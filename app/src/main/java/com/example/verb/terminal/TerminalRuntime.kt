@@ -35,12 +35,19 @@ class TerminalRuntime(private val workingDir: File) {
                 .directory(workingDir)
                 .redirectErrorStream(true)
 
+            val env = pb.environment()
+            env["TERM"] = "xterm-256color"
+            env["COLORTERM"] = "truecolor"
+            env["HOME"] = workingDir.absolutePath
+            val currentPath = env["PATH"] ?: "/system/bin:/system/xbin"
+            env["PATH"] = "$currentPath:/system/bin:/system/xbin"
+
             val p = pb.start()
             process = p
             outputStream = p.outputStream
             _isSessionActive.value = true
 
-            appendOutput("Verb Terminal V0.1 initialized.\n$ ")
+            appendOutput("Verb Terminal Session Active (${workingDir.name}).\n$ ")
 
             // Read output stream continuously
             scope.launch {

@@ -38,7 +38,8 @@ class ActionRegistry(private val context: Context) {
                 title = "Capability Not Supported",
                 summary = "Verb V0.1 does not support the requested capability '${intent.id}'.",
                 isSuccess = false,
-                errorMessage = "Action not registered in V0 Action Registry."
+                errorMessage = "Action not registered in V0 Action Registry.",
+                originalIntent = intent
             )
         }
 
@@ -51,7 +52,8 @@ class ActionRegistry(private val context: Context) {
                 requiresConfirmation = true,
                 confirmationPrompt = "Are you sure you want to execute '${intent.name}' for parameter ${intent.parameters}?",
                 targetPid = intent.parameters["pid"]?.toIntOrNull(),
-                isSuccess = false
+                isSuccess = false,
+                originalIntent = intent
             )
         }
 
@@ -61,11 +63,12 @@ class ActionRegistry(private val context: Context) {
                 title = "Destructive Action Blocked",
                 summary = "Verb V0.1 does not execute destructive filesystem operations automatically.",
                 isSuccess = false,
-                errorMessage = "Action blocked by V0 Safety Policy."
+                errorMessage = "Action blocked by V0 Safety Policy.",
+                originalIntent = intent
             )
         }
 
-        return when (intent.id) {
+        val result = when (intent.id) {
             "storage.summary" -> executeStorageSummary()
             "memory.summary" -> executeMemorySummary()
             "process.list" -> executeProcessList()
@@ -89,6 +92,8 @@ class ActionRegistry(private val context: Context) {
                 isSuccess = false
             )
         }
+
+        return result.copy(originalIntent = intent)
     }
 
     private fun executeStorageSummary(): ActionResult {
@@ -257,7 +262,7 @@ class ActionRegistry(private val context: Context) {
             summary = summaryStr,
             metrics = metrics,
             rawCommand = rawCommand,
-            rawOutput = if (isOccupied) "tcp 0 0 0.0.0.0:$port 0.0.0.0:* LISTEN (PID 19281/node)" else "Port $port is open and not bound."
+            rawOutput = if (isOccupied) "tcp 0 0 0.0.0.0:$port 0.0.0.0:* LISTEN" else "Port $port is open and not bound."
         )
     }
 
