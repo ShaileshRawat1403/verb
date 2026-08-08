@@ -54,11 +54,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.text.TextRange
 import com.example.verb.terminal.MobileTerminalKeyboard
+import com.example.verb.terminal.SelectionChangeListener
+import com.example.verb.terminal.TerminalRuntimeAdapter
 
 @Composable
 fun TerminalScreen(
     terminalOutput: String,
+    terminalRuntime: TerminalRuntimeAdapter? = null,
     onSendCommand: (String) -> Unit,
     onSendKey: (String) -> Unit,
     onClearTerminal: () -> Unit,
@@ -68,6 +73,19 @@ fun TerminalScreen(
     var commandInput by remember { mutableStateOf("") }
     var showNaturalLanguageSheet by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+
+    // Register SelectionChangeListener with TerminalRuntime for active selection monitoring
+    DisposableEffect(terminalRuntime, onInspectText) {
+        val listener = SelectionChangeListener { range, selectedText ->
+            if (selectedText.isNotBlank()) {
+                onInspectText(selectedText)
+            }
+        }
+        terminalRuntime?.addSelectionChangeListener(listener)
+        onDispose {
+            terminalRuntime?.removeSelectionChangeListener(listener)
+        }
+    }
 
     // Auto-scroll terminal to bottom when new output arrives
     LaunchedEffect(terminalOutput) {
@@ -219,12 +237,20 @@ fun TerminalScreen(
                 .fillMaxWidth()
                 .padding(12.dp)
                 .verticalScroll(scrollState)
-                .pointerInput(Unit) {
+                .pointerInput(terminalRuntime, terminalOutput) {
                     detectTapGestures(
                         onLongPress = {
-                            val snippet = terminalOutput.takeLast(400)
+                            val activeText = terminalRuntime?.activeSelectionText?.value ?: ""
+                            val snippet = if (activeText.isNotBlank()) activeText else terminalOutput.takeLast(300)
                             if (snippet.isNotBlank()) {
-                                onInspectText(snippet)
+                                if (terminalRuntime != null) {
+                                    terminalRuntime.notifySelectionChanged(
+                                        TextRange(0, snippet.length),
+                                        snippet
+                                    )
+                                } else {
+                                    onInspectText(snippet)
+                                }
                             }
                         }
                     )

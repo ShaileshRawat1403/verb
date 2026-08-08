@@ -129,6 +129,71 @@ class VerbLogicTest {
     }
 
     @Test
+    fun `selection change listener captures exact range and passes selection to observer`() {
+        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir)
+        var capturedSelection = ""
+        var capturedRange = androidx.compose.ui.text.TextRange.Zero
+
+        val listener = com.example.verb.terminal.SelectionChangeListener { range, text ->
+            capturedRange = range
+            capturedSelection = text
+        }
+
+        runtime.addSelectionChangeListener(listener)
+        runtime.notifySelectionChanged(androidx.compose.ui.text.TextRange(5, 12), "/storage/emulated/0")
+
+        assertEquals(androidx.compose.ui.text.TextRange(5, 12), capturedRange)
+        assertEquals("/storage/emulated/0", capturedSelection)
+
+        val entity = semanticEngine.analyzeText(capturedSelection)
+        assertEquals(EntityType.FILE_PATH, entity.entityType)
+        assertTrue(entity.title.contains("Shared Android Storage Path"))
+
+        runtime.destroy()
+    }
+
+    @Test
+    fun `terminal runtime termux session initialization`() {
+        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir)
+        assertTrue(runtime.isSessionActive.value)
+        assertTrue(runtime.terminalOutput.value.contains("Verb Terminal Session Active"))
+
+        runtime.sendCommand("echo 'Verb TTY test'")
+        runtime.clearBuffer()
+        assertEquals("$ ", runtime.terminalOutput.value)
+
+        runtime.destroy()
+        assertFalse(runtime.isSessionActive.value)
+    }
+
+    @Test
+    fun `terminal runtime adapter session state transitions`() {
+        val adapter: com.example.verb.terminal.TerminalRuntimeAdapter =
+            com.example.verb.terminal.TerminalRuntime(context.filesDir)
+
+        assertEquals(com.example.verb.terminal.TerminalSessionState.RUNNING, adapter.sessionState.value)
+        assertTrue(adapter.isSessionActive.value)
+
+        adapter.sendControlKey("CTRL_C")
+        adapter.sendText("echo test\n")
+
+        adapter.destroy()
+        assertEquals(com.example.verb.terminal.TerminalSessionState.EXITED, adapter.sessionState.value)
+        assertFalse(adapter.isSessionActive.value)
+    }
+
+    @Test
+    fun `port observation truthfulness`() {
+        val intent = intentEngine.resolveIntent("what's using port 3000?")
+        val result = actionRegistry.executeAction(intent)
+
+        assertNotNull(result.observedOutput)
+        assertNotNull(result.explanation)
+        assertTrue(result.observedOutput?.contains("Socket bind check") == true)
+        assertFalse(result.observedOutput?.contains("PID 19281") == true) // No fake PID
+    }
+
+    @Test
     fun `terminal command template resolution`() {
         val intent = intentEngine.resolveIntent("what's using port 3000?")
         assertEquals("network.port.inspect", intent.id)
