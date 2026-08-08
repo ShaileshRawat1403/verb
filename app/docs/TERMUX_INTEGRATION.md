@@ -1,11 +1,10 @@
 # Termux Terminal Engine Integration & Provenance Report
 
 ## 1. Provenance Metadata (Real Verified Upstream Source)
-
 - **Upstream Repository**: [ShaileshRawat1403/termux-app](https://github.com/ShaileshRawat1403/termux-app)
 - **Upstream Branch**: `master`
 - **Verified Commit SHA**: `3df69d1da197dd9bd71a3bafd902dffd720576b4`
-- **Verification Method**: Verified directly via GitHub API (`curl -s https://api.github.com/repos/ShaileshRawat1403/termux-app/commits?per_page=1`)
+- **Verification Method**: Verified against upstream Java sources in the specified commit.
 - **Licensing**:
   - Upstream Termux core (`terminal-emulator` / `terminal-view`): **GPLv3** (GNU General Public License v3.0)
   - Verb runtime adapter layer (`com.example.verb.terminal.*`): **Apache License 2.0**
@@ -13,68 +12,65 @@
 ---
 
 ## 2. File Audit & Classification
+Every file under `app/src/main/java/com/termux/terminal/` and `app/src/main/java/com/termux/view/` has been audited against upstream Java sources. The Kotlin reimplementations have been removed and replaced with the actual upstream Java implementations.
 
-Every file under `app/src/main/java/com/termux/terminal/` and `app/src/main/java/com/termux/view/` has been audited against upstream Java sources:
+### EXACT_UPSTREAM
+These files are byte-identical or functionally identical to the upstream pinned commit:
+- `com/termux/terminal/ByteQueue.java`
+- `com/termux/terminal/KeyHandler.java`
+- `com/termux/terminal/Logger.java`
+- `com/termux/terminal/TerminalBuffer.java`
+- `com/termux/terminal/TerminalColorScheme.java`
+- `com/termux/terminal/TerminalColors.java`
+- `com/termux/terminal/TerminalEmulator.java`
+- `com/termux/terminal/TerminalOutput.java`
+- `com/termux/terminal/TerminalRow.java`
+- `com/termux/terminal/TerminalSession.java`
+- `com/termux/terminal/TerminalSessionClient.java`
+- `com/termux/terminal/TextStyle.java`
+- `com/termux/terminal/WcWidth.java`
+- `com/termux/terminal/JNI.java`
+- `com/termux/view/GestureAndScaleRecognizer.java`
+- `com/termux/view/textselection/CursorController.java`
+- `com/termux/view/textselection/TextSelectionHandleView.java`
+- `com/termux/view/support/PopupWindowCompatGingerbread.java`
 
-| File Path | Classification | Provenance & Rationale |
-| :--- | :--- | :--- |
-| `com/termux/terminal/JNI.kt` | `VERB_REIMPLEMENTATION` | Kotlin JNI bridge written for Verb with runtime library presence check. |
-| `com/termux/terminal/TerminalSession.kt` | `VERB_REIMPLEMENTATION` | Kotlin process lifecycle adapter wrapping native/PTY handles. |
-| `com/termux/terminal/TerminalEmulator.kt` | `VERB_REIMPLEMENTATION` | Kotlin VT100 ANSI sequence state machine adaptation. |
-| `com/termux/terminal/TerminalBuffer.kt` | `VERB_REIMPLEMENTATION` | Kotlin row matrix and transcript scrollback buffer. |
-| `com/termux/terminal/TerminalRow.kt` | `VERB_REIMPLEMENTATION` | Kotlin terminal row data representation. |
-| `com/termux/terminal/ByteQueue.kt` | `VERB_REIMPLEMENTATION` | Kotlin circular byte buffer for TTY stream reading. |
-| `com/termux/terminal/TextStyle.kt` | `VERB_REIMPLEMENTATION` | Kotlin bitwise attribute constants container. |
-| `com/termux/terminal/WcWidth.kt` | `VERB_REIMPLEMENTATION` | Kotlin character width helper for Unicode cell alignment. |
-| `com/termux/view/TerminalView.kt` | `VERB_REIMPLEMENTATION` | Kotlin Android Canvas view widget providing terminal rendering. |
-| `com/termux/view/TextSelectionCursorController.kt` | `VERB_REIMPLEMENTATION` | Kotlin selection handle delegate for text selection gesture handling. |
-
-> **Classification Note**: Because these files are Kotlin adaptations simplified for execution in the cloud build environment, they are classified strictly as `VERB_REIMPLEMENTATION`. They are NOT un-modified upstream Java binaries.
-
----
-
-## 3. Native Library Proof (APK Inspection)
-
-- **Build Command Executed**: `gradle :app:assembleDebug`
-- **Build Status**: `PASS`
-- **Output APK Path**: `app/build/outputs/apk/debug/app-debug.apk`
-- **Inspection Command**: `unzip -l app/build/outputs/apk/debug/app-debug.apk | grep libtermux`
-- **Inspection Result**:
-  ```
-     9008  1981-01-01 01:01   lib/arm64-v8a/libtermux.so
-     6492  1981-01-01 01:01   lib/armeabi-v7a/libtermux.so
-     8576  1981-01-01 01:01   lib/x86/libtermux.so
-     9248  1981-01-01 01:01   lib/x86_64/libtermux.so
-  ```
-- **Native Library Status**: **PRESENT (`libtermux.so` is included for all ABIs)**.
-- **Resolution**: Pre-compiled libraries were acquired from official upstream Termux universal APK (v0.118.3) and placed into `app/src/main/jniLibs/` to satisfy the native PTY requirement in this environment where NDK is unavailable.
-- **Truthful Status**: Native PTY integration is **COMPLETE** and verified inside the APK.
+### MODIFIED_UPSTREAM
+These files were imported from upstream but required minor modifications for Verb integration:
+- `com/termux/view/TerminalViewClient.java` (Added `onInspectText(String)` for Semantic Lens integration)
+- `com/termux/view/textselection/TextSelectionCursorController.java` (Added `ACTION_INSPECT` menu item for Semantic Lens)
+- `com/termux/view/TerminalRenderer.java` (Added Typeface support constructor)
+- `com/termux/view/TerminalView.java` (Added `setTypeface` and modified `mRenderer` instantiation for Typeface support)
 
 ---
 
-## 4. Production Failure Policy (No Silent Fake Fallback)
+## 3. Native Version Provenance
+- **NATIVE_VERSION_STATUS**: `VERSION_MISMATCH`
+- **Details**: The Java source comes from the pinned Termux fork (`3df69d1da197dd9bd71a3bafd902dffd720576b4`), while the native binary `libtermux.so` was extracted from Termux v0.118.3 universal APK.
+- **Compatibility Status**: `VERSION_MISMATCH_UNVERIFIED`
+- **Resolution**: The JNI contract used by `com.termux.terminal.JNI.java` appears to match the native binary contract, but a formal verification has not been performed.
 
-Production `TerminalRuntime` enforces strict boundary rules:
-- In Android production (`useFakeForTesting = false`), `TerminalRuntime` initializes `TermuxTerminalRuntimeAdapter`.
-- If native PTY initialization fails (because `libtermux.so` is absent or PTY allocation fails), the session state transitions strictly from `STARTING` -> `FAILED`.
-- Diagnostic output: `[FAILED to start Termux PTY session: libtermux.so or PTY allocation failed]`.
-- `TerminalRuntime` does **NOT** silently fall back to `FakeTerminalRuntimeAdapter` in production. `FakeTerminalRuntimeAdapter` is permitted **ONLY** via explicit test injection (`useFakeForTesting = true`).
+---
+
+## 4. Runtime Environment Definition
+For Verb P0.2, the runtime is explicitly defined as:
+- **Termux terminal engine** (upstream Java + `libtermux.so` native PTY binary)
+- **Android system shell** (`/system/bin/sh`)
+
+**Note on Termux Userland**: Verb is not the `com.termux` package. It does not automatically append `/data/data/com.termux/files/usr/bin` to `PATH`. Full Termux bootstrap/package userland integration is outside the scope of this sprint.
 
 ---
 
 ## 5. Automated Build & Test Evidence
-
-| Command | Environment | Status | Details |
-| :--- | :--- | :---: | :--- |
-| `compile_applet` | Cloud Platform Tool | **PASS** | Applet compiles cleanly without errors. |
-| `gradle :app:assembleDebug` | Gradle CLI | **PASS** | APK built in 3s (`app-debug.apk`). |
-| `gradle :app:testDebugUnitTest` | JVM / Robolectric | **PASS** | 10 unit tests executed and passed in 32s. |
+| Command | Environment | Status |
+| :--- | :--- | :---: |
+| `gradle :app:assembleDebug` | Gradle CLI | **PASS** |
+| `gradle :app:testDebugUnitTest` | JVM / Robolectric | **PASS** |
 
 ---
 
 ## 6. Physical Device Test Checklist (Truthful Status)
-
-Gemini / AI Studio Build Agent **cannot** execute tests on physical Android hardware. Therefore, all physical device test items are recorded as **NOT RUN** until executed on a physical Android phone by the user:
+Physical Android tests remain **NOT_RUN** unless the user performs them on a physical device. We do not fabricate physical-device results.
 
 | Test ID | Test Case Scenario | Procedure | Physical Status |
 | :---: | :--- | :--- | :---: |
@@ -88,3 +84,15 @@ Gemini / AI Studio Build Agent **cannot** execute tests on physical Android hard
 | **8** | Exact Selection | Long press line and forward selection to Semantic Lens | **NOT RUN** |
 | **9** | Alternate Screen | Run full-screen interactive utility (`top` or `vim`) | **NOT RUN** |
 | **10** | Lifecycle Resume | Move app to background and resume foreground state | **NOT RUN** |
+
+---
+
+## 7. Source-Reference Report
+At completion state:
+- **Termux repo**: `ShaileshRawat1403/termux-app`
+- **Termux commit**: `3df69d1da197dd9bd71a3bafd902dffd720576b4`
+- **Termux files inspected**: All `com.termux.terminal.*` and `com.termux.view.*` Java files.
+- **Exact upstream files reused**: 18 files.
+- **Modified upstream files**: 4 files.
+- **Verb adapter files modified**: `TermuxTerminalRuntimeAdapter.kt` (fixed selection ownership and `PATH` assumption).
+- **Termix consulted**: NOT REQUIRED FOR THIS INFRASTRUCTURE PATCH
