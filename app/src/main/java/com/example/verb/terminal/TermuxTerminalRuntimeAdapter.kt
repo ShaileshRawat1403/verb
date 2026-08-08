@@ -124,15 +124,39 @@ class TermuxTerminalRuntimeAdapter(
 
     override fun sendControlKey(key: String) {
         val s = session ?: return
+        val cursorApp = s.emulator?.isCursorKeysApplicationMode ?: false
+        
+        // Helper to get KeyHandler code
+        fun getCode(keyCode: Int, shift: Boolean = false): String? {
+            val mod = if (shift) com.termux.terminal.KeyHandler.KEYMOD_SHIFT else 0
+            return com.termux.terminal.KeyHandler.getCode(keyCode, mod, cursorApp, false)
+        }
+
         when (key) {
-            "ESC" -> s.write("\u001b")
-            "CTRL_C" -> s.write("\u0003")
-            "TAB" -> s.write("\t")
-            "UP" -> s.write("\u001b[A")
-            "DOWN" -> s.write("\u001b[B")
-            "RIGHT" -> s.write("\u001b[C")
-            "LEFT" -> s.write("\u001b[D")
-            else -> s.write(key)
+            "ESC" -> getCode(android.view.KeyEvent.KEYCODE_ESCAPE)?.let { s.write(it) }
+            "TAB" -> getCode(android.view.KeyEvent.KEYCODE_TAB)?.let { s.write(it) }
+            "SHIFT_TAB" -> getCode(android.view.KeyEvent.KEYCODE_TAB, true)?.let { s.write(it) }
+            "UP" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_UP)?.let { s.write(it) }
+            "DOWN" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_DOWN)?.let { s.write(it) }
+            "RIGHT" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)?.let { s.write(it) }
+            "LEFT" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_LEFT)?.let { s.write(it) }
+            "HOME" -> getCode(android.view.KeyEvent.KEYCODE_MOVE_HOME)?.let { s.write(it) }
+            "END" -> getCode(android.view.KeyEvent.KEYCODE_MOVE_END)?.let { s.write(it) }
+            "PGUP" -> getCode(android.view.KeyEvent.KEYCODE_PAGE_UP)?.let { s.write(it) }
+            "PGDN" -> getCode(android.view.KeyEvent.KEYCODE_PAGE_DOWN)?.let { s.write(it) }
+            "DEL" -> getCode(android.view.KeyEvent.KEYCODE_FORWARD_DEL)?.let { s.write(it) }
+            "PASTE" -> onPasteTextFromClipboard(s)
+            else -> {
+                if (key.startsWith("CTRL_") && key.length == 6) {
+                    val c = key.last()
+                    if (c in 'A'..'Z') {
+                        val codePoint = c - 'A' + 1
+                        s.write(codePoint.toChar().toString())
+                        return
+                    }
+                }
+                s.write(key)
+            }
         }
     }
 
