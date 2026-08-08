@@ -130,7 +130,7 @@ class VerbLogicTest {
 
     @Test
     fun `selection change listener captures exact range and passes selection to observer`() {
-        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir)
+        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir, useFakeForTesting = true)
         var capturedSelection = ""
         var capturedRange = androidx.compose.ui.text.TextRange.Zero
 
@@ -153,8 +153,8 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `terminal runtime termux session initialization`() {
-        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir)
+    fun `terminal runtime fake session initialization`() {
+        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir, useFakeForTesting = true)
         assertTrue(runtime.isSessionActive.value)
         assertTrue(runtime.terminalOutput.value.contains("Verb Terminal Session Active"))
 
@@ -167,9 +167,19 @@ class VerbLogicTest {
     }
 
     @Test
+    fun `production termux runtime adapter reports truthful failure when native pty unavailable`() {
+        // Without useFakeForTesting, production TermuxTerminalRuntimeAdapter is selected.
+        // On JVM without native libtermux.so, it must report FAILED state truthfully without fake fallback.
+        val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir, useFakeForTesting = false)
+        assertEquals(com.example.verb.terminal.TerminalSessionState.FAILED, runtime.sessionState.value)
+        assertFalse(runtime.isSessionActive.value)
+        assertTrue(runtime.terminalOutput.value.contains("FAILED to start Termux PTY session"))
+    }
+
+    @Test
     fun `terminal runtime adapter session state transitions`() {
         val adapter: com.example.verb.terminal.TerminalRuntimeAdapter =
-            com.example.verb.terminal.TerminalRuntime(context.filesDir)
+            com.example.verb.terminal.TerminalRuntime(context.filesDir, useFakeForTesting = true)
 
         assertEquals(com.example.verb.terminal.TerminalSessionState.RUNNING, adapter.sessionState.value)
         assertTrue(adapter.isSessionActive.value)

@@ -14,10 +14,10 @@ class TerminalRuntime(
     useFakeForTesting: Boolean = false
 ) : TerminalRuntimeAdapter {
 
-    private val delegate: TerminalRuntimeAdapter = if (!useFakeForTesting && JNI.isLoaded()) {
-        TermuxTerminalRuntimeAdapter(workingDir)
-    } else {
+    private val delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
         FakeTerminalRuntimeAdapter(workingDir)
+    } else {
+        TermuxTerminalRuntimeAdapter(workingDir)
     }
 
     override val sessionState: StateFlow<TerminalSessionState> get() = delegate.sessionState
