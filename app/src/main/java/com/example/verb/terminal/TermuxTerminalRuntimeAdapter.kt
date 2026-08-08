@@ -207,7 +207,7 @@ class TermuxTerminalRuntimeAdapter(
             val clipData = clipboard.primaryClip
             if (clipData != null && clipData.itemCount > 0) {
                 val text = clipData.getItemAt(0).coerceToText(ctx).toString()
-                s?.write(text)
+                s?.emulator?.paste(text)
             }
         }
     }
