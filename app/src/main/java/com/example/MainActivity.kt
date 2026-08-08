@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
@@ -74,7 +74,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 NavigationBarItem(
                     selected = activeTab == VerbTab.ASK,
                     onClick = { viewModel.selectTab(VerbTab.ASK) },
-                    icon = { Icon(Icons.Default.Chat, contentDescription = "Ask") },
+                    icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Ask") },
                     label = { Text("Ask") },
                     modifier = Modifier.testTag("tab_ask")
                 )

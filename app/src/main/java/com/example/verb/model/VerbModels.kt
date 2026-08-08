@@ -26,7 +26,24 @@ data class VerbIntent(
     val risk: ActionRisk = ActionRisk.READ_ONLY,
     val confidence: Float = 1.0f,
     val description: String = ""
-)
+) {
+    val summary: String
+        get() = description.ifEmpty { name }
+
+    val commandTemplate: String?
+        get() = when (id) {
+            "storage.summary" -> "df -h"
+            "memory.summary" -> "free -m"
+            "process.list" -> "ps -A"
+            "file.list" -> "ls -la ${parameters["path"] ?: "."}"
+            "file.search" -> "find . -name '*${parameters["query"] ?: ""}*'"
+            "network.port.inspect" -> "netstat -tuln | grep :${parameters["port"] ?: "3000"}"
+            "process.stop" -> "kill -9 ${parameters["pid"] ?: ""}"
+            "system.summary" -> "uname -a"
+            "terminal.explain" -> "man ${parameters["command"] ?: ""}"
+            else -> parameters["raw"] ?: "sh"
+        }
+}
 
 data class ActionResult(
     val intentId: String,
