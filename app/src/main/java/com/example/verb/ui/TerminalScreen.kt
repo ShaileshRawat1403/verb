@@ -243,8 +243,8 @@ fun TerminalScreen(
         if (termuxAdapter != null) {
             AndroidView(
                 factory = { ctx ->
-                    termuxAdapter.terminalView ?: TerminalView(ctx).also {
-                        it.viewClient = termuxAdapter
+                    termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
+                        termuxAdapter.bindTerminalView(it)
                     }
                 },
                 modifier = Modifier

@@ -1,7 +1,6 @@
 package com.example.verb.terminal
 
 import androidx.compose.ui.text.TextRange
-import com.termux.terminal.JNI
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
