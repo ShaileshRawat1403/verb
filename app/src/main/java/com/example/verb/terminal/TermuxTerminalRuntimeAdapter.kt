@@ -1,5 +1,8 @@
 package com.example.verb.terminal
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.ui.text.TextRange
@@ -22,7 +25,6 @@ class TermuxTerminalRuntimeAdapter(
     val workingDir: File,
     val shellExecutable: String = "/system/bin/sh"
 ) : TerminalRuntimeAdapter, TerminalSessionClient, TerminalViewClient {
-
     private var session: TerminalSession? = null
     var terminalView: TerminalView? = null
 
@@ -45,6 +47,10 @@ class TermuxTerminalRuntimeAdapter(
     override val activeSelectionText: StateFlow<String> = _activeSelectionText.asStateFlow()
 
     private val _activeSelectionRange = MutableStateFlow<TextRange>(TextRange.Zero)
+    /**
+     * Note: The activeSelectionRange currently represents a range local to the extracted string
+     * rather than exact terminal cell coordinates.
+     */
     override val activeSelectionRange: StateFlow<TextRange> = _activeSelectionRange.asStateFlow()
 
     private val selectionListeners = CopyOnWriteArrayList<SelectionChangeListener>()
@@ -81,7 +87,7 @@ class TermuxTerminalRuntimeAdapter(
             
             // Initialize the emulator immediately for headless execution
             newSession.updateSize(80, 24, 0, 0)
-
+            
             if (newSession.isRunning) {
                 session = newSession
                 _isSessionActive.value = true
@@ -139,6 +145,7 @@ class TermuxTerminalRuntimeAdapter(
     }
 
     override fun notifySelectionChanged(selectedRange: TextRange, selectedText: String) {
+        // The selection range is documented as local to the extracted string
         _activeSelectionRange.value = selectedRange
         _activeSelectionText.value = selectedText
         for (listener in selectionListeners) {
@@ -187,10 +194,23 @@ class TermuxTerminalRuntimeAdapter(
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
-        notifySelectionChanged(TextRange(0, text.length), text)
+        terminalView?.context?.let { ctx ->
+            val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Termux Selection", text))
+        }
     }
 
-    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {
+        val s = session ?: this.session
+        terminalView?.context?.let { ctx ->
+            val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clipData = clipboard.primaryClip
+            if (clipData != null && clipData.itemCount > 0) {
+                val text = clipData.getItemAt(0).coerceToText(ctx).toString()
+                s?.write(text)
+            }
+        }
+    }
     
     override fun onBell(session: TerminalSession) {}
     
@@ -204,11 +224,11 @@ class TermuxTerminalRuntimeAdapter(
 
     // TerminalViewClient callbacks
     override fun onScale(scale: Float): Float = scale
-
+    
     override fun onSingleTapUp(e: MotionEvent) {}
-
+    
     override fun onInspectText(text: String) {
-        // Notify Semantic Lens about inspected text
+        // Notify Semantic Lens about inspected text. The selection range is local to the extracted string.
         notifySelectionChanged(TextRange(0, text.length), text)
     }
 
@@ -221,7 +241,7 @@ class TermuxTerminalRuntimeAdapter(
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
     override fun isTerminalViewSelected(): Boolean = true
     override fun copyModeChanged(copyMode: Boolean) {}
-
+    
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession?): Boolean = false
     override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
     override fun readControlKey(): Boolean = false
@@ -229,8 +249,9 @@ class TermuxTerminalRuntimeAdapter(
     override fun readShiftKey(): Boolean = false
     override fun readFnKey(): Boolean = false
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
+    
     override fun onEmulatorSet() {}
-
+    
     override fun logError(tag: String, message: String) {}
     override fun logWarn(tag: String, message: String) {}
     override fun logInfo(tag: String, message: String) {}

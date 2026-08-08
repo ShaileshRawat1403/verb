@@ -6,7 +6,7 @@
 - **Verified Commit SHA**: `3df69d1da197dd9bd71a3bafd902dffd720576b4`
 - **Verification Method**: Verified against upstream Java sources in the specified commit.
 - **Licensing**:
-  - Upstream Termux core (`terminal-emulator` / `terminal-view`): **GPLv3** (GNU General Public License v3.0)
+  - Upstream Termux core (`terminal-emulator` / `terminal-view`): **GPLv3-only with exceptions**. As stated in the upstream LICENSE.md, it includes Android Terminal Emulator-derived code used in terminal-view and terminal-emulator which is licensed under the **Apache License 2.0**.
   - Verb runtime adapter layer (`com.example.verb.terminal.*`): **Apache License 2.0**
 
 ---
@@ -14,7 +14,7 @@
 ## 2. File Audit & Classification
 Every file under `app/src/main/java/com/termux/terminal/` and `app/src/main/java/com/termux/view/` has been audited against upstream Java sources. The Kotlin reimplementations have been removed and replaced with the actual upstream Java implementations.
 
-### EXACT_UPSTREAM
+### EXACT_UPSTREAM (20 files)
 These files are byte-identical or functionally identical to the upstream pinned commit:
 - `com/termux/terminal/ByteQueue.java`
 - `com/termux/terminal/KeyHandler.java`
@@ -31,16 +31,16 @@ These files are byte-identical or functionally identical to the upstream pinned 
 - `com/termux/terminal/WcWidth.java`
 - `com/termux/terminal/JNI.java`
 - `com/termux/view/GestureAndScaleRecognizer.java`
+- `com/termux/view/TerminalRenderer.java`
+- `com/termux/view/TerminalView.java`
 - `com/termux/view/textselection/CursorController.java`
 - `com/termux/view/textselection/TextSelectionHandleView.java`
 - `com/termux/view/support/PopupWindowCompatGingerbread.java`
 
-### MODIFIED_UPSTREAM
+### MODIFIED_UPSTREAM (2 files)
 These files were imported from upstream but required minor modifications for Verb integration:
 - `com/termux/view/TerminalViewClient.java` (Added `onInspectText(String)` for Semantic Lens integration)
 - `com/termux/view/textselection/TextSelectionCursorController.java` (Added `ACTION_INSPECT` menu item for Semantic Lens)
-- `com/termux/view/TerminalRenderer.java` (Added Typeface support constructor)
-- `com/termux/view/TerminalView.java` (Added `setTypeface` and modified `mRenderer` instantiation for Typeface support)
 
 ---
 
@@ -64,8 +64,8 @@ For Verb P0.2, the runtime is explicitly defined as:
 ## 5. Automated Build & Test Evidence
 | Command | Environment | Status |
 | :--- | :--- | :---: |
-| `gradle :app:assembleDebug` | Gradle CLI | **PASS** |
-| `gradle :app:testDebugUnitTest` | JVM / Robolectric | **PASS** |
+| `gradle :app:assembleDebug` | Gradle CLI | **BUILD_VERIFIED** |
+| `gradle :app:testDebugUnitTest` | JVM / Robolectric | **BUILD_VERIFIED** |
 
 ---
 
@@ -92,7 +92,7 @@ At completion state:
 - **Termux repo**: `ShaileshRawat1403/termux-app`
 - **Termux commit**: `3df69d1da197dd9bd71a3bafd902dffd720576b4`
 - **Termux files inspected**: All `com.termux.terminal.*` and `com.termux.view.*` Java files.
-- **Exact upstream files reused**: 18 files.
-- **Modified upstream files**: 4 files.
-- **Verb adapter files modified**: `TermuxTerminalRuntimeAdapter.kt` (fixed selection ownership and `PATH` assumption).
+- **Exact upstream files reused**: 20 files.
+- **Modified upstream files**: 2 files.
+- **Verb adapter files modified**: `TermuxTerminalRuntimeAdapter.kt` (fixed selection ownership, clipboard path, and `PATH` assumption).
 - **Termix consulted**: NOT REQUIRED FOR THIS INFRASTRUCTURE PATCH
