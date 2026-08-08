@@ -64,7 +64,7 @@ class TermuxTerminalRuntimeAdapter(
             "TERM=xterm-256color",
             "COLORTERM=truecolor",
             "HOME=${workingDir.absolutePath}",
-            "PATH=$sysPath:/data/data/com.termux/files/usr/bin",
+            "PATH=$sysPath",
             "LANG=en_US.UTF-8"
         )
 
@@ -207,12 +207,13 @@ class TermuxTerminalRuntimeAdapter(
 
     override fun onSingleTapUp(e: MotionEvent) {}
 
+    override fun onInspectText(text: String) {
+        // Notify Semantic Lens about inspected text
+        notifySelectionChanged(TextRange(0, text.length), text)
+    }
+
     override fun onLongPress(e: MotionEvent): Boolean {
-        val selText = terminalView?.storedSelectedText ?: ""
-        if (selText.isNotBlank()) {
-            notifySelectionChanged(TextRange(0, selText.length), selText)
-        }
-        return true
+        return false
     }
 
     override fun shouldBackButtonBeMappedToEscape(): Boolean = false

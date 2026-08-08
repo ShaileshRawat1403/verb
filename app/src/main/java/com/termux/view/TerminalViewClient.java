@@ -47,6 +47,7 @@ public interface TerminalViewClient {
     boolean onKeyUp(int keyCode, KeyEvent e);
 
     boolean onLongPress(MotionEvent event);
+    void onInspectText(String text);
 
 
 
