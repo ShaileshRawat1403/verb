@@ -56,9 +56,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.viewinterop.AndroidView
 import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalRuntimeAdapter
+import com.example.verb.terminal.TermuxTerminalRuntimeAdapter
+import com.termux.view.TerminalView
 
 @Composable
 fun TerminalScreen(
@@ -74,9 +77,9 @@ fun TerminalScreen(
     var showNaturalLanguageSheet by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
-    // Register SelectionChangeListener with TerminalRuntime for active selection monitoring
+    // Register SelectionChangeListener with TerminalRuntime for active exact selection monitoring
     DisposableEffect(terminalRuntime, onInspectText) {
-        val listener = SelectionChangeListener { range, selectedText ->
+        val listener = SelectionChangeListener { _, selectedText ->
             if (selectedText.isNotBlank()) {
                 onInspectText(selectedText)
             }
@@ -146,11 +149,16 @@ fun TerminalScreen(
                             }
                         }
 
-                        // Active status green dot
+                        // Active status indicator dot
+                        val statusColor = when (terminalRuntime?.sessionState?.value) {
+                            com.example.verb.terminal.TerminalSessionState.RUNNING -> Color(0xFF22C55E)
+                            com.example.verb.terminal.TerminalSessionState.STARTING -> Color(0xFFEAB308)
+                            else -> Color(0xFFEF4444)
+                        }
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
-                                .background(Color(0xFF22C55E), CircleShape)
+                                .background(statusColor, CircleShape)
                         )
                     }
 
@@ -220,7 +228,7 @@ fun TerminalScreen(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "~/projects/verb",
+                            text = terminalRuntime?.currentWorkingDirectory() ?: "~/projects/verb",
                             fontSize = 11.sp,
                             fontFamily = FontFamily.Monospace,
                             color = Color(0xFF64748B)
@@ -230,43 +238,42 @@ fun TerminalScreen(
             }
         }
 
-        // Real Terminal Canvas View
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(12.dp)
-                .verticalScroll(scrollState)
-                .pointerInput(terminalRuntime, terminalOutput) {
-                    detectTapGestures(
-                        onLongPress = {
-                            val activeText = terminalRuntime?.activeSelectionText?.value ?: ""
-                            val snippet = if (activeText.isNotBlank()) activeText else terminalOutput.takeLast(300)
-                            if (snippet.isNotBlank()) {
-                                if (terminalRuntime != null) {
-                                    terminalRuntime.notifySelectionChanged(
-                                        TextRange(0, snippet.length),
-                                        snippet
-                                    )
-                                } else {
-                                    onInspectText(snippet)
-                                }
-                            }
-                        }
+        // Real Terminal Canvas View boundary
+        val termuxAdapter = terminalRuntime as? TermuxTerminalRuntimeAdapter
+        if (termuxAdapter != null) {
+            AndroidView(
+                factory = { ctx ->
+                    termuxAdapter.terminalView ?: TerminalView(ctx).also {
+                        it.viewClient = termuxAdapter
+                    }
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(12.dp)
+                    .testTag("termux_terminal_view")
+            )
+        } else {
+            // Compose selection view fallback for unit tests and headless environments
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(12.dp)
+                    .verticalScroll(scrollState)
+            ) {
+                SelectionContainer {
+                    Text(
+                        text = terminalOutput.ifEmpty { "$ " },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        color = Color(0xFFE2E8F0),
+                        lineHeight = 18.sp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("terminal_output_text")
                     )
                 }
-        ) {
-            SelectionContainer {
-                Text(
-                    text = terminalOutput.ifEmpty { "$ " },
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    color = Color(0xFFE2E8F0),
-                    lineHeight = 18.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("terminal_output_text")
-                )
             }
         }
 
