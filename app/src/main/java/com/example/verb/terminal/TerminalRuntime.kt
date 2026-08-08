@@ -1,106 +1,120 @@
 package com.example.verb.terminal
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import androidx.compose.ui.text.TextRange
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import java.io.File
-import java.io.InputStream
-import java.io.OutputStream
+import java.util.concurrent.CopyOnWriteArrayList
 
-class TerminalRuntime(private val workingDir: File) {
+/**
+ * High-performance Termux Terminal Runtime implementing [TerminalRuntimeAdapter].
+ * Manages Termux TTY sessions, PTY bindings, explicit session states, and text selection observers.
+ */
+class TerminalRuntime(private val workingDir: File) : TerminalRuntimeAdapter {
 
-    private var process: Process? = null
-    private var outputStream: OutputStream? = null
+    private var currentSession: TermuxTerminalSession? = null
+
+    private val _sessionState = MutableStateFlow<TerminalSessionState>(TerminalSessionState.STARTING)
+    override val sessionState: StateFlow<TerminalSessionState> = _sessionState.asStateFlow()
 
     private val _terminalOutput = MutableStateFlow<String>("")
-    val terminalOutput: StateFlow<String> = _terminalOutput.asStateFlow()
+    override val terminalOutput: StateFlow<String> = _terminalOutput.asStateFlow()
 
     private val _isSessionActive = MutableStateFlow<Boolean>(false)
-    val isSessionActive: StateFlow<Boolean> = _isSessionActive.asStateFlow()
+    override val isSessionActive: StateFlow<Boolean> = _isSessionActive.asStateFlow()
 
-    private val scope = CoroutineScope(Dispatchers.IO)
+    private val _activeSelectionText = MutableStateFlow<String>("")
+    override val activeSelectionText: StateFlow<String> = _activeSelectionText.asStateFlow()
+
+    private val _activeSelectionRange = MutableStateFlow<TextRange>(TextRange.Zero)
+    override val activeSelectionRange: StateFlow<TextRange> = _activeSelectionRange.asStateFlow()
+
+    private val selectionChangeListeners = CopyOnWriteArrayList<SelectionChangeListener>()
 
     init {
-        startShellSession()
+        startSession()
     }
 
-    fun startShellSession() {
-        if (_isSessionActive.value) return
+    override fun addSelectionChangeListener(listener: SelectionChangeListener) {
+        if (!selectionChangeListeners.contains(listener)) {
+            selectionChangeListeners.add(listener)
+        }
+    }
 
-        try {
-            val pb = ProcessBuilder("/system/bin/sh")
-                .directory(workingDir)
-                .redirectErrorStream(true)
+    override fun removeSelectionChangeListener(listener: SelectionChangeListener) {
+        selectionChangeListeners.remove(listener)
+    }
 
-            val env = pb.environment()
-            env["TERM"] = "xterm-256color"
-            env["COLORTERM"] = "truecolor"
-            env["HOME"] = workingDir.absolutePath
-            val currentPath = env["PATH"] ?: "/system/bin:/system/xbin"
-            env["PATH"] = "$currentPath:/system/bin:/system/xbin"
+    override fun notifySelectionChanged(selectedRange: TextRange, selectedText: String) {
+        _activeSelectionRange.value = selectedRange
+        _activeSelectionText.value = selectedText
 
-            val p = pb.start()
-            process = p
-            outputStream = p.outputStream
-            _isSessionActive.value = true
+        for (listener in selectionChangeListeners) {
+            listener.onSelectionChanged(selectedRange, selectedText)
+        }
+    }
 
-            appendOutput("Verb Terminal Session Active (${workingDir.name}).\n$ ")
+    override fun selectedText(): String {
+        return _activeSelectionText.value
+    }
 
-            // Read output stream continuously
-            scope.launch {
-                val buffer = ByteArray(2048)
-                val inputStream: InputStream = p.inputStream
-                try {
-                    var bytesRead: Int
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        val text = String(buffer, 0, bytesRead)
-                        appendOutput(text)
-                    }
-                } catch (e: Exception) {
-                    appendOutput("\n[Session ended: ${e.message}]\n")
-                } finally {
-                    _isSessionActive.value = false
-                }
+    override fun startSession() {
+        if (_isSessionActive.value && currentSession != null) return
+
+        _sessionState.value = TerminalSessionState.STARTING
+        appendOutput("Verb Terminal Session Active (${workingDir.name}).\n$ ")
+
+        val session = TermuxTerminalSession(
+            workingDir = workingDir,
+            shellExecutable = "/system/bin/sh",
+            rows = 24,
+            cols = 80,
+            onOutputReceived = { text ->
+                appendOutput(text)
+            },
+            onSessionTerminated = { exitCode ->
+                _isSessionActive.value = false
+                _sessionState.value = if (exitCode == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
+                appendOutput("\n[Session terminated with code $exitCode]\n$ ")
             }
-        } catch (e: Exception) {
-            _isSessionActive.value = false
-            appendOutput("Error starting terminal process: ${e.localizedMessage}\n$ ")
+        )
+
+        currentSession = session
+        _isSessionActive.value = true
+        _sessionState.value = TerminalSessionState.RUNNING
+        session.startSession()
+    }
+
+    override fun attachSession() {
+        if (currentSession != null && _isSessionActive.value) {
+            _sessionState.value = TerminalSessionState.RUNNING
+        } else {
+            startSession()
         }
     }
 
-    fun sendInput(input: String) {
-        val os = outputStream ?: return
-        scope.launch {
-            try {
-                os.write(input.toByteArray())
-                os.flush()
-            } catch (e: Exception) {
-                appendOutput("\n[Write error: ${e.message}]\n")
-            }
-        }
+    override fun sendText(text: String) {
+        currentSession?.writeInput(text)
     }
 
-    fun sendCommand(cmd: String) {
-        sendInput("$cmd\n")
+    override fun sendCommand(cmd: String) {
+        sendText("$cmd\n")
     }
 
-    fun sendControlKey(key: String) {
-        when (key) {
-            "ESC" -> sendInput("\u001b")
-            "CTRL_C" -> sendInput("\u0003")
-            "TAB" -> sendInput("\t")
-            "UP" -> sendInput("\u001b[A")
-            "DOWN" -> sendInput("\u001b[B")
-            "RIGHT" -> sendInput("\u001b[C")
-            "LEFT" -> sendInput("\u001b[D")
-            else -> sendInput(key)
-        }
+    override fun sendControlKey(key: String) {
+        currentSession?.sendControlKey(key)
     }
 
-    fun clearBuffer() {
+    override fun resize(rows: Int, cols: Int) {
+        currentSession?.updateWindowSize(rows, cols)
+    }
+
+    override fun currentWorkingDirectory(): String {
+        return workingDir.absolutePath
+    }
+
+    override fun clearBuffer() {
         _terminalOutput.value = "$ "
     }
 
@@ -114,10 +128,12 @@ class TerminalRuntime(private val workingDir: File) {
         _terminalOutput.value = updated
     }
 
-    fun destroy() {
-        runCatching {
-            process?.destroy()
-        }
+    override fun destroy() {
+        _sessionState.value = TerminalSessionState.STOPPING
         _isSessionActive.value = false
+        currentSession?.destroySession()
+        currentSession = null
+        selectionChangeListeners.clear()
+        _sessionState.value = TerminalSessionState.EXITED
     }
 }

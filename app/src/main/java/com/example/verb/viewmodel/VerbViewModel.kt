@@ -90,7 +90,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
                 // If result contains raw command, also reflect in terminal runtime history
                 result.rawCommand?.let { cmd ->
-                    terminalRuntime.sendInput("# Executed from Ask: $cmd\n")
+                    terminalRuntime.sendText("# Executed from Ask: $cmd\n")
                 }
             }
         }
@@ -108,7 +108,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             _historyList.value = listOf(result) + _historyList.value.take(9)
 
             result.rawCommand?.let { cmd ->
-                terminalRuntime.sendInput("# Executed confirmed action: $cmd\n")
+                terminalRuntime.sendText("# Executed confirmed action: $cmd\n")
             }
         }
     }

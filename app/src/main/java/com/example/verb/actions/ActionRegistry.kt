@@ -240,20 +240,30 @@ class ActionRegistry(private val context: Context) {
     private fun executePortInspect(portStr: String): ActionResult {
         val port = portStr.toIntOrNull() ?: 3000
 
-        // Check socket or proc if possible
-        val rawCommand = "netstat -tuln | grep :$port"
         val isOccupied = checkPortOccupied(port)
 
         val metrics = mapOf(
             "Target Port" to port.toString(),
-            "Port Status" to if (isOccupied) "OCCUPIED (Conflict)" else "AVAILABLE",
-            "Transport Protocol" to "TCP / UDP"
+            "Port Status" to if (isOccupied) "OCCUPIED / RESTRICTED" else "AVAILABLE",
+            "Transport Protocol" to "TCP"
         )
 
         val summaryStr = if (isOccupied) {
-            "Port $port is currently in use by an active listener process."
+            "Port $port is currently unavailable for socket binding."
         } else {
             "Port $port is currently free and available for binding."
+        }
+
+        val observedStr = if (isOccupied) {
+            "Socket bind check: java.net.BindException (Port $port bound or restricted)"
+        } else {
+            "Socket bind check: Successfully bound and unbound local port $port"
+        }
+
+        val explanationStr = if (isOccupied) {
+            "Socket bind check returned a conflict for port $port. Direct OS process identification is restricted by Android sandbox policies."
+        } else {
+            "Socket bind check confirmed port $port is available."
         }
 
         return ActionResult(
@@ -261,8 +271,11 @@ class ActionRegistry(private val context: Context) {
             title = "Port $port Inspection",
             summary = summaryStr,
             metrics = metrics,
-            rawCommand = rawCommand,
-            rawOutput = if (isOccupied) "tcp 0 0 0.0.0.0:$port 0.0.0.0:* LISTEN" else "Port $port is open and not bound."
+            rawCommand = "ServerSocket($port)",
+            rawOutput = observedStr,
+            observedOutput = observedStr,
+            derivedData = metrics,
+            explanation = explanationStr
         )
     }
 
