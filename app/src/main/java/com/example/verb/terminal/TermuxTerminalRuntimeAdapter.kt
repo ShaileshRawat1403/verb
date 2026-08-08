@@ -3,7 +3,6 @@ package com.example.verb.terminal
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.ui.text.TextRange
-import com.termux.terminal.JNI
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import com.termux.view.TerminalView
@@ -26,7 +25,12 @@ class TermuxTerminalRuntimeAdapter(
 
     private var session: TerminalSession? = null
     var terminalView: TerminalView? = null
-        private set
+
+    fun bindTerminalView(view: TerminalView) {
+        terminalView = view
+        view.setTerminalViewClient(this)
+        session?.let { view.attachSession(it) }
+    }
 
     private val _sessionState = MutableStateFlow<TerminalSessionState>(TerminalSessionState.STARTING)
     override val sessionState: StateFlow<TerminalSessionState> = _sessionState.asStateFlow()
@@ -64,25 +68,35 @@ class TermuxTerminalRuntimeAdapter(
             "LANG=en_US.UTF-8"
         )
 
-        val newSession = TerminalSession(
-            shellPath = shellExecutable,
-            cwd = workingDir.absolutePath,
-            args = arrayOf("-l"),
-            env = envArray,
-            client = this
-        )
+        try {
+            Class.forName("com.termux.terminal.JNI")
+            val newSession = TerminalSession(
+                shellExecutable,
+                workingDir.absolutePath,
+                arrayOf("-l"),
+                envArray,
+                2000,
+                this
+            )
+            
+            // Initialize the emulator immediately for headless execution
+            newSession.updateSize(80, 24, 0, 0)
 
-        if (newSession.isRunning && JNI.isLoaded()) {
-            session = newSession
-            _isSessionActive.value = true
-            _sessionState.value = TerminalSessionState.RUNNING
-
-            terminalView?.attachSession(newSession)
-        } else {
-            // Truthful failure reporting in production — NO silent fallback
+            if (newSession.isRunning) {
+                session = newSession
+                _isSessionActive.value = true
+                _sessionState.value = TerminalSessionState.RUNNING
+                terminalView?.attachSession(newSession)
+            } else {
+                // Truthful failure reporting in production — NO silent fallback
+                _isSessionActive.value = false
+                _sessionState.value = TerminalSessionState.FAILED
+                appendOutput("\n[FAILED to start Termux PTY session: libtermux.so or PTY allocation failed]\n")
+            }
+        } catch (t: Throwable) {
             _isSessionActive.value = false
             _sessionState.value = TerminalSessionState.FAILED
-            appendOutput("\n[FAILED to start Termux PTY session: libtermux.so or PTY allocation failed]\n")
+            appendOutput("\n[FAILED to start Termux PTY session: ${t.message}]\n")
         }
     }
 
@@ -117,17 +131,16 @@ class TermuxTerminalRuntimeAdapter(
     }
 
     override fun resize(rows: Int, cols: Int) {
-        session?.updateSize(rows, cols)
+        session?.updateSize(cols, rows, 0, 0)
     }
 
     override fun selectedText(): String {
-        return terminalView?.getStoredSelectedText() ?: _activeSelectionText.value
+        return terminalView?.storedSelectedText ?: _activeSelectionText.value
     }
 
     override fun notifySelectionChanged(selectedRange: TextRange, selectedText: String) {
         _activeSelectionRange.value = selectedRange
         _activeSelectionText.value = selectedText
-
         for (listener in selectionListeners) {
             listener.onSelectionChanged(selectedRange, selectedText)
         }
@@ -162,24 +175,32 @@ class TermuxTerminalRuntimeAdapter(
 
     // TerminalSessionClient callbacks
     override fun onTextChanged(changedSession: TerminalSession) {
-        appendOutput(changedSession.emulator.screenBuffer.getFullText())
+        appendOutput(changedSession.emulator.screen.transcriptText)
     }
 
     override fun onTitleChanged(changedSession: TerminalSession) {}
 
     override fun onSessionFinished(finishedSession: TerminalSession) {
         _isSessionActive.value = false
-        _sessionState.value = if (finishedSession.exitCode == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
-        appendOutput("\n[Session terminated with code ${finishedSession.exitCode}]\n$ ")
+        _sessionState.value = if (finishedSession.exitStatus == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
+        appendOutput("\n[Session terminated with code ${finishedSession.exitStatus}]\n$ ")
     }
 
-    override fun onClipboardText(session: TerminalSession, text: String) {
+    override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
         notifySelectionChanged(TextRange(0, text.length), text)
     }
 
+    override fun onPasteTextFromClipboard(session: TerminalSession?) {}
+    
     override fun onBell(session: TerminalSession) {}
-
+    
     override fun onColorsChanged(session: TerminalSession) {}
+    
+    override fun onTerminalCursorStateChange(state: Boolean) {}
+    
+    override fun setTerminalShellPid(session: TerminalSession, pid: Int) {}
+    
+    override fun getTerminalCursorStyle(): Int = 0
 
     // TerminalViewClient callbacks
     override fun onScale(scale: Float): Float = scale
@@ -187,22 +208,35 @@ class TermuxTerminalRuntimeAdapter(
     override fun onSingleTapUp(e: MotionEvent) {}
 
     override fun onLongPress(e: MotionEvent): Boolean {
-        val selText = terminalView?.getStoredSelectedText() ?: ""
+        val selText = terminalView?.storedSelectedText ?: ""
         if (selText.isNotBlank()) {
             notifySelectionChanged(TextRange(0, selText.length), selText)
         }
         return true
     }
 
+    override fun shouldBackButtonBeMappedToEscape(): Boolean = false
+    override fun shouldEnforceCharBasedInput(): Boolean = false
+    override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
+    override fun isTerminalViewSelected(): Boolean = true
+    override fun copyModeChanged(copyMode: Boolean) {}
+
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession?): Boolean = false
-
     override fun onKeyUp(keyCode: Int, e: KeyEvent): Boolean = false
+    override fun readControlKey(): Boolean = false
+    override fun readAltKey(): Boolean = false
+    override fun readShiftKey(): Boolean = false
+    override fun readFnKey(): Boolean = false
+    override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession?): Boolean = false
+    override fun onEmulatorSet() {}
 
-    override fun onSelectedTextClipboard(selectedText: String) {
-        if (selectedText.isNotBlank()) {
-            notifySelectionChanged(TextRange(0, selectedText.length), selectedText)
-        }
-    }
+    override fun logError(tag: String, message: String) {}
+    override fun logWarn(tag: String, message: String) {}
+    override fun logInfo(tag: String, message: String) {}
+    override fun logDebug(tag: String, message: String) {}
+    override fun logVerbose(tag: String, message: String) {}
+    override fun logStackTraceWithMessage(tag: String, message: String, e: Exception) {}
+    override fun logStackTrace(tag: String, e: Exception) {}
 
     private fun appendOutput(text: String) {
         val current = _terminalOutput.value
