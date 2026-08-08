@@ -57,6 +57,7 @@ data class ActionResult(
     val requiresConfirmation: Boolean = false,
     val confirmationPrompt: String? = null,
     val targetPid: Int? = null,
+    val originalIntent: VerbIntent? = null,
     val timestamp: Long = System.currentTimeMillis()
 )
 

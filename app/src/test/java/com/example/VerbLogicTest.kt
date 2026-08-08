@@ -66,16 +66,27 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `process stop requires confirmation`() {
+    fun `process stop requires confirmation and retains original intent parameters`() {
         val intent = intentEngine.resolveIntent("stop process 1234")
         assertEquals("process.stop", intent.id)
+        assertEquals("1234", intent.parameters["pid"])
         assertEquals(ActionRisk.CONTROLLED_WRITE, intent.risk)
 
         val unconfirmedResult = actionRegistry.executeAction(intent, confirmed = false)
         assertTrue(unconfirmedResult.requiresConfirmation)
+        assertNotNull(unconfirmedResult.originalIntent)
+        assertEquals("1234", unconfirmedResult.originalIntent?.parameters?.get("pid"))
 
-        val confirmedResult = actionRegistry.executeAction(intent, confirmed = true)
+        val confirmedResult = actionRegistry.executeAction(unconfirmedResult.originalIntent!!, confirmed = true)
         assertFalse(confirmedResult.requiresConfirmation)
+        assertEquals("1234", confirmedResult.originalIntent?.parameters?.get("pid"))
+    }
+
+    @Test
+    fun `storage size entity detection`() {
+        val entity = semanticEngine.analyzeText("9.7G")
+        assertEquals("Storage Size (9.7 G)", entity.title)
+        assertTrue(entity.suggestedActions.isNotEmpty())
     }
 
     @Test

@@ -111,6 +111,14 @@ fun MobileTerminalKeyboard(
                         KeyButton(label = "ESC", testTag = "key_esc") { onSendKey("ESC") }
                         KeyButton(label = "CTRL+C", testTag = "key_ctrl_c") { onSendKey("CTRL_C") }
                         KeyButton(label = "TAB", testTag = "key_tab") { onSendKey("TAB") }
+                        KeyButton(label = "Inspect Selection", testTag = "key_inspect_selection", isAccent = true) {
+                            val pasted = clipboardManager.getText()?.text
+                            if (!pasted.isNullOrEmpty()) {
+                                onInspectOutput(pasted)
+                            } else {
+                                onInspectOutput(terminalOutput.takeLast(300))
+                            }
+                        }
                         KeyButton(label = "▲", testTag = "key_up") { onSendKey("UP") }
                         KeyButton(label = "▼", testTag = "key_down") { onSendKey("DOWN") }
                         KeyButton(label = "◄", testTag = "key_left") { onSendKey("LEFT") }

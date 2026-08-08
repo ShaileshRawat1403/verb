@@ -101,7 +101,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _confirmationPendingResult.value = null
 
         viewModelScope.launch(Dispatchers.IO) {
-            val intent = intentEngine.resolveIntent(pending.title)
+            val intent = pending.originalIntent ?: intentEngine.resolveIntent(pending.title)
             val result = actionRegistry.executeAction(intent, confirmed = true)
 
             _currentActionResult.value = result

@@ -73,6 +73,33 @@ class SemanticEngine {
             )
         }
 
+        // 2.5 Storage size detection (9.7G, 500MB, 12GB, etc.)
+        val storageSizeMatch = Regex("""^(\d+(?:\.\d+)?)\s*([KMGTPE]i?B?)$""", RegexOption.IGNORE_CASE).find(text)
+        if (storageSizeMatch != null) {
+            val num = storageSizeMatch.groupValues[1]
+            val unit = storageSizeMatch.groupValues[2].uppercase()
+            return SemanticEntity(
+                rawText = text,
+                entityType = EntityType.GENERIC_TEXT,
+                title = "Storage Size ($num $unit)",
+                description = "Storage capacity or usage metric value of $text.",
+                suggestedActions = listOf(
+                    SuggestedAction(
+                        id = "show_storage",
+                        label = "Show Storage Breakdown",
+                        intentQuery = "show me my storage",
+                        risk = ActionRisk.READ_ONLY
+                    ),
+                    SuggestedAction(
+                        id = "explain_size",
+                        label = "Explain metric",
+                        intentQuery = "explain storage metric $text",
+                        risk = ActionRisk.READ_ONLY
+                    )
+                )
+            )
+        }
+
         // 3. Port number standalone or socket (:3000, port 8080)
         val standalonePortMatch = Regex("""\b(?:port\s*)?([1-9]\d{2,4})\b""", RegexOption.IGNORE_CASE).find(text)
         if (standalonePortMatch != null && (text.contains("port", ignoreCase = true) || text.startsWith(":") || text.matches(Regex("""\d{4,5}""")))) {
@@ -168,18 +195,26 @@ class SemanticEngine {
         }
 
         // 7. File Path
-        if (text.startsWith("/") || text.startsWith("./") || text.contains("/") || text.endsWith(".js") || text.endsWith(".kts") || text.endsWith(".json")) {
+        if (text.startsWith("/") || text.startsWith("./") || text.startsWith("~") || text.contains("/") || text.endsWith(".js") || text.endsWith(".kts") || text.endsWith(".json")) {
+            val titleText = if (text.contains("storage/emulated")) "Shared Android Storage Path" else "File Path"
+            val descText = if (text.contains("storage/emulated")) "Shared Android storage location: '$text'" else "Path reference: '$text'."
             return SemanticEntity(
                 rawText = text,
                 entityType = EntityType.FILE_PATH,
-                title = "File Path",
-                description = "Path reference: '$text'.",
+                title = titleText,
+                description = descText,
                 detectedPath = text,
                 suggestedActions = listOf(
                     SuggestedAction(
                         id = "list_files_path",
-                        label = "List files in directory",
+                        label = "Open files in $text",
                         intentQuery = "show files in $text",
+                        risk = ActionRisk.READ_ONLY
+                    ),
+                    SuggestedAction(
+                        id = "explain_path",
+                        label = "Explain path location",
+                        intentQuery = "explain path $text",
                         risk = ActionRisk.READ_ONLY
                     )
                 )
