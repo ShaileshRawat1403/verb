@@ -33,7 +33,20 @@ class IntentEngine {
             )
         }
 
-        // 3. Process list
+        // 3. Process stop (Controlled write - checked before process list)
+        if (normalized.contains("stop process") || normalized.contains("kill process") || normalized.contains("kill ")) {
+            val pid = extractNumbers(normalized).firstOrNull() ?: ""
+            return VerbIntent(
+                id = "process.stop",
+                name = "Stop Process",
+                parameters = mapOf("pid" to pid),
+                risk = ActionRisk.CONTROLLED_WRITE,
+                confidence = 0.90f,
+                description = "Stop process with PID $pid (Requires user confirmation)"
+            )
+        }
+
+        // 4. Process list
         if (normalized.contains("process") || normalized.contains("running app") || normalized.contains("ps")) {
             return VerbIntent(
                 id = "process.list",
@@ -82,19 +95,6 @@ class IntentEngine {
                 risk = ActionRisk.READ_ONLY,
                 confidence = 0.90f,
                 description = "Inspect process or socket using port $portStr"
-            )
-        }
-
-        // 7. Process stop (Controlled write)
-        if (normalized.contains("stop process") || normalized.contains("kill process") || normalized.contains("kill ")) {
-            val pid = extractNumbers(normalized).firstOrNull() ?: ""
-            return VerbIntent(
-                id = "process.stop",
-                name = "Stop Process",
-                parameters = mapOf("pid" to pid),
-                risk = ActionRisk.CONTROLLED_WRITE,
-                confidence = 0.90f,
-                description = "Stop process with PID $pid (Requires user confirmation)"
             )
         }
 
