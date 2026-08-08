@@ -1,0 +1,6 @@
+{
+  "name": "Verb",
+  "description": "Touch-native interface for operating your device through natural language, guided actions, and a real terminal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
