@@ -8,22 +8,9 @@ class SemanticEngine {
         val text = selectedText.trim()
 
         // 0. Sensitive Text Guard
-        if (text.contains("-----BEGIN PRIVATE KEY-----") ||
-            text.contains("-----BEGIN RSA PRIVATE KEY-----") ||
-            text.contains("Authorization: Bearer") ||
-            text.contains("password=", ignoreCase = true) ||
-            text.contains("api_key=", ignoreCase = true) ||
-            text.contains("secret=", ignoreCase = true)) {
-            return SemanticEntity(
-                rawText = text,
-                entityType = EntityType.SENSITIVE_TEXT,
-                title = "Sensitive Text",
-                description = "Credential or sensitive material detected. Remote analysis disabled.",
-                risk = ActionRisk.READ_ONLY,
-                isSensitive = true,
-                confidence = DetectionConfidence.HIGH,
-                detectionMethod = "DETERMINISTIC_PATTERN"
-            )
+        val sensitiveEntity = SecretGuard.checkSensitive(text)
+        if (sensitiveEntity != null) {
+            return sensitiveEntity
         }
 
         // 1. Error messages
@@ -42,7 +29,7 @@ class SemanticEngine {
                 risk = ActionRisk.READ_ONLY,
                 detectedPort = detectedPort,
                 confidence = DetectionConfidence.HIGH,
-                detectionMethod = "DETERMINISTIC_ERROR",
+                detectionMethod = "ERROR_EADDRINUSE",
                 normalizedValue = detectedPort?.toString(),
                 suggestedActions = if (detectedPort != null) listOf(
                     SuggestedAction(
@@ -65,7 +52,7 @@ class SemanticEngine {
             text.contains("ENOENT", ignoreCase = true) || 
             text.contains("TypeError", ignoreCase = true)) {
             val errorSummary = when {
-                text.contains("TypeError", ignoreCase = true) -> "Often means a method or property was accessed on an undefined or null reference."
+                text.contains("TypeError", ignoreCase = true) -> "unknown without more context"
                 text.contains("Permission denied", ignoreCase = true) -> "Selected output indicates the current process lacks permissions for the resource."
                 text.contains("Command not found", ignoreCase = true) -> "Often means the executable is not installed or not in PATH."
                 else -> "Often means a file or directory does not exist (ENOENT)."
@@ -73,10 +60,10 @@ class SemanticEngine {
             return SemanticEntity(
                 rawText = text,
                 entityType = EntityType.ERROR_MESSAGE,
-                title = "Runtime Error",
-                description = errorSummary,
+                title = if (text.contains("TypeError", ignoreCase = true)) "Type-related runtime error" else "Runtime Error",
+                description = if (text.contains("TypeError", ignoreCase = true)) "Cause: unknown without more context" else errorSummary,
                 confidence = DetectionConfidence.HIGH,
-                detectionMethod = "DETERMINISTIC_ERROR"
+                detectionMethod = "ERROR_MESSAGE"
             )
         }
 
@@ -90,7 +77,7 @@ class SemanticEngine {
                 title = "URL Link",
                 description = "Web address: $url",
                 confidence = DetectionConfidence.EXACT,
-                detectionMethod = "DETERMINISTIC_URL",
+                detectionMethod = "EXACT_URL",
                 normalizedValue = url
             )
         }
@@ -106,7 +93,7 @@ class SemanticEngine {
                     title = "IP Address",
                     description = "IPv4 network address: ${ipMatch.value}",
                     confidence = DetectionConfidence.EXACT,
-                    detectionMethod = "DETERMINISTIC_IP",
+                    detectionMethod = "EXACT_IPV4",
                     normalizedValue = ipMatch.value
                 )
             }
@@ -125,7 +112,7 @@ class SemanticEngine {
                     description = "TCP/UDP communication port $p.",
                     detectedPort = p,
                     confidence = DetectionConfidence.EXACT,
-                    detectionMethod = "DETERMINISTIC_PORT",
+                    detectionMethod = "EXACT_PORT",
                     normalizedValue = p.toString(),
                     suggestedActions = listOf(
                         SuggestedAction(
@@ -157,7 +144,7 @@ class SemanticEngine {
                     description = "System Process Identifier $pid.",
                     detectedPid = pid,
                     confidence = DetectionConfidence.EXACT,
-                    detectionMethod = "DETERMINISTIC_PID",
+                    detectionMethod = "PID_PATTERN",
                     normalizedValue = pid.toString()
                 )
             }
@@ -224,7 +211,7 @@ class SemanticEngine {
                     description = "Path reference: '$text'.",
                     detectedPath = text,
                     confidence = DetectionConfidence.HIGH,
-                    detectionMethod = "DETERMINISTIC_PATH",
+                    detectionMethod = "FILE_PATH",
                     normalizedValue = text,
                     suggestedActions = listOf(
                         SuggestedAction(
