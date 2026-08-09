@@ -193,7 +193,6 @@ fun TerminalScreen(
             AndroidView(
                 factory = { ctx ->
                     termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
-                        it.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                         termuxAdapter.bindTerminalView(it)
                     }
                 },

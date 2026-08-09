@@ -9,10 +9,14 @@
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
 .DS_Store
-/build
+build/
 /captures
 .externalNativeBuild
 .cxx
 local.properties
 .env
 debug.keystore
+.build-outputs/
+app/build/
+debug.keystore.base64
+app/.cxx
