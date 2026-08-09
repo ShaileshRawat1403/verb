@@ -177,7 +177,7 @@ fun VerbNaturalLanguageSheet(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("verb_run_command_button"),
+                    .testTag("verb_submit_intent_button"),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
             ) {
                 Icon(
