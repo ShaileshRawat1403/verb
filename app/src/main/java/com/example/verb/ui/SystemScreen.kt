@@ -21,26 +21,42 @@ import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.SdCard
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.verb.ai.AiProviderConfig
+import com.example.verb.ai.AiProviderId
+import com.example.verb.ai.AiProviderSettings
 import com.example.verb.ui.theme.SecondaryCyan
 import java.util.Locale
 
 @Composable
 fun SystemScreen(
     isTerminalSessionActive: Boolean,
+    aiProviderSettings: AiProviderSettings = AiProviderSettings(),
+    onSaveAiProviderSettings: (AiProviderConfig, String?) -> Result<Unit> = { _, _ -> Result.success(Unit) },
+    onClearAiProviderApiKey: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -152,7 +168,157 @@ fun SystemScreen(
             )
         )
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        AiProviderSettingsCard(
+            settings = aiProviderSettings,
+            onSave = onSaveAiProviderSettings,
+            onClearApiKey = onClearAiProviderApiKey
+        )
+
         Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+@Composable
+private fun AiProviderSettingsCard(
+    settings: AiProviderSettings,
+    onSave: (AiProviderConfig, String?) -> Result<Unit>,
+    onClearApiKey: () -> Unit
+) {
+    var selectedProvider by remember(settings.config?.providerId) {
+        mutableStateOf(settings.config?.providerId ?: AiProviderId.OPENAI)
+    }
+    var model by remember(settings.config?.model) { mutableStateOf(settings.config?.model.orEmpty()) }
+    var baseUrl by remember(settings.config?.baseUrl, selectedProvider) {
+        mutableStateOf(settings.config?.baseUrl ?: selectedProvider.defaultBaseUrl)
+    }
+    var apiKeyInput by remember { mutableStateOf("") }
+    var feedback by remember { mutableStateOf<String?>(null) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("AI Provider", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "Bring your own API key. The key is encrypted with Android Keystore and is never sent to Terminal.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AiProviderId.entries.take(2).forEach { provider ->
+                    FilterChip(
+                        selected = selectedProvider == provider,
+                        onClick = {
+                            selectedProvider = provider
+                            baseUrl = provider.defaultBaseUrl
+                            feedback = null
+                        },
+                        label = { Text(provider.displayName) }
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AiProviderId.entries.drop(2).forEach { provider ->
+                    FilterChip(
+                        selected = selectedProvider == provider,
+                        onClick = {
+                            selectedProvider = provider
+                            baseUrl = provider.defaultBaseUrl
+                            feedback = null
+                        },
+                        label = { Text(provider.displayName) }
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = model,
+                onValueChange = { model = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp)
+                    .testTag("ai_provider_model"),
+                label = { Text("Model") },
+                placeholder = { Text("Choose a model available to your account") },
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = baseUrl,
+                onValueChange = { baseUrl = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .testTag("ai_provider_endpoint"),
+                label = { Text("HTTPS endpoint") },
+                placeholder = { Text(selectedProvider.defaultBaseUrl.ifBlank { "https://…" }) },
+                singleLine = true
+            )
+            OutlinedTextField(
+                value = apiKeyInput,
+                onValueChange = { apiKeyInput = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .testTag("ai_provider_api_key"),
+                label = { Text(if (settings.hasApiKey) "New API key (optional)" else "API key") },
+                placeholder = {
+                    Text(if (settings.hasApiKey) "A key is already stored securely" else "Paste your provider API key")
+                },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true
+            )
+
+            feedback?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+
+            Row(
+                modifier = Modifier.padding(top = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Button(
+                    onClick = {
+                        if (!settings.hasApiKey && apiKeyInput.isBlank()) {
+                            feedback = "An API key is required to enable this provider."
+                            return@Button
+                        }
+                        onSave(
+                            AiProviderConfig(selectedProvider, model, baseUrl),
+                            apiKeyInput.takeIf { it.isNotBlank() }
+                        ).onSuccess {
+                            apiKeyInput = ""
+                            feedback = "Provider settings saved."
+                        }.onFailure { exception ->
+                            feedback = exception.message ?: "Provider settings could not be saved."
+                        }
+                    },
+                    modifier = Modifier.testTag("save_ai_provider")
+                ) {
+                    Text("Save provider")
+                }
+                if (settings.hasApiKey) {
+                    OutlinedButton(onClick = {
+                        onClearApiKey()
+                        feedback = "Saved API key removed."
+                    }) {
+                        Text("Remove key")
+                    }
+                }
+            }
+        }
     }
 }
 
