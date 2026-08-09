@@ -59,6 +59,31 @@ class ActionRegistry(private val context: Context) {
         val authoritativeRisk = actionRiskPolicy[intent.id] ?: intent.risk
         val enforcedIntent = intent.copy(risk = authoritativeRisk)
 
+        if (enforcedIntent.id == "process.stop") {
+            val pidStr = enforcedIntent.parameters["pid"] ?: ""
+            val pid = pidStr.toIntOrNull()
+            if (pid == android.os.Process.myPid()) {
+                return ActionResult(
+                    intentId = "process.stop",
+                    title = "Process Stop Blocked",
+                    summary = "Cannot kill Verb's own process (PID $pid).",
+                    isSuccess = false,
+                    errorMessage = "Self-termination blocked.",
+                    originalIntent = enforcedIntent
+                )
+            }
+            if (pid == null || pid <= 0) {
+                return ActionResult(
+                    intentId = "process.stop",
+                    title = "Process Stop Failed",
+                    summary = "Invalid PID specified: '$pidStr'. Must be a positive integer.",
+                    isSuccess = false,
+                    errorMessage = "PID must be a valid positive integer.",
+                    originalIntent = enforcedIntent
+                )
+            }
+        }
+
         // Check Risk & Confirmation Policy
         if (enforcedIntent.risk == ActionRisk.CONTROLLED_WRITE && !confirmed) {
             return ActionResult(
