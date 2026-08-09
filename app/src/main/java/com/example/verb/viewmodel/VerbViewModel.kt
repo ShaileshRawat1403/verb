@@ -66,11 +66,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun submitIntent(intent: com.example.verb.model.VerbIntent) {
         _isExecuting.value = true
         _queryInput.value = intent.summary
-        if (intent.id != "terminal.open") {
-            // Structured results and confirmations belong to Ask, even when the action was
-            // initiated from the terminal's natural-language sheet or Semantic Lens.
-            _activeTab.value = VerbTab.ASK
-        }
         viewModelScope.launch(Dispatchers.IO) {
             if (intent.id == "terminal.open") {
                 _isExecuting.value = false
@@ -84,6 +79,9 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 _currentActionResult.value = result
                 _historyList.value = listOf(result) + _historyList.value.take(9)
+                result.rawCommand?.let { cmd ->
+                    terminalRuntime.sendText("# Executed from Lens: $cmd\n")
+                }
             }
         }
     }
@@ -111,6 +109,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 _currentActionResult.value = result
                 _historyList.value = listOf(result) + _historyList.value.take(9)
 
+                // If result contains raw command, also reflect in terminal runtime history
+                result.rawCommand?.let { cmd ->
+                    terminalRuntime.sendText("# Executed from Ask: $cmd\n")
+                }
             }
         }
     }
@@ -126,6 +128,9 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             _currentActionResult.value = result
             _historyList.value = listOf(result) + _historyList.value.take(9)
 
+            result.rawCommand?.let { cmd ->
+                terminalRuntime.sendText("# Executed confirmed action: $cmd\n")
+            }
         }
     }
 
@@ -145,8 +150,9 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _activeSemanticEntity.value = null
     }
 
-    fun openTerminal() {
+    fun openTerminalWithCommand(command: String) {
         _activeTab.value = VerbTab.TERMINAL
+        terminalRuntime.sendCommand(command)
     }
 
     override fun onCleared() {
