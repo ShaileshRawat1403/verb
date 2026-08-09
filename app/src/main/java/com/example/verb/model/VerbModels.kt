@@ -30,20 +30,6 @@ data class VerbIntent(
 ) {
     val summary: String
         get() = description.ifEmpty { name }
-
-    val commandTemplate: String?
-        get() = when (id) {
-            "storage.summary" -> "df -h"
-            "memory.summary" -> "free -m"
-            "process.list" -> "ps -A"
-            "file.list" -> "ls -la ${parameters["path"] ?: "."}"
-            "file.search" -> "find . -name '*${parameters["query"] ?: ""}*'"
-            "network.port.inspect" -> "netstat -tuln | grep :${parameters["port"] ?: "3000"}"
-            "process.stop" -> "kill -9 ${parameters["pid"] ?: ""}"
-            "system.summary" -> "uname -a"
-            "terminal.explain" -> "man ${parameters["command"] ?: ""}"
-            else -> parameters["raw"] ?: "sh"
-        }
 }
 
 data class ActionResult(
@@ -51,9 +37,7 @@ data class ActionResult(
     val title: String,
     val summary: String,
     val metrics: Map<String, String> = emptyMap(),
-    val rawCommand: String? = null,
-    val rawOutput: String? = null,
-    val observedOutput: String? = rawOutput,
+    val observedOutput: String? = null,
     val derivedData: Map<String, String> = metrics,
     val explanation: String? = summary,
     val isSuccess: Boolean = true,
