@@ -24,6 +24,7 @@ class TerminalRuntime(
     override val activeSelectionText: StateFlow<String> get() = delegate.activeSelectionText
     override val activeSelectionRange: StateFlow<TextRange> get() = delegate.activeSelectionRange
     override val isSessionActive: StateFlow<Boolean> get() = delegate.isSessionActive
+    override val terminalContextState: StateFlow<TerminalContextState> get() = delegate.terminalContextState
 
     override fun startSession() = delegate.startSession()
     override fun attachSession() = delegate.attachSession()

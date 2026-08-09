@@ -150,6 +150,14 @@ class VerbLogicTest {
         val runtime = com.example.verb.terminal.TerminalRuntime(context.filesDir, useFakeForTesting = true)
         assertTrue(runtime.isSessionActive.value)
         assertTrue(runtime.terminalOutput.value.contains("Verb Terminal Session Active"))
+        assertEquals(
+            com.example.verb.terminal.TerminalContextCapability.SESSION_ONLY,
+            runtime.terminalContextState.value.capability
+        )
+        assertEquals(
+            com.example.verb.terminal.AlternateScreenState.UNKNOWN,
+            runtime.terminalContextState.value.alternateScreenState
+        )
 
         runtime.sendCommand("echo 'Verb TTY test'")
         runtime.clearBuffer()
@@ -157,6 +165,10 @@ class VerbLogicTest {
 
         runtime.destroy()
         assertFalse(runtime.isSessionActive.value)
+        assertEquals(
+            com.example.verb.terminal.TerminalContextCapability.UNAVAILABLE,
+            runtime.terminalContextState.value.capability
+        )
     }
 
     @Test
@@ -167,6 +179,14 @@ class VerbLogicTest {
         assertEquals(com.example.verb.terminal.TerminalSessionState.FAILED, runtime.sessionState.value)
         assertFalse(runtime.isSessionActive.value)
         assertTrue(runtime.terminalOutput.value.contains("FAILED to start Termux PTY session"))
+        assertEquals(
+            com.example.verb.terminal.TerminalContextCapability.UNAVAILABLE,
+            runtime.terminalContextState.value.capability
+        )
+        assertEquals(
+            com.example.verb.terminal.AlternateScreenState.UNKNOWN,
+            runtime.terminalContextState.value.alternateScreenState
+        )
     }
 
     @Test
