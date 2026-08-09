@@ -22,13 +22,14 @@ Date: 2026-08-09
 | Result provenance | Derived, Observed, and Explanation fields each rendered separately. |
 | Port inspection | `port 3000` reported only local bind availability; no fabricated process/PID owner. |
 | Explanation precedence | `what does ps do?` rendered Command Explanation, not Running Processes. |
+| Process-stop safety | `stop process 1234` displayed explicit confirmation; the request was cancelled without execution. |
 | System screen | Live storage formatting and `/system/bin/sh` runtime identity rendered correctly. |
 | Terminal foundation | Real shell prompt, Clear control, and ESC/CTRL/SHIFT/TAB/PASTE controls rendered. |
 | Firebase residue | The post-`48616e6` build launched without Firebase/Google Services initialization warnings. |
 
 ## Intentionally not exercised
 
-- No process-stop confirmation was confirmed against a real device process.
+- No process-stop confirmation was approved against a real device process.
 - No terminal command was injected by automated validation.
 - Semantic Lens selection/Inspect needs an explicit user-driven terminal text selection pass.
 
