@@ -232,6 +232,25 @@ class VerbLogicTest {
     }
 
     @Test
+    fun `explicit command explanation takes precedence over matching read only actions`() {
+        val intent = intentEngine.resolveIntent("what does ps do?")
+
+        assertEquals("terminal.explain", intent.id)
+        assertEquals("ps", intent.parameters["command"])
+        assertEquals(ActionRisk.READ_ONLY, intent.risk)
+    }
+
+    @Test
+    fun `explanation request for a controlled action does not request that action`() {
+        val intent = intentEngine.resolveIntent("explain stop process 1234")
+
+        assertEquals("terminal.explain", intent.id)
+        assertEquals("stop process 1234", intent.parameters["command"])
+        assertEquals(ActionRisk.READ_ONLY, intent.risk)
+        assertFalse(actionRegistry.executeAction(intent).requiresConfirmation)
+    }
+
+    @Test
     fun `terminal port intent resolution`() {
         val intent = intentEngine.resolveIntent("what's using port 3000?")
         assertEquals("network.port.inspect", intent.id)
