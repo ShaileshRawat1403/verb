@@ -25,6 +25,24 @@ class VerbUIRegressionTest {
     val composeTestRule = createComposeRule()
 
     @Test
+    fun defaultPromptSubmitsSupportedV0Intent() {
+        var submittedIntent: VerbIntent? = null
+        composeTestRule.setContent {
+            VerbNaturalLanguageSheet(
+                onDismiss = {},
+                onSubmitIntent = { intent ->
+                    submittedIntent = intent
+                }
+            )
+        }
+
+        composeTestRule.onNodeWithTag("verb_submit_intent_button").performClick()
+
+        assertNotNull(submittedIntent)
+        assertEquals("file.list", submittedIntent!!.id)
+    }
+
+    @Test
     fun unsupportedInputSubmitsTypedIntentUnsupportedIntent() {
         var submittedIntent: VerbIntent? = null
         composeTestRule.setContent {

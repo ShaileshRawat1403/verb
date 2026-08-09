@@ -249,7 +249,7 @@ class SemanticEngine {
             "free" -> "Displays system memory (RAM) totals, usage, and available capacity."
             "ps" -> "Lists running process snapshots."
             "ls" -> "Lists directory contents and permissions."
-            else -> "Executes '$baseCmd' in local shell environment."
+            else -> "Describes what '$baseCmd' normally does in a local shell. Verb will not execute it."
         }
     }
 

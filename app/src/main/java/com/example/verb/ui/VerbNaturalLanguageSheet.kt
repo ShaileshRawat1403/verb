@@ -49,7 +49,7 @@ fun VerbNaturalLanguageSheet(
     onSubmitIntent: (VerbIntent) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var promptInput by remember { mutableStateOf("find the five biggest files here") }
+    var promptInput by remember { mutableStateOf("show files") }
 
     val intentEngine = remember { IntentEngine() }
     val currentIntent = remember(promptInput) { intentEngine.resolveIntent(promptInput) }
