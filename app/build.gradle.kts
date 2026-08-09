@@ -20,7 +20,17 @@ android {
     versionCode = 1
     versionName = "1.0"
 
+    ndk {
+      abiFilters.add("arm64-v8a")
+    }
+
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  externalNativeBuild {
+    ndkBuild {
+      path = file("src/main/jni/Android.mk")
+    }
   }
 
   signingConfigs {

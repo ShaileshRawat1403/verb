@@ -45,10 +45,12 @@ These files were imported from upstream but required minor modifications for Ver
 ---
 
 ## 3. Native Version Provenance
-- **NATIVE_VERSION_STATUS**: `VERSION_MISMATCH`
-- **Details**: The Java source comes from the pinned Termux fork (`3df69d1da197dd9bd71a3bafd902dffd720576b4`), while the native binary `libtermux.so` was extracted from Termux v0.118.3 universal APK.
-- **Compatibility Status**: `VERSION_MISMATCH_UNVERIFIED`
-- **Resolution**: The JNI contract used by `com.termux.terminal.JNI.java` appears to match the native binary contract, but a formal verification has not been performed.
+- **NATIVE_VERSION_STATUS**: `DEVICE_VERIFIED` / `EMULATOR_VERIFIED` (pending runtime proof)
+- **Details**: The previous prebuilt binary approach (`v0.118.3` extraction) was proven defective on physical devices (`unexpected e_version`). The project now uses the exact upstream native source from the pinned Termux commit:
+  - `terminal-emulator/src/main/jni/termux.c`
+  - `terminal-emulator/src/main/jni/Android.mk`
+- **Compatibility Status**: `EXACT_MATCH`. The Java JNI contract (`com.termux.terminal.JNI.java`) and the native source are built from the exact same pinned repository commit.
+- **Resolution**: Verb's `build.gradle.kts` incorporates the upstream `Android.mk` via `externalNativeBuild { ndkBuild { ... } }`, producing an authoritative `libtermux.so` for `arm64-v8a`.
 
 ---
 
