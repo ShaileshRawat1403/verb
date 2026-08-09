@@ -66,53 +66,43 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun submitIntent(intent: com.example.verb.model.VerbIntent) {
         _isExecuting.value = true
         _queryInput.value = intent.summary
+        if (intent.id != "terminal.open") {
+            _activeTab.value = VerbTab.ASK
+        }
         viewModelScope.launch(Dispatchers.IO) {
-            if (intent.id == "terminal.open") {
-                _isExecuting.value = false
-                _activeTab.value = VerbTab.TERMINAL
-                return@launch
-            }
-            val result = actionRegistry.executeAction(intent, confirmed = false)
-            _isExecuting.value = false
-            if (result.requiresConfirmation) {
-                _confirmationPendingResult.value = result
-            } else {
-                _currentActionResult.value = result
-                _historyList.value = listOf(result) + _historyList.value.take(9)
-                result.rawCommand?.let { cmd ->
-                    terminalRuntime.sendText("# Executed from Lens: $cmd\n")
+            try {
+                if (intent.id == "terminal.open") {
+                    _activeTab.value = VerbTab.TERMINAL
+                    return@launch
                 }
+                handleActionResult(actionRegistry.executeAction(intent, confirmed = false))
+            } catch (e: Exception) {
+                handleActionResult(unexpectedFailure(intent, e))
+            } finally {
+                _isExecuting.value = false
             }
         }
     }
 
     fun submitQuery(query: String) {
         if (query.isBlank()) return
+        _isExecuting.value = true
         _queryInput.value = query
 
         viewModelScope.launch(Dispatchers.IO) {
-            val intent = intentEngine.resolveIntent(query)
-
-            if (intent.id == "terminal.open") {
-                _isExecuting.value = false
-                _activeTab.value = VerbTab.TERMINAL
-                return@launch
-            }
-
-            val result = actionRegistry.executeAction(intent, confirmed = false)
-
-            _isExecuting.value = false
-
-            if (result.requiresConfirmation) {
-                _confirmationPendingResult.value = result
-            } else {
-                _currentActionResult.value = result
-                _historyList.value = listOf(result) + _historyList.value.take(9)
-
-                // If result contains raw command, also reflect in terminal runtime history
-                result.rawCommand?.let { cmd ->
-                    terminalRuntime.sendText("# Executed from Ask: $cmd\n")
+            var intent: com.example.verb.model.VerbIntent? = null
+            try {
+                val resolvedIntent = intentEngine.resolveIntent(query)
+                intent = resolvedIntent
+                if (resolvedIntent.id == "terminal.open") {
+                    _activeTab.value = VerbTab.TERMINAL
+                    return@launch
                 }
+                handleActionResult(actionRegistry.executeAction(resolvedIntent, confirmed = false))
+            } catch (e: Exception) {
+                handleActionResult(unexpectedFailure(intent, e))
+            } finally {
+                _isExecuting.value = false
             }
         }
     }
@@ -120,16 +110,20 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmPendingAction() {
         val pending = _confirmationPendingResult.value ?: return
         _confirmationPendingResult.value = null
+        _isExecuting.value = true
 
         viewModelScope.launch(Dispatchers.IO) {
-            val intent = pending.originalIntent ?: intentEngine.resolveIntent(pending.title)
-            val result = actionRegistry.executeAction(intent, confirmed = true)
-
-            _currentActionResult.value = result
-            _historyList.value = listOf(result) + _historyList.value.take(9)
-
-            result.rawCommand?.let { cmd ->
-                terminalRuntime.sendText("# Executed confirmed action: $cmd\n")
+            val intent = pending.originalIntent
+            try {
+                if (intent == null) {
+                    handleActionResult(unexpectedFailure(null, IllegalStateException("Missing confirmed intent.")))
+                } else {
+                    handleActionResult(actionRegistry.executeAction(intent, confirmed = true))
+                }
+            } catch (e: Exception) {
+                handleActionResult(unexpectedFailure(intent, e))
+            } finally {
+                _isExecuting.value = false
             }
         }
     }
@@ -150,10 +144,30 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _activeSemanticEntity.value = null
     }
 
-    fun openTerminalWithCommand(command: String) {
+    fun openTerminal() {
         _activeTab.value = VerbTab.TERMINAL
-        terminalRuntime.sendCommand(command)
     }
+
+    private fun handleActionResult(result: ActionResult) {
+        if (result.requiresConfirmation) {
+            _confirmationPendingResult.value = result
+        } else {
+            _currentActionResult.value = result
+            _historyList.value = listOf(result) + _historyList.value.take(9)
+        }
+    }
+
+    private fun unexpectedFailure(
+        intent: com.example.verb.model.VerbIntent?,
+        error: Exception
+    ): ActionResult = ActionResult(
+        intentId = intent?.id ?: "internal.error",
+        title = "Action Failed",
+        summary = "Verb could not complete this action.",
+        isSuccess = false,
+        errorMessage = error.localizedMessage ?: "Unexpected runtime error.",
+        originalIntent = intent
+    )
 
     override fun onCleared() {
         super.onCleared()
