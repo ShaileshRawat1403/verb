@@ -90,16 +90,14 @@ class ActionRegistry(private val context: Context) {
             "process.list" -> executeProcessList()
             "file.list" -> executeFileList(intent.parameters["path"] ?: ".")
             "file.search" -> executeFileSearch(intent.parameters["query"] ?: "")
-            "network.port.inspect" -> executePortInspect(intent.parameters["port"] ?: "3000")
+            "network.port.inspect" -> executePortInspect(intent.parameters["port"] ?: "")
             "process.stop" -> executeProcessStop(intent.parameters["pid"] ?: "")
             "system.summary" -> executeSystemSummary()
             "terminal.explain" -> executeTerminalExplain(intent.parameters["command"] ?: "")
             "terminal.open" -> ActionResult(
                 intentId = "terminal.open",
                 title = "Opening Terminal",
-                summary = "Switching to raw interactive terminal.",
-                rawCommand = "sh",
-                rawOutput = "Terminal session ready."
+                summary = "Switching to raw interactive terminal."
             )
             else -> ActionResult(
                 intentId = enforcedIntent.id,
@@ -221,7 +219,37 @@ class ActionRegistry(private val context: Context) {
 
     private fun executeFileList(pathParam: String): ActionResult {
         val targetDir = if (pathParam == "." || pathParam.isEmpty()) context.filesDir else File(pathParam)
-        val files = targetDir.listFiles() ?: emptyArray()
+
+        if (!targetDir.exists()) {
+            return ActionResult(
+                intentId = "file.list",
+                title = "File Listing Failed",
+                summary = "Path does not exist: ${targetDir.absolutePath}",
+                isSuccess = false,
+                errorMessage = "Directory or file not found."
+            )
+        }
+
+        if (!targetDir.isDirectory) {
+            return ActionResult(
+                intentId = "file.list",
+                title = "File Listing Failed",
+                summary = "Path is not a directory: ${targetDir.absolutePath}",
+                isSuccess = false,
+                errorMessage = "Target path is a file, not a directory."
+            )
+        }
+
+        val files = targetDir.listFiles()
+        if (files == null) {
+            return ActionResult(
+                intentId = "file.list",
+                title = "File Listing Failed",
+                summary = "Unable to read contents of: ${targetDir.absolutePath}",
+                isSuccess = false,
+                errorMessage = "Permission denied or I/O failure."
+            )
+        }
 
         val metrics = mapOf(
             "Directory" to targetDir.absolutePath,
@@ -231,7 +259,7 @@ class ActionRegistry(private val context: Context) {
         val fileDetails = files.take(15).joinToString("\n") {
             val type = if (it.isDirectory) "[DIR]" else "[FILE]"
             "$type ${it.name} (${it.length()} bytes)"
-        }.ifEmpty { "Directory is empty." }
+        }.ifEmpty { "(Directory is empty)" }
 
         return ActionResult(
             intentId = "file.list",
@@ -245,33 +273,52 @@ class ActionRegistry(private val context: Context) {
     }
 
     private fun executeFileSearch(query: String): ActionResult {
-        val targetDir = context.filesDir
-        val matchedFiles = targetDir.walkTopDown()
-            .filter { it.name.contains(query, ignoreCase = true) }
-            .take(10)
-            .toList()
+        return try {
+            val targetDir = context.filesDir
+            val matchedFiles = targetDir.walkTopDown()
+                .filter { it.name.contains(query, ignoreCase = true) }
+                .take(10)
+                .toList()
 
-        val metrics = mapOf(
-            "Search Query" to query,
-            "Matches Found" to matchedFiles.size.toString()
-        )
+            val metrics = mapOf(
+                "Search Query" to query,
+                "Matches Found" to matchedFiles.size.toString()
+            )
 
-        val results = matchedFiles.joinToString("\n") { it.absolutePath }
-            .ifEmpty { "No files matching '$query' found in app storage." }
+            val results = matchedFiles.joinToString("\n") { it.absolutePath }
+                .ifEmpty { "No files matching '$query' found in app storage." }
 
-        return ActionResult(
-            intentId = "file.search",
-            title = "File Search Results",
-            summary = "Search for '$query' returned ${matchedFiles.size} matches.",
-            metrics = metrics,
-            observedOutput = results,
-            derivedData = metrics,
-            explanation = "File search executed directly on filesystem."
-        )
+            ActionResult(
+                intentId = "file.search",
+                title = "File Search Results",
+                summary = "Search for '$query' returned ${matchedFiles.size} matches.",
+                metrics = metrics,
+                observedOutput = results,
+                derivedData = metrics,
+                explanation = "File search executed directly on filesystem."
+            )
+        } catch (e: Exception) {
+            ActionResult(
+                intentId = "file.search",
+                title = "File Search Failed",
+                summary = "Failed to search for '$query'.",
+                isSuccess = false,
+                errorMessage = e.localizedMessage ?: "Unknown I/O error."
+            )
+        }
     }
 
     private fun executePortInspect(portStr: String): ActionResult {
-        val port = portStr.toIntOrNull() ?: 3000
+        val port = portStr.toIntOrNull()
+        if (port == null || port !in 1..65535) {
+            return ActionResult(
+                intentId = "network.port.inspect",
+                title = "Port Inspection Failed",
+                summary = "Invalid port specified: '$portStr'. Must be between 1 and 65535.",
+                isSuccess = false,
+                errorMessage = "Port must be a valid integer between 1 and 65535."
+            )
+        }
 
         val isOccupied = checkPortOccupied(port)
 
@@ -282,9 +329,9 @@ class ActionRegistry(private val context: Context) {
         )
 
         val summaryStr = if (isOccupied) {
-            "Port $port is currently unavailable for socket binding."
+            "Port $port is unavailable for this bind attempt."
         } else {
-            "Port $port is currently free and available for binding."
+            "Port $port is available for this bind attempt."
         }
 
         val observedStr = if (isOccupied) {
@@ -312,13 +359,23 @@ class ActionRegistry(private val context: Context) {
 
     private fun executeProcessStop(pidStr: String): ActionResult {
         val pid = pidStr.toIntOrNull()
-        if (pid == null) {
+        if (pid == null || pid <= 0) {
             return ActionResult(
                 intentId = "process.stop",
                 title = "Process Stop Failed",
-                summary = "Invalid PID specified: '$pidStr'",
+                summary = "Invalid PID specified: '$pidStr'. Must be a positive integer.",
                 isSuccess = false,
-                errorMessage = "PID must be a valid integer."
+                errorMessage = "PID must be a valid positive integer."
+            )
+        }
+
+        if (pid == Process.myPid()) {
+            return ActionResult(
+                intentId = "process.stop",
+                title = "Process Stop Blocked",
+                summary = "Cannot kill Verb's own process (PID $pid).",
+                isSuccess = false,
+                errorMessage = "Self-termination blocked."
             )
         }
 
@@ -326,11 +383,11 @@ class ActionRegistry(private val context: Context) {
             Process.killProcess(pid)
             ActionResult(
                 intentId = "process.stop",
-                title = "Process Stopped",
-                summary = "Sent SIGKILL signal to process PID $pid successfully.",
-                metrics = mapOf("Target PID" to pid.toString(), "Status" to "Terminated"),
+                title = "Process Stop Attempted",
+                summary = "Signal requested for PID $pid. Outcome unverified.",
+                metrics = mapOf("Target PID" to pid.toString(), "Status" to "Signal Requested"),
                 observedOutput = "Process.killProcess($pid) executed without exceptions.",
-                explanation = "Attempted to terminate process via Android API."
+                explanation = "Attempted to terminate process via Android API. The system does not guarantee immediate termination."
             )
         } catch (e: Exception) {
             ActionResult(

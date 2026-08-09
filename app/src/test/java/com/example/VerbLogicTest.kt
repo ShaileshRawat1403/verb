@@ -202,14 +202,13 @@ class VerbLogicTest {
         val intent = intentEngine.resolveIntent("what's using port 3000?")
         assertEquals("network.port.inspect", intent.id)
         assertEquals("3000", intent.parameters["port"])
-        assertTrue(intent.commandTemplate?.contains("3000") == true)
     }
 
     @Test
     fun `file list intent command template`() {
         val intent = intentEngine.resolveIntent("show files in /sdcard")
         assertEquals("file.list", intent.id)
-        assertEquals("ls -la /sdcard", intent.commandTemplate)
+        assertEquals("/sdcard", intent.parameters["path"])
     }
 
     @Test

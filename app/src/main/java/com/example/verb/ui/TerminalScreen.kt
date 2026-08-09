@@ -1,5 +1,6 @@
 package com.example.verb.ui
 
+import com.example.verb.model.VerbIntent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -241,9 +242,8 @@ fun TerminalScreen(
         VerbNaturalLanguageSheet(
             onDismiss = { showNaturalLanguageSheet = false },
             onSubmitIntent = { intent ->
-                // To support executing intent from TerminalScreen, it should be passed through
-                // But wait, the function doesn't have an onSubmitIntent param.
-                // Let's add it.
+                showNaturalLanguageSheet = false
+                onSubmitIntent(intent)
             }
         )
     }

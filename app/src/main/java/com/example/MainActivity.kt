@@ -127,7 +127,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onSendCommand = viewModel.terminalRuntime::sendCommand,
                     onSendKey = viewModel.terminalRuntime::sendControlKey,
                     onClearTerminal = viewModel.terminalRuntime::clearBuffer,
-                    onInspectText = viewModel::inspectSemanticText
+                    onInspectText = viewModel::inspectSemanticText,
+                    onSubmitIntent = viewModel::submitIntent
                 )
             }
 
