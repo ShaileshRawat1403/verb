@@ -38,8 +38,9 @@ jobs:
         env:
           # termux-am invokes Gradle, which may install the Android platform/build-tools
           # missing from the pinned builder image. The image's SDK directory is root-owned;
-          # run this disposable CI container command as root so that install can succeed.
-          TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages --user root
+          # run this disposable CI container command as root so that install can succeed. Keep
+          # HOME at the builder path: Termux resolves its preinstalled NDK from $HOME/lib.
+          TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages --user root --env HOME=/home/builder
         run: >-
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh
           --architectures aarch64
