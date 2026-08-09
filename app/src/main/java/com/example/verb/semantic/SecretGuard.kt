@@ -7,6 +7,8 @@ import com.example.verb.model.SemanticEntity
 
 object SecretGuard {
 
+    private const val REDACTED_SENSITIVE_CONTENT = "[REDACTED_SENSITIVE_CONTENT]"
+
     private val secretPatterns = listOf(
         Regex("-----BEGIN (?:RSA )?PRIVATE KEY-----"),
         Regex("Authorization:\\s*Bearer\\s+[\\w\\-.]+"),
@@ -18,7 +20,7 @@ object SecretGuard {
     )
 
     fun checkSensitive(text: String): SemanticEntity? {
-        if (secretPatterns.any { it.containsMatchIn(text) }) {
+        if (containsKnownSensitivePattern(text)) {
             return SemanticEntity(
                 rawText = "******** (Redacted)",
                 entityType = EntityType.SENSITIVE_TEXT,
@@ -32,4 +34,16 @@ object SecretGuard {
         }
         return null
     }
+
+    /**
+     * Removes an entire value when it matches one of Verb's known local secret patterns.
+     *
+     * This is deliberately conservative: it is a prerequisite for future bounded context,
+     * not permission to retain arbitrary terminal input or output.
+     */
+    fun redactKnownSensitiveText(text: String): String =
+        if (containsKnownSensitivePattern(text)) REDACTED_SENSITIVE_CONTENT else text
+
+    private fun containsKnownSensitivePattern(text: String): Boolean =
+        secretPatterns.any { it.containsMatchIn(text) }
 }
