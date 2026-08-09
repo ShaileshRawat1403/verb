@@ -56,6 +56,7 @@ fun TerminalScreen(
     onSendKey: (String) -> Unit,
     onClearTerminal: () -> Unit,
     onInspectText: (String) -> Unit,
+    onSubmitIntent: (VerbIntent) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showNaturalLanguageSheet by remember { mutableStateOf(false) }
@@ -239,8 +240,10 @@ fun TerminalScreen(
     if (showNaturalLanguageSheet) {
         VerbNaturalLanguageSheet(
             onDismiss = { showNaturalLanguageSheet = false },
-            onExecuteCommand = { cmd ->
-                onSendCommand(cmd)
+            onSubmitIntent = { intent ->
+                // To support executing intent from TerminalScreen, it should be passed through
+                // But wait, the function doesn't have an onSubmitIntent param.
+                // Let's add it.
             }
         )
     }
