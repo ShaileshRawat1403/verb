@@ -45,7 +45,7 @@ These files were imported from upstream but required minor modifications for Ver
 ---
 
 ## 3. Native Version Provenance
-- **NATIVE_VERSION_STATUS**: `DEVICE_VERIFIED` / `EMULATOR_VERIFIED` (pending runtime proof)
+- **NATIVE_VERSION_STATUS**: `EMULATOR_VERIFIED` = **VERIFIED** / `PHYSICAL_DEVICE_VERIFIED` = **NOT_RUN**
 - **Details**: The previous prebuilt binary approach (`v0.118.3` extraction) was proven defective on physical devices (`unexpected e_version`). The project now uses the exact upstream native source from the pinned Termux commit:
   - `terminal-emulator/src/main/jni/termux.c`
   - `terminal-emulator/src/main/jni/Android.mk`
