@@ -35,7 +35,18 @@ class IntentEngine {
 
         // 3. Process stop (Controlled write - checked before process list)
         if (normalized.contains("stop process") || normalized.contains("kill process") || normalized.contains("kill ")) {
-            val pid = extractNumbers(normalized).firstOrNull() ?: ""
+            val pidList = extractNumbers(normalized)
+            if (pidList.size != 1 || pidList.first().toIntOrNull() == null || pidList.first().toInt() <= 0) {
+                return VerbIntent(
+                    id = "unsupported.intent",
+                    name = "Insufficient Information",
+                    parameters = mapOf("raw" to query),
+                    risk = ActionRisk.READ_ONLY,
+                    confidence = 0.80f,
+                    description = "A single valid positive PID is required to stop a process."
+                )
+            }
+            val pid = pidList.first()
             return VerbIntent(
                 id = "process.stop",
                 name = "Stop Process",
@@ -87,7 +98,17 @@ class IntentEngine {
         val portRegex = Regex("""port\s*(\d+)""")
         val portMatch = portRegex.find(normalized)
         if (portMatch != null || normalized.contains("using port") || normalized.contains("port conflict")) {
-            val portStr = portMatch?.groupValues?.get(1) ?: extractNumbers(normalized).firstOrNull() ?: "3000"
+            val portStr = portMatch?.groupValues?.get(1) ?: extractNumbers(normalized).firstOrNull()
+            if (portStr == null || portStr.toIntOrNull() == null || portStr.toInt() !in 1..65535) {
+                return VerbIntent(
+                    id = "unsupported.intent",
+                    name = "Insufficient Information",
+                    parameters = mapOf("raw" to query),
+                    risk = ActionRisk.READ_ONLY,
+                    confidence = 0.80f,
+                    description = "A valid port number (1-65535) is required to inspect a port."
+                )
+            }
             return VerbIntent(
                 id = "network.port.inspect",
                 name = "Inspect Port",
