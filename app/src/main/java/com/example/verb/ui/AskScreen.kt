@@ -74,7 +74,7 @@ fun AskScreen(
     onSubmitQuery: (String) -> Unit,
     onConfirmAction: () -> Unit,
     onDismissConfirmation: () -> Unit,
-    onOpenTerminal: (String) -> Unit,
+    onOpenTerminal: () -> Unit,
     onInspectText: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -301,10 +301,10 @@ fun AskScreen(
 @Composable
 fun ActionResultCard(
     result: ActionResult,
-    onOpenTerminal: (String) -> Unit,
+    onOpenTerminal: () -> Unit,
     onInspectText: (String) -> Unit
 ) {
-    var showRawDetails by remember { mutableStateOf(false) }
+    var showEvidenceDetails by remember { mutableStateOf(false) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -346,15 +346,24 @@ fun ActionResultCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Metrics Grid
-            if (result.metrics.isNotEmpty()) {
+            // Derived data is a calculation or normalized presentation of an observation.
+            // `metrics` remains as a backwards-compatible fallback for older results.
+            val derivedValues = if (result.derivedData.isNotEmpty()) result.derivedData else result.metrics
+            if (derivedValues.isNotEmpty()) {
+                Text(
+                    text = "Derived",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
-                        result.metrics.forEach { (key, value) ->
+                        derivedValues.forEach { (key, value) ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -380,9 +389,10 @@ fun ActionResultCard(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Raw Output Toggleable Section
+            // Evidence is intentionally distinct from shell output. Android API observations
+            // must not be rendered as a command transcript.
             AnimatedVisibility(
-                visible = showRawDetails,
+                visible = showEvidenceDetails,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
@@ -391,33 +401,42 @@ fun ActionResultCard(
                         .fillMaxWidth()
                         .padding(bottom = 12.dp)
                 ) {
-                    result.rawCommand?.let { cmd ->
+                    result.observedOutput?.let { observed ->
                         Text(
-                            text = "Command: $cmd",
+                            text = "Observed",
                             fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable { onInspectText(cmd) }
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-
-                    result.rawOutput?.let { out ->
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = MaterialTheme.colorScheme.background,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = out,
+                                text = observed,
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onBackground,
                                 modifier = Modifier
                                     .padding(8.dp)
-                                    .clickable { onInspectText(out) }
+                                    .clickable { onInspectText(observed) }
                             )
                         }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
+                    result.explanation?.let { explanation ->
+                        Text(
+                            text = "Explanation",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = explanation,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                 }
             }
@@ -429,7 +448,7 @@ fun ActionResultCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedButton(
-                    onClick = { showRawDetails = !showRawDetails },
+                    onClick = { showEvidenceDetails = !showEvidenceDetails },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
@@ -439,13 +458,13 @@ fun ActionResultCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (showRawDetails) "Hide Raw" else "Show Raw",
+                        text = if (showEvidenceDetails) "Hide Evidence" else "Show Evidence",
                         fontSize = 12.sp
                     )
                 }
 
                 Button(
-                    onClick = { onOpenTerminal(result.rawCommand ?: "sh") },
+                    onClick = onOpenTerminal,
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(
