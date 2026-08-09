@@ -197,15 +197,14 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `terminal command template resolution`() {
+    fun `terminal port intent resolution`() {
         val intent = intentEngine.resolveIntent("what's using port 3000?")
         assertEquals("network.port.inspect", intent.id)
         assertEquals("3000", intent.parameters["port"])
-        
     }
 
     @Test
-    fun `file list intent command template`() {
+    fun `file list intent resolution`() {
         val intent = intentEngine.resolveIntent("show files in /sdcard")
         assertEquals("file.list", intent.id)
         assertEquals("/sdcard", intent.parameters["path"])
@@ -242,6 +241,15 @@ class VerbLogicTest {
         assertEquals(EntityType.GENERIC_TEXT, semanticEngine.analyzeText("PID 0").entityType)
         assertEquals(EntityType.COMMAND, semanticEngine.analyzeText("ls -la").entityType)
         assertEquals(EntityType.GENERIC_TEXT, semanticEngine.analyzeText("lsof").entityType)
+    }
+
+    @Test
+    fun `selected commands are explained without execution claims`() {
+        val entity = semanticEngine.analyzeText("echo hello")
+
+        assertEquals(EntityType.COMMAND, entity.entityType)
+        assertTrue(entity.description.contains("will not execute", ignoreCase = true))
+        assertFalse(entity.description.contains("executes", ignoreCase = true))
     }
 
     @Test
