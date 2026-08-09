@@ -142,6 +142,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
 
                 VerbTab.SYSTEM -> SystemScreen(
                     isTerminalSessionActive = isSessionActive,
+                    terminalEnvironment = viewModel.terminalRuntime.environment,
                     aiProviderSettings = aiProviderSettings,
                     onSaveAiProviderSettings = viewModel::saveAiProviderSettings,
                     onClearAiProviderApiKey = viewModel::clearAiProviderApiKey

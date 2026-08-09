@@ -23,7 +23,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 class TermuxTerminalRuntimeAdapter(
     val workingDir: File,
-    val shellExecutable: String = "/system/bin/sh"
+    val shellExecutable: String = "/system/bin/sh",
+    private val sessionEnvironment: Array<String>? = null
 ) : TerminalRuntimeAdapter, TerminalSessionClient, TerminalViewClient {
     private var session: TerminalSession? = null
     var terminalView: TerminalView? = null
@@ -72,14 +73,7 @@ class TermuxTerminalRuntimeAdapter(
         _sessionState.value = TerminalSessionState.STARTING
         appendOutput("Verb Termux Session Active (${workingDir.name})\n$ ")
 
-        val sysPath = System.getenv("PATH") ?: "/system/bin:/system/xbin"
-        val envArray = arrayOf(
-            "TERM=xterm-256color",
-            "COLORTERM=truecolor",
-            "HOME=${workingDir.absolutePath}",
-            "PATH=$sysPath",
-            "LANG=en_US.UTF-8"
-        )
+        val envArray = sessionEnvironment ?: defaultSystemEnvironment()
 
         try {
             Class.forName("com.termux.terminal.JNI")
@@ -113,6 +107,17 @@ class TermuxTerminalRuntimeAdapter(
             refreshTerminalContext()
             appendOutput("\n[FAILED to start Termux PTY session: ${t.message}]\n")
         }
+    }
+
+    private fun defaultSystemEnvironment(): Array<String> {
+        val sysPath = System.getenv("PATH") ?: "/system/bin:/system/xbin"
+        return arrayOf(
+            "TERM=xterm-256color",
+            "COLORTERM=truecolor",
+            "HOME=${workingDir.absolutePath}",
+            "PATH=$sysPath",
+            "LANG=en_US.UTF-8"
+        )
     }
 
     override fun attachSession() {

@@ -1,0 +1,45 @@
+name: Build Verb terminal bootstrap
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verb-terminal-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  build-aarch64:
+    name: Build Verb aarch64 userland
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Verb runtime definitions
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Termux package sources
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          ref: bd2e956e639090779a728c96fcca2e387dd3a246
+          path: termux-packages
+
+      - name: Apply Verb Android application id
+        working-directory: termux-packages
+        run: git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-app-id.patch"
+
+      - name: Build isolated bootstrap
+        working-directory: termux-packages
+        run: >-
+          ./scripts/run-docker.sh ./scripts/build-bootstraps.sh -f
+          --architectures aarch64
+          --add ca-certificates,libcurl,git,nodejs-lts,npm,openssh,python
+
+      - name: Upload signed-review bootstrap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verb-bootstrap-aarch64
+          path: termux-packages/bootstrap-aarch64.zip
+          if-no-files-found: error
+          retention-days: 14
