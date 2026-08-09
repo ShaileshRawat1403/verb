@@ -265,6 +265,29 @@ class VerbLogicTest {
     }
 
     @Test
+    fun `file search requires a non blank search term`() {
+        assertEquals("unsupported.intent", intentEngine.resolveIntent("search files").id)
+
+        val directResult = actionRegistry.executeAction(
+            com.example.verb.model.VerbIntent(
+                id = "file.search",
+                name = "Search Files",
+                parameters = mapOf("query" to "")
+            )
+        )
+        assertFalse(directResult.isSuccess)
+        assertEquals("Search Term Required", directResult.title)
+    }
+
+    @Test
+    fun `file search keeps its explicit search term`() {
+        val intent = intentEngine.resolveIntent("find files report")
+
+        assertEquals("file.search", intent.id)
+        assertEquals("report", intent.parameters["query"])
+    }
+
+    @Test
     fun `selected port conflict without a port fabricates nothing`() {
         val entity = semanticEngine.analyzeText("EADDRINUSE")
         assertEquals(EntityType.PORT_CONFLICT, entity.entityType)

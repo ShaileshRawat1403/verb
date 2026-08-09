@@ -97,6 +97,16 @@ class IntentEngine {
         // 5. File search
         if (normalized.contains("find file") || normalized.contains("search file")) {
             val term = normalized.substringAfter("file").trim().removePrefix("s").trim()
+            if (term.isBlank()) {
+                return VerbIntent(
+                    id = "unsupported.intent",
+                    name = "Insufficient Information",
+                    parameters = mapOf("raw" to query),
+                    risk = ActionRisk.READ_ONLY,
+                    confidence = 0.80f,
+                    description = "A filename or search term is required to search app storage."
+                )
+            }
             return VerbIntent(
                 id = "file.search",
                 name = "Search Files",
@@ -128,7 +138,7 @@ class IntentEngine {
                 parameters = mapOf("port" to portStr),
                 risk = ActionRisk.READ_ONLY,
                 confidence = 0.90f,
-                description = "Inspect process or socket using port $portStr"
+                description = "Check whether Verb can bind a local TCP socket on port $portStr"
             )
         }
 

@@ -302,6 +302,16 @@ class ActionRegistry(
     }
 
     private fun executeFileSearch(query: String): ActionResult {
+        if (query.isBlank()) {
+            return ActionResult(
+                intentId = "file.search",
+                title = "Search Term Required",
+                summary = "Enter a filename or search term before searching app storage.",
+                isSuccess = false,
+                errorMessage = "File search requires a non-blank query."
+            )
+        }
+
         return try {
             val targetDir = context.filesDir
             val matchedFiles = targetDir.walkTopDown()
