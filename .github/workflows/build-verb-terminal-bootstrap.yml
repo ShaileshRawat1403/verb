@@ -31,6 +31,8 @@ jobs:
 
       - name: Build isolated bootstrap
         working-directory: termux-packages
+        env:
+          TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages
         run: >-
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh -f
           --architectures aarch64
