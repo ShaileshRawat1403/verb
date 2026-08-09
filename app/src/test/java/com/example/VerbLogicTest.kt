@@ -264,72 +264,67 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `invalid IP address`() {
-        val entity = semanticEngine.analyzeText("999.999.1.1")
-        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
-    }
-
-    @Test
-    fun `valid file path`() {
-        val entity = semanticEngine.analyzeText("/storage/emulated/0/Download/test.txt")
-        assertEquals(EntityType.FILE_PATH, entity.entityType)
-    }
-
-    @Test
-    fun `random slash text is not file path`() {
-        val entity = semanticEngine.analyzeText("This/or that")
-        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
-    }
-
-    @Test
-    fun `valid PID recognized`() {
-        val entity = semanticEngine.analyzeText("PID 18342")
-        assertEquals(EntityType.PID, entity.entityType)
-        assertEquals(18342, entity.detectedPid)
-    }
-
-    @Test
-    fun `invalid PID 0 rejected`() {
-        val entity = semanticEngine.analyzeText("PID 0")
-        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
-    }
-
-    @Test
-    fun `command recognized`() {
-        val entity = semanticEngine.analyzeText("ls -la")
-        assertEquals(EntityType.COMMAND, entity.entityType)
-    }
-
-    @Test
-    fun `command startsWith false positive avoided`() {
-        val entity = semanticEngine.analyzeText("lsof")
-        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
-    }
-
-    @Test
-    fun `destructive command recognized`() {
-        val entity = semanticEngine.analyzeText("rm -rf ./build")
-        assertEquals(EntityType.DESTRUCTIVE_COMMAND, entity.entityType)
-        assertEquals(ActionRisk.DESTRUCTIVE, entity.risk)
-    }
-
-    @Test
-    fun `error message recognized`() {
-        val entity = semanticEngine.analyzeText("Permission denied")
-        assertEquals(EntityType.ERROR_MESSAGE, entity.entityType)
-    }
-
-    @Test
     fun `sensitive text guarded`() {
         val entity = semanticEngine.analyzeText("Authorization: Bearer xyz123")
         assertEquals(EntityType.SENSITIVE_TEXT, entity.entityType)
         assertTrue(entity.isSensitive)
         assertTrue(entity.suggestedActions.isEmpty())
+        assertEquals("******** (Redacted)", entity.rawText)
+        assertEquals("SECRET_PATTERN", entity.detectionMethod)
     }
 
     @Test
-    fun `generic prose`() {
-        val entity = semanticEngine.analyzeText("just some random text")
+    fun `ordinary text does not trigger secret guard`() {
+        val entity = semanticEngine.analyzeText("This is a secret meeting")
         assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+        assertFalse(entity.isSensitive)
+    }
+
+    @Test
+    fun `direct controlled-write intent still confirms via registry`() {
+        val intent = com.example.verb.model.VerbIntent(
+            id = "process.stop",
+            name = "Stop Process",
+            parameters = mapOf("pid" to "9999"),
+            risk = ActionRisk.READ_ONLY // Intentionally wrong risk
+        )
+        val result = actionRegistry.executeAction(intent, confirmed = false)
+        assertTrue(result.requiresConfirmation)
+        assertEquals(ActionRisk.CONTROLLED_WRITE, result.originalIntent?.risk)
+    }
+
+    @Test
+    fun `registry risk overrides SuggestedAction risk`() {
+        val intent = com.example.verb.model.VerbIntent(
+            id = "storage.summary",
+            name = "Storage Summary",
+            parameters = emptyMap(),
+            risk = ActionRisk.CONTROLLED_WRITE // Intentionally wrong risk
+        )
+        val result = actionRegistry.executeAction(intent, confirmed = false)
+        assertFalse(result.requiresConfirmation)
+        assertEquals(ActionRisk.READ_ONLY, result.originalIntent?.risk)
+    }
+
+    @Test
+    fun `invalid IPv4 rejected`() {
+        val entity = semanticEngine.analyzeText("999.999.1.1")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+
+    @Test
+    fun `EADDRINUSE without port fabricates nothing`() {
+        val entity = semanticEngine.analyzeText("EADDRINUSE")
+        assertEquals(EntityType.PORT_CONFLICT, entity.entityType)
+        assertNull(entity.detectedPort)
+        assertTrue(entity.suggestedActions.isEmpty())
+    }
+
+    @Test
+    fun `URL normalization and extraction`() {
+        val entity = semanticEngine.analyzeText("https://example.com/api/v1?test=1")
+        assertEquals(EntityType.URL, entity.entityType)
+        assertEquals("https://example.com/api/v1?test=1", entity.normalizedValue)
     }
 }

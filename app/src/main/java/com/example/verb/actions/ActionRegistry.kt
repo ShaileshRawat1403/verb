@@ -26,6 +26,19 @@ class ActionRegistry(private val context: Context) {
         "terminal.open"
     )
 
+    private val actionRiskPolicy = mapOf(
+        "storage.summary" to ActionRisk.READ_ONLY,
+        "memory.summary" to ActionRisk.READ_ONLY,
+        "process.list" to ActionRisk.READ_ONLY,
+        "file.list" to ActionRisk.READ_ONLY,
+        "file.search" to ActionRisk.READ_ONLY,
+        "network.port.inspect" to ActionRisk.READ_ONLY,
+        "process.stop" to ActionRisk.CONTROLLED_WRITE,
+        "system.summary" to ActionRisk.READ_ONLY,
+        "terminal.explain" to ActionRisk.READ_ONLY,
+        "terminal.open" to ActionRisk.READ_ONLY
+    )
+
     fun isActionSupported(intentId: String): Boolean = supportedIntents.contains(intentId)
 
     /**
@@ -43,32 +56,35 @@ class ActionRegistry(private val context: Context) {
             )
         }
 
+        val authoritativeRisk = actionRiskPolicy[intent.id] ?: intent.risk
+        val enforcedIntent = intent.copy(risk = authoritativeRisk)
+
         // Check Risk & Confirmation Policy
-        if (intent.risk == ActionRisk.CONTROLLED_WRITE && !confirmed) {
+        if (enforcedIntent.risk == ActionRisk.CONTROLLED_WRITE && !confirmed) {
             return ActionResult(
-                intentId = intent.id,
-                title = "Confirmation Required: ${intent.name}",
+                intentId = enforcedIntent.id,
+                title = "Confirmation Required: ${enforcedIntent.name}",
                 summary = "This action modifies device runtime state. Explicit confirmation required.",
                 requiresConfirmation = true,
-                confirmationPrompt = "Are you sure you want to execute '${intent.name}' for parameter ${intent.parameters}?",
-                targetPid = intent.parameters["pid"]?.toIntOrNull(),
+                confirmationPrompt = "Are you sure you want to execute '${enforcedIntent.name}' for parameter ${enforcedIntent.parameters}?",
+                targetPid = enforcedIntent.parameters["pid"]?.toIntOrNull(),
                 isSuccess = false,
-                originalIntent = intent
+                originalIntent = enforcedIntent
             )
         }
 
-        if (intent.risk == ActionRisk.DESTRUCTIVE) {
+        if (enforcedIntent.risk == ActionRisk.DESTRUCTIVE) {
             return ActionResult(
-                intentId = intent.id,
+                intentId = enforcedIntent.id,
                 title = "Destructive Action Blocked",
                 summary = "Verb V0.1 does not execute destructive filesystem operations automatically.",
                 isSuccess = false,
                 errorMessage = "Action blocked by V0 Safety Policy.",
-                originalIntent = intent
+                originalIntent = enforcedIntent
             )
         }
 
-        val result = when (intent.id) {
+        val result = when (enforcedIntent.id) {
             "storage.summary" -> executeStorageSummary()
             "memory.summary" -> executeMemorySummary()
             "process.list" -> executeProcessList()
@@ -86,14 +102,14 @@ class ActionRegistry(private val context: Context) {
                 rawOutput = "Terminal session ready."
             )
             else -> ActionResult(
-                intentId = intent.id,
+                intentId = enforcedIntent.id,
                 title = "Error",
                 summary = "Unhandled intent",
                 isSuccess = false
             )
         }
 
-        return result.copy(originalIntent = intent)
+        return result.copy(originalIntent = enforcedIntent)
     }
 
     private fun executeStorageSummary(): ActionResult {
