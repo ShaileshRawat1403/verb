@@ -136,7 +136,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 SemanticLensSheet(
                     entity = semanticEntity!!,
                     onDismiss = viewModel::closeSemanticLens,
-                    onExecuteSuggestedAction = viewModel::submitQuery
+                    onExecuteSuggestedAction = viewModel::submitQuery,
+                    onExecuteSuggestedIntent = viewModel::submitIntent
                 )
             }
         }

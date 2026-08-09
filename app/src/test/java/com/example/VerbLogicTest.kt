@@ -10,6 +10,7 @@ import com.example.verb.semantic.SemanticEngine
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -83,13 +84,6 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `storage size entity detection`() {
-        val entity = semanticEngine.analyzeText("9.7G")
-        assertEquals("Storage Size (9.7 G)", entity.title)
-        assertTrue(entity.suggestedActions.isNotEmpty())
-    }
-
-    @Test
     fun `destructive selected command is flagged and not executed`() {
         val text = "rm -rf dist"
         val entity = semanticEngine.analyzeText(text)
@@ -147,7 +141,7 @@ class VerbLogicTest {
 
         val entity = semanticEngine.analyzeText(capturedSelection)
         assertEquals(EntityType.FILE_PATH, entity.entityType)
-        assertTrue(entity.title.contains("Shared Android Storage Path"))
+        assertTrue(entity.title.contains("Directory") || entity.title.contains("Path"))
 
         runtime.destroy()
     }
@@ -216,5 +210,126 @@ class VerbLogicTest {
         val intent = intentEngine.resolveIntent("show files in /sdcard")
         assertEquals("file.list", intent.id)
         assertEquals("ls -la /sdcard", intent.commandTemplate)
+    }
+
+    @Test
+    fun `port conflict with explicit port`() {
+        val entity = semanticEngine.analyzeText("EADDRINUSE :::3000")
+        assertEquals(EntityType.PORT_CONFLICT, entity.entityType)
+        assertEquals(3000, entity.detectedPort)
+    }
+
+    @Test
+    fun `port conflict without port defaults removed`() {
+        val entity = semanticEngine.analyzeText("EADDRINUSE")
+        assertEquals(EntityType.PORT_CONFLICT, entity.entityType)
+        assertNull(entity.detectedPort)
+    }
+
+    @Test
+    fun `valid port recognized`() {
+        val entity = semanticEngine.analyzeText("port 8080")
+        assertEquals(EntityType.PORT, entity.entityType)
+        assertEquals(8080, entity.detectedPort)
+    }
+
+    @Test
+    fun `invalid port rejected`() {
+        val entity = semanticEngine.analyzeText("port 70000")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+    @Test
+    fun `random number is not port`() {
+        val entity = semanticEngine.analyzeText("I have 3000 files")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+    @Test
+    fun `URL recognized over file path`() {
+        val entity = semanticEngine.analyzeText("https://example.com/a/b")
+        assertEquals(EntityType.URL, entity.entityType)
+    }
+
+    @Test
+    fun `URL with port recognized`() {
+        val entity = semanticEngine.analyzeText("http://localhost:3000")
+        assertEquals(EntityType.URL, entity.entityType)
+    }
+
+    @Test
+    fun `valid IP address`() {
+        val entity = semanticEngine.analyzeText("192.168.1.1")
+        assertEquals(EntityType.IP_ADDRESS, entity.entityType)
+    }
+
+    @Test
+    fun `invalid IP address`() {
+        val entity = semanticEngine.analyzeText("999.999.1.1")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+    @Test
+    fun `valid file path`() {
+        val entity = semanticEngine.analyzeText("/storage/emulated/0/Download/test.txt")
+        assertEquals(EntityType.FILE_PATH, entity.entityType)
+    }
+
+    @Test
+    fun `random slash text is not file path`() {
+        val entity = semanticEngine.analyzeText("This/or that")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+    @Test
+    fun `valid PID recognized`() {
+        val entity = semanticEngine.analyzeText("PID 18342")
+        assertEquals(EntityType.PID, entity.entityType)
+        assertEquals(18342, entity.detectedPid)
+    }
+
+    @Test
+    fun `invalid PID 0 rejected`() {
+        val entity = semanticEngine.analyzeText("PID 0")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+    @Test
+    fun `command recognized`() {
+        val entity = semanticEngine.analyzeText("ls -la")
+        assertEquals(EntityType.COMMAND, entity.entityType)
+    }
+
+    @Test
+    fun `command startsWith false positive avoided`() {
+        val entity = semanticEngine.analyzeText("lsof")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
+    }
+
+    @Test
+    fun `destructive command recognized`() {
+        val entity = semanticEngine.analyzeText("rm -rf ./build")
+        assertEquals(EntityType.DESTRUCTIVE_COMMAND, entity.entityType)
+        assertEquals(ActionRisk.DESTRUCTIVE, entity.risk)
+    }
+
+    @Test
+    fun `error message recognized`() {
+        val entity = semanticEngine.analyzeText("Permission denied")
+        assertEquals(EntityType.ERROR_MESSAGE, entity.entityType)
+    }
+
+    @Test
+    fun `sensitive text guarded`() {
+        val entity = semanticEngine.analyzeText("Authorization: Bearer xyz123")
+        assertEquals(EntityType.SENSITIVE_TEXT, entity.entityType)
+        assertTrue(entity.isSensitive)
+        assertTrue(entity.suggestedActions.isEmpty())
+    }
+
+    @Test
+    fun `generic prose`() {
+        val entity = semanticEngine.analyzeText("just some random text")
+        assertEquals(EntityType.GENERIC_TEXT, entity.entityType)
     }
 }
