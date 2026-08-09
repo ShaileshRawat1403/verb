@@ -11,6 +11,19 @@ class IntentEngine {
     fun resolveIntent(query: String): VerbIntent {
         val normalized = query.trim().lowercase()
 
+        // Explicit explanation requests must be resolved before any action keyword. A user asking
+        // what a command does must never be routed to the corresponding action.
+        explanationCommand(normalized)?.let { command ->
+            return VerbIntent(
+                id = "terminal.explain",
+                name = "Explain Command",
+                parameters = mapOf("command" to command),
+                risk = ActionRisk.READ_ONLY,
+                confidence = 0.85f,
+                description = "Explain syntax and behavior of '$command' without executing it"
+            )
+        }
+
         // 1. Storage summary
         if (normalized.contains("storage") || normalized.contains("disk space") || normalized.contains("df")) {
             return VerbIntent(
@@ -141,19 +154,6 @@ class IntentEngine {
             )
         }
 
-        // 10. Explain command
-        if (normalized.startsWith("explain") || normalized.contains("what does")) {
-            val cmd = normalized.removePrefix("explain").trim()
-            return VerbIntent(
-                id = "terminal.explain",
-                name = "Explain Command",
-                parameters = mapOf("command" to cmd),
-                risk = ActionRisk.READ_ONLY,
-                confidence = 0.85f,
-                description = "Explain syntax and behavior of '$cmd'"
-            )
-        }
-
         // Fallback: Unknown or unsupported intent
         return VerbIntent(
             id = "unsupported.intent",
@@ -167,6 +167,21 @@ class IntentEngine {
 
     private fun extractNumbers(text: String): List<String> {
         return Regex("""\d+""").findAll(text).map { it.value }.toList()
+    }
+
+    private fun explanationCommand(normalized: String): String? {
+        val command = when {
+            normalized.startsWith("explain") -> normalized.removePrefix("explain").trim()
+            normalized.contains("explain ") -> normalized.substringAfter("explain ").trim()
+            normalized.startsWith("what does ") -> normalized
+                .removePrefix("what does ")
+                .removeSuffix("?")
+                .removeSuffix(" do")
+                .trim()
+            else -> return null
+        }
+
+        return command.takeIf { it.isNotBlank() }
     }
 
     private fun extractPath(text: String): String? {
