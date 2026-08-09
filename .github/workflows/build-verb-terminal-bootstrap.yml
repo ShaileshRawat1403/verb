@@ -29,6 +29,10 @@ jobs:
         working-directory: termux-packages
         run: git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-app-id.patch"
 
+      - name: Build matching Termux package-builder image
+        working-directory: termux-packages
+        run: docker build -t ghcr.io/termux/package-builder:latest scripts/
+
       - name: Build isolated bootstrap
         working-directory: termux-packages
         env:
