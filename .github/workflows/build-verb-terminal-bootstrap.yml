@@ -38,7 +38,7 @@ jobs:
         env:
           TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages
         run: >-
-          ./scripts/run-docker.sh ./scripts/build-bootstraps.sh -f
+          ./scripts/run-docker.sh ./scripts/build-bootstraps.sh
           --architectures aarch64
           --add ca-certificates,libcurl,git,nodejs-lts,npm,openssh,python
 

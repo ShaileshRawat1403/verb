@@ -10,9 +10,10 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -85,6 +86,10 @@ fun MobileTerminalKeyboard(
     var shiftActive by remember { mutableStateOf(false) }
     var isSheetOpen by remember { mutableStateOf(false) }
     var terminalInput by remember { mutableStateOf("") }
+    // The command field stays available while the IME is open. The auxiliary strips are useful
+    // for terminal navigation, but keeping them mounted beside the IME turns the entire dock into
+    // a large, distracting panel and leaves too little room for terminal output.
+    val isImeVisible = WindowInsets.isImeVisible
     
     val scrollState1 = rememberScrollState()
     val scrollState2 = rememberScrollState()
@@ -99,8 +104,7 @@ fun MobileTerminalKeyboard(
 
     Surface(
         modifier = modifier
-            .fillMaxWidth()
-            .imePadding(),
+            .fillMaxWidth(),
         color = Color(0xFF161820),
         tonalElevation = 4.dp
     ) {
@@ -108,7 +112,7 @@ fun MobileTerminalKeyboard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
@@ -116,8 +120,9 @@ fun MobileTerminalKeyboard(
                     onValueChange = { terminalInput = it },
                     modifier = Modifier
                         .weight(1f)
+                        .height(48.dp)
                         .testTag("terminal_input_field"),
-                    placeholder = { Text("Type a terminal command…", color = Color(0xFF94A3B8)) },
+                    placeholder = { Text("$ type a command", color = Color(0xFF94A3B8)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { submitTerminalInput() }),
@@ -141,7 +146,7 @@ fun MobileTerminalKeyboard(
                 }
             }
 
-            if (ctrlActive) {
+            if (!isImeVisible && ctrlActive) {
                 // Ctrl combinations row
                 Row(
                     modifier = Modifier
@@ -160,7 +165,7 @@ fun MobileTerminalKeyboard(
                         }
                     }
                 }
-            } else {
+            } else if (!isImeVisible) {
                 // Quick keys row
                 Row(
                     modifier = Modifier
@@ -189,36 +194,39 @@ fun MobileTerminalKeyboard(
                 }
             }
             
-            // Core power strip
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(scrollState1)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                KeyButton(label = "ESC", testTag = "key_esc") { onSendKey("ESC") }
-                KeyButton(label = "CTRL", testTag = "key_ctrl", isAccent = ctrlActive) { 
-                    ctrlActive = !ctrlActive 
-                    shiftActive = false
+            if (!isImeVisible) {
+                // Core power strip is deliberately hidden with the IME. It returns immediately
+                // after keyboard dismissal, while the compact command field remains in place.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(scrollState1)
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    KeyButton(label = "ESC", testTag = "key_esc") { onSendKey("ESC") }
+                    KeyButton(label = "CTRL", testTag = "key_ctrl", isAccent = ctrlActive) {
+                        ctrlActive = !ctrlActive
+                        shiftActive = false
+                    }
+                    KeyButton(label = "SHIFT", testTag = "key_shift", isAccent = shiftActive) {
+                        shiftActive = !shiftActive
+                        ctrlActive = false
+                    }
+                    KeyButton(label = "TAB", testTag = "key_tab") {
+                        onSendKey(if (shiftActive) "SHIFT_TAB" else "TAB")
+                        shiftActive = false
+                    }
+                    KeyButton(label = "PASTE", testTag = "key_paste") {
+                        // PASTE action is routed to TermuxTerminalRuntimeAdapter.
+                        onSendKey("PASTE")
+                    }
+                    KeyButton(label = "▲", testTag = "key_up") { onSendKey("UP") }
+                    KeyButton(label = "▼", testTag = "key_down") { onSendKey("DOWN") }
+                    KeyButton(label = "◄", testTag = "key_left") { onSendKey("LEFT") }
+                    KeyButton(label = "►", testTag = "key_right") { onSendKey("RIGHT") }
                 }
-                KeyButton(label = "SHIFT", testTag = "key_shift", isAccent = shiftActive) {
-                    shiftActive = !shiftActive
-                    ctrlActive = false
-                }
-                KeyButton(label = "TAB", testTag = "key_tab") { 
-                    onSendKey(if (shiftActive) "SHIFT_TAB" else "TAB")
-                    shiftActive = false
-                }
-                KeyButton(label = "PASTE", testTag = "key_paste") {
-                    // PASTE action is routed to TermuxTerminalRuntimeAdapter
-                    onSendKey("PASTE")
-                }
-                KeyButton(label = "▲", testTag = "key_up") { onSendKey("UP") }
-                KeyButton(label = "▼", testTag = "key_down") { onSendKey("DOWN") }
-                KeyButton(label = "◄", testTag = "key_left") { onSendKey("LEFT") }
-                KeyButton(label = "►", testTag = "key_right") { onSendKey("RIGHT") }
             }
         }
     }

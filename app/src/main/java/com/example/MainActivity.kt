@@ -3,11 +3,12 @@ package com.example
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -42,7 +43,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
 
         setContent {
             VerbTheme {
@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun VerbAppContent(viewModel: VerbViewModel) {
     val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
@@ -64,6 +65,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val aiProviderSettings by viewModel.aiProviderSettings.collectAsStateWithLifecycle()
     val assistantInput by viewModel.assistantInput.collectAsStateWithLifecycle()
     val assistantState by viewModel.assistantState.collectAsStateWithLifecycle()
+    val isImeVisible = WindowInsets.isImeVisible
 
     val terminalOutput by viewModel.terminalRuntime.terminalOutput.collectAsStateWithLifecycle()
     val isSessionActive by viewModel.terminalRuntime.isSessionActive.collectAsStateWithLifecycle()
@@ -71,7 +73,10 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         bottomBar = {
-            NavigationBar(
+            // A terminal (or any text-entry surface) needs the limited portrait space above the
+            // system keyboard. Removing navigation while the IME is visible keeps the active
+            // command field docked directly above it rather than marooned mid-screen.
+            if (!isImeVisible || activeTab != VerbTab.TERMINAL) NavigationBar(
                 modifier = Modifier
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .testTag("verb_bottom_navigation")
