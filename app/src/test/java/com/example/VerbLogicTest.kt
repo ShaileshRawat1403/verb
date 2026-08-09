@@ -119,7 +119,7 @@ class VerbLogicTest {
         val entity = semanticEngine.analyzeText(text)
 
         assertEquals(EntityType.ERROR_MESSAGE, entity.entityType)
-        assertTrue(entity.description.contains("null reference", ignoreCase = true) || entity.description.contains("undefined", ignoreCase = true))
+        assertTrue(entity.description.contains("unknown without more context", ignoreCase = true))
     }
 
     @Test
