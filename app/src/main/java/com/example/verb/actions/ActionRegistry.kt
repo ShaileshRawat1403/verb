@@ -11,7 +11,11 @@ import com.example.verb.model.ActionRisk
 import com.example.verb.model.VerbIntent
 import java.io.File
 
-class ActionRegistry(private val context: Context) {
+class ActionRegistry(
+    private val context: Context,
+    private val processStopper: (Int) -> Unit = { pid -> Process.killProcess(pid) },
+    private val currentProcessId: () -> Int = { Process.myPid() }
+) {
 
     private val supportedIntents = setOf(
         "storage.summary",
@@ -62,7 +66,7 @@ class ActionRegistry(private val context: Context) {
         if (enforcedIntent.id == "process.stop") {
             val pidStr = enforcedIntent.parameters["pid"] ?: ""
             val pid = pidStr.toIntOrNull()
-            if (pid == android.os.Process.myPid()) {
+            if (pid == currentProcessId()) {
                 return ActionResult(
                     intentId = "process.stop",
                     title = "Process Stop Blocked",
@@ -394,7 +398,7 @@ class ActionRegistry(private val context: Context) {
             )
         }
 
-        if (pid == Process.myPid()) {
+        if (pid == currentProcessId()) {
             return ActionResult(
                 intentId = "process.stop",
                 title = "Process Stop Blocked",
@@ -405,14 +409,16 @@ class ActionRegistry(private val context: Context) {
         }
 
         return try {
-            Process.killProcess(pid)
+            processStopper(pid)
             ActionResult(
                 intentId = "process.stop",
                 title = "Process Stop Attempted",
                 summary = "Signal requested for PID $pid. Outcome unverified.",
                 metrics = mapOf("Target PID" to pid.toString(), "Status" to "Signal Requested"),
                 observedOutput = "Process.killProcess($pid) executed without exceptions.",
-                explanation = "Attempted to terminate process via Android API. The system does not guarantee immediate termination."
+                explanation = "Attempted to terminate process via Android API. The system does not guarantee immediate termination.",
+                isSuccess = false,
+                errorMessage = "The signal request returned, but Verb cannot observe whether the target exited."
             )
         } catch (e: Exception) {
             ActionResult(
