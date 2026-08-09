@@ -271,6 +271,20 @@ class VerbLogicTest {
     }
 
     @Test
+    fun `known sensitive text is redacted before bounded context could retain it`() {
+        assertEquals(
+            "[REDACTED_SENSITIVE_CONTENT]",
+            com.example.verb.semantic.SecretGuard.redactKnownSensitiveText(
+                "Authorization: Bearer secret-token-value"
+            )
+        )
+        assertEquals(
+            "safe terminal text",
+            com.example.verb.semantic.SecretGuard.redactKnownSensitiveText("safe terminal text")
+        )
+    }
+
+    @Test
     fun `selected PID and command patterns require exact recognition`() {
         assertEquals(EntityType.PID, semanticEngine.analyzeText("PID 18342").entityType)
         assertEquals(EntityType.GENERIC_TEXT, semanticEngine.analyzeText("PID 0").entityType)
