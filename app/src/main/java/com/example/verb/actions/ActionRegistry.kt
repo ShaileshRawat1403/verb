@@ -11,11 +11,7 @@ import com.example.verb.model.ActionRisk
 import com.example.verb.model.VerbIntent
 import java.io.File
 
-class ActionRegistry(
-    private val context: Context,
-    private val processStopper: (Int) -> Unit = { pid -> Process.killProcess(pid) },
-    private val currentProcessId: () -> Int = { Process.myPid() }
-) {
+class ActionRegistry(private val context: Context) {
 
     private val supportedIntents = setOf(
         "storage.summary",
@@ -373,7 +369,7 @@ class ActionRegistry(
             )
         }
 
-        if (pid == currentProcessId()) {
+        if (pid == Process.myPid()) {
             return ActionResult(
                 intentId = "process.stop",
                 title = "Process Stop Blocked",
@@ -384,16 +380,14 @@ class ActionRegistry(
         }
 
         return try {
-            processStopper(pid)
+            Process.killProcess(pid)
             ActionResult(
                 intentId = "process.stop",
                 title = "Process Stop Attempted",
                 summary = "Signal requested for PID $pid. Outcome unverified.",
                 metrics = mapOf("Target PID" to pid.toString(), "Status" to "Signal Requested"),
                 observedOutput = "Process.killProcess($pid) executed without exceptions.",
-                explanation = "Attempted to terminate process via Android API. The system does not guarantee immediate termination.",
-                isSuccess = false,
-                errorMessage = "The signal request returned, but Verb cannot observe whether the target exited."
+                explanation = "Attempted to terminate process via Android API. The system does not guarantee immediate termination."
             )
         } catch (e: Exception) {
             ActionResult(
