@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.verb.model.ActionResult
+import com.example.verb.model.VerbIntent
 import com.example.verb.ui.theme.SecondaryCyan
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -72,6 +73,7 @@ fun AskScreen(
     confirmationPending: ActionResult?,
     onQueryChange: (String) -> Unit,
     onSubmitQuery: (String) -> Unit,
+    onSubmitIntent: (VerbIntent) -> Unit,
     onConfirmAction: () -> Unit,
     onDismissConfirmation: () -> Unit,
     onOpenTerminal: () -> Unit,
@@ -258,11 +260,18 @@ fun AskScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             historyList.drop(1).forEach { item ->
+                val replayIntent = item.originalIntent
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp)
-                        .clickable { onSubmitQuery(item.title) },
+                        .then(
+                            if (replayIntent != null) {
+                                Modifier.clickable { onSubmitIntent(replayIntent) }
+                            } else {
+                                Modifier
+                            }
+                        ),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                 ) {
                     Row(

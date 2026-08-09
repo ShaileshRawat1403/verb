@@ -105,6 +105,50 @@ class VerbUIRegressionTest {
     }
 
     @Test
+    fun historyReplaysTheOriginalTypedIntentWithoutNaturalLanguageReparsing() {
+        var replayedIntent: VerbIntent? = null
+        val replayIntent = VerbIntent(
+            id = "file.list",
+            name = "List Files",
+            parameters = mapOf("path" to "/storage/emulated/0/Download")
+        )
+        val history = listOf(
+            ActionResult(
+                intentId = "storage.summary",
+                title = "Storage Summary",
+                summary = "Current result"
+            ),
+            ActionResult(
+                intentId = replayIntent.id,
+                title = "Files in Directory",
+                summary = "Previous result",
+                originalIntent = replayIntent
+            )
+        )
+
+        composeTestRule.setContent {
+            AskScreen(
+                queryInput = "",
+                isExecuting = false,
+                currentResult = null,
+                historyList = history,
+                confirmationPending = null,
+                onQueryChange = {},
+                onSubmitQuery = {},
+                onSubmitIntent = { replayedIntent = it },
+                onConfirmAction = {},
+                onDismissConfirmation = {},
+                onOpenTerminal = {},
+                onInspectText = {}
+            )
+        }
+
+        composeTestRule.onNodeWithText("Files in Directory").performClick()
+
+        assertEquals(replayIntent, replayedIntent)
+    }
+
+    @Test
     fun resultProvenanceUIRendersDerivedObservedAndExplanationDistinctly() {
         composeTestRule.setContent {
             ActionResultCard(
