@@ -111,6 +111,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     confirmationPending = confirmationPending,
                     onQueryChange = viewModel::updateQueryInput,
                     onSubmitQuery = viewModel::submitQuery,
+                    onSubmitIntent = viewModel::submitIntent,
                     onConfirmAction = viewModel::confirmPendingAction,
                     onDismissConfirmation = viewModel::dismissConfirmation,
                     onOpenTerminal = viewModel::openTerminal,
