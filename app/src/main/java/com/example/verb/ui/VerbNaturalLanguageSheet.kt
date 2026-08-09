@@ -14,11 +14,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
@@ -35,18 +37,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.verb.intent.IntentEngine
 import com.example.verb.model.ActionRisk
-import com.example.verb.model.VerbIntent
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VerbNaturalLanguageSheet(
     onDismiss: () -> Unit,
-    onSubmitIntent: (VerbIntent) -> Unit
+    onExecuteCommand: (String) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var promptInput by remember { mutableStateOf("find the five biggest files here") }
@@ -96,7 +98,7 @@ fun VerbNaturalLanguageSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("verb_prompt_input"),
-                placeholder = { Text("What do you want Verb to do?", color = Color(0xFF64748B)) },
+                placeholder = { Text("What do you want to run in terminal?", color = Color(0xFF64748B)) },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color(0xFF6366F1),
@@ -121,7 +123,7 @@ fun VerbNaturalLanguageSheet(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = "Verb Action Preview",
+                            text = "Command Preview",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF38BDF8)
@@ -163,17 +165,34 @@ fun VerbNaturalLanguageSheet(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    // Shell Command Code Display
+                    currentIntent.commandTemplate?.let { cmd ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = Color(0xFF1E293B),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "$ $cmd",
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 12.sp,
+                                color = Color(0xFF38BDF8),
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // Natural language submits a structured action. It must never manufacture or write
-            // a shell command into the PTY.
+            // Action Execution Button
             Button(
                 onClick = {
-                    onSubmitIntent(currentIntent)
-                    onDismiss()
+                    currentIntent.commandTemplate?.let { cmd ->
+                        onExecuteCommand(cmd)
+                        onDismiss()
+                    }
                 },
                 modifier = Modifier
                     .fillMaxWidth()
@@ -186,7 +205,7 @@ fun VerbNaturalLanguageSheet(
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Run Verb Action")
+                Text("Run in Real Terminal")
             }
 
             Spacer(modifier = Modifier.height(12.dp))

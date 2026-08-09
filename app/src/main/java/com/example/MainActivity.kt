@@ -113,7 +113,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onSubmitQuery = viewModel::submitQuery,
                     onConfirmAction = viewModel::confirmPendingAction,
                     onDismissConfirmation = viewModel::dismissConfirmation,
-                    onOpenTerminal = viewModel::openTerminal,
+                    onOpenTerminal = viewModel::openTerminalWithCommand,
                     onInspectText = viewModel::inspectSemanticText
                 )
 
