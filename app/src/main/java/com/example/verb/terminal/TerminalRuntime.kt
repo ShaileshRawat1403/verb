@@ -13,10 +13,16 @@ class TerminalRuntime(
     useFakeForTesting: Boolean = false
 ) : TerminalRuntimeAdapter {
 
+    val environment: TerminalEnvironment = TerminalEnvironmentResolver(workingDir).resolve()
+
     private val delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
         FakeTerminalRuntimeAdapter(workingDir)
     } else {
-        TermuxTerminalRuntimeAdapter(workingDir)
+        TermuxTerminalRuntimeAdapter(
+            workingDir = environment.workingDirectory,
+            shellExecutable = environment.shellExecutable,
+            sessionEnvironment = environment.variables
+        )
     }
 
     override val sessionState: StateFlow<TerminalSessionState> get() = delegate.sessionState

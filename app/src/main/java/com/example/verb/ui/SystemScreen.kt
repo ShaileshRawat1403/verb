@@ -48,12 +48,14 @@ import androidx.compose.ui.unit.sp
 import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
+import com.example.verb.terminal.TerminalEnvironment
 import com.example.verb.ui.theme.SecondaryCyan
 import java.util.Locale
 
 @Composable
 fun SystemScreen(
     isTerminalSessionActive: Boolean,
+    terminalEnvironment: TerminalEnvironment,
     aiProviderSettings: AiProviderSettings = AiProviderSettings(),
     onSaveAiProviderSettings: (AiProviderConfig, String?) -> Result<Unit> = { _, _ -> Result.success(Unit) },
     onClearAiProviderApiKey: () -> Unit = {},
@@ -162,7 +164,8 @@ fun SystemScreen(
             icon = Icons.Default.Terminal,
             details = listOf(
                 "Runtime Environment" to "Termux / Android PTY Adapter",
-                "Shell Process" to "/system/bin/sh",
+                "CLI Userland" to terminalEnvironment.displayName,
+                "Shell Process" to terminalEnvironment.shellExecutable,
                 "Session State" to if (isTerminalSessionActive) "ACTIVE (Running)" else "INACTIVE",
                 "Root Access" to "No Root (Unprivileged Safe User)"
             )
