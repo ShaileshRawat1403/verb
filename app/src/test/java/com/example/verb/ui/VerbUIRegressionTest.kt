@@ -1,8 +1,9 @@
 package com.example.verb.ui
 
-import androidx.compose.ui.test.assertDoesNotExist
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -138,7 +139,7 @@ class VerbUIRegressionTest {
         composeTestRule.onNodeWithText("This process is using 5% CPU.").assertIsDisplayed()
 
         // Assert shell-prompt framing (e.g. "$ ") is absent from rendered UI
-        composeTestRule.onNodeWithText("$ ", substring = true).assertDoesNotExist()
-        composeTestRule.onNodeWithText("# ", substring = true).assertDoesNotExist()
+        composeTestRule.onAllNodesWithText("$ ", substring = true).assertCountEquals(0)
+        composeTestRule.onAllNodesWithText("# ", substring = true).assertCountEquals(0)
     }
 }
