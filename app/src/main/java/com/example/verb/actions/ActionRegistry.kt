@@ -144,17 +144,19 @@ class ActionRegistry(private val context: Context) {
                 title = "Storage Summary",
                 summary = "Used $usedGb out of $totalGb ($availableGb available).",
                 metrics = metrics,
-                rawCommand = "df -h ${path.path}",
-                rawOutput = "Filesystem      Size  Used Avail Use%\n/data           $totalGb  $usedGb $availableGb  ${if (totalBytes > 0) (usedBytes * 100 / totalBytes) else 0}%",
+                observedOutput = "totalBytes=$totalBytes, availableBytes=$availableBytes, blockSize=$blockSize",
+                derivedData = metrics,
+                explanation = "Storage information obtained via Android StatFs.",
                 isSuccess = true
             )
         } catch (e: Exception) {
             ActionResult(
                 intentId = "storage.summary",
-                title = "Storage Breakdown",
-                summary = "Device storage summary (Simulated/Fallback).",
-                metrics = mapOf("Total Storage" to "64.0 GB", "Used Storage" to "16.0 GB"),
-                isSuccess = true
+                title = "Storage Information Unavailable",
+                summary = "Unable to retrieve device storage statistics.",
+                metrics = emptyMap(),
+                isSuccess = false,
+                errorMessage = e.localizedMessage ?: "Unknown error"
             )
         }
     }
@@ -180,8 +182,9 @@ class ActionRegistry(private val context: Context) {
             title = "Memory Summary",
             summary = "Used $usedMemGb out of $totalMemGb ($availMemGb available).",
             metrics = metrics,
-            rawCommand = "free -m",
-            rawOutput = "              total        used        free      shared  buff/cache   available\nMem:           ${memInfo.totalMem/1024/1024}       ${(memInfo.totalMem - memInfo.availMem)/1024/1024}       ${memInfo.availMem/1024/1024}           0           0       ${memInfo.availMem/1024/1024}"
+            observedOutput = "totalMem=${memInfo.totalMem}, availMem=${memInfo.availMem}, lowMemory=${memInfo.lowMemory}",
+            derivedData = metrics,
+            explanation = "Memory information obtained via Android ActivityManager."
         )
     }
 
@@ -196,7 +199,7 @@ class ActionRegistry(private val context: Context) {
         val sampleList = if (appProcesses.isNotEmpty()) {
             appProcesses.take(8).joinToString("\n") { "PID ${it.pid} - ${it.processName}" }
         } else {
-            "PID ${Process.myPid()} - ${context.packageName}\nPID ${Process.myUid()} - system_server"
+            "PID ${Process.myPid()} - ${context.packageName}\n(Android did not expose a broader process list to this application.)"
         }
 
         val metrics = mapOf(
@@ -210,8 +213,9 @@ class ActionRegistry(private val context: Context) {
             title = "Running Processes",
             summary = "Found $count active processes visible to Verb runtime.",
             metrics = metrics,
-            rawCommand = "ps -A",
-            rawOutput = "USER     PID   PPID  VSIZE  RSS   WCHAN            PC  NAME\n$sampleList"
+            observedOutput = sampleList,
+            derivedData = metrics,
+            explanation = "Process list obtained via Android ActivityManager."
         )
     }
 
@@ -234,8 +238,9 @@ class ActionRegistry(private val context: Context) {
             title = "Files in Directory",
             summary = "Found ${files.size} items in ${targetDir.name.ifEmpty { "root" }}.",
             metrics = metrics,
-            rawCommand = "ls -la ${targetDir.absolutePath}",
-            rawOutput = fileDetails
+            observedOutput = fileDetails,
+            derivedData = metrics,
+            explanation = "File listing read directly from filesystem."
         )
     }
 
@@ -259,8 +264,9 @@ class ActionRegistry(private val context: Context) {
             title = "File Search Results",
             summary = "Search for '$query' returned ${matchedFiles.size} matches.",
             metrics = metrics,
-            rawCommand = "find ${targetDir.absolutePath} -name '*$query*'",
-            rawOutput = results
+            observedOutput = results,
+            derivedData = metrics,
+            explanation = "File search executed directly on filesystem."
         )
     }
 
@@ -298,8 +304,6 @@ class ActionRegistry(private val context: Context) {
             title = "Port $port Inspection",
             summary = summaryStr,
             metrics = metrics,
-            rawCommand = "ServerSocket($port)",
-            rawOutput = observedStr,
             observedOutput = observedStr,
             derivedData = metrics,
             explanation = explanationStr
@@ -325,17 +329,17 @@ class ActionRegistry(private val context: Context) {
                 title = "Process Stopped",
                 summary = "Sent SIGKILL signal to process PID $pid successfully.",
                 metrics = mapOf("Target PID" to pid.toString(), "Status" to "Terminated"),
-                rawCommand = "kill -9 $pid",
-                rawOutput = "Process $pid terminated."
+                observedOutput = "Process.killProcess($pid) executed without exceptions.",
+                explanation = "Attempted to terminate process via Android API."
             )
         } catch (e: Exception) {
             ActionResult(
                 intentId = "process.stop",
-                title = "Process Stop Attempted",
-                summary = "Attempted signal to PID $pid: ${e.localizedMessage}",
-                metrics = mapOf("Target PID" to pid.toString(), "Status" to "Signal Sent"),
-                rawCommand = "kill -9 $pid",
-                rawOutput = "Signal sent to PID $pid."
+                title = "Process Stop Failed",
+                summary = "Unable to verify process stop for PID $pid.",
+                metrics = mapOf("Target PID" to pid.toString(), "Status" to "Failed"),
+                isSuccess = false,
+                errorMessage = e.localizedMessage ?: "Unknown error during process kill."
             )
         }
     }
@@ -354,8 +358,9 @@ class ActionRegistry(private val context: Context) {
             title = "System Summary",
             summary = "Running on ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}).",
             metrics = metrics,
-            rawCommand = "uname -a && getprop ro.build.version.release",
-            rawOutput = "Linux android 5.10.0 #${Build.BOARD} ${Build.SUPPORTED_ABIS.firstOrNull()}\nAndroid ${Build.VERSION.RELEASE} API ${Build.VERSION.SDK_INT}"
+            observedOutput = "Manufacturer=${Build.MANUFACTURER}, Model=${Build.MODEL}, API=${Build.VERSION.SDK_INT}",
+            derivedData = metrics,
+            explanation = "System properties obtained via Android Build API."
         )
     }
 
@@ -374,8 +379,7 @@ class ActionRegistry(private val context: Context) {
             title = "Command Explanation",
             summary = explanation,
             metrics = mapOf("Command" to command, "Risk Class" to if (command.contains("rm")) "DESTRUCTIVE" else "READ_ONLY"),
-            rawCommand = "man $command",
-            rawOutput = explanation
+            explanation = explanation
         )
     }
 
