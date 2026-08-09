@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.verb.ui.theme.SecondaryCyan
+import java.util.Locale
 
 @Composable
 fun SystemScreen(
@@ -113,7 +114,13 @@ fun SystemScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = String.format("%.1f GB used of %.1f GB (%.1f GB available)", usedStorageGb, totalStorageGb, availStorageGb),
+                    text = String.format(
+                        Locale.getDefault(),
+                        "%.1f GB used of %.1f GB (%.1f GB available)",
+                        usedStorageGb,
+                        totalStorageGb,
+                        availStorageGb
+                    ),
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

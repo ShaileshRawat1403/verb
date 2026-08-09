@@ -10,6 +10,7 @@ import com.example.verb.model.ActionResult
 import com.example.verb.model.ActionRisk
 import com.example.verb.model.VerbIntent
 import java.io.File
+import java.util.Locale
 
 class ActionRegistry(
     private val context: Context,
@@ -151,13 +152,13 @@ class ActionRegistry(
             val availableBytes = availableBlocks * blockSize
             val usedBytes = totalBytes - availableBytes
 
-            val totalGb = String.format("%.1f GB", totalBytes / (1024.0 * 1024.0 * 1024.0))
-            val usedGb = String.format("%.1f GB", usedBytes / (1024.0 * 1024.0 * 1024.0))
-            val availableGb = String.format("%.1f GB", availableBytes / (1024.0 * 1024.0 * 1024.0))
+            val totalGb = String.format(Locale.getDefault(), "%.1f GB", totalBytes / (1024.0 * 1024.0 * 1024.0))
+            val usedGb = String.format(Locale.getDefault(), "%.1f GB", usedBytes / (1024.0 * 1024.0 * 1024.0))
+            val availableGb = String.format(Locale.getDefault(), "%.1f GB", availableBytes / (1024.0 * 1024.0 * 1024.0))
 
             val appDir = context.filesDir
             val termuxDirSize = getFolderSize(appDir)
-            val termuxSizeMb = String.format("%.1f MB", termuxDirSize / (1024.0 * 1024.0))
+            val termuxSizeMb = String.format(Locale.getDefault(), "%.1f MB", termuxDirSize / (1024.0 * 1024.0))
 
             val metrics = mapOf(
                 "Total Storage" to totalGb,
@@ -193,9 +194,9 @@ class ActionRegistry(
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
 
-        val totalMemGb = String.format("%.2f GB", memInfo.totalMem / (1024.0 * 1024.0 * 1024.0))
-        val availMemGb = String.format("%.2f GB", memInfo.availMem / (1024.0 * 1024.0 * 1024.0))
-        val usedMemGb = String.format("%.2f GB", (memInfo.totalMem - memInfo.availMem) / (1024.0 * 1024.0 * 1024.0))
+        val totalMemGb = String.format(Locale.getDefault(), "%.2f GB", memInfo.totalMem / (1024.0 * 1024.0 * 1024.0))
+        val availMemGb = String.format(Locale.getDefault(), "%.2f GB", memInfo.availMem / (1024.0 * 1024.0 * 1024.0))
+        val usedMemGb = String.format(Locale.getDefault(), "%.2f GB", (memInfo.totalMem - memInfo.availMem) / (1024.0 * 1024.0 * 1024.0))
 
         val metrics = mapOf(
             "Total Memory" to totalMemGb,
