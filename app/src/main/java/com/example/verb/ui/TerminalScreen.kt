@@ -1,11 +1,7 @@
 package com.example.verb.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,23 +18,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,14 +36,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
@@ -73,7 +58,6 @@ fun TerminalScreen(
     onInspectText: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var commandInput by remember { mutableStateOf("") }
     var showNaturalLanguageSheet by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
@@ -100,7 +84,7 @@ fun TerminalScreen(
             .fillMaxSize()
             .background(Color(0xFF0D0E12))
     ) {
-        // Terminal Top Header Bar matching user's design diagram
+        // Thin Terminal Header Bar
         Surface(
             modifier = Modifier.fillMaxWidth(),
             color = Color(0xFF161820)
@@ -109,7 +93,7 @@ fun TerminalScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -118,12 +102,32 @@ fun TerminalScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text(
-                            text = "Verb",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF6366F1),
+                            modifier = Modifier
+                                .clickable { showNaturalLanguageSheet = true }
+                                .testTag("verb_nl_trigger_top")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Verb",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
 
                         Surface(
                             shape = RoundedCornerShape(6.dp),
@@ -167,34 +171,6 @@ fun TerminalScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Natural Language Assistant Trigger
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF6366F1),
-                            modifier = Modifier
-                                .clickable { showNaturalLanguageSheet = true }
-                                .testTag("verb_nl_trigger_top")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = null,
-                                    tint = Color.White,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "Verb",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                            }
-                        }
-
                         IconButton(
                             onClick = onClearTerminal,
                             modifier = Modifier.size(32.dp)
@@ -208,33 +184,6 @@ fun TerminalScreen(
                         }
                     }
                 }
-
-                // Current Working Directory Sub-bar
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFF101216)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = null,
-                            tint = Color(0xFF38BDF8),
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = terminalRuntime?.currentWorkingDirectory() ?: "~/projects/verb",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = Color(0xFF64748B)
-                        )
-                    }
-                }
             }
         }
 
@@ -244,7 +193,7 @@ fun TerminalScreen(
             AndroidView(
                 factory = { ctx ->
                     termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
-                        it.setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
+                        it.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                         termuxAdapter.bindTerminalView(it)
                     }
                 },
@@ -278,92 +227,13 @@ fun TerminalScreen(
             }
         }
 
-        // Contextual Touch Control Strip
+        // Contextual Touch Control Strip for P0.3
         MobileTerminalKeyboard(
             onSendKey = onSendKey,
             onSendCommand = onSendCommand,
             terminalOutput = terminalOutput,
             onInspectOutput = onInspectText
         )
-
-        // Command Entry Box with Embedded Verb Trigger
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF161820)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Verb NL Button
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = Color(0xFF6366F1),
-                    modifier = Modifier
-                        .clickable { showNaturalLanguageSheet = true }
-                        .testTag("verb_nl_prompt_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AutoAwesome,
-                        contentDescription = "Ask Verb",
-                        tint = Color.White,
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .size(16.dp)
-                    )
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                Text(
-                    text = "$ ",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 16.sp,
-                    color = Color(0xFF38BDF8)
-                )
-
-                OutlinedTextField(
-                    value = commandInput,
-                    onValueChange = { commandInput = it },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("terminal_input_field"),
-                    placeholder = {
-                        Text(
-                            "Type command or ask Verb...",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp,
-                            color = Color(0xFF64748B)
-                        )
-                    },
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color(0xFF6366F1),
-                        unfocusedBorderColor = Color(0xFF334155),
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
-                    )
-                )
-
-                IconButton(
-                    onClick = {
-                        if (commandInput.isNotBlank()) {
-                            onSendCommand(commandInput)
-                            commandInput = ""
-                        }
-                    },
-                    modifier = Modifier.testTag("terminal_send_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send Command",
-                        tint = Color(0xFF6366F1)
-                    )
-                }
-            }
-        }
     }
 
     // Natural Language Sheet Modal

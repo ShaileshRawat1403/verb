@@ -94,18 +94,19 @@ class MobileTerminalKeyboardTest {
     }
 
     @Test
-    fun `no SHELL GIT ERROR chips present`() {
+    fun `PASTE emits PASTE`() {
+        val keysSent = mutableListOf<String>()
         composeTestRule.setContent {
             MobileTerminalKeyboard(
-                onSendKey = {},
+                onSendKey = { keysSent.add(it) },
                 onSendCommand = {},
                 terminalOutput = "",
                 onInspectOutput = {}
             )
         }
-        composeTestRule.onAllNodesWithTag("SHELL").assertCountEquals(0)
-        composeTestRule.onAllNodesWithTag("GIT").assertCountEquals(0)
-        composeTestRule.onAllNodesWithTag("ERROR").assertCountEquals(0)
+
+        composeTestRule.onNodeWithTag("key_paste").assertExists().performClick()
+        assertEquals(listOf("PASTE"), keysSent)
     }
 
     @Test
