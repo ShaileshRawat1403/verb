@@ -37,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +64,14 @@ fun TerminalScreen(
 ) {
     var showNaturalLanguageSheet by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+    val focusManager: FocusManager = LocalFocusManager.current
+    val termuxAdapter = terminalRuntime as? TermuxTerminalRuntimeAdapter
+
+    // A Compose text field on another tab may retain IME focus across navigation. Release it as
+    // Terminal opens so the explicit terminal input field can claim text focus when the user taps.
+    LaunchedEffect(terminalRuntime) {
+        focusManager.clearFocus(force = true)
+    }
 
     // Register SelectionChangeListener with TerminalRuntime for active exact selection monitoring
     DisposableEffect(terminalRuntime, onInspectText) {
@@ -190,7 +200,6 @@ fun TerminalScreen(
         }
 
         // Real Terminal Canvas View boundary
-        val termuxAdapter = terminalRuntime as? TermuxTerminalRuntimeAdapter
         if (termuxAdapter != null) {
             AndroidView(
                 factory = { ctx ->

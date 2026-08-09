@@ -110,6 +110,41 @@ class MobileTerminalKeyboardTest {
     }
 
     @Test
+    fun `user typed terminal input is submitted only by the terminal input control`() {
+        val commandsSent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = {},
+                onSendCommand = { commandsSent.add(it) },
+                terminalOutput = "",
+                onInspectOutput = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("git status")
+        composeTestRule.onNodeWithTag("terminal_input_submit").performClick()
+
+        assertEquals(listOf("git status"), commandsSent)
+    }
+
+    @Test
+    fun `empty terminal input sends an explicit Enter for interactive programs`() {
+        val commandsSent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = {},
+                onSendCommand = { commandsSent.add(it) },
+                terminalOutput = "",
+                onInspectOutput = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("terminal_input_submit").performClick()
+
+        assertEquals(listOf(""), commandsSent)
+    }
+
+    @Test
     fun `quick-key customisation persistence`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         

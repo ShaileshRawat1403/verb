@@ -4,6 +4,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.view.MotionEvent
 import androidx.test.core.app.ApplicationProvider
+import com.termux.view.TerminalView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -66,6 +67,16 @@ class TermuxTerminalRuntimeAdapterTest {
     fun `long press returns false so Termux owns selection`() {
         val event = MotionEvent.obtain(0L, 0L, MotionEvent.ACTION_DOWN, 0f, 0f, 0)
         assertFalse(adapter.onLongPress(event))
+    }
+
+    @Test
+    fun `binding terminal view enables touch focus for IME input`() {
+        val view = TerminalView(context, null)
+
+        adapter.bindTerminalView(view)
+
+        assertTrue(view.isFocusable)
+        assertTrue(view.isFocusableInTouchMode)
     }
 
     @Test
