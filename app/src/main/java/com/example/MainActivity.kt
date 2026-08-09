@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Icon
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.verb.ui.AskScreen
+import com.example.verb.ui.AssistantScreen
 import com.example.verb.ui.SemanticLensSheet
 import com.example.verb.ui.SystemScreen
 import com.example.verb.ui.TerminalScreen
@@ -59,6 +61,9 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val historyList by viewModel.historyList.collectAsStateWithLifecycle()
     val confirmationPending by viewModel.confirmationPendingResult.collectAsStateWithLifecycle()
     val semanticEntity by viewModel.activeSemanticEntity.collectAsStateWithLifecycle()
+    val aiProviderSettings by viewModel.aiProviderSettings.collectAsStateWithLifecycle()
+    val assistantInput by viewModel.assistantInput.collectAsStateWithLifecycle()
+    val assistantState by viewModel.assistantState.collectAsStateWithLifecycle()
 
     val terminalOutput by viewModel.terminalRuntime.terminalOutput.collectAsStateWithLifecycle()
     val isSessionActive by viewModel.terminalRuntime.isSessionActive.collectAsStateWithLifecycle()
@@ -77,6 +82,14 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Ask") },
                     label = { Text("Ask") },
                     modifier = Modifier.testTag("tab_ask")
+                )
+
+                NavigationBarItem(
+                    selected = activeTab == VerbTab.ASSISTANT,
+                    onClick = viewModel::openAssistant,
+                    icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "Assistant") },
+                    label = { Text("Assistant") },
+                    modifier = Modifier.testTag("tab_assistant")
                 )
 
                 NavigationBarItem(
@@ -118,8 +131,20 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onInspectText = viewModel::inspectSemanticText
                 )
 
+                VerbTab.ASSISTANT -> AssistantScreen(
+                    providerSettings = aiProviderSettings,
+                    prompt = assistantInput,
+                    state = assistantState,
+                    onPromptChange = viewModel::updateAssistantInput,
+                    onSubmitPrompt = viewModel::submitAssistantPrompt,
+                    onOpenProviderSettings = { viewModel.selectTab(VerbTab.SYSTEM) }
+                )
+
                 VerbTab.SYSTEM -> SystemScreen(
-                    isTerminalSessionActive = isSessionActive
+                    isTerminalSessionActive = isSessionActive,
+                    aiProviderSettings = aiProviderSettings,
+                    onSaveAiProviderSettings = viewModel::saveAiProviderSettings,
+                    onClearAiProviderApiKey = viewModel::clearAiProviderApiKey
                 )
 
                 VerbTab.TERMINAL -> TerminalScreen(

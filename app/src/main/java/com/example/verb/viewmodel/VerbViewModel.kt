@@ -4,6 +4,13 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.verb.actions.ActionRegistry
+import com.example.verb.ai.AiAssistantRequest
+import com.example.verb.ai.AiAssistantService
+import com.example.verb.ai.AiAssistantState
+import com.example.verb.ai.AiProviderConfig
+import com.example.verb.ai.AiProviderSettings
+import com.example.verb.ai.AndroidKeystoreAiProviderSettingsStore
+import com.example.verb.ai.DefaultAiProviderClientFactory
 import com.example.verb.intent.IntentEngine
 import com.example.verb.model.ActionResult
 import com.example.verb.model.SemanticEntity
@@ -17,6 +24,7 @@ import kotlinx.coroutines.launch
 
 enum class VerbTab {
     ASK,
+    ASSISTANT,
     SYSTEM,
     TERMINAL
 }
@@ -26,11 +34,26 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val intentEngine = IntentEngine()
     private val actionRegistry = ActionRegistry(application.applicationContext)
     private val semanticEngine = SemanticEngine()
+    private val aiProviderSettingsStore = AndroidKeystoreAiProviderSettingsStore(application.applicationContext)
+    private val aiProviderClientFactory = DefaultAiProviderClientFactory()
+    private val aiAssistantService = AiAssistantService(
+        settingsStore = aiProviderSettingsStore,
+        clientFactory = aiProviderClientFactory::invoke
+    )
 
     val terminalRuntime = TerminalRuntime(application.applicationContext.filesDir)
 
     private val _activeTab = MutableStateFlow(VerbTab.ASK)
     val activeTab: StateFlow<VerbTab> = _activeTab.asStateFlow()
+
+    private val _aiProviderSettings = MutableStateFlow(aiProviderSettingsStore.load())
+    val aiProviderSettings: StateFlow<AiProviderSettings> = _aiProviderSettings.asStateFlow()
+
+    private val _assistantInput = MutableStateFlow("")
+    val assistantInput: StateFlow<String> = _assistantInput.asStateFlow()
+
+    private val _assistantState = MutableStateFlow<AiAssistantState>(AiAssistantState.Idle)
+    val assistantState: StateFlow<AiAssistantState> = _assistantState.asStateFlow()
 
     private val _queryInput = MutableStateFlow("")
     val queryInput: StateFlow<String> = _queryInput.asStateFlow()
@@ -61,6 +84,37 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     fun updateQueryInput(newInput: String) {
         _queryInput.value = newInput
+    }
+
+    fun updateAssistantInput(newInput: String) {
+        _assistantInput.value = newInput
+    }
+
+    fun saveAiProviderSettings(config: AiProviderConfig, apiKey: String?): Result<Unit> = runCatching {
+        aiProviderSettingsStore.save(config, apiKey)
+        _aiProviderSettings.value = aiProviderSettingsStore.load()
+    }
+
+    fun clearAiProviderApiKey() {
+        aiProviderSettingsStore.clearApiKey()
+        _aiProviderSettings.value = aiProviderSettingsStore.load()
+    }
+
+    fun openAssistant() {
+        _activeTab.value = VerbTab.ASSISTANT
+    }
+
+    fun submitAssistantPrompt(prompt: String) {
+        if (prompt.isBlank() || _assistantState.value is AiAssistantState.Generating) return
+        _assistantInput.value = prompt
+        _assistantState.value = AiAssistantState.Generating
+        viewModelScope.launch(Dispatchers.IO) {
+            _assistantState.value = try {
+                AiAssistantState.Answer(aiAssistantService.respond(AiAssistantRequest(prompt)))
+            } catch (exception: Exception) {
+                AiAssistantState.Failure(exception.message ?: "The assistant could not complete this request.")
+            }
+        }
     }
 
     fun submitIntent(intent: com.example.verb.model.VerbIntent) {

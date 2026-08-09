@@ -2,6 +2,8 @@ package com.example.verb.ui
 
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -10,6 +12,10 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
 import com.example.verb.model.ActionResult
 import com.example.verb.model.VerbIntent
+import com.example.verb.ai.AiAssistantState
+import com.example.verb.ai.AiProviderConfig
+import com.example.verb.ai.AiProviderId
+import com.example.verb.ai.AiProviderSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -185,5 +191,42 @@ class VerbUIRegressionTest {
         // Assert shell-prompt framing (e.g. "$ ") is absent from rendered UI
         composeTestRule.onAllNodesWithText("$ ", substring = true).assertCountEquals(0)
         composeTestRule.onAllNodesWithText("# ", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun assistantDoesNotSubmitUntilProviderAndKeyAreConfigured() {
+        var submitCount = 0
+        composeTestRule.setContent {
+            AssistantScreen(
+                providerSettings = AiProviderSettings(),
+                prompt = "Explain ls",
+                state = AiAssistantState.Idle,
+                onPromptChange = {},
+                onSubmitPrompt = { submitCount++ },
+                onOpenProviderSettings = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("assistant_submit_button").assertIsNotEnabled()
+        assertEquals(0, submitCount)
+    }
+
+    @Test
+    fun assistantEnablesSubmissionOnlyWhenProviderIsReady() {
+        composeTestRule.setContent {
+            AssistantScreen(
+                providerSettings = AiProviderSettings(
+                    config = AiProviderConfig(AiProviderId.OPENAI, "test-model", "https://api.openai.com/v1"),
+                    hasApiKey = true
+                ),
+                prompt = "Explain ls",
+                state = AiAssistantState.Idle,
+                onPromptChange = {},
+                onSubmitPrompt = {},
+                onOpenProviderSettings = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("assistant_submit_button").assertIsEnabled()
     }
 }
