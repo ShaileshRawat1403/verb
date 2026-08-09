@@ -78,9 +78,8 @@ class VerbLogicTest {
         assertNotNull(unconfirmedResult.originalIntent)
         assertEquals("1234", unconfirmedResult.originalIntent?.parameters?.get("pid"))
 
-        val confirmedResult = actionRegistry.executeAction(unconfirmedResult.originalIntent!!, confirmed = true)
-        assertFalse(confirmedResult.requiresConfirmation)
-        assertEquals("1234", confirmedResult.originalIntent?.parameters?.get("pid"))
+        // This test deliberately stops at the confirmation boundary. A unit test must not
+        // request a real Android process kill in order to prove confirmation is required.
     }
 
     @Test
@@ -198,14 +197,14 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `terminal command template resolution`() {
+    fun `port intent preserves its structured parameter`() {
         val intent = intentEngine.resolveIntent("what's using port 3000?")
         assertEquals("network.port.inspect", intent.id)
         assertEquals("3000", intent.parameters["port"])
     }
 
     @Test
-    fun `file list intent command template`() {
+    fun `file list intent preserves its structured parameter`() {
         val intent = intentEngine.resolveIntent("show files in /sdcard")
         assertEquals("file.list", intent.id)
         assertEquals("/sdcard", intent.parameters["path"])
@@ -383,17 +382,105 @@ class VerbLogicTest {
     }
 
     @Test
-    fun `process-stop exception does NOT claim signal sent`() {
+    fun `non-positive PID is rejected before a stop is requested`() {
         val intent = com.example.verb.model.VerbIntent(
             id = "process.stop",
             name = "Stop Process",
-            parameters = mapOf("pid" to "-999") // Invalid PID or one that should fail
+            parameters = mapOf("pid" to "-999")
         )
         val result = actionRegistry.executeAction(intent, confirmed = true)
-        // With -999, killProcess might actually not throw on JVM (Robolectric), but let's check it doesn't say "Signal sent" on exception
-        // Wait, killProcess is a void method and in Robolectric it might not throw.
-        // If it succeeds, it says "Sent SIGKILL". 
-        assertFalse(result.summary.contains("Signal sent to PID")) 
+        assertFalse(result.isSuccess)
+        assertTrue(result.summary.contains("positive integer"))
+    }
+
+    @Test
+    fun `process stop reports an unverified outcome when Android accepts the request`() {
+        val registry = ActionRegistry(
+            context = context,
+            processStopper = { },
+            currentProcessId = { 4242 }
+        )
+        val intent = com.example.verb.model.VerbIntent(
+            id = "process.stop",
+            name = "Stop Process",
+            parameters = mapOf("pid" to "1234")
+        )
+
+        val result = registry.executeAction(intent, confirmed = true)
+
+        assertFalse(result.isSuccess)
+        assertTrue(result.summary.contains("Outcome unverified"))
+        assertFalse(result.summary.contains("stopped", ignoreCase = true))
+        assertFalse(result.summary.contains("terminated", ignoreCase = true))
+    }
+
+    @Test
+    fun `process stop exception is reported as failure`() {
+        val registry = ActionRegistry(
+            context = context,
+            processStopper = { throw SecurityException("permission denied") },
+            currentProcessId = { 4242 }
+        )
+        val intent = com.example.verb.model.VerbIntent(
+            id = "process.stop",
+            name = "Stop Process",
+            parameters = mapOf("pid" to "1234")
+        )
+
+        val result = registry.executeAction(intent, confirmed = true)
+
+        assertFalse(result.isSuccess)
+        assertEquals("Process Stop Failed", result.title)
+        assertTrue(result.errorMessage?.contains("permission denied") == true)
+    }
+
+    @Test
+    fun `process stop blocks Verb own PID`() {
+        val registry = ActionRegistry(
+            context = context,
+            processStopper = { throw AssertionError("must not stop itself") },
+            currentProcessId = { 1234 }
+        )
+        val intent = com.example.verb.model.VerbIntent(
+            id = "process.stop",
+            name = "Stop Process",
+            parameters = mapOf("pid" to "1234")
+        )
+
+        val result = registry.executeAction(intent, confirmed = true)
+
+        assertFalse(result.isSuccess)
+        assertEquals("Process Stop Blocked", result.title)
+    }
+
+    @Test
+    fun `invalid port is not substituted with 3000`() {
+        val intent = com.example.verb.model.VerbIntent(
+            id = "network.port.inspect",
+            name = "Inspect Port",
+            parameters = mapOf("port" to "70000")
+        )
+
+        val result = actionRegistry.executeAction(intent)
+
+        assertFalse(result.isSuccess)
+        assertTrue(result.summary.contains("70000"))
+        assertFalse(result.summary.contains("3000"))
+    }
+
+    @Test
+    fun `missing directory is not reported as empty`() {
+        val missingPath = context.filesDir.resolve("verb-test-missing-directory").absolutePath
+        val intent = com.example.verb.model.VerbIntent(
+            id = "file.list",
+            name = "List Files",
+            parameters = mapOf("path" to missingPath)
+        )
+
+        val result = actionRegistry.executeAction(intent)
+
+        assertFalse(result.isSuccess)
+        assertTrue(result.summary.contains("does not exist"))
     }
 
     @Test
