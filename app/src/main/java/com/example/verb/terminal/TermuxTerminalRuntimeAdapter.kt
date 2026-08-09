@@ -206,7 +206,12 @@ class TermuxTerminalRuntimeAdapter(
 
     // TerminalSessionClient callbacks
     override fun onTextChanged(changedSession: TerminalSession) {
-        appendOutput(changedSession.emulator.screen.transcriptText)
+        val transcript = changedSession.emulator.screen.transcriptText ?: ""
+        if (transcript.length > 50_000) {
+            _terminalOutput.value = transcript.takeLast(50_000)
+        } else {
+            _terminalOutput.value = transcript
+        }
     }
 
     override fun onTitleChanged(changedSession: TerminalSession) {}
