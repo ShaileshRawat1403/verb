@@ -29,6 +29,10 @@ class TermuxTerminalRuntimeAdapter(
     var terminalView: TerminalView? = null
 
     fun bindTerminalView(view: TerminalView) {
+        // TerminalView is a plain Android View, so Compose does not make it focusable for us.
+        // These flags keep user-initiated focus requests available to the terminal view.
+        view.isFocusable = true
+        view.isFocusableInTouchMode = true
         terminalView = view
         view.setTerminalViewClient(this)
         session?.let { view.attachSession(it) }

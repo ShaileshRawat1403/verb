@@ -12,12 +12,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
@@ -46,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
@@ -79,16 +84,63 @@ fun MobileTerminalKeyboard(
     var ctrlActive by remember { mutableStateOf(false) }
     var shiftActive by remember { mutableStateOf(false) }
     var isSheetOpen by remember { mutableStateOf(false) }
+    var terminalInput by remember { mutableStateOf("") }
     
     val scrollState1 = rememberScrollState()
     val scrollState2 = rememberScrollState()
 
+    fun submitTerminalInput() {
+        // This is explicit, user-authored terminal input. It remains outside the natural-language
+        // action layer and never accepts model-generated command text. An empty submission is a
+        // real Enter key, needed for interactive terminal programs.
+        onSendCommand(terminalInput)
+        terminalInput = ""
+    }
+
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .imePadding(),
         color = Color(0xFF161820),
         tonalElevation = 4.dp
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = terminalInput,
+                    onValueChange = { terminalInput = it },
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("terminal_input_field"),
+                    placeholder = { Text("Type a terminal command…", color = Color(0xFF94A3B8)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { submitTerminalInput() }),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedBorderColor = Color(0xFF6366F1),
+                        unfocusedBorderColor = Color(0xFF3B4252)
+                    )
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                IconButton(
+                    onClick = ::submitTerminalInput,
+                    modifier = Modifier.testTag("terminal_input_submit")
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Run typed terminal input",
+                        tint = Color(0xFF818CF8)
+                    )
+                }
+            }
+
             if (ctrlActive) {
                 // Ctrl combinations row
                 Row(
