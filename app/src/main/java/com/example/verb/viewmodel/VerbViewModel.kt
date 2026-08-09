@@ -63,10 +63,31 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _queryInput.value = newInput
     }
 
+    fun submitIntent(intent: com.example.verb.model.VerbIntent) {
+        _isExecuting.value = true
+        _queryInput.value = intent.summary
+        viewModelScope.launch(Dispatchers.IO) {
+            if (intent.id == "terminal.open") {
+                _isExecuting.value = false
+                _activeTab.value = VerbTab.TERMINAL
+                return@launch
+            }
+            val result = actionRegistry.executeAction(intent, confirmed = false)
+            _isExecuting.value = false
+            if (result.requiresConfirmation) {
+                _confirmationPendingResult.value = result
+            } else {
+                _currentActionResult.value = result
+                _historyList.value = listOf(result) + _historyList.value.take(9)
+                result.rawCommand?.let { cmd ->
+                    terminalRuntime.sendText("# Executed from Lens: $cmd\n")
+                }
+            }
+        }
+    }
+
     fun submitQuery(query: String) {
         if (query.isBlank()) return
-
-        _isExecuting.value = true
         _queryInput.value = query
 
         viewModelScope.launch(Dispatchers.IO) {

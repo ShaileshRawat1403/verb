@@ -48,7 +48,8 @@ import com.example.verb.ui.theme.SecondaryCyan
 fun SemanticLensSheet(
     entity: SemanticEntity,
     onDismiss: () -> Unit,
-    onExecuteSuggestedAction: (String) -> Unit
+    onExecuteSuggestedAction: ((String) -> Unit)? = null,
+    onExecuteSuggestedIntent: ((com.example.verb.model.VerbIntent) -> Unit)? = null
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val clipboardManager: ClipboardManager = LocalClipboardManager.current
@@ -107,11 +108,25 @@ fun SemanticLensSheet(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
-                    text = entity.rawText,
+                    text = if (entity.isSensitive) "******** (Redacted)" else entity.rawText,
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onBackground,
                     modifier = Modifier.padding(10.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = "Source: ${entity.detectionMethod}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Confidence: ${entity.confidence.name}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -211,8 +226,10 @@ fun SemanticLensSheet(
                 entity.suggestedActions.forEach { action ->
                     Button(
                         onClick = {
-                            action.intentQuery?.let { query ->
-                                onExecuteSuggestedAction(query)
+                            if (action.intent != null) {
+                                onExecuteSuggestedIntent?.invoke(action.intent)
+                            } else if (action.intentQuery != null) {
+                                onExecuteSuggestedAction?.invoke(action.intentQuery)
                             }
                             onDismiss()
                         },

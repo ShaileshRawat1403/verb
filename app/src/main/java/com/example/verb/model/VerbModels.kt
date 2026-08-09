@@ -16,6 +16,7 @@ enum class EntityType {
     PID,
     URL,
     IP_ADDRESS,
+    SENSITIVE_TEXT,
     GENERIC_TEXT
 }
 
@@ -64,9 +65,16 @@ data class ActionResult(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+enum class DetectionConfidence {
+    EXACT,
+    HIGH,
+    LOW
+}
+
 data class SuggestedAction(
     val id: String,
     val label: String,
+    val intent: VerbIntent? = null,
     val intentQuery: String? = null,
     val risk: ActionRisk = ActionRisk.READ_ONLY,
     val isDangerous: Boolean = false
@@ -88,5 +96,9 @@ data class SemanticEntity(
     val detectedPort: Int? = null,
     val detectedPid: Int? = null,
     val detectedPath: String? = null,
-    val suggestedActions: List<SuggestedAction> = emptyList()
+    val suggestedActions: List<SuggestedAction> = emptyList(),
+    val confidence: DetectionConfidence = DetectionConfidence.LOW,
+    val detectionMethod: String = "HEURISTIC",
+    val normalizedValue: String? = null,
+    val isSensitive: Boolean = false
 )
