@@ -217,6 +217,21 @@ class VerbLogicTest {
     }
 
     @Test
+    fun `terminal explanations do not claim command execution`() {
+        val result = actionRegistry.executeAction(
+            com.example.verb.model.VerbIntent(
+                id = "terminal.explain",
+                name = "Explain Command",
+                parameters = mapOf("command" to "echo hello")
+            )
+        )
+
+        assertTrue(result.isSuccess)
+        assertTrue(result.summary.contains("will not execute", ignoreCase = true))
+        assertFalse(result.summary.contains("executes shell operation", ignoreCase = true))
+    }
+
+    @Test
     fun `terminal port intent resolution`() {
         val intent = intentEngine.resolveIntent("what's using port 3000?")
         assertEquals("network.port.inspect", intent.id)

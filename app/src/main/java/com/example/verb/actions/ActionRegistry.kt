@@ -459,7 +459,7 @@ class ActionRegistry(
             command.contains("df") -> "Displays total, used, and available filesystem disk space."
             command.contains("free") -> "Displays total, used, and available RAM memory metrics."
             command.contains("ps") -> "Lists active operating processes and their process IDs (PIDs)."
-            else -> "Command '$command' executes shell operation in the current runtime working directory."
+            else -> "Verb is describing '$command' for the current runtime. It will not execute it."
         }
 
         return ActionResult(
