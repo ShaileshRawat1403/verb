@@ -24,6 +24,9 @@ class FakeTerminalRuntimeAdapter(
     private val _isSessionActive = MutableStateFlow<Boolean>(false)
     override val isSessionActive: StateFlow<Boolean> = _isSessionActive.asStateFlow()
 
+    private val _terminalContextState = MutableStateFlow(TerminalContextState())
+    override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
+
     private val _activeSelectionText = MutableStateFlow<String>("")
     override val activeSelectionText: StateFlow<String> = _activeSelectionText.asStateFlow()
 
@@ -42,6 +45,11 @@ class FakeTerminalRuntimeAdapter(
         _terminalOutput.value = "Verb Terminal Session Active (${workingDir.name}).\n$ "
         _isSessionActive.value = true
         _sessionState.value = TerminalSessionState.RUNNING
+        _terminalContextState.value = TerminalContextState(
+            capability = TerminalContextCapability.SESSION_ONLY,
+            sessionId = "fake-session",
+            alternateScreenState = AlternateScreenState.UNKNOWN
+        )
     }
 
     override fun attachSession() {
@@ -100,5 +108,6 @@ class FakeTerminalRuntimeAdapter(
         _isSessionActive.value = false
         selectionListeners.clear()
         _sessionState.value = TerminalSessionState.EXITED
+        _terminalContextState.value = TerminalContextState()
     }
 }

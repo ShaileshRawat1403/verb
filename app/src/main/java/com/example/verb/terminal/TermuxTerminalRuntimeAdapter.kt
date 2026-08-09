@@ -43,6 +43,9 @@ class TermuxTerminalRuntimeAdapter(
     private val _isSessionActive = MutableStateFlow<Boolean>(false)
     override val isSessionActive: StateFlow<Boolean> = _isSessionActive.asStateFlow()
 
+    private val _terminalContextState = MutableStateFlow(TerminalContextState())
+    override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
+
     private val _activeSelectionText = MutableStateFlow<String>("")
     override val activeSelectionText: StateFlow<String> = _activeSelectionText.asStateFlow()
 
@@ -92,6 +95,7 @@ class TermuxTerminalRuntimeAdapter(
                 session = newSession
                 _isSessionActive.value = true
                 _sessionState.value = TerminalSessionState.RUNNING
+                refreshTerminalContext(newSession)
                 terminalView?.attachSession(newSession)
             } else {
                 // Truthful failure reporting in production — NO silent fallback
@@ -102,6 +106,7 @@ class TermuxTerminalRuntimeAdapter(
         } catch (t: Throwable) {
             _isSessionActive.value = false
             _sessionState.value = TerminalSessionState.FAILED
+            refreshTerminalContext()
             appendOutput("\n[FAILED to start Termux PTY session: ${t.message}]\n")
         }
     }
@@ -200,12 +205,14 @@ class TermuxTerminalRuntimeAdapter(
         _isSessionActive.value = false
         session?.finishIfRunning()
         session = null
+        refreshTerminalContext()
         selectionListeners.clear()
         _sessionState.value = TerminalSessionState.EXITED
     }
 
     // TerminalSessionClient callbacks
     override fun onTextChanged(changedSession: TerminalSession) {
+        refreshTerminalContext(changedSession)
         val transcript = changedSession.emulator.screen.transcriptText ?: ""
         if (transcript.length > 50_000) {
             _terminalOutput.value = transcript.takeLast(50_000)
@@ -219,6 +226,7 @@ class TermuxTerminalRuntimeAdapter(
     override fun onSessionFinished(finishedSession: TerminalSession) {
         _isSessionActive.value = false
         _sessionState.value = if (finishedSession.exitStatus == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
+        refreshTerminalContext()
         appendOutput("\n[Session terminated with code ${finishedSession.exitStatus}]\n$ ")
     }
 
@@ -297,5 +305,22 @@ class TermuxTerminalRuntimeAdapter(
             current + text
         }
         _terminalOutput.value = updated
+    }
+
+    private fun refreshTerminalContext(activeSession: TerminalSession? = session) {
+        val emulator = activeSession?.emulator
+        _terminalContextState.value = if (_isSessionActive.value && activeSession != null && emulator != null) {
+            TerminalContextState(
+                capability = TerminalContextCapability.SESSION_ONLY,
+                sessionId = activeSession.mHandle,
+                alternateScreenState = if (emulator.isAlternateBufferActive) {
+                    AlternateScreenState.ACTIVE
+                } else {
+                    AlternateScreenState.INACTIVE
+                }
+            )
+        } else {
+            TerminalContextState()
+        }
     }
 }

@@ -22,6 +22,12 @@ interface TerminalRuntimeAdapter {
     /** Backward-compatible boolean state flow indicating active session */
     val isSessionActive: StateFlow<Boolean>
 
+    /**
+     * Metadata-only terminal context available without parsing transcript text.
+     * Command boundaries, exit codes, and command output are intentionally unavailable.
+     */
+    val terminalContextState: StateFlow<TerminalContextState>
+
     /** Starts or attaches a Termux shell session */
     fun startSession()
 
