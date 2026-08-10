@@ -2,6 +2,12 @@ name: Build Verb terminal bootstrap
 
 on:
   workflow_dispatch:
+    inputs:
+      build:
+        description: Build the full source bootstrap after the preflight gate passes
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -11,8 +17,36 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Validate Verb bootstrap inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Verb runtime definitions
+        uses: actions/checkout@v4
+
+      - name: Check out pinned Termux package sources
+        uses: actions/checkout@v4
+        with:
+          repository: termux/termux-packages
+          ref: bd2e956e639090779a728c96fcca2e387dd3a246
+          path: termux-packages
+
+      - name: Validate the exact runtime patch set
+        working-directory: termux-packages
+        run: |
+          git apply --check "$GITHUB_WORKSPACE/runtime/termux-packages/verb-app-id.patch"
+          git apply --check "$GITHUB_WORKSPACE/runtime/termux-packages/verb-bootstrap-minimal.patch"
+          git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-app-id.patch"
+          git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-bootstrap-minimal.patch"
+          git diff --check
+          test -f packages/libbz2/build.sh
+          ! grep -Fq 'PACKAGES+=("bzip2")' scripts/build-bootstraps.sh
+          ! grep -Fq 'termux-am' packages/termux-tools/build.sh
+
   build-aarch64:
     name: Build Verb aarch64 userland
+    needs: preflight
+    if: inputs.build == true
     runs-on: ubuntu-latest
     steps:
       - name: Check out Verb runtime definitions
