@@ -29,6 +29,11 @@ set for the embedded local terminal.
 The preflight also probes the pinned `apr-util` archive URL. This prevents an
 Apache mirror retirement from consuming a full native build before it is seen.
 
+The source workflow persists the Termux build and package-output caches using a
+key derived from the pinned upstream revision and Verb's runtime patches. A
+retry of the same runtime configuration reuses completed native packages rather
+than rebuilding the whole dependency graph.
+
 The workflow deliberately uploads a review artifact only. It does not publish a
 release or change the Android app automatically. Before an artifact is accepted,
 we must record its SHA-256, review its license manifest, and add a verified
