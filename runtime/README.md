@@ -28,6 +28,8 @@ set for the embedded local terminal.
 
 The preflight also probes the pinned `apr-util` archive URL. This prevents an
 Apache mirror retirement from consuming a full native build before it is seen.
+It similarly uses and probes Savannah's mirror router for `attr`, rather than
+depending on a single Savannah download host.
 
 The source workflow persists the Termux build and package-output caches using a
 key derived from the pinned upstream revision and Verb's runtime patches. A
