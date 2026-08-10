@@ -48,7 +48,7 @@ jobs:
           test -f packages/libbz2/build.sh
           ! grep -Fq 'PACKAGES+=("bzip2")' scripts/build-bootstraps.sh
           ! grep -Fq 'termux-am' packages/termux-tools/build.sh
-          grep -Fqx 'mv -f "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" "$TERMUX_BUILT_DEBS_DIRECTORY/"' scripts/build-bootstraps.sh
+          grep -Fq 'mv -f "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" "$TERMUX_BUILT_DEBS_DIRECTORY/"' scripts/build-bootstraps.sh
           ! grep -Fq 'codeberg.org/dnkl/foot' packages/ncurses/build.sh
           ! grep -Fq 'x11-packages/kitty/build.sh' packages/ncurses/build.sh
           ! grep -Fq 'x11-packages/alacritty/build.sh' packages/ncurses/build.sh
