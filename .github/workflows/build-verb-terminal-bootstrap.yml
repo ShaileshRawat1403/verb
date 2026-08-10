@@ -79,8 +79,12 @@ jobs:
             .termux-build-cache
             .termux-output-cache
           key: verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
+          # A source-host URL replacement does not invalidate already-built
+          # packages. The broader fallback restores the compatible ABI cache;
+          # Termux still builds the unbuilt or changed package.
           restore-keys: |
             verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-
+            verb-termux-aarch64-bd2e956e-v2-
 
       - name: Prepare writable container mounts
         run: |
