@@ -45,6 +45,11 @@ Verb's runtime patches. These may reuse downloads and intermediates, but they ar
 guarantee of a short rebuild: the upstream bootstrap process clears generated package
 output. Do not use a cache hit as justification to retry a multi-hour build.
 
+The completed archive is written directly to the workflow's writable output mount before
+artifact upload. The package-builder's source checkout is read-only to its unprivileged
+build user; moving the finished archive into that checkout caused the otherwise successful
+core build in run #21 to be lost.
+
 The workflow deliberately uploads a review artifact only. It does not publish a
 release or change the Android app automatically. Before an artifact is accepted,
 we must record its SHA-256, review its license manifest, and add a verified

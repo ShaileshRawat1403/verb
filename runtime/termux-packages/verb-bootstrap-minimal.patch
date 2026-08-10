@@ -13,6 +13,17 @@ diff --git a/packages/termux-tools/build.sh b/packages/termux-tools/build.sh
 diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
 --- a/scripts/build-bootstraps.sh
 +++ b/scripts/build-bootstraps.sh
+@@ -246,7 +246,9 @@ create_bootstrap_archive() {
+ 		zip -r9 "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" ./*
+ 	)
+ 
+-	mv -f "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" "$TERMUX_PACKAGES_DIRECTORY/"
++	# The package source checkout may be read-only to the unprivileged container
++	# user. Keep the reviewed archive in the writable output mount for CI upload.
++	mv -f "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" "$TERMUX_BUILT_DEBS_DIRECTORY/"
+ 
+ 	echo "[*] Finished successfully (${1})."
+ 
 @@ -429,7 +429,7 @@
  
  		# Core utilities.
