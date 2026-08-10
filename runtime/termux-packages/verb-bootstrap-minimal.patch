@@ -7,7 +7,20 @@ index 9973785..2077a4b 100644
  # that core packages are installed after upgrading (we removed busybox
  # from essentials).
 -TERMUX_PKG_DEPENDS="bzip2, coreutils, curl, dash, diffutils, findutils, gawk, grep, gzip, less, procps, psmisc, sed, tar, termux-am (>= 0.8.0), termux-am-socket (>= 1.5.0), termux-core, termux-exec, util-linux, xz-utils, dialog"
-+TERMUX_PKG_DEPENDS="bzip2, coreutils, curl, dash, diffutils, findutils, gawk, grep, gzip, less, procps, psmisc, sed, tar, termux-core, termux-exec, util-linux, xz-utils, dialog"
++TERMUX_PKG_DEPENDS="libbz2, coreutils, curl, dash, diffutils, findutils, gawk, grep, gzip, less, procps, psmisc, sed, tar, termux-core, termux-exec, util-linux, xz-utils, dialog"
  
  # Optional packages that are distributed as part of bootstrap archives.
  TERMUX_PKG_RECOMMENDS="ed, dos2unix, inetutils, net-tools, patch, unzip"
+diff --git a/scripts/build-bootstraps.sh b/scripts/build-bootstraps.sh
+index 53bb59d..e62fac2 100755
+--- a/scripts/build-bootstraps.sh
++++ b/scripts/build-bootstraps.sh
+@@ -427,7 +427,7 @@ for TERMUX_ARCH in "${TERMUX_ARCHITECTURES[@]}"; do
+ 
+ 		# Core utilities.
+ 		PACKAGES+=("bash") # Used by `termux-bootstrap-second-stage.sh`
+-		PACKAGES+=("bzip2")
++		PACKAGES+=("libbz2")
+ 		if ! ${BOOTSTRAP_ANDROID10_COMPATIBLE}; then
+ 			PACKAGES+=("command-not-found")
+ 		else
