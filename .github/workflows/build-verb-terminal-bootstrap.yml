@@ -67,6 +67,25 @@ jobs:
           ref: bd2e956e639090779a728c96fcca2e387dd3a246
           path: termux-packages
 
+      - name: Restore native build cache
+        id: restore-termux-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .termux-build-cache
+            .termux-output-cache
+          key: verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
+          restore-keys: |
+            verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-
+
+      - name: Prepare writable container mounts
+        run: |
+          mkdir -p .termux-build-cache .termux-output-cache
+          # The package-builder runs as its unprivileged `builder` user while
+          # Actions owns the checkout. Make the shared roots writable so the
+          # generated bootstrap can be copied back for artifact upload.
+          chmod -R a+rwX termux-packages .termux-build-cache .termux-output-cache
+
       - name: Apply Verb runtime patches
         working-directory: termux-packages
         run: |
@@ -83,6 +102,9 @@ jobs:
       - name: Build isolated bootstrap
         working-directory: termux-packages
         env:
+          TERMUX_DOCKER_RUN_EXTRA_ARGS: >-
+            --volume ${{ github.workspace }}/.termux-build-cache:/home/builder/.termux-build
+            --volume ${{ github.workspace }}/.termux-output-cache:/home/builder/termux-packages/output
           TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages
         run: >-
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh
@@ -96,3 +118,13 @@ jobs:
           path: termux-packages/bootstrap-aarch64.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Save native build cache
+        if: ${{ always() && steps.restore-termux-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .termux-build-cache
+            .termux-output-cache
+          key: verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
