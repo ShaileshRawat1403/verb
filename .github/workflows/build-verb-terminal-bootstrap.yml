@@ -25,9 +25,14 @@ jobs:
           ref: bd2e956e639090779a728c96fcca2e387dd3a246
           path: termux-packages
 
-      - name: Apply Verb Android application id
+      - name: Apply Verb runtime patches
         working-directory: termux-packages
-        run: git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-app-id.patch"
+        run: |
+          git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-app-id.patch"
+          # The upstream termux-am Android companion requires a Gradle SDK installation that
+          # cannot run in the pinned package-builder image. It is not needed for a standalone
+          # local CLI, so exclude it (and its socket companion) from Verb's first bootstrap.
+          git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-bootstrap-minimal.patch"
 
       - name: Build matching Termux package-builder image
         working-directory: termux-packages
@@ -36,11 +41,7 @@ jobs:
       - name: Build isolated bootstrap
         working-directory: termux-packages
         env:
-          # termux-am invokes Gradle, which may install the Android platform/build-tools
-          # missing from the pinned builder image. The image's SDK directory is root-owned;
-          # run this disposable CI container command as root so that install can succeed. Keep
-          # HOME at the builder path: Termux resolves its preinstalled NDK from $HOME/lib.
-          TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages --user root --env HOME=/home/builder
+          TERMUX_DOCKER_EXEC_EXTRA_ARGS: --workdir /home/builder/termux-packages
         run: >-
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh
           --architectures aarch64

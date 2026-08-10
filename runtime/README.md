@@ -16,6 +16,11 @@ base Termux-compatible shell and utilities plus CA certificates, curl, Git,
 Node LTS, npm, OpenSSH, and Python. This gives us the minimum local substrate
 for user-installed CLI tools and agents.
 
+It deliberately excludes Termux's Android-specific `am` and `termux-am-socket`
+companions. They are not required for a regular local terminal and depend on an
+Android Gradle build that cannot be provisioned safely inside the pinned package
+builder. Android activity-management features can be evaluated separately later.
+
 The workflow deliberately uploads a review artifact only. It does not publish a
 release or change the Android app automatically. Before an artifact is accepted,
 we must record its SHA-256, review its license manifest, and add a verified
