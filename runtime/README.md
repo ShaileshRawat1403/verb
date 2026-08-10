@@ -21,6 +21,11 @@ companions. They are not required for a regular local terminal and depend on an
 Android Gradle build that cannot be provisioned safely inside the pinned package
 builder. Android activity-management features can be evaluated separately later.
 
+It also uses the base ncurses source's built-in terminfo database instead of
+fetching optional X11 terminal metadata. This removes a nonessential external
+download (including Codeberg) while retaining a broader terminal-description
+set for the embedded local terminal.
+
 The workflow deliberately uploads a review artifact only. It does not publish a
 release or change the Android app automatically. Before an artifact is accepted,
 we must record its SHA-256, review its license manifest, and add a verified
