@@ -90,3 +90,15 @@ diff --git a/packages/ncurses/build.sh b/packages/ncurses/build.sh
 +	# Keep the ncurses source's complete built-in terminfo database. This is more
 +	# reliable for a headless local terminal than downloading optional X11 entries.
  }
+diff --git a/packages/apr-util/build.sh b/packages/apr-util/build.sh
+--- a/packages/apr-util/build.sh
++++ b/packages/apr-util/build.sh
+@@ -4,7 +4,7 @@
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION=1.6.3
+ TERMUX_PKG_REVISION=3
+-TERMUX_PKG_SRCURL=https://downloads.apache.org/apr/apr-util-${TERMUX_PKG_VERSION}.tar.gz
++TERMUX_PKG_SRCURL=https://archive.apache.org/dist/apr/apr-util-${TERMUX_PKG_VERSION}.tar.gz
+ TERMUX_PKG_SHA256=2b74d8932703826862ca305b094eef2983c27b39d5c9414442e9976a9acf1983
+ TERMUX_PKG_DEPENDS="apr, libcrypt, libexpat, libiconv, libuuid"
+ TERMUX_PKG_BREAKS="apr-util-dev"
