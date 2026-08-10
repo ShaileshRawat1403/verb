@@ -46,6 +46,10 @@ jobs:
           ! grep -Fq 'x11-packages/kitty/build.sh' packages/ncurses/build.sh
           ! grep -Fq 'x11-packages/alacritty/build.sh' packages/ncurses/build.sh
           ! grep -Fq 'x11-packages/foot/build.sh' packages/ncurses/build.sh
+          grep -Fqx 'TERMUX_PKG_SRCURL=https://archive.apache.org/dist/apr/apr-util-${TERMUX_PKG_VERSION}.tar.gz' packages/apr-util/build.sh
+          ! grep -Fq 'downloads.apache.org/apr/apr-util' packages/apr-util/build.sh
+          curl --fail --silent --show-error --location --head --retry 2 --connect-timeout 10 \
+            'https://archive.apache.org/dist/apr/apr-util-1.6.3.tar.gz' > /dev/null
 
   build-aarch64:
     name: Build Verb aarch64 userland

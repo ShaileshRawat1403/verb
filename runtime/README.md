@@ -26,6 +26,9 @@ fetching optional X11 terminal metadata. This removes a nonessential external
 download (including Codeberg) while retaining a broader terminal-description
 set for the embedded local terminal.
 
+The preflight also probes the pinned `apr-util` archive URL. This prevents an
+Apache mirror retirement from consuming a full native build before it is seen.
+
 The workflow deliberately uploads a review artifact only. It does not publish a
 release or change the Android app automatically. Before an artifact is accepted,
 we must record its SHA-256, review its license manifest, and add a verified
