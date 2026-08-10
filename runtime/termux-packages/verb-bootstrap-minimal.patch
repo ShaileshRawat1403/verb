@@ -102,3 +102,15 @@ diff --git a/packages/apr-util/build.sh b/packages/apr-util/build.sh
  TERMUX_PKG_SHA256=2b74d8932703826862ca305b094eef2983c27b39d5c9414442e9976a9acf1983
  TERMUX_PKG_DEPENDS="apr, libcrypt, libexpat, libiconv, libuuid"
  TERMUX_PKG_BREAKS="apr-util-dev"
+diff --git a/packages/attr/build.sh b/packages/attr/build.sh
+--- a/packages/attr/build.sh
++++ b/packages/attr/build.sh
+@@ -3,7 +3,7 @@
+ TERMUX_PKG_LICENSE="GPL-2.0"
+ TERMUX_PKG_MAINTAINER="@termux"
+ TERMUX_PKG_VERSION="2.6.0"
+-TERMUX_PKG_SRCURL="http://download.savannah.gnu.org/releases/attr/attr-${TERMUX_PKG_VERSION}.tar.gz"
++TERMUX_PKG_SRCURL="https://download-mirror.savannah.gnu.org/releases/attr/attr-${TERMUX_PKG_VERSION}.tar.gz"
+ TERMUX_PKG_SHA256=d42fa374513180bb48cb11a46696f488240e5124ff1e6ad88b0abff706985612
+ TERMUX_PKG_AUTO_UPDATE=true
+ TERMUX_PKG_BREAKS="attr-dev"

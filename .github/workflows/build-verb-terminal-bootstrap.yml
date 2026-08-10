@@ -50,6 +50,10 @@ jobs:
           ! grep -Fq 'downloads.apache.org/apr/apr-util' packages/apr-util/build.sh
           curl --fail --silent --show-error --location --head --retry 2 --connect-timeout 10 \
             'https://archive.apache.org/dist/apr/apr-util-1.6.3.tar.gz' > /dev/null
+          grep -Fqx 'TERMUX_PKG_SRCURL="https://download-mirror.savannah.gnu.org/releases/attr/attr-${TERMUX_PKG_VERSION}.tar.gz"' packages/attr/build.sh
+          ! grep -Fq 'http://download.savannah.gnu.org/releases/attr' packages/attr/build.sh
+          curl --fail --silent --show-error --location --head --retry 2 --connect-timeout 10 \
+            'https://download-mirror.savannah.gnu.org/releases/attr/attr-2.6.0.tar.gz' > /dev/null
 
   build-aarch64:
     name: Build Verb aarch64 userland
