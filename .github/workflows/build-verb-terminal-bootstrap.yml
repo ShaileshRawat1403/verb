@@ -3,11 +3,17 @@ name: Build Verb terminal bootstrap
 on:
   workflow_dispatch:
     inputs:
-      build:
-        description: Build the full source bootstrap after the preflight gate passes
+      profile:
+        description: >-
+          Source builds are one-time release operations and can take hours. Select
+          preflight-only for normal development.
         required: true
-        default: false
-        type: boolean
+        default: preflight-only
+        type: choice
+        options:
+          - preflight-only
+          - core-shell-git-release
+          - developer-runtime-release
 
 permissions:
   contents: read
@@ -58,7 +64,7 @@ jobs:
   build-aarch64:
     name: Build Verb aarch64 userland
     needs: preflight
-    if: inputs.build == true
+    if: inputs.profile != 'preflight-only'
     runs-on: ubuntu-latest
     steps:
       - name: Check out Verb runtime definitions
@@ -107,6 +113,26 @@ jobs:
         working-directory: termux-packages
         run: docker build -t ghcr.io/termux/package-builder:latest scripts/
 
+      - name: Select reviewed runtime profile
+        id: runtime-profile
+        run: |
+          case "${{ inputs.profile }}" in
+            core-shell-git-release)
+              echo 'packages=ca-certificates,libcurl,git' >> "$GITHUB_OUTPUT"
+              ;;
+            developer-runtime-release)
+              # OpenSSH is intentionally not part of the first userland. Its Kerberos
+              # source is an optional dependency and made run #20 fail after hours of
+              # successful compilation when kerberos.org timed out. Git over HTTPS
+              # remains available; SSH is a future independently-built add-on.
+              echo 'packages=ca-certificates,libcurl,git,nodejs-lts,npm,python' >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported runtime profile: ${{ inputs.profile }}" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Build isolated bootstrap
         working-directory: termux-packages
         env:
@@ -117,7 +143,7 @@ jobs:
         run: >-
           ./scripts/run-docker.sh ./scripts/build-bootstraps.sh
           --architectures aarch64
-          --add ca-certificates,libcurl,git,nodejs-lts,npm,openssh,python
+          --add ${{ steps.runtime-profile.outputs.packages }}
 
       - name: Upload signed-review bootstrap artifact
         uses: actions/upload-artifact@v4
