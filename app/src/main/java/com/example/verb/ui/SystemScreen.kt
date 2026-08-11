@@ -49,6 +49,7 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.terminal.TerminalEnvironment
+import com.example.verb.viewmodel.RuntimeImportState
 import com.example.verb.ui.theme.SecondaryCyan
 import java.util.Locale
 
@@ -56,6 +57,8 @@ import java.util.Locale
 fun SystemScreen(
     isTerminalSessionActive: Boolean,
     terminalEnvironment: TerminalEnvironment,
+    runtimeImportState: RuntimeImportState = RuntimeImportState.Idle,
+    onImportRuntime: () -> Unit = {},
     aiProviderSettings: AiProviderSettings = AiProviderSettings(),
     onSaveAiProviderSettings: (AiProviderConfig, String?) -> Result<Unit> = { _, _ -> Result.success(Unit) },
     onClearAiProviderApiKey: () -> Unit = {},
@@ -170,6 +173,41 @@ fun SystemScreen(
                 "Root Access" to "No Root (Unprivileged Safe User)"
             )
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Verb Runtime", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "Import the reviewed Verb aarch64 runtime ZIP and its SHA-256 file. The archive is verified before installation.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+                )
+                Button(
+                    onClick = onImportRuntime,
+                    enabled = runtimeImportState !is RuntimeImportState.Importing,
+                    modifier = Modifier.testTag("import_verb_runtime")
+                ) {
+                    Text(if (runtimeImportState is RuntimeImportState.Importing) "Importing…" else "Import Verb Runtime")
+                }
+                when (runtimeImportState) {
+                    RuntimeImportState.Idle -> Unit
+                    RuntimeImportState.Importing -> Text("Checking checksum and installing…", modifier = Modifier.padding(top = 8.dp))
+                    RuntimeImportState.Success -> Text("Verb local CLI userland installed and terminal restarted.", modifier = Modifier.padding(top = 8.dp))
+                    is RuntimeImportState.Failure -> Text(
+                        "Import failed: ${runtimeImportState.message}",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
