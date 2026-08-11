@@ -62,6 +62,19 @@ jobs:
           curl --fail --silent --show-error --location --head --retry 2 --connect-timeout 10 \
             'https://download-mirror.savannah.gnu.org/releases/attr/attr-2.6.0.tar.gz' > /dev/null
 
+      - name: Validate cache-output isolation
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+
+          mkdir "$scratch/preserved" "$scratch/legacy"
+          touch "$scratch/preserved/current-profile.deb" "$scratch/legacy/stale-profile.deb"
+          bash runtime/scripts/prepare-bootstrap-output-cache.sh "$scratch/preserved" ''
+          test -f "$scratch/preserved/current-profile.deb"
+          bash runtime/scripts/prepare-bootstrap-output-cache.sh "$scratch/legacy" 'legacy-prefix-match'
+          test -z "$(find "$scratch/legacy" -mindepth 1 -maxdepth 1 -print -quit)"
+
   build-aarch64:
     name: Build Verb aarch64 userland
     needs: preflight
@@ -109,7 +122,7 @@ jobs:
       # delete its output directory before the bootstrap script sees it.
       - name: Restore legacy compiled-source cache
         id: restore-legacy-cache
-        if: ${{ steps.restore-native-build-cache.outputs.cache-hit != 'true' }}
+        if: ${{ steps.restore-native-build-cache.outputs.cache-hit != 'true' && steps.restore-runtime-output-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -121,16 +134,18 @@ jobs:
 
       - name: Prepare writable container mounts
         run: |
-          if [ "${{ steps.restore-legacy-cache.outputs.cache-hit }}" = 'true' ]; then
-            # The old cache's output can contain another profile's .debs. This
-            # directory is generated scratch output, never source or user data.
-            rm -rf .termux-output-cache
-          fi
-          mkdir -p .termux-build-cache .termux-output-cache
+          bash runtime/scripts/prepare-bootstrap-output-cache.sh \
+            .termux-output-cache \
+            "${{ steps.restore-legacy-cache.outputs.cache-matched-key }}"
+          mkdir -p .termux-build-cache
           # The package-builder runs as its unprivileged `builder` user while
           # Actions owns the checkout. Make the shared roots writable so the
           # generated bootstrap can be copied back for artifact upload.
           chmod -R a+rwX termux-packages .termux-build-cache .termux-output-cache
+
+      - name: Verify selected runtime output is clean
+        if: ${{ steps.restore-legacy-cache.outputs.cache-matched-key != '' }}
+        run: test -z "$(find .termux-output-cache -mindepth 1 -maxdepth 1 -print -quit)"
 
       - name: Apply Verb runtime patches
         working-directory: termux-packages
