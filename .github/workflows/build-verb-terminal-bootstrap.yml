@@ -104,8 +104,28 @@ jobs:
             verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-
             verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-
 
+      # One-time migration: the former cache combined build intermediates and
+      # output packages. Reuse only its expensive compiled-source work, then
+      # delete its output directory before the bootstrap script sees it.
+      - name: Restore legacy compiled-source cache
+        id: restore-legacy-cache
+        if: ${{ steps.restore-native-build-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .termux-build-cache
+            .termux-output-cache
+          key: verb-termux-aarch64-bd2e956e-v2-migration-${{ github.run_id }}
+          restore-keys: |
+            verb-termux-aarch64-bd2e956e-v2-
+
       - name: Prepare writable container mounts
         run: |
+          if [ "${{ steps.restore-legacy-cache.outputs.cache-hit }}" = 'true' ]; then
+            # The old cache's output can contain another profile's .debs. This
+            # directory is generated scratch output, never source or user data.
+            rm -rf .termux-output-cache
+          fi
           mkdir -p .termux-build-cache .termux-output-cache
           # The package-builder runs as its unprivileged `builder` user while
           # Actions owns the checkout. Make the shared roots writable so the
