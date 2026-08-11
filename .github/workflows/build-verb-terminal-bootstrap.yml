@@ -46,6 +46,7 @@ jobs:
           git apply "$GITHUB_WORKSPACE/runtime/termux-packages/verb-bootstrap-minimal.patch"
           git diff --check
           test -f packages/libbz2/build.sh
+          grep -Fq 'export TERMUX_PREFIX="/data/data/${TERMUX_APP__PACKAGE_NAME}/files/usr"' packages/termux-tools/build.sh
           ! grep -Fq 'PACKAGES+=("bzip2")' scripts/build-bootstraps.sh
           ! grep -Fq 'termux-am' packages/termux-tools/build.sh
           grep -Fq 'mv -f "${BOOTSTRAP_TMPDIR}/bootstrap-${1}.zip" "$TERMUX_BUILT_DEBS_DIRECTORY/"' scripts/build-bootstraps.sh
@@ -220,6 +221,8 @@ jobs:
 
           test -s "$archive"
           unzip -t "$archive" > /dev/null
+          unzip -p "$archive" bin/login | grep -Fq '/data/data/com.aistudio.verb.app/files/usr/bin/bash'
+          ! unzip -p "$archive" bin/login | grep -Fq '/data/data/com.termux/files/usr'
           unzip -p "$archive" var/lib/dpkg/status \
             | awk '/^Package: / { print $2 }' \
             | LC_ALL=C sort -u > "$manifest"

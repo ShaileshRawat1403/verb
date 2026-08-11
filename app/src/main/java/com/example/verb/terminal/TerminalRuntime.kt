@@ -1,7 +1,9 @@
 package com.example.verb.terminal
 
 import androidx.compose.ui.text.TextRange
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
@@ -10,12 +12,14 @@ import java.io.File
  */
 class TerminalRuntime(
     private val workingDir: File,
-    useFakeForTesting: Boolean = false
+    private val useFakeForTesting: Boolean = false
 ) : TerminalRuntimeAdapter {
 
-    val environment: TerminalEnvironment = TerminalEnvironmentResolver(workingDir).resolve()
+    private val _environment = MutableStateFlow(TerminalEnvironmentResolver(workingDir).resolve())
+    val environment: TerminalEnvironment get() = _environment.value
+    val environmentState: StateFlow<TerminalEnvironment> = _environment.asStateFlow()
 
-    private val delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
+    private var delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
         FakeTerminalRuntimeAdapter(workingDir)
     } else {
         TermuxTerminalRuntimeAdapter(
@@ -23,6 +27,21 @@ class TerminalRuntime(
             shellExecutable = environment.shellExecutable,
             sessionEnvironment = environment.variables
         )
+    }
+
+    /** Recreates the PTY so an imported userland is used immediately. */
+    fun restartSession() {
+        delegate.destroy()
+        _environment.value = TerminalEnvironmentResolver(workingDir).resolve()
+        delegate = if (useFakeForTesting) {
+            FakeTerminalRuntimeAdapter(workingDir)
+        } else {
+            TermuxTerminalRuntimeAdapter(
+                workingDir = environment.workingDirectory,
+                shellExecutable = environment.shellExecutable,
+                sessionEnvironment = environment.variables
+            )
+        }
     }
 
     override val sessionState: StateFlow<TerminalSessionState> get() = delegate.sessionState

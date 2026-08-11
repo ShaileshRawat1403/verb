@@ -1,6 +1,7 @@
 package com.example.verb.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.verb.actions.ActionRegistry
@@ -16,6 +17,8 @@ import com.example.verb.model.ActionResult
 import com.example.verb.model.SemanticEntity
 import com.example.verb.semantic.SemanticEngine
 import com.example.verb.terminal.TerminalRuntime
+import com.example.verb.terminal.RuntimeArtifactImporter
+import com.example.verb.terminal.TerminalEnvironment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +45,13 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     val terminalRuntime = TerminalRuntime(application.applicationContext.filesDir)
+    private val runtimeImporter = RuntimeArtifactImporter(
+        contentResolver = application.contentResolver,
+        appFilesDir = application.applicationContext.filesDir
+    )
+    private val _runtimeImportState = MutableStateFlow<RuntimeImportState>(RuntimeImportState.Idle)
+    val runtimeImportState: StateFlow<RuntimeImportState> = _runtimeImportState.asStateFlow()
+    val terminalEnvironment: StateFlow<TerminalEnvironment> = terminalRuntime.environmentState
 
     private val _activeTab = MutableStateFlow(VerbTab.ASK)
     val activeTab: StateFlow<VerbTab> = _activeTab.asStateFlow()
@@ -98,6 +108,21 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAiProviderApiKey() {
         aiProviderSettingsStore.clearApiKey()
         _aiProviderSettings.value = aiProviderSettingsStore.load()
+    }
+
+    fun importRuntime(zipUri: Uri, checksumUri: Uri) {
+        if (_runtimeImportState.value is RuntimeImportState.Importing) return
+        _runtimeImportState.value = RuntimeImportState.Importing
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runtimeImporter.importArtifact(zipUri, checksumUri)
+            _runtimeImportState.value = result.fold(
+                onSuccess = {
+                    terminalRuntime.restartSession()
+                    RuntimeImportState.Success
+                },
+                onFailure = { RuntimeImportState.Failure(it.message ?: "Runtime import failed.") }
+            )
+        }
     }
 
     fun openAssistant() {
@@ -227,4 +252,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         terminalRuntime.destroy()
     }
+}
+
+sealed interface RuntimeImportState {
+    data object Idle : RuntimeImportState
+    data object Importing : RuntimeImportState
+    data object Success : RuntimeImportState
+    data class Failure(val message: String) : RuntimeImportState
 }
