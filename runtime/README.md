@@ -40,10 +40,14 @@ Apache mirror retirement from consuming a full native build before it is seen.
 It similarly uses and probes Savannah's mirror router for `attr`, rather than
 depending on a single Savannah download host.
 
-The source workflow persists build caches keyed to the pinned upstream revision and
-Verb's runtime patches. These may reuse downloads and intermediates, but they are not a
-guarantee of a short rebuild: the upstream bootstrap process clears generated package
-output. Do not use a cache hit as justification to retry a multi-hour build.
+The source workflow separates its caches deliberately. Compiled sources and
+intermediates may be reused across profiles, while generated package output is cached
+only for the exact runtime profile that produced it. The upstream bootstrap script
+extracts every package in its output directory, so sharing that directory would silently
+mix packages (for example, Node and Python) into the core Git image. Every completed
+archive is checked against its selected profile and is accompanied by a package manifest
+and SHA-256 file before upload. Caches can reduce work but do not guarantee a short
+rebuild; do not use a cache hit as a reason to retry a multi-hour source build.
 
 The completed archive is written directly to the workflow's writable output mount before
 artifact upload. The package-builder's source checkout is read-only to its unprivileged
