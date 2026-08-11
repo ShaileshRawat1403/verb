@@ -75,6 +75,22 @@ jobs:
           bash runtime/scripts/prepare-bootstrap-output-cache.sh "$scratch/legacy" 'legacy-prefix-match'
           test -z "$(find "$scratch/legacy" -mindepth 1 -maxdepth 1 -print -quit)"
 
+      - name: Validate runtime profile policy
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          trap 'rm -rf "$scratch"' EXIT
+
+          printf '%s\n' ca-certificates libcurl git python > "$scratch/core-manifest"
+          bash runtime/scripts/verify-bootstrap-profile.sh \
+            --manifest "$scratch/core-manifest" \
+            --profile core-shell-git-release
+
+          printf '%s\n' ca-certificates libcurl git nodejs-lts npm python > "$scratch/developer-manifest"
+          bash runtime/scripts/verify-bootstrap-profile.sh \
+            --manifest "$scratch/developer-manifest" \
+            --profile developer-runtime-release
+
   build-aarch64:
     name: Build Verb aarch64 userland
     needs: preflight
@@ -207,45 +223,9 @@ jobs:
           test -s "$manifest"
           sha256sum "$archive" | awk '{ print $1 "  bootstrap-aarch64.zip" }' > "$checksum"
 
-          require_package() {
-            if ! grep -Fqx -- "$1" "$manifest"; then
-              echo "Required package missing from generated bootstrap: $1" >&2
-              exit 1
-            fi
-          }
-
-          forbid_package() {
-            if grep -Fqx -- "$1" "$manifest"; then
-              echo "Package forbidden by the selected runtime profile: $1" >&2
-              exit 1
-            fi
-          }
-
-          for package in ca-certificates libcurl git; do
-            require_package "$package"
-          done
-          forbid_package openssh
-
-          case "${{ inputs.profile }}" in
-            core-shell-git-release)
-              # The upstream bootstrap always includes command-not-found. At this
-              # pinned Termux revision its dependency closure includes Python, so
-              # Python is not a reliable discriminator for this profile. Node and
-              # npm are the developer-only additions that must stay out of core.
-              for forbidden in nodejs-lts npm; do
-                forbid_package "$forbidden"
-              done
-              ;;
-            developer-runtime-release)
-              for required in nodejs-lts npm python; do
-                require_package "$required"
-              done
-              ;;
-            *)
-              echo "Unsupported runtime profile: ${{ inputs.profile }}" >&2
-              exit 1
-              ;;
-          esac
+          bash runtime/scripts/verify-bootstrap-profile.sh \
+            --manifest "$manifest" \
+            --profile "${{ inputs.profile }}"
 
       - name: Upload signed-review bootstrap artifact
         uses: actions/upload-artifact@v4

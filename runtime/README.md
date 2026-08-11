@@ -48,8 +48,10 @@ only for the exact runtime profile that produced it. The upstream bootstrap scri
 extracts every package in its output directory, so sharing that directory would silently
 mix packages (for example, Node and Python) into the core Git image. Every completed
 archive is checked against its selected profile and is accompanied by a package manifest
-and SHA-256 file before upload. Caches can reduce work but do not guarantee a short
-rebuild; do not use a cache hit as a reason to retry a multi-hour source build.
+and SHA-256 file before upload. The profile policy is also exercised with small fixture
+manifests in the seconds-long preflight job, before any source compilation begins. Caches
+can reduce work but do not guarantee a short rebuild; do not use a cache hit as a reason
+to retry a multi-hour source build.
 
 For the first run after this cache separation, the workflow may reuse the old combined
 cache's compiled-source directory, but explicitly discards its generated package output
