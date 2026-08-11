@@ -207,20 +207,38 @@ jobs:
           test -s "$manifest"
           sha256sum "$archive" | awk '{ print $1 "  bootstrap-aarch64.zip" }' > "$checksum"
 
+          require_package() {
+            if ! grep -Fqx -- "$1" "$manifest"; then
+              echo "Required package missing from generated bootstrap: $1" >&2
+              exit 1
+            fi
+          }
+
+          forbid_package() {
+            if grep -Fqx -- "$1" "$manifest"; then
+              echo "Package forbidden by the selected runtime profile: $1" >&2
+              exit 1
+            fi
+          }
+
           for package in ca-certificates libcurl git; do
-            grep -Fqx "$package" "$manifest"
+            require_package "$package"
           done
-          ! grep -Fqx openssh "$manifest"
+          forbid_package openssh
 
           case "${{ inputs.profile }}" in
             core-shell-git-release)
-              for forbidden in nodejs-lts npm python; do
-                ! grep -Fqx "$forbidden" "$manifest"
+              # The upstream bootstrap always includes command-not-found. At this
+              # pinned Termux revision its dependency closure includes Python, so
+              # Python is not a reliable discriminator for this profile. Node and
+              # npm are the developer-only additions that must stay out of core.
+              for forbidden in nodejs-lts npm; do
+                forbid_package "$forbidden"
               done
               ;;
             developer-runtime-release)
               for required in nodejs-lts npm python; do
-                grep -Fqx "$required" "$manifest"
+                require_package "$required"
               done
               ;;
             *)
