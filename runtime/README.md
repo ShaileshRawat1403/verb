@@ -16,8 +16,10 @@ has three deliberate modes:
 - `preflight-only` (the default) validates source pins, patches, and known upstream
   downloads in seconds. It never compiles a runtime.
 - `core-shell-git-release` is a one-time release build for the shell, certificates,
-  curl, and Git over HTTPS.
-- `developer-runtime-release` additionally adds Node LTS, npm, and Python. It is a
+  curl, and Git over HTTPS. It intentionally excludes Node LTS and npm; the pinned
+  upstream bootstrap's `command-not-found` dependency closure currently includes Python.
+- `developer-runtime-release` additionally adds Node LTS and npm (and explicitly
+  verifies Python). It is a
   release-engineering operation, not a normal development command, and can take hours.
 
 OpenSSH is intentionally not in either first-release profile. Run #20 demonstrated why:
