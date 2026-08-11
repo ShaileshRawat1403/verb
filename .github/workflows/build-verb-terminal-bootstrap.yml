@@ -138,7 +138,10 @@ jobs:
       # delete its output directory before the bootstrap script sees it.
       - name: Restore legacy compiled-source cache
         id: restore-legacy-cache
-        if: ${{ steps.restore-native-build-cache.outputs.cache-hit != 'true' && steps.restore-runtime-output-cache.outputs.cache-hit != 'true' }}
+        # A prefix-key restore is still a valid current cache, but actions/cache
+        # reports cache-hit=false for it. Do not overlay such a cache with the
+        # one-time legacy migration or clear its profile-specific package output.
+        if: ${{ steps.restore-native-build-cache.outputs.cache-matched-key == '' && steps.restore-runtime-output-cache.outputs.cache-matched-key == '' }}
         uses: actions/cache/restore@v4
         with:
           path: |
