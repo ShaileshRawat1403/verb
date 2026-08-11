@@ -52,7 +52,9 @@ rebuild; do not use a cache hit as a reason to retry a multi-hour source build.
 For the first run after this cache separation, the workflow may reuse the old combined
 cache's compiled-source directory, but explicitly discards its generated package output
 before building. This is a one-time migration optimization: it reuses verified native
-work without inheriting the prior profile-mixing bug.
+work without inheriting the prior profile-mixing bug. The cleanup relies on the cache
+action's matched-key signal (not its `cache-hit` flag, which is false for prefix-key
+restores) and is covered by the fast preflight check.
 
 The completed archive is written directly to the workflow's writable output mount before
 artifact upload. The package-builder's source checkout is read-only to its unprivileged
