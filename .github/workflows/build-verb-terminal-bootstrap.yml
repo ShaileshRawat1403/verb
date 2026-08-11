@@ -78,20 +78,31 @@ jobs:
           ref: bd2e956e639090779a728c96fcca2e387dd3a246
           path: termux-packages
 
+      # The package-builder extracts every .deb in its output directory into the
+      # bootstrap. Keep compiled sources/intermediates reusable, but never share
+      # package output between runtime profiles: doing so can silently turn the
+      # small core image into a developer image.
       - name: Restore native build cache
-        id: restore-termux-cache
+        id: restore-native-build-cache
         uses: actions/cache/restore@v4
         with:
-          path: |
-            .termux-build-cache
-            .termux-output-cache
-          key: verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
-          # A source-host URL replacement does not invalidate already-built
-          # packages. The broader fallback restores the compatible ABI cache;
-          # Termux still builds the unbuilt or changed package.
+          path: .termux-build-cache
+          key: verb-termux-build-aarch64-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
           restore-keys: |
-            verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-
-            verb-termux-aarch64-bd2e956e-v2-
+            verb-termux-build-aarch64-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-
+            verb-termux-build-aarch64-bd2e956e-v1-
+
+      - name: Restore selected runtime output cache
+        id: restore-runtime-output-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .termux-output-cache
+          key: verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
+          # Deliberately no broad fallback: output .debs define the contents of
+          # the generated bootstrap and must never cross a profile boundary.
+          restore-keys: |
+            verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-
+            verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-
 
       - name: Prepare writable container mounts
         run: |
@@ -146,20 +157,66 @@ jobs:
           --architectures aarch64
           --add ${{ steps.runtime-profile.outputs.packages }}
 
+      - name: Verify runtime profile and record manifest
+        run: |
+          set -euo pipefail
+          archive=.termux-output-cache/bootstrap-aarch64.zip
+          manifest=.termux-output-cache/verb-runtime-aarch64-packages.txt
+          checksum=.termux-output-cache/bootstrap-aarch64.zip.sha256
+
+          test -s "$archive"
+          unzip -t "$archive" > /dev/null
+          unzip -p "$archive" var/lib/dpkg/status \
+            | awk '/^Package: / { print $2 }' \
+            | LC_ALL=C sort -u > "$manifest"
+          test -s "$manifest"
+          sha256sum "$archive" | awk '{ print $1 "  bootstrap-aarch64.zip" }' > "$checksum"
+
+          for package in ca-certificates libcurl git; do
+            grep -Fqx "$package" "$manifest"
+          done
+          ! grep -Fqx openssh "$manifest"
+
+          case "${{ inputs.profile }}" in
+            core-shell-git-release)
+              for forbidden in nodejs-lts npm python; do
+                ! grep -Fqx "$forbidden" "$manifest"
+              done
+              ;;
+            developer-runtime-release)
+              for required in nodejs-lts npm python; do
+                grep -Fqx "$required" "$manifest"
+              done
+              ;;
+            *)
+              echo "Unsupported runtime profile: ${{ inputs.profile }}" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Upload signed-review bootstrap artifact
         uses: actions/upload-artifact@v4
         with:
           name: verb-bootstrap-aarch64
-          path: .termux-output-cache/bootstrap-aarch64.zip
+          path: |
+            .termux-output-cache/bootstrap-aarch64.zip
+            .termux-output-cache/bootstrap-aarch64.zip.sha256
+            .termux-output-cache/verb-runtime-aarch64-packages.txt
           if-no-files-found: error
           retention-days: 14
 
       - name: Save native build cache
-        if: ${{ always() && steps.restore-termux-cache.outputs.cache-hit != 'true' }}
+        if: ${{ success() && steps.restore-native-build-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
-          path: |
-            .termux-build-cache
-            .termux-output-cache
-          key: verb-termux-aarch64-bd2e956e-v2-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
+          path: .termux-build-cache
+          key: verb-termux-build-aarch64-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
+
+      - name: Save selected runtime output cache
+        if: ${{ success() && steps.restore-runtime-output-cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .termux-output-cache
+          key: verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
