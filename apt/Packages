@@ -1,0 +1,29 @@
+Package: verb-hello
+Version: 0.1.0
+Architecture: aarch64
+Maintainer: Verb <verb@aistudio.local>
+Installed-Size: 8
+Depends: git
+Section: misc
+Priority: optional
+Filename: ./verb-hello_0.1.0_aarch64.deb
+Size: 750
+MD5sum: f0f0ebd280806dceef9e83a6dc1c1701
+SHA1: 9c043f85d7f36a895a471c7697f4a7a25ecb78c9
+SHA256: ba089055c7c87d83930b514b760c35db48d4ef6d94864673fe0d7cb39103a073
+Description: Verb package-registry test
+
+Package: verb-tools
+Version: 0.1.0
+Architecture: aarch64
+Maintainer: Verb <verb@aistudio.local>
+Installed-Size: 8
+Depends: verb-hello
+Section: misc
+Priority: optional
+Filename: ./verb-tools_0.1.0_aarch64.deb
+Size: 746
+MD5sum: b34beca8a228b0a498fb395d70034b8c
+SHA1: 00e8fcb001a9b18a61aa27823aaca376c4f068e7
+SHA256: 94cc774df85c631257f6b8a773efbcaf823e3a1b86275f74878666c4832f225e
+Description: Verb package-registry dependency test
