@@ -1,9 +1,9 @@
 package com.example.verb.viewmodel
 
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.verb.actions.ActionRegistry
 import com.example.verb.ai.AiAssistantRequest
 import com.example.verb.ai.AiAssistantService
@@ -12,18 +12,36 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.ai.AndroidKeystoreAiProviderSettingsStore
 import com.example.verb.ai.DefaultAiProviderClientFactory
+import com.example.verb.db.CommandHistoryEntity
+import com.example.verb.db.VerbRepository
 import com.example.verb.intent.IntentEngine
 import com.example.verb.model.ActionResult
+import com.example.verb.model.ChatMessage
+import com.example.verb.model.ChatSender
 import com.example.verb.model.SemanticEntity
+import com.example.verb.project.ProjectRepository
+import com.example.verb.project.VerbProject
+import com.example.verb.semantic.SecretGuard
 import com.example.verb.semantic.SemanticEngine
+import com.example.verb.terminal.BundledToolBootstrap
+import com.example.verb.terminal.LogCategory
+import com.example.verb.terminal.RuntimeCapabilityDetector
+import com.example.verb.terminal.RuntimeProfileId
+import com.example.verb.terminal.RuntimeProfileReport
+import com.example.verb.terminal.RuntimeProfiles
+import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalRuntime
-import com.example.verb.terminal.RuntimeArtifactImporter
-import com.example.verb.terminal.TerminalEnvironment
+import com.example.verb.terminal.TerminalSessionLogger
+import com.example.verb.terminal.TermuxBootstrapInstaller
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 
 enum class VerbTab {
     ASK,
@@ -43,18 +61,71 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore = aiProviderSettingsStore,
         clientFactory = aiProviderClientFactory::invoke
     )
+    private val repository = VerbRepository.getInstance(application.applicationContext)
+    private val projectRepository = ProjectRepository(application.applicationContext)
+    private val runtimeCapabilityDetector = RuntimeCapabilityDetector(application.filesDir)
 
-    val terminalRuntime = TerminalRuntime(application.applicationContext.filesDir)
-    private val runtimeImporter = RuntimeArtifactImporter(
-        contentResolver = application.contentResolver,
-        appFilesDir = application.applicationContext.filesDir
+    /**
+     * Installs bundled CLI tools (busybox/curl/jq + CA bundle) with ELF validation. The terminal
+     * runtime only picks the bundled bin directory up when at least one binary validated; corrupt
+     * assets are skipped rather than ever being offered to the shell.
+     */
+    private val bundledTools = if (BuildConfig.FULL_CLI) {
+        BundledToolBootstrap.install(application.applicationContext)
+    } else {
+        BundledToolBootstrap.Result(binDir = null, installed = emptyList(), skipped = emptyList())
+    }
+    private val bundledBinDir: File? = bundledTools.binDir?.takeIf { bundledTools.isReady }
+
+    val terminalRuntime = TerminalRuntime(
+        workingDir = application.applicationContext.filesDir,
+        bundledBinDir = bundledBinDir,
+        initialProjectDirectory = projectRepository.selected()?.directory
     )
-    private val _runtimeImportState = MutableStateFlow<RuntimeImportState>(RuntimeImportState.Idle)
-    val runtimeImportState: StateFlow<RuntimeImportState> = _runtimeImportState.asStateFlow()
-    val terminalEnvironment: StateFlow<TerminalEnvironment> = terminalRuntime.environmentState
 
-    private val _activeTab = MutableStateFlow(VerbTab.ASK)
+    private val _projects = MutableStateFlow(projectRepository.list())
+    val projects: StateFlow<List<VerbProject>> = _projects.asStateFlow()
+    private val _selectedProject = MutableStateFlow(projectRepository.selected())
+    val selectedProject: StateFlow<VerbProject?> = _selectedProject.asStateFlow()
+
+    private val _terminalBootstrapState =
+        MutableStateFlow<TermuxBootstrapInstaller.State>(TermuxBootstrapInstaller.State.NotStarted)
+    val terminalBootstrapState: StateFlow<TermuxBootstrapInstaller.State> = _terminalBootstrapState.asStateFlow()
+
+    private val _runtimeProfileReports = MutableStateFlow(runtimeReports())
+    val runtimeProfileReports: StateFlow<List<RuntimeProfileReport>> = _runtimeProfileReports.asStateFlow()
+
+    private val _runtimeInstallingProfile = MutableStateFlow<RuntimeProfileId?>(null)
+    val runtimeInstallingProfile: StateFlow<RuntimeProfileId?> = _runtimeInstallingProfile.asStateFlow()
+
+    private val _runtimeInstallMessage = MutableStateFlow<String?>(null)
+    val runtimeInstallMessage: StateFlow<String?> = _runtimeInstallMessage.asStateFlow()
+
+    // The terminal is the primary product surface, so the app lands on it at launch rather than
+    // the query/assistant tabs where raw shell commands would appear to do nothing.
+    private val _activeTab = MutableStateFlow(VerbTab.TERMINAL)
     val activeTab: StateFlow<VerbTab> = _activeTab.asStateFlow()
+
+    // Tabs visited before the current one, newest first. Back gestures retrace this order until it
+    // empties (the terminal root), at which point back exits the app.
+    private val _tabBackStack = MutableStateFlow<List<VerbTab>>(emptyList())
+    val tabBackStack: StateFlow<List<VerbTab>> = _tabBackStack.asStateFlow()
+
+    // Reliable keyboard visibility driven by the Activity's window insets (edge-to-edge), not the
+    // Compose-side isImeVisible read which can report a stale true on this configuration.
+    private val _isKeyboardVisible = MutableStateFlow(false)
+    val isKeyboardVisible: StateFlow<Boolean> = _isKeyboardVisible.asStateFlow()
+
+    fun setKeyboardVisible(visible: Boolean) {
+        if (_isKeyboardVisible.value != visible) {
+            _isKeyboardVisible.value = visible
+        }
+    }
+
+    private companion object {
+        const val MAX_TAB_BACK_STACK = 8
+        const val PROFILE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000L
+    }
 
     private val _aiProviderSettings = MutableStateFlow(aiProviderSettingsStore.load())
     val aiProviderSettings: StateFlow<AiProviderSettings> = _aiProviderSettings.asStateFlow()
@@ -83,13 +154,172 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _confirmationPendingResult = MutableStateFlow<ActionResult?>(null)
     val confirmationPendingResult: StateFlow<ActionResult?> = _confirmationPendingResult.asStateFlow()
 
+    private val _persistedCommandHistory = MutableStateFlow<List<CommandHistoryEntity>>(emptyList())
+    val persistedCommandHistory: StateFlow<List<CommandHistoryEntity>> = _persistedCommandHistory.asStateFlow()
+
+    private val _terminalAiExplanation = MutableStateFlow<String?>(null)
+    val terminalAiExplanation: StateFlow<String?> = _terminalAiExplanation.asStateFlow()
+
+    private val _isTerminalAiExplaining = MutableStateFlow(false)
+    val isTerminalAiExplaining: StateFlow<Boolean> = _isTerminalAiExplaining.asStateFlow()
+
     init {
-        // Execute initial default storage check on launch to present structured home state immediately
-        submitQuery("show me my storage")
+        TerminalSessionLogger.info(
+            LogCategory.DIAGNOSTIC,
+            "Bundled tools: installed=${bundledTools.installed}, skipped=${bundledTools.skipped.size}"
+        )
+
+        installTermuxBootstrap()
+
+        // Mirror persisted command history into UI state as it changes
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.commandHistory.collect { _persistedCommandHistory.value = it }
+        }
+    }
+
+    private fun runtimeReports(): List<RuntimeProfileReport> =
+        RuntimeProfiles.all.map(runtimeCapabilityDetector::inspect)
+
+    private fun refreshRuntimeProfiles() {
+        _runtimeProfileReports.value = runtimeReports()
+    }
+
+    /**
+     * Ensures the full Verb CLI userland is present, downloading and installing it on first
+     * launch. Once it is ready the terminal runtime is re-resolved so the live PTY restarts under
+     * proot with the Verb environment.
+     */
+    private fun installTermuxBootstrap() {
+        val context = getApplication<Application>()
+        if (!BuildConfig.FULL_CLI) {
+            _terminalBootstrapState.value = TermuxBootstrapInstaller.State.NotStarted
+            return
+        }
+        // Best-effort app-local copy of the linker config so proot can bind /linkerconfig without
+        // hitting the Android 12+ EACCES on the real directory. Runs every launch, not just on
+        // install, so already-provisioned devices also get the fix.
+        TermuxBootstrapInstaller.ensureGuestLinkerConfig(context.filesDir)
+        TermuxBootstrapInstaller.ensureSecureAptSources(context.filesDir)
+        if (TermuxBootstrapInstaller.isInstalled(context)) {
+            _terminalBootstrapState.value = TermuxBootstrapInstaller.State.Ready
+            TermuxBootstrapInstaller.ensureGuestDns(context)
+            terminalRuntime.refreshEnvironment()
+            refreshRuntimeProfiles()
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            TermuxBootstrapInstaller.install(context) { state ->
+                _terminalBootstrapState.value = state
+                if (state is TermuxBootstrapInstaller.State.Ready) {
+                    TermuxBootstrapInstaller.ensureGuestDns(context)
+                    viewModelScope.launch(Dispatchers.Main.immediate) {
+                        terminalRuntime.refreshEnvironment()
+                        refreshRuntimeProfiles()
+                    }
+                }
+            }
+        }
+    }
+
+    fun retryTermuxBootstrap() {
+        installTermuxBootstrap()
+    }
+
+    fun installRuntimeProfile(profileId: RuntimeProfileId) {
+        if (_runtimeInstallingProfile.value != null) return
+        if (!BuildConfig.FULL_CLI) {
+            _runtimeInstallMessage.value =
+                "Package profiles require the Full CLI distribution; the Play build uses Android's system shell."
+            return
+        }
+        val profile = RuntimeProfiles.forId(profileId)
+        val report = runtimeCapabilityDetector.inspect(profile)
+        if (report.isReady) {
+            _runtimeInstallMessage.value = "${profile.displayName} is already ready."
+            refreshRuntimeProfiles()
+            return
+        }
+        val missingPrerequisites = profile.prerequisiteProfiles.filter { prerequisite ->
+            !runtimeCapabilityDetector.inspect(RuntimeProfiles.forId(prerequisite)).isReady
+        }
+        if (missingPrerequisites.isNotEmpty()) {
+            _runtimeInstallMessage.value = "Install ${missingPrerequisites.joinToString { RuntimeProfiles.forId(it).displayName }} before ${profile.displayName}."
+            return
+        }
+        if (report.incompatibleCommands.isNotEmpty()) {
+            _runtimeInstallMessage.value =
+                "${profile.displayName} is blocked: incompatible ${report.incompatibleCommands.joinToString()}."
+            return
+        }
+        if (_terminalBootstrapState.value !is TermuxBootstrapInstaller.State.Ready) {
+            _runtimeInstallMessage.value = "Finish the core runtime setup before adding profiles."
+            return
+        }
+
+        val marker = "__VERB_PROFILE_${profileId.name}_${System.currentTimeMillis()}__"
+        val command = "${profile.installCommand}; profile_status=${'$'}?; printf '\\n$marker:%s\\n' \"${'$'}profile_status\""
+        _runtimeInstallingProfile.value = profileId
+        _runtimeInstallMessage.value = "Installing ${profile.displayName}..."
+
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main.immediate) {
+                terminalRuntime.sendCommand(command)
+                recordTerminalCommand(command)
+            }
+            val completed: String? = withTimeoutOrNull(PROFILE_INSTALL_TIMEOUT_MS) {
+                var result: String? = null
+                while (result == null) {
+                    val output = terminalRuntime.terminalOutput.value
+                    if (output.contains(marker)) {
+                        result = output
+                        continue
+                    }
+                    // The terminal transcript is intentionally throttled. Capability state is a
+                    // second completion signal so a successful package install is not hidden by a
+                    // missed snapshot publication.
+                    if (runtimeCapabilityDetector.inspect(profile).isReady) {
+                        result = "profile-ready"
+                        continue
+                    }
+                    delay(500)
+                }
+                result
+            }
+            withContext(Dispatchers.Main.immediate) {
+                refreshRuntimeProfiles()
+                _runtimeInstallingProfile.value = null
+                _runtimeInstallMessage.value = if (completed == null) {
+                    "${profile.displayName} timed out; inspect the terminal output."
+                } else if (completed == "profile-ready" || completed.substringAfter("$marker:").trim().startsWith("0")) {
+                    "${profile.displayName} installed."
+                } else {
+                    "${profile.displayName} failed; inspect the terminal output."
+                }
+            }
+        }
     }
 
     fun selectTab(tab: VerbTab) {
+        val current = _activeTab.value
+        if (current == tab) return
+        // Push the outgoing tab so the system back gesture retraces tab hops in order.
+        val stack = _tabBackStack.value
+        if (stack.lastOrNull() != current && stack.size < MAX_TAB_BACK_STACK) {
+            _tabBackStack.value = stack + current
+        }
         _activeTab.value = tab
+    }
+
+    /**
+     * Pops the tab history. Returns false when already at the root tab so the caller can decide
+     * whether the app should exit.
+     */
+    fun navigateBack(): Boolean {
+        val stack = _tabBackStack.value
+        if (stack.isEmpty()) return false
+        _tabBackStack.value = stack.dropLast(1)
+        _activeTab.value = stack.last()
+        return true
     }
 
     fun updateQueryInput(newInput: String) {
@@ -110,23 +340,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _aiProviderSettings.value = aiProviderSettingsStore.load()
     }
 
-    fun importRuntime(zipUri: Uri, checksumUri: Uri) {
-        if (_runtimeImportState.value is RuntimeImportState.Importing) return
-        _runtimeImportState.value = RuntimeImportState.Importing
-        viewModelScope.launch(Dispatchers.IO) {
-            val result = runtimeImporter.importArtifact(zipUri, checksumUri)
-            _runtimeImportState.value = result.fold(
-                onSuccess = {
-                    terminalRuntime.restartSession()
-                    RuntimeImportState.Success
-                },
-                onFailure = { RuntimeImportState.Failure(it.message ?: "Runtime import failed.") }
-            )
-        }
-    }
-
     fun openAssistant() {
-        _activeTab.value = VerbTab.ASSISTANT
+        selectTab(VerbTab.ASSISTANT)
     }
 
     fun submitAssistantPrompt(prompt: String) {
@@ -135,7 +350,12 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _assistantState.value = AiAssistantState.Generating
         viewModelScope.launch(Dispatchers.IO) {
             _assistantState.value = try {
-                AiAssistantState.Answer(aiAssistantService.respond(AiAssistantRequest(prompt)))
+                val response = aiAssistantService.respond(AiAssistantRequest(prompt))
+                runCatching {
+                    repository.saveChatMessage(ChatMessage(sender = ChatSender.USER, text = prompt))
+                    repository.saveChatMessage(ChatMessage(sender = ChatSender.AGENT, text = response.text))
+                }
+                AiAssistantState.Answer(response)
             } catch (exception: Exception) {
                 AiAssistantState.Failure(exception.message ?: "The assistant could not complete this request.")
             }
@@ -146,17 +366,17 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _isExecuting.value = true
         _queryInput.value = intent.summary
         if (intent.id != "terminal.open") {
-            _activeTab.value = VerbTab.ASK
+            selectTab(VerbTab.ASK)
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (intent.id == "terminal.open") {
-                    _activeTab.value = VerbTab.TERMINAL
+                    selectTab(VerbTab.TERMINAL)
                     return@launch
                 }
-                handleActionResult(actionRegistry.executeAction(intent, confirmed = false))
+                handleActionResult(actionRegistry.executeAction(intent, confirmed = false), query = intent.summary)
             } catch (e: Exception) {
-                handleActionResult(unexpectedFailure(intent, e))
+                handleActionResult(unexpectedFailure(intent, e), query = intent.summary)
             } finally {
                 _isExecuting.value = false
             }
@@ -174,12 +394,12 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 val resolvedIntent = intentEngine.resolveIntent(query)
                 intent = resolvedIntent
                 if (resolvedIntent.id == "terminal.open") {
-                    _activeTab.value = VerbTab.TERMINAL
+                    selectTab(VerbTab.TERMINAL)
                     return@launch
                 }
-                handleActionResult(actionRegistry.executeAction(resolvedIntent, confirmed = false))
+                handleActionResult(actionRegistry.executeAction(resolvedIntent, confirmed = false), query = query)
             } catch (e: Exception) {
-                handleActionResult(unexpectedFailure(intent, e))
+                handleActionResult(unexpectedFailure(intent, e), query = query)
             } finally {
                 _isExecuting.value = false
             }
@@ -195,12 +415,12 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             val intent = pending.originalIntent
             try {
                 if (intent == null) {
-                    handleActionResult(unexpectedFailure(null, IllegalStateException("Missing confirmed intent.")))
+                    handleActionResult(unexpectedFailure(null, IllegalStateException("Missing confirmed intent.")), query = pending.title)
                 } else {
-                    handleActionResult(actionRegistry.executeAction(intent, confirmed = true))
+                    handleActionResult(actionRegistry.executeAction(intent, confirmed = true), query = intent.summary)
                 }
             } catch (e: Exception) {
-                handleActionResult(unexpectedFailure(intent, e))
+                handleActionResult(unexpectedFailure(intent, e), query = intent?.summary)
             } finally {
                 _isExecuting.value = false
             }
@@ -224,10 +444,94 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openTerminal() {
-        _activeTab.value = VerbTab.TERMINAL
+        selectTab(VerbTab.TERMINAL)
     }
 
-    private fun handleActionResult(result: ActionResult) {
+    fun createProject(name: String) {
+        runCatching { projectRepository.create(name) }.getOrNull()?.let { project ->
+            _projects.value = projectRepository.list()
+            _selectedProject.value = project
+            terminalRuntime.selectProject(project.directory)
+        }
+    }
+
+    fun selectProject(id: String) {
+        projectRepository.select(id)?.let { project ->
+            if (_selectedProject.value?.id == project.id) return
+            _selectedProject.value = project
+            terminalRuntime.selectProject(project.directory)
+        }
+    }
+
+    /**
+     * Sends a command to the real PTY and records a bounded transcript snapshot to Room. The
+     * command text is written to the TTY only; it is never parsed or executed by the AI layer.
+     */
+    fun sendTerminalCommand(cmd: String) {
+        terminalRuntime.sendCommand(cmd)
+        recordTerminalCommand(cmd)
+    }
+
+    /**
+     * Records a command + bounded transcript snapshot to Room without writing to the PTY. The
+     * mobile keyboard's live-echo typing path sends characters to the shell as they are typed and
+     * only submits a trailing newline through [sendTerminalCommand], so it calls this directly
+     * with the real typed text to keep command history meaningful instead of blank.
+     */
+    fun recordTerminalCommand(cmd: String) {
+        if (cmd.isBlank()) return
+        TerminalSessionLogger.info(LogCategory.IO, "Terminal command submitted (${cmd.length} chars)")
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                // Redacted through SecretGuard before it ever reaches disk, and capped well below
+                // the 50k in-memory buffer: this snapshot is written on every command send, so an
+                // unbounded copy would grow the local database roughly with (commands x buffer
+                // size) over a session.
+                repository.recordTerminalOutput(
+                    command = SecretGuard.redactKnownSensitiveText(cmd),
+                    output = SecretGuard.redactKnownSensitiveText(terminalRuntime.terminalOutput.value).takeLast(4_000),
+                    workingDir = terminalRuntime.currentWorkingDirectory()
+                )
+            }
+        }
+    }
+
+    /**
+     * Asks the user-configured provider to explain the recent terminal output. The transcript is
+     * redacted through [com.example.verb.semantic.SecretGuard] before leaving the device.
+     */
+    fun explainTerminalOutput() {
+        if (_isTerminalAiExplaining.value) return
+        val output = terminalRuntime.terminalOutput.value
+        if (output.isBlank()) return
+
+        _isTerminalAiExplaining.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            _terminalAiExplanation.value = try {
+                TerminalAiHelper.analyze(
+                    service = aiAssistantService,
+                    output = output,
+                    workingDir = terminalRuntime.currentWorkingDirectory(),
+                    sessionState = terminalRuntime.sessionState.value
+                )
+            } catch (e: Exception) {
+                e.message ?: "AI analysis failed."
+            }
+            _isTerminalAiExplaining.value = false
+        }
+    }
+
+    fun dismissTerminalAiExplanation() {
+        _terminalAiExplanation.value = null
+    }
+
+    private fun handleActionResult(result: ActionResult, query: String? = null) {
+        if (!result.requiresConfirmation) {
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { repository.recordCommand(query ?: result.title, result) }
+            }
+        }
+
         if (result.requiresConfirmation) {
             _confirmationPendingResult.value = result
         } else {
@@ -252,11 +556,4 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         terminalRuntime.destroy()
     }
-}
-
-sealed interface RuntimeImportState {
-    data object Idle : RuntimeImportState
-    data object Importing : RuntimeImportState
-    data object Success : RuntimeImportState
-    data class Failure(val message: String) : RuntimeImportState
 }

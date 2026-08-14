@@ -247,8 +247,34 @@ class ActionRegistry(
         )
     }
 
+    /**
+     * Confines file.list to Verb's own app-private storage. This is reachable through natural-
+     * language intents (Ask/Assistant), not just a deliberate file-browser tap, so an unsanitized
+     * absolute path here would let a phrased request enumerate directories outside Verb's sandbox
+     * that the process happens to have read access to. Anything already inside filesDir --
+     * including the proot userland under filesDir/usr and filesDir/home -- still resolves
+     * normally; only paths that canonicalize outside that root are blocked.
+     */
     private fun executeFileList(pathParam: String): ActionResult {
-        val targetDir = if (pathParam == "." || pathParam.isEmpty()) context.filesDir else File(pathParam)
+        val sandboxRoot = context.filesDir.canonicalFile
+        val requested = when {
+            pathParam.isBlank() || pathParam == "." -> sandboxRoot
+            File(pathParam).isAbsolute -> File(pathParam)
+            else -> File(sandboxRoot, pathParam)
+        }
+        val targetDir = runCatching { requested.canonicalFile }.getOrNull()
+
+        if (targetDir == null ||
+            (targetDir != sandboxRoot && !targetDir.path.startsWith(sandboxRoot.path + File.separator))
+        ) {
+            return ActionResult(
+                intentId = "file.list",
+                title = "File Listing Blocked",
+                summary = "Verb only browses its own app storage, not the wider device filesystem.",
+                isSuccess = false,
+                errorMessage = "Requested path is outside Verb's app storage sandbox."
+            )
+        }
 
         if (!targetDir.exists()) {
             return ActionResult(

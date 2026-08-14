@@ -22,9 +22,10 @@ import java.util.concurrent.CopyOnWriteArrayList
  * NO silent ProcessBuilder fallbacks are performed in production.
  */
 class TermuxTerminalRuntimeAdapter(
-    val workingDir: File,
-    val shellExecutable: String = "/system/bin/sh",
-    private val sessionEnvironment: Array<String>? = null
+    var workingDir: File,
+    var shellExecutable: String = "/system/bin/sh",
+    private var arguments: Array<String> = arrayOf("-l"),
+    private var sessionEnvironment: Array<String>? = null
 ) : TerminalRuntimeAdapter, TerminalSessionClient, TerminalViewClient {
     private var session: TerminalSession? = null
     var terminalView: TerminalView? = null
@@ -36,6 +37,15 @@ class TermuxTerminalRuntimeAdapter(
         view.isFocusableInTouchMode = true
         terminalView = view
         view.setTerminalViewClient(this)
+        // The renderer (and its font metrics) is created lazily by setTextSize(). Without it the
+        // first layout NPEs in TerminalView.updateSize(). Width is 0 here so updateSize() no-ops
+        // safely; the size is applied once the view is measured.
+        if (view.mRenderer == null) {
+            val textSize = android.util.TypedValue.applyDimension(
+                android.util.TypedValue.COMPLEX_UNIT_DIP, 9f, view.context.resources.displayMetrics
+            ).toInt()
+            view.setTextSize(textSize)
+        }
         session?.let { view.attachSession(it) }
     }
 
@@ -50,6 +60,18 @@ class TermuxTerminalRuntimeAdapter(
 
     private val _terminalContextState = MutableStateFlow(TerminalContextState())
     override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
+
+    private val _urlToOpen = MutableStateFlow<String?>(null)
+    override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
+    override fun consumeUrlToOpen() {
+        _urlToOpen.value = null
+    }
+
+    private val _clipboardCopyEvent = MutableStateFlow<String?>(null)
+    override val clipboardCopyEvent: StateFlow<String?> = _clipboardCopyEvent.asStateFlow()
+    override fun consumeClipboardCopyEvent() {
+        _clipboardCopyEvent.value = null
+    }
 
     private val _activeSelectionText = MutableStateFlow<String>("")
     override val activeSelectionText: StateFlow<String> = _activeSelectionText.asStateFlow()
@@ -67,11 +89,61 @@ class TermuxTerminalRuntimeAdapter(
         startSession()
     }
 
+    private var probedExec = false
+
+    private fun probeExec(binPath: String, arg: String): String {
+        return try {
+            val p = ProcessBuilder(binPath, arg).redirectErrorStream(true).start()
+            if (!waitForProbe(p)) {
+                p.destroy()
+                return "TIMEOUT"
+            }
+            val out = p.inputStream.readBytes().decodeToString().take(300).trim()
+            val code = p.exitValue()
+            "OK exit=$code out=[$out]"
+        } catch (e: Exception) {
+            "FAILED ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+
+    private fun waitForProbe(process: Process): Boolean {
+        val deadline = android.os.SystemClock.uptimeMillis() + 2_000L
+        while (true) {
+            try {
+                process.exitValue()
+                return true
+            } catch (_: IllegalThreadStateException) {
+                if (android.os.SystemClock.uptimeMillis() >= deadline) return false
+                Thread.sleep(25L)
+            }
+        }
+    }
+
+    private fun probeExecOnce() {
+        if (probedExec) return
+        probedExec = true
+        val sh = probeExec("/system/bin/sh", "-c")
+        android.util.Log.i(TAG, "probe /system/bin/sh -c -> $sh")
+        val proot = probeExec(shellExecutable, "--version")
+        android.util.Log.i(TAG, "probe proot --version -> $proot")
+        if (workingDir.parentFile != null) {
+            val bash = File(workingDir.parentFile, "usr/bin/bash")
+            if (bash.isFile) {
+                android.util.Log.i(TAG, "probe bootstrap bash --version -> ${probeExec(bash.absolutePath, "--version")}")
+            }
+        }
+    }
+
     override fun startSession() {
         if (_isSessionActive.value && session != null) return
+        probeExecOnce()
 
         _sessionState.value = TerminalSessionState.STARTING
-        appendOutput("Verb Termux Session Active (${workingDir.name})\n$ ")
+        TerminalSessionLogger.info(
+            LogCategory.LIFECYCLE,
+            "Starting Termux PTY session: shell=$shellExecutable cwd=${workingDir.absolutePath}"
+        )
+        android.util.Log.i(TAG, "startSession shell=$shellExecutable args=${arguments.joinToString(" ")} cwd=${workingDir.absolutePath}")
 
         val envArray = sessionEnvironment ?: defaultSystemEnvironment()
 
@@ -80,7 +152,7 @@ class TermuxTerminalRuntimeAdapter(
             val newSession = TerminalSession(
                 shellExecutable,
                 workingDir.absolutePath,
-                arrayOf("-l"),
+                arguments,
                 envArray,
                 2000,
                 this
@@ -95,17 +167,25 @@ class TermuxTerminalRuntimeAdapter(
                 _sessionState.value = TerminalSessionState.RUNNING
                 refreshTerminalContext(newSession)
                 terminalView?.attachSession(newSession)
+                TerminalSessionLogger.info(LogCategory.LIFECYCLE, "Termux PTY session running (pid ${newSession.pid})")
             } else {
                 // Truthful failure reporting in production — NO silent fallback
                 _isSessionActive.value = false
                 _sessionState.value = TerminalSessionState.FAILED
                 appendOutput("\n[FAILED to start Termux PTY session: libtermux.so or PTY allocation failed]\n")
+                TerminalSessionLogger.error(
+                    LogCategory.JNI,
+                    "Termux PTY session failed to allocate (isRunning=false)"
+                )
+                android.util.Log.e(TAG, "PTY session failed to allocate (isRunning=false), shell=$shellExecutable")
             }
         } catch (t: Throwable) {
             _isSessionActive.value = false
             _sessionState.value = TerminalSessionState.FAILED
             refreshTerminalContext()
             appendOutput("\n[FAILED to start Termux PTY session: ${t.message}]\n")
+            TerminalSessionLogger.error(LogCategory.JNI, "Termux PTY session failed: ${t.message}")
+            android.util.Log.e(TAG, "PTY session failed: ${t.message}", t)
         }
     }
 
@@ -116,7 +196,9 @@ class TermuxTerminalRuntimeAdapter(
             "COLORTERM=truecolor",
             "HOME=${workingDir.absolutePath}",
             "PATH=$sysPath",
-            "LANG=en_US.UTF-8"
+            "LANG=en_US.UTF-8",
+            "TMPDIR=${workingDir.absolutePath}/.tmp",
+            "CURL_CA_BUNDLE=${workingDir.absolutePath}/cacert.pem"
         )
     }
 
@@ -129,7 +211,25 @@ class TermuxTerminalRuntimeAdapter(
     }
 
     override fun sendText(text: String) {
-        session?.write(text)
+        // A finished or reclaimed session silently drops writes. Restart it so typed commands
+        // actually execute instead of appearing to do nothing (the "terminal won't run" symptom).
+        val current = session
+        if (current == null || !current.isRunning) {
+            android.util.Log.i(TAG, "Session not running; auto-restarting before write")
+            restartSession()
+        }
+        val target = session
+        target?.let {
+            writeToSession(it, text)
+            // The PTY reader updates the emulator asynchronously. Keep the canvas responsive while
+            // the IME is resizing the Compose layout; a touch should not be required to repaint it.
+            terminalView?.postInvalidateOnAnimation()
+        }
+    }
+
+    private fun writeToSession(target: TerminalSession, text: String) {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (bytes.isNotEmpty()) target.write(bytes, 0, bytes.size)
     }
 
     override fun sendCommand(cmd: String) {
@@ -147,29 +247,30 @@ class TermuxTerminalRuntimeAdapter(
         }
 
         when (key) {
-            "ESC" -> getCode(android.view.KeyEvent.KEYCODE_ESCAPE)?.let { s.write(it) }
-            "TAB" -> getCode(android.view.KeyEvent.KEYCODE_TAB)?.let { s.write(it) }
-            "SHIFT_TAB" -> getCode(android.view.KeyEvent.KEYCODE_TAB, true)?.let { s.write(it) }
-            "UP" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_UP)?.let { s.write(it) }
-            "DOWN" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_DOWN)?.let { s.write(it) }
-            "RIGHT" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)?.let { s.write(it) }
-            "LEFT" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_LEFT)?.let { s.write(it) }
-            "HOME" -> getCode(android.view.KeyEvent.KEYCODE_MOVE_HOME)?.let { s.write(it) }
-            "END" -> getCode(android.view.KeyEvent.KEYCODE_MOVE_END)?.let { s.write(it) }
-            "PGUP" -> getCode(android.view.KeyEvent.KEYCODE_PAGE_UP)?.let { s.write(it) }
-            "PGDN" -> getCode(android.view.KeyEvent.KEYCODE_PAGE_DOWN)?.let { s.write(it) }
-            "DEL" -> getCode(android.view.KeyEvent.KEYCODE_FORWARD_DEL)?.let { s.write(it) }
+            "ESC" -> getCode(android.view.KeyEvent.KEYCODE_ESCAPE)?.let { writeToSession(s, it) }
+            "TAB" -> getCode(android.view.KeyEvent.KEYCODE_TAB)?.let { writeToSession(s, it) }
+            "SHIFT_TAB" -> getCode(android.view.KeyEvent.KEYCODE_TAB, true)?.let { writeToSession(s, it) }
+            "UP" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_UP)?.let { writeToSession(s, it) }
+            "DOWN" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_DOWN)?.let { writeToSession(s, it) }
+            "RIGHT" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_RIGHT)?.let { writeToSession(s, it) }
+            "LEFT" -> getCode(android.view.KeyEvent.KEYCODE_DPAD_LEFT)?.let { writeToSession(s, it) }
+            "HOME" -> getCode(android.view.KeyEvent.KEYCODE_MOVE_HOME)?.let { writeToSession(s, it) }
+            "END" -> getCode(android.view.KeyEvent.KEYCODE_MOVE_END)?.let { writeToSession(s, it) }
+            "PGUP" -> getCode(android.view.KeyEvent.KEYCODE_PAGE_UP)?.let { writeToSession(s, it) }
+            "PGDN" -> getCode(android.view.KeyEvent.KEYCODE_PAGE_DOWN)?.let { writeToSession(s, it) }
+            "DEL" -> getCode(android.view.KeyEvent.KEYCODE_FORWARD_DEL)?.let { writeToSession(s, it) }
+            "BACKSPACE" -> getCode(android.view.KeyEvent.KEYCODE_DEL)?.let { writeToSession(s, it) }
             "PASTE" -> onPasteTextFromClipboard(s)
             else -> {
                 if (key.startsWith("CTRL_") && key.length == 6) {
                     val c = key.last()
                     if (c in 'A'..'Z') {
                         val codePoint = c - 'A' + 1
-                        s.write(codePoint.toChar().toString())
+                        writeToSession(s, codePoint.toChar().toString())
                         return
                     }
                 }
-                s.write(key)
+                writeToSession(s, key)
             }
         }
     }
@@ -207,9 +308,38 @@ class TermuxTerminalRuntimeAdapter(
 
     override fun clearBuffer() {
         _terminalOutput.value = "$ "
+        session?.reset()
+    }
+
+    override fun restartSession() {
+        destroy()
+        startSession()
+    }
+
+    /**
+     * Swaps the session launch configuration (shell/argv/working directory/environment) and
+     * restarts the session against the same terminal view. Used by [TerminalRuntime.refreshEnvironment]
+     * once the Termux bootstrap finishes installing so the PTY starts proot instead of the
+     * Android system shell.
+     */
+    fun reconfigure(
+        shellExecutable: String,
+        arguments: Array<String>,
+        workingDirectory: File,
+        sessionEnvironment: Array<String>
+    ) {
+        android.util.Log.i(TAG, "reconfigure shell=$shellExecutable args=${arguments.joinToString(" ")} cwd=${workingDirectory.absolutePath}")
+        destroy()
+        this.shellExecutable = shellExecutable
+        this.arguments = arguments
+        this.workingDir = workingDirectory
+        this.sessionEnvironment = sessionEnvironment
+        startSession()
     }
 
     override fun destroy() {
+        outputHandler.removeCallbacks(publishSnapshotRunnable)
+        pendingSnapshotSession = null
         _sessionState.value = TerminalSessionState.STOPPING
         _isSessionActive.value = false
         session?.finishIfRunning()
@@ -217,32 +347,120 @@ class TermuxTerminalRuntimeAdapter(
         refreshTerminalContext()
         selectionListeners.clear()
         _sessionState.value = TerminalSessionState.EXITED
+        TerminalSessionLogger.info(LogCategory.LIFECYCLE, "Termux PTY session destroyed")
+    }
+
+    private companion object {
+        const val TAG = "VerbTerminal"
+        const val OUTPUT_THROTTLE_MS = 120L
+        const val METRICS_WINDOW_MS = 5_000L
     }
 
     // TerminalSessionClient callbacks
+    //
+    // Codex/heavy TUI output can invoke this dozens of times per second. Rebuilding the full
+    // transcript into a String and publishing it to a StateFlow on every single callback was
+    // competing with the live PTY redraw on the UI thread (transcript rebuild cost + Compose
+    // recomposition of every terminalOutput consumer, including screens that never render the
+    // real TerminalView) and made typing and Codex's streaming replies feel laggy. The real
+    // terminal canvas never reads _terminalOutput -- it draws straight from the emulator's screen
+    // buffer -- so only the derived snapshot (used for AI-explain and history recording) is
+    // throttled here; the visible redraw below still fires on every callback, unchanged.
     override fun onTextChanged(changedSession: TerminalSession) {
         refreshTerminalContext(changedSession)
-        val transcript = changedSession.emulator.screen.transcriptText ?: ""
-        if (transcript.length > 50_000) {
-            _terminalOutput.value = transcript.takeLast(50_000)
-        } else {
-            _terminalOutput.value = transcript
+        terminalView?.postInvalidateOnAnimation()
+        scheduleOutputSnapshot(changedSession)
+        recordCallbackForMetrics()
+    }
+
+    // Rolling counters answering "did the throttle actually change anything" with numbers
+    // instead of a feeling. Every PTY callback increments metricsCallbackCount here; every time
+    // the throttle in scheduleOutputSnapshot() actually lets a publish through,
+    // publishOutputSnapshot() increments metricsPublishCount. Every METRICS_WINDOW_MS a one-line
+    // summary goes to
+    // TerminalSessionLogger under LogCategory.DIAGNOSTIC, visible in the existing Diagnostics
+    // sheet -- no new UI, no rebuild-to-toggle: run a real Codex conversation, open Diagnostics,
+    // filter to Diagnostic.
+    private var metricsWindowStart = android.os.SystemClock.uptimeMillis()
+    private var metricsCallbackCount = 0
+    private var metricsPublishCount = 0
+
+    private fun recordCallbackForMetrics() {
+        metricsCallbackCount++
+        val now = android.os.SystemClock.uptimeMillis()
+        val elapsed = now - metricsWindowStart
+        if (elapsed >= METRICS_WINDOW_MS) {
+            val throttleRatio = if (metricsCallbackCount > 0) {
+                100 - (metricsPublishCount * 100 / metricsCallbackCount)
+            } else 0
+            TerminalSessionLogger.info(
+                LogCategory.DIAGNOSTIC,
+                "PTY callback rate: $metricsCallbackCount onTextChanged / $metricsPublishCount " +
+                    "snapshots published in ${elapsed}ms ($throttleRatio% coalesced by throttle)"
+            )
+            metricsWindowStart = now
+            metricsCallbackCount = 0
+            metricsPublishCount = 0
         }
+    }
+
+    private val outputHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var lastOutputPublishAt = 0L
+    private var pendingSnapshotSession: TerminalSession? = null
+    private val publishSnapshotRunnable = Runnable {
+        pendingSnapshotSession?.let { publishOutputSnapshot(it) }
+        pendingSnapshotSession = null
+    }
+
+    /**
+     * Leading+trailing throttle: the first callback in a burst publishes immediately, further
+     * callbacks within [OUTPUT_THROTTLE_MS] are coalesced, and a trailing publish is always
+     * scheduled so the final chunk of a burst is never dropped once output goes idle.
+     */
+    private fun scheduleOutputSnapshot(session: TerminalSession) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val elapsed = now - lastOutputPublishAt
+        if (elapsed >= OUTPUT_THROTTLE_MS) {
+            outputHandler.removeCallbacks(publishSnapshotRunnable)
+            pendingSnapshotSession = null
+            publishOutputSnapshot(session)
+        } else {
+            pendingSnapshotSession = session
+            outputHandler.removeCallbacks(publishSnapshotRunnable)
+            outputHandler.postDelayed(publishSnapshotRunnable, OUTPUT_THROTTLE_MS - elapsed)
+        }
+    }
+
+    private fun publishOutputSnapshot(session: TerminalSession) {
+        val transcript = session.emulator?.screen?.transcriptText ?: ""
+        _terminalOutput.value = if (transcript.length > 50_000) transcript.takeLast(50_000) else transcript
+        lastOutputPublishAt = android.os.SystemClock.uptimeMillis()
+        metricsPublishCount++
     }
 
     override fun onTitleChanged(changedSession: TerminalSession) {}
 
     override fun onSessionFinished(finishedSession: TerminalSession) {
+        // A session destroyed during a restart (reconfigure/destroy) reports its own finish
+        // asynchronously, AFTER the replacement session is already running. Ignore those stale
+        // callbacks or they clobber the live session's state into FAILED/EXITED.
+        if (finishedSession !== session) {
+            android.util.Log.w(TAG, "Ignoring stale onSessionFinished for a replaced session (pid ${finishedSession.pid})")
+            return
+        }
         _isSessionActive.value = false
         _sessionState.value = if (finishedSession.exitStatus == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
         refreshTerminalContext()
         appendOutput("\n[Session terminated with code ${finishedSession.exitStatus}]\n$ ")
+        TerminalSessionLogger.warn(LogCategory.LIFECYCLE, "Termux PTY session finished with exit code ${finishedSession.exitStatus}")
+        android.util.Log.w(TAG, "Session finished exit=${finishedSession.exitStatus} shell=$shellExecutable")
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
         terminalView?.context?.let { ctx ->
             val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("Termux Selection", text))
+            _clipboardCopyEvent.value = "Copied to clipboard"
         }
     }
 
@@ -270,8 +488,50 @@ class TermuxTerminalRuntimeAdapter(
 
     // TerminalViewClient callbacks
     override fun onScale(scale: Float): Float = scale
-    
-    override fun onSingleTapUp(e: MotionEvent) {}
+
+    override fun onSingleTapUp(e: MotionEvent) {
+        val view = terminalView ?: return
+        val columnAndRow = view.getColumnAndRow(e, true)
+        val column = columnAndRow[0]
+        val row = columnAndRow[1]
+        val emulator = session?.emulator ?: return
+        val url = findUrlAtBuffer(emulator, row, column) ?: return
+        _urlToOpen.value = url
+    }
+
+    private fun findUrlAtBuffer(emulator: com.termux.terminal.TerminalEmulator, row: Int, column: Int): String? {
+        val lines = mutableMapOf<Int, String>()
+
+        fun readLine(bufferRow: Int): String? = lines.getOrPut(bufferRow) {
+            emulator.getScreen().getSelectedText(0, bufferRow, 100_000, bufferRow).trimEnd()
+        }
+
+        // Codex and other CLIs often print a URL longer than the terminal width. Search a small
+        // row window with soft-wrapped rows joined, while preserving the tap's offset in that
+        // joined text. Normal line breaks remain boundaries in the single-row fast path below.
+        runCatching {
+            readLine(row)?.let { line ->
+                if (line.isNotBlank()) {
+                    findUrlAt(line, column)?.let { return it }
+                }
+            }
+
+            val radius = 8
+            for (start in row - radius..row) {
+                val joined = StringBuilder()
+                var tappedOffset = -1
+                for (bufferRow in start..(row + radius)) {
+                    val line = readLine(bufferRow) ?: ""
+                    if (bufferRow == row) tappedOffset = joined.length + column
+                    joined.append(line)
+                }
+                if (tappedOffset >= 0) {
+                    findUrlAt(joined.toString(), tappedOffset)?.let { return it }
+                }
+            }
+        }
+        return null
+    }
     
     override fun onInspectText(text: String) {
         // Notify Semantic Lens about inspected text. The selection range is local to the extracted string.

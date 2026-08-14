@@ -53,6 +53,7 @@ fun VerbNaturalLanguageSheet(
 
     val intentEngine = remember { IntentEngine() }
     val currentIntent = remember(promptInput) { intentEngine.resolveIntent(promptInput) }
+    val isSupported = currentIntent.id != "unsupported.intent"
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -96,7 +97,7 @@ fun VerbNaturalLanguageSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("verb_prompt_input"),
-                placeholder = { Text("What do you want Verb to do?", color = Color(0xFF64748B)) },
+                placeholder = { Text("Try: storage, memory, list files, or open terminal", color = Color(0xFF64748B)) },
                 singleLine = true,
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color(0xFF6366F1),
@@ -163,6 +164,14 @@ fun VerbNaturalLanguageSheet(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
+                    if (!isSupported) {
+                        Text(
+                            text = "Supported actions: storage, memory, files, processes, ports, system summary, and terminal.",
+                            fontSize = 12.sp,
+                            color = Color(0xFFFBBF24)
+                        )
+                    }
+
                 }
             }
 
@@ -178,6 +187,7 @@ fun VerbNaturalLanguageSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("verb_submit_intent_button"),
+                enabled = isSupported,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
             ) {
                 Icon(

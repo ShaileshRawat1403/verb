@@ -27,6 +27,18 @@ class FakeTerminalRuntimeAdapter(
     private val _terminalContextState = MutableStateFlow(TerminalContextState())
     override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
 
+    private val _urlToOpen = MutableStateFlow<String?>(null)
+    override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
+    override fun consumeUrlToOpen() {
+        _urlToOpen.value = null
+    }
+
+    private val _clipboardCopyEvent = MutableStateFlow<String?>(null)
+    override val clipboardCopyEvent: StateFlow<String?> = _clipboardCopyEvent.asStateFlow()
+    override fun consumeClipboardCopyEvent() {
+        _clipboardCopyEvent.value = null
+    }
+
     private val _activeSelectionText = MutableStateFlow<String>("")
     override val activeSelectionText: StateFlow<String> = _activeSelectionText.asStateFlow()
 
@@ -101,6 +113,11 @@ class FakeTerminalRuntimeAdapter(
 
     override fun clearBuffer() {
         _terminalOutput.value = "$ "
+    }
+
+    override fun restartSession() {
+        destroy()
+        startSession()
     }
 
     override fun destroy() {

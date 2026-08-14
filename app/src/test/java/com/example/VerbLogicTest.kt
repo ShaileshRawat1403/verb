@@ -19,7 +19,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class VerbLogicTest {
 
     private lateinit var context: Context
@@ -262,6 +262,20 @@ class VerbLogicTest {
         val intent = intentEngine.resolveIntent("show files in /sdcard")
         assertEquals("file.list", intent.id)
         assertEquals("/sdcard", intent.parameters["path"])
+    }
+
+    @Test
+    fun `file listing blocks paths outside app storage`() {
+        val result = actionRegistry.executeAction(
+            com.example.verb.model.VerbIntent(
+                id = "file.list",
+                name = "List Files",
+                parameters = mapOf("path" to context.filesDir.parentFile!!.absolutePath)
+            )
+        )
+
+        assertFalse(result.isSuccess)
+        assertEquals("File Listing Blocked", result.title)
     }
 
     @Test

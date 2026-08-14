@@ -1,5 +1,6 @@
 package com.example.verb.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -23,6 +24,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -54,9 +57,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.verb.model.ActionResult
@@ -71,6 +77,7 @@ fun AskScreen(
     currentResult: ActionResult?,
     historyList: List<ActionResult>,
     confirmationPending: ActionResult?,
+    isKeyboardVisible: Boolean = false,
     onQueryChange: (String) -> Unit,
     onSubmitQuery: (String) -> Unit,
     onSubmitIntent: (VerbIntent) -> Unit,
@@ -81,6 +88,14 @@ fun AskScreen(
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Back with the keyboard open hides it first instead of leaving the tab.
+    BackHandler(enabled = isKeyboardVisible) {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+    }
 
     // Confirmation Alert Dialog
     if (confirmationPending != null) {
@@ -132,7 +147,7 @@ fun AskScreen(
         )
 
         Text(
-            text = "Tell your computer what you want to do.",
+            text = "Run supported, privacy-respecting actions on this Android device.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
@@ -159,6 +174,14 @@ fun AskScreen(
                         .testTag("ask_input_field"),
                     placeholder = { Text("What do you want to do?") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(
+                        onSend = {
+                            if (queryInput.isNotBlank() && !isExecuting) {
+                                onSubmitQuery(queryInput)
+                            }
+                        }
+                    ),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = MaterialTheme.colorScheme.primary,
                         unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant

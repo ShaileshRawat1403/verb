@@ -1,8 +1,10 @@
 package com.example.verb.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,18 +31,25 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import com.example.verb.ai.AiAssistantState
 import com.example.verb.ai.AiProviderSettings
 
 /** Provider-backed assistant. It deliberately has no terminal command execution callback. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AssistantScreen(
     providerSettings: AiProviderSettings,
     prompt: String,
     state: AiAssistantState,
+    isKeyboardVisible: Boolean = false,
     onPromptChange: (String) -> Unit,
     onSubmitPrompt: (String) -> Unit,
     onOpenProviderSettings: () -> Unit,
@@ -48,6 +57,15 @@ fun AssistantScreen(
 ) {
     val isGenerating = state is AiAssistantState.Generating
     val scrollState = rememberScrollState()
+
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    // Back with the keyboard open hides it first instead of leaving the tab.
+    BackHandler(enabled = isKeyboardVisible) {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+    }
 
     Column(
         modifier = modifier
@@ -85,7 +103,13 @@ fun AssistantScreen(
             placeholder = { Text("Explain a command, plan a task, or ask a question") },
             minLines = 4,
             maxLines = 8,
-            enabled = providerSettings.isReady && !isGenerating
+            enabled = providerSettings.isReady && !isGenerating,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+            keyboardActions = KeyboardActions(
+                onSend = {
+                    if (prompt.isNotBlank() && !isGenerating) onSubmitPrompt(prompt)
+                }
+            )
         )
 
         Spacer(modifier = Modifier.height(12.dp))

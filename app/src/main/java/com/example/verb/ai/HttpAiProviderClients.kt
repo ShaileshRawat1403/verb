@@ -71,8 +71,8 @@ private abstract class HttpAiProviderClient(
     }
 
     protected fun modelName(model: String): String = model.trim().takeIf {
-        it.matches(Regex("[A-Za-z0-9._-]+"))
-    } ?: throw AiProviderException("The model name contains unsupported characters.")
+        it.isNotEmpty() && it.length <= 200 && it.none(Char::isISOControl)
+    } ?: throw AiProviderException("Enter a valid model name.")
 
     protected fun responseTextOrThrow(text: String?, provider: AiProviderId, model: String): AiAssistantResponse =
         text?.trim()?.takeIf { it.isNotEmpty() }

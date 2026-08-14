@@ -12,7 +12,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class HttpAiProviderClientsTest {
 
     @Test
@@ -61,7 +61,7 @@ class HttpAiProviderClientsTest {
             verifyRequest(
                 server = server,
                 client = factory(AiProviderId.OPENAI_COMPATIBLE),
-                config = AiProviderConfig(AiProviderId.OPENAI_COMPATIBLE, "compatible-test", server.url("/v1").toString().trimEnd('/')),
+                config = AiProviderConfig(AiProviderId.OPENAI_COMPATIBLE, "openrouter/auto:free", server.url("/v1").toString().trimEnd('/')),
                 apiKey = "compatible-test-key",
                 responseBody = """{"choices":[{"message":{"content":"Compatible answer"}}]}""",
                 expectedPath = "/v1/chat/completions",

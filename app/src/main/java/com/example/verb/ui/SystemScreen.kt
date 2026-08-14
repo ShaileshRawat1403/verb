@@ -6,13 +6,17 @@ import android.os.StatFs
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -45,11 +49,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.verb.ai.AiModelPresets
 import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.terminal.TerminalEnvironment
-import com.example.verb.viewmodel.RuntimeImportState
+import com.example.verb.terminal.RuntimeProfileId
+import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.ui.theme.SecondaryCyan
 import java.util.Locale
 
@@ -57,11 +63,15 @@ import java.util.Locale
 fun SystemScreen(
     isTerminalSessionActive: Boolean,
     terminalEnvironment: TerminalEnvironment,
-    runtimeImportState: RuntimeImportState = RuntimeImportState.Idle,
-    onImportRuntime: () -> Unit = {},
     aiProviderSettings: AiProviderSettings = AiProviderSettings(),
     onSaveAiProviderSettings: (AiProviderConfig, String?) -> Result<Unit> = { _, _ -> Result.success(Unit) },
     onClearAiProviderApiKey: () -> Unit = {},
+    onOpenTerminal: () -> Unit = {},
+    distributionName: String = "Full CLI",
+    runtimeProfileReports: List<RuntimeProfileReport> = emptyList(),
+    installingRuntimeProfile: RuntimeProfileId? = null,
+    runtimeInstallMessage: String? = null,
+    onInstallRuntimeProfile: (RuntimeProfileId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -84,18 +94,26 @@ fun SystemScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "System Overview",
+            text = "System & setup",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
         )
 
         Text(
-            text = "Device specs, memory, storage & Verb runtime state.",
+            text = "Configure AI first, then inspect your terminal runtime and device.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 4.dp, bottom = 20.dp)
         )
+
+        AiProviderSettingsCard(
+            settings = aiProviderSettings,
+            onSave = onSaveAiProviderSettings,
+            onClearApiKey = onClearAiProviderApiKey
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Device Specs Card
         SystemMetricCard(
@@ -166,7 +184,8 @@ fun SystemScreen(
             title = "Verb Runtime Status",
             icon = Icons.Default.Terminal,
             details = listOf(
-                "Runtime Environment" to "Termux / Android PTY Adapter",
+                "Runtime Environment" to "Verb / Android PTY Adapter",
+                "Distribution" to distributionName,
                 "CLI Userland" to terminalEnvironment.displayName,
                 "Shell Process" to terminalEnvironment.shellExecutable,
                 "Session State" to if (isTerminalSessionActive) "ACTIVE (Running)" else "INACTIVE",
@@ -174,53 +193,40 @@ fun SystemScreen(
             )
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        Spacer(modifier = Modifier.height(8.dp))
+        Button(
+            onClick = onOpenTerminal,
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("btn_system_open_terminal")
         ) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Verb Runtime", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    "Import the reviewed Verb aarch64 runtime ZIP and its SHA-256 file. The archive is verified before installation.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
-                )
-                Button(
-                    onClick = onImportRuntime,
-                    enabled = runtimeImportState !is RuntimeImportState.Importing,
-                    modifier = Modifier.testTag("import_verb_runtime")
-                ) {
-                    Text(if (runtimeImportState is RuntimeImportState.Importing) "Importing…" else "Import Verb Runtime")
-                }
-                when (runtimeImportState) {
-                    RuntimeImportState.Idle -> Unit
-                    RuntimeImportState.Importing -> Text("Checking checksum and installing…", modifier = Modifier.padding(top = 8.dp))
-                    RuntimeImportState.Success -> Text("Verb local CLI userland installed and terminal restarted.", modifier = Modifier.padding(top = 8.dp))
-                    is RuntimeImportState.Failure -> Text(
-                        "Import failed: ${runtimeImportState.message}",
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-            }
+            Icon(
+                imageVector = Icons.Default.Terminal,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Open Terminal")
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        AiProviderSettingsCard(
-            settings = aiProviderSettings,
-            onSave = onSaveAiProviderSettings,
-            onClearApiKey = onClearAiProviderApiKey
+        RuntimeProfilesCard(
+            reports = runtimeProfileReports,
+            installingProfile = installingRuntimeProfile,
+            message = runtimeInstallMessage,
+            onInstall = onInstallRuntimeProfile
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        UsbDebuggingDiagnosticCard()
 
         Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AiProviderSettingsCard(
     settings: AiProviderSettings,
@@ -234,8 +240,9 @@ private fun AiProviderSettingsCard(
     var baseUrl by remember(settings.config?.baseUrl, selectedProvider) {
         mutableStateOf(settings.config?.baseUrl ?: selectedProvider.defaultBaseUrl)
     }
-    var apiKeyInput by remember { mutableStateOf("") }
+    var apiKeyInput by remember(selectedProvider) { mutableStateOf("") }
     var feedback by remember { mutableStateOf<String?>(null) }
+    val hasKeyForSelectedProvider = settings.hasApiKey && settings.config?.providerId == selectedProvider
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -251,32 +258,52 @@ private fun AiProviderSettingsCard(
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AiProviderId.entries.take(2).forEach { provider ->
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                AiProviderId.entries.forEach { provider ->
                     FilterChip(
                         selected = selectedProvider == provider,
                         onClick = {
                             selectedProvider = provider
                             baseUrl = provider.defaultBaseUrl
+                            model = ""
                             feedback = null
                         },
                         label = { Text(provider.displayName) }
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                AiProviderId.entries.drop(2).forEach { provider ->
-                    FilterChip(
-                        selected = selectedProvider == provider,
-                        onClick = {
-                            selectedProvider = provider
-                            baseUrl = provider.defaultBaseUrl
-                            feedback = null
-                        },
-                        label = { Text(provider.displayName) }
-                    )
+
+            val presets = AiModelPresets.forProvider(selectedProvider)
+            if (presets.isNotEmpty()) {
+                Text(
+                    text = "Suggested model IDs",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(top = 12.dp)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(top = 4.dp)
+                ) {
+                    presets.forEach { preset ->
+                        FilterChip(
+                            selected = model == preset,
+                            onClick = { model = preset },
+                            label = { Text(preset) }
+                        )
+                    }
                 }
+                Text(
+                    text = "Availability depends on your account and endpoint.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
 
             OutlinedTextField(
@@ -286,8 +313,8 @@ private fun AiProviderSettingsCard(
                     .fillMaxWidth()
                     .padding(top = 12.dp)
                     .testTag("ai_provider_model"),
-                label = { Text("Model") },
-                placeholder = { Text("Choose a model available to your account") },
+                label = { Text("Model ID") },
+                placeholder = { Text("Select a suggestion or enter a custom ID") },
                 singleLine = true
             )
             OutlinedTextField(
@@ -308,9 +335,9 @@ private fun AiProviderSettingsCard(
                     .fillMaxWidth()
                     .padding(top = 8.dp)
                     .testTag("ai_provider_api_key"),
-                label = { Text(if (settings.hasApiKey) "New API key (optional)" else "API key") },
+                label = { Text(if (hasKeyForSelectedProvider) "New API key (optional)" else "API key") },
                 placeholder = {
-                    Text(if (settings.hasApiKey) "A key is already stored securely" else "Paste your provider API key")
+                    Text(if (hasKeyForSelectedProvider) "A key is stored for this provider" else "Paste this provider's API key")
                 },
                 visualTransformation = PasswordVisualTransformation(),
                 singleLine = true
@@ -332,8 +359,12 @@ private fun AiProviderSettingsCard(
             ) {
                 Button(
                     onClick = {
-                        if (!settings.hasApiKey && apiKeyInput.isBlank()) {
+                        if (!hasKeyForSelectedProvider && apiKeyInput.isBlank()) {
                             feedback = "An API key is required to enable this provider."
+                            return@Button
+                        }
+                        if (model.isBlank()) {
+                            feedback = "Select or enter a model ID."
                             return@Button
                         }
                         onSave(
@@ -350,7 +381,7 @@ private fun AiProviderSettingsCard(
                 ) {
                     Text("Save provider")
                 }
-                if (settings.hasApiKey) {
+                if (hasKeyForSelectedProvider) {
                     OutlinedButton(onClick = {
                         onClearApiKey()
                         feedback = "Saved API key removed."
