@@ -11,3 +11,16 @@ index ebaf323..22bb815 100644
  TERMUX_APP_PACKAGE="$TERMUX_APP__PACKAGE_NAME" # Deprecated alternative variable for `TERMUX_APP__PACKAGE_NAME`
  
  __termux_build_props__add_variables_validator_actions "TERMUX_APP__PACKAGE_NAME" "app_package_name"
+diff --git a/packages/termux-tools/build.sh b/packages/termux-tools/build.sh
+index 9973785b2b..0b6abb2171 100644
+--- a/packages/termux-tools/build.sh
++++ b/packages/termux-tools/build.sh
+@@ -22,5 +22,8 @@ TERMUX_PKG_DEPENDS="bzip2, coreutils, curl, dash, diffutils, findutils, gawk, gr
+ TERMUX_PKG_RECOMMENDS="ed, dos2unix, inetutils, net-tools, patch, unzip"
+ 
+ termux_step_pre_configure() {
++	# login.in substitutes TERMUX_PREFIX at configure time. It must point at
++	# Verb's private Android directory, not Termux's com.termux sandbox.
++	export TERMUX_PREFIX="/data/data/${TERMUX_APP__PACKAGE_NAME}/files/usr"
+ 	autoreconf -vfi
+ }

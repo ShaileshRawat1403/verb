@@ -1,9 +1,12 @@
 package com.example
 
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
@@ -40,13 +43,29 @@ import com.example.verb.viewmodel.VerbViewModel
 class MainActivity : ComponentActivity() {
 
     private val viewModel: VerbViewModel by viewModels()
+    private var selectedRuntimeZip: Uri? = null
+    private lateinit var runtimeChecksumPicker: ActivityResultLauncher<Array<String>>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        runtimeChecksumPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { checksumUri ->
+            val zipUri = selectedRuntimeZip
+            selectedRuntimeZip = null
+            if (zipUri != null && checksumUri != null) viewModel.importRuntime(zipUri, checksumUri)
+        }
+        val runtimeZipPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { zipUri ->
+            if (zipUri != null) {
+                selectedRuntimeZip = zipUri
+                runtimeChecksumPicker.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
+            }
+        }
+
         setContent {
             VerbTheme {
-                VerbAppContent(viewModel = viewModel)
+                VerbAppContent(viewModel = viewModel, onImportRuntime = {
+                    runtimeZipPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                })
             }
         }
     }
@@ -54,7 +73,7 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun VerbAppContent(viewModel: VerbViewModel) {
+fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
     val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
     val queryInput by viewModel.queryInput.collectAsStateWithLifecycle()
     val isExecuting by viewModel.isExecuting.collectAsStateWithLifecycle()
@@ -69,6 +88,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
 
     val terminalOutput by viewModel.terminalRuntime.terminalOutput.collectAsStateWithLifecycle()
     val isSessionActive by viewModel.terminalRuntime.isSessionActive.collectAsStateWithLifecycle()
+    val terminalEnvironment by viewModel.terminalEnvironment.collectAsStateWithLifecycle()
+    val runtimeImportState by viewModel.runtimeImportState.collectAsStateWithLifecycle()
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -147,7 +168,9 @@ fun VerbAppContent(viewModel: VerbViewModel) {
 
                 VerbTab.SYSTEM -> SystemScreen(
                     isTerminalSessionActive = isSessionActive,
-                    terminalEnvironment = viewModel.terminalRuntime.environment,
+                    terminalEnvironment = terminalEnvironment,
+                    runtimeImportState = runtimeImportState,
+                    onImportRuntime = onImportRuntime,
                     aiProviderSettings = aiProviderSettings,
                     onSaveAiProviderSettings = viewModel::saveAiProviderSettings,
                     onClearAiProviderApiKey = viewModel::clearAiProviderApiKey
