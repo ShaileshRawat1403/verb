@@ -10,10 +10,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -63,8 +61,11 @@ val DEFAULT_QUICK_KEYS = listOf("/", "|", "~", "-", "_", "\\", ":", ";", "&", "#
 fun MobileTerminalKeyboard(
     onSendKey: (String) -> Unit,
     onSendCommand: (String) -> Unit,
+    onSendText: (String) -> Unit,
     terminalOutput: String,
+    isKeyboardVisible: Boolean = false,
     onInspectOutput: (String) -> Unit,
+    onCommandExecuted: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -89,16 +90,46 @@ fun MobileTerminalKeyboard(
     // The command field stays available while the IME is open. The auxiliary strips are useful
     // for terminal navigation, but keeping them mounted beside the IME turns the entire dock into
     // a large, distracting panel and leaves too little room for terminal output.
-    val isImeVisible = WindowInsets.isImeVisible
     
     val scrollState1 = rememberScrollState()
     val scrollState2 = rememberScrollState()
 
+    // Characters are forwarded to the PTY as they are typed so they echo at the shell prompt on
+    // the terminal canvas instead of being trapped in the field. The field keeps a copy as an
+    // editable buffer; submitting only sends a newline because the text is already live.
+    fun handleInputChange(new: String) {
+        val old = terminalInput
+        when {
+            new.length > old.length && new.startsWith(old) -> {
+                onSendText(new.substring(old.length))
+            }
+            old.length > new.length && old.startsWith(new) -> {
+                repeat(old.length - new.length) { onSendKey("BACKSPACE") }
+            }
+            new.isNotEmpty() -> {
+                // Mid-line edit: clear the echoed line, then re-type it to resync the shell.
+                repeat(old.length) { onSendKey("BACKSPACE") }
+                onSendText(new)
+            }
+            else -> {
+                // Full clear.
+                repeat(old.length) { onSendKey("BACKSPACE") }
+            }
+        }
+        terminalInput = new
+    }
+
     fun submitTerminalInput() {
-        // This is explicit, user-authored terminal input. It remains outside the natural-language
-        // action layer and never accepts model-generated command text. An empty submission is a
-        // real Enter key, needed for interactive terminal programs.
-        onSendCommand(terminalInput)
+        // The command is already on the shell line (live echo), so Enter just completes it.
+        // An empty submission is a real Enter key, needed for interactive terminal programs.
+        if (terminalInput.isEmpty()) {
+            onSendText("\r")
+        } else {
+            // onSendCommand carries no text (already echoed); the real text goes to the caller
+            // separately so command history in Room isn't recorded as a blank string.
+            onCommandExecuted(terminalInput)
+            onSendCommand("")
+        }
         terminalInput = ""
     }
 
@@ -117,10 +148,9 @@ fun MobileTerminalKeyboard(
             ) {
                 OutlinedTextField(
                     value = terminalInput,
-                    onValueChange = { terminalInput = it },
+                    onValueChange = ::handleInputChange,
                     modifier = Modifier
                         .weight(1f)
-                        .height(48.dp)
                         .testTag("terminal_input_field"),
                     placeholder = { Text("$ type a command", color = Color(0xFF94A3B8)) },
                     singleLine = true,
@@ -146,7 +176,28 @@ fun MobileTerminalKeyboard(
                 }
             }
 
-            if (!isImeVisible && ctrlActive) {
+            // History recall, tab completion, and interrupt are needed mid-typing, not just
+            // after the IME is dismissed, so this strip stays visible regardless of keyboard
+            // state. Kept to four keys to avoid eating into the terminal output above it.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                KeyButton(label = "▲", testTag = "key_up") { onSendKey("UP") }
+                KeyButton(label = "▼", testTag = "key_down") { onSendKey("DOWN") }
+                KeyButton(label = "TAB", testTag = "key_tab") {
+                    onSendKey(if (shiftActive) "SHIFT_TAB" else "TAB")
+                    shiftActive = false
+                }
+                KeyButton(label = "^C", testTag = "key_essential_ctrl_c", isAccent = true) {
+                    onSendKey("CTRL_C")
+                }
+            }
+
+            if (!isKeyboardVisible && ctrlActive) {
                 // Ctrl combinations row
                 Row(
                     modifier = Modifier
@@ -165,7 +216,7 @@ fun MobileTerminalKeyboard(
                         }
                     }
                 }
-            } else if (!isImeVisible) {
+            } else if (!isKeyboardVisible) {
                 // Quick keys row
                 Row(
                     modifier = Modifier
@@ -194,7 +245,7 @@ fun MobileTerminalKeyboard(
                 }
             }
             
-            if (!isImeVisible) {
+            if (!isKeyboardVisible) {
                 // Core power strip is deliberately hidden with the IME. It returns immediately
                 // after keyboard dismissal, while the compact command field remains in place.
                 Row(
@@ -214,16 +265,10 @@ fun MobileTerminalKeyboard(
                         shiftActive = !shiftActive
                         ctrlActive = false
                     }
-                    KeyButton(label = "TAB", testTag = "key_tab") {
-                        onSendKey(if (shiftActive) "SHIFT_TAB" else "TAB")
-                        shiftActive = false
-                    }
                     KeyButton(label = "PASTE", testTag = "key_paste") {
                         // PASTE action is routed to TermuxTerminalRuntimeAdapter.
                         onSendKey("PASTE")
                     }
-                    KeyButton(label = "▲", testTag = "key_up") { onSendKey("UP") }
-                    KeyButton(label = "▼", testTag = "key_down") { onSendKey("DOWN") }
                     KeyButton(label = "◄", testTag = "key_left") { onSendKey("LEFT") }
                     KeyButton(label = "►", testTag = "key_right") { onSendKey("RIGHT") }
                 }

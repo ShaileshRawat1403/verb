@@ -14,6 +14,19 @@ enum class AiProviderId(
     OPENAI_COMPATIBLE("OpenAI-compatible", "")
 }
 
+/**
+ * Locally bundled suggestions for common provider model IDs. They are not an account capability
+ * check: availability depends on the user's account and endpoint, and custom IDs remain allowed.
+ */
+object AiModelPresets {
+    fun forProvider(provider: AiProviderId): List<String> = when (provider) {
+        AiProviderId.OPENAI -> listOf("gpt-5", "gpt-5-mini", "gpt-4.1")
+        AiProviderId.ANTHROPIC -> listOf("claude-sonnet-4", "claude-opus-4", "claude-3-5-haiku-latest")
+        AiProviderId.GEMINI -> listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash")
+        AiProviderId.OPENAI_COMPATIBLE -> emptyList()
+    }
+}
+
 data class AiProviderConfig(
     val providerId: AiProviderId,
     val model: String,

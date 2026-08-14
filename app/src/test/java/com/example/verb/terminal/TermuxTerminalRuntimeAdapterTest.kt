@@ -17,7 +17,7 @@ import java.io.File
 import androidx.compose.ui.text.TextRange
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class TermuxTerminalRuntimeAdapterTest {
 
     private lateinit var context: Context

@@ -1,9 +1,7 @@
 package com.example.verb.terminal
 
 import androidx.compose.ui.text.TextRange
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
@@ -12,36 +10,54 @@ import java.io.File
  */
 class TerminalRuntime(
     private val workingDir: File,
-    private val useFakeForTesting: Boolean = false
+    private val useFakeForTesting: Boolean = false,
+    private val bundledBinDir: File? = null,
+    initialProjectDirectory: File? = null
 ) : TerminalRuntimeAdapter {
 
-    private val _environment = MutableStateFlow(TerminalEnvironmentResolver(workingDir).resolve())
-    val environment: TerminalEnvironment get() = _environment.value
-    val environmentState: StateFlow<TerminalEnvironment> = _environment.asStateFlow()
+    private var projectDirectory: File? = initialProjectDirectory
 
-    private var delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
+    var environment: TerminalEnvironment =
+        TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
+
+    private val delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
         FakeTerminalRuntimeAdapter(workingDir)
     } else {
         TermuxTerminalRuntimeAdapter(
             workingDir = environment.workingDirectory,
             shellExecutable = environment.shellExecutable,
+            arguments = environment.arguments,
             sessionEnvironment = environment.variables
         )
     }
 
-    /** Recreates the PTY so an imported userland is used immediately. */
-    fun restartSession() {
-        delegate.destroy()
-        _environment.value = TerminalEnvironmentResolver(workingDir).resolve()
-        delegate = if (useFakeForTesting) {
-            FakeTerminalRuntimeAdapter(workingDir)
-        } else {
-            TermuxTerminalRuntimeAdapter(
-                workingDir = environment.workingDirectory,
-                shellExecutable = environment.shellExecutable,
-                sessionEnvironment = environment.variables
-            )
-        }
+    /**
+     * The concrete Termux adapter backing this runtime, or null when a fake is in use. Lets the UI
+     * bind the authentic [com.termux.view.TerminalView] instead of the transcript-based fallback.
+     */
+    val termuxDelegate: TermuxTerminalRuntimeAdapter?
+        get() = delegate as? TermuxTerminalRuntimeAdapter
+
+    /**
+     * Re-resolves the environment and reconfigures the live PTY session. Called once the Termux
+     * bootstrap finishes installing so the terminal switches from the Android system shell to the
+     * proot-backed Termux userland without recreating this runtime (and losing the bound view).
+     */
+    fun refreshEnvironment() {
+        environment = TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
+        if (useFakeForTesting) return
+        (delegate as? TermuxTerminalRuntimeAdapter)?.reconfigure(
+            shellExecutable = environment.shellExecutable,
+            arguments = environment.arguments,
+            workingDirectory = environment.workingDirectory,
+            sessionEnvironment = environment.variables
+        )
+    }
+
+    /** Selection changes define the next launch directory; later shell `cd` commands are not tracked. */
+    fun selectProject(directory: File?) {
+        projectDirectory = directory
+        refreshEnvironment()
     }
 
     override val sessionState: StateFlow<TerminalSessionState> get() = delegate.sessionState
@@ -50,6 +66,10 @@ class TerminalRuntime(
     override val activeSelectionRange: StateFlow<TextRange> get() = delegate.activeSelectionRange
     override val isSessionActive: StateFlow<Boolean> get() = delegate.isSessionActive
     override val terminalContextState: StateFlow<TerminalContextState> get() = delegate.terminalContextState
+    override val urlToOpen: StateFlow<String?> get() = delegate.urlToOpen
+    override fun consumeUrlToOpen() = delegate.consumeUrlToOpen()
+    override val clipboardCopyEvent: StateFlow<String?> get() = delegate.clipboardCopyEvent
+    override fun consumeClipboardCopyEvent() = delegate.consumeClipboardCopyEvent()
 
     override fun startSession() = delegate.startSession()
     override fun attachSession() = delegate.attachSession()
@@ -69,5 +89,6 @@ class TerminalRuntime(
 
     override fun currentWorkingDirectory(): String = delegate.currentWorkingDirectory()
     override fun clearBuffer() = delegate.clearBuffer()
+    override fun restartSession() = delegate.restartSession()
     override fun destroy() = delegate.destroy()
 }

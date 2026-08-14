@@ -1,19 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Verb's app-private storage holds an on-device Linux userland (proot rootfs, shell history, and
+   any credentials the user configures inside the terminal) plus a local database of command and
+   terminal-output history. None of that should leave the device via Auto Backup or device
+   transfer, so both are excluded below rather than left to the sample defaults.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="database" path="verb_database" />
+        <exclude domain="file" path="." />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="database" path="verb_database" />
+        <exclude domain="file" path="." />
     </device-transfer>
-    -->
 </data-extraction-rules>

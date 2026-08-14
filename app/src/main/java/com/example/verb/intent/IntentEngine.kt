@@ -90,7 +90,7 @@ class IntentEngine {
                 parameters = mapOf("path" to path),
                 risk = ActionRisk.READ_ONLY,
                 confidence = 0.90f,
-                description = "List files in directory $path"
+                description = "List files in Verb's accessible workspace directory $path"
             )
         }
 
@@ -143,7 +143,7 @@ class IntentEngine {
         }
 
         // 8. System summary / info
-        if (normalized.contains("system") || normalized.contains("device") || normalized.contains("info")) {
+        if (normalized.contains("system") || normalized.contains("device") || normalized.contains("system info")) {
             return VerbIntent(
                 id = "system.summary",
                 name = "System Summary",

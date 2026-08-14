@@ -28,6 +28,26 @@ interface TerminalRuntimeAdapter {
      */
     val terminalContextState: StateFlow<TerminalContextState>
 
+    /**
+     * Single-use URL detected from a tap on the terminal canvas. Set when the user taps a line
+     * containing a link so the host can launch it in a browser; consumed (reset to null) once
+     * collected, keeping it effectively a one-shot event.
+     */
+    val urlToOpen: StateFlow<String?>
+
+    /** Resets [urlToOpen] back to null after the host has consumed it. */
+    fun consumeUrlToOpen()
+
+    /**
+     * Single-use confirmation that text was copied to the system clipboard (e.g. from a terminal
+     * selection). Set on copy; consumed (reset to null) once collected, so the host can show a
+     * brief "Copied to clipboard" confirmation without re-showing it on recomposition.
+     */
+    val clipboardCopyEvent: StateFlow<String?>
+
+    /** Resets [clipboardCopyEvent] back to null after the host has consumed it. */
+    fun consumeClipboardCopyEvent()
+
     /** Starts or attaches a Termux shell session */
     fun startSession()
 
@@ -63,6 +83,9 @@ interface TerminalRuntimeAdapter {
 
     /** Clears terminal buffer output */
     fun clearBuffer()
+
+    /** Destroys and restarts the active session, allocating a fresh PTY */
+    fun restartSession()
 
     /** Destroys active session and cleans up PTY resources */
     fun destroy()

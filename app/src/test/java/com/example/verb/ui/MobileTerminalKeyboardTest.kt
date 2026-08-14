@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import com.example.verb.terminal.MobileTerminalKeyboard
 import org.junit.Assert.assertEquals
@@ -19,7 +20,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class MobileTerminalKeyboardTest {
 
     @get:Rule
@@ -32,6 +33,7 @@ class MobileTerminalKeyboardTest {
             MobileTerminalKeyboard(
                 onSendKey = { keysSent.add(it) },
                 onSendCommand = {},
+                onSendText = {},
                 terminalOutput = "",
                 onInspectOutput = {}
             )
@@ -50,6 +52,7 @@ class MobileTerminalKeyboardTest {
             MobileTerminalKeyboard(
                 onSendKey = { keysSent.add(it) },
                 onSendCommand = {},
+                onSendText = {},
                 terminalOutput = "",
                 onInspectOutput = {}
             )
@@ -76,6 +79,7 @@ class MobileTerminalKeyboardTest {
             MobileTerminalKeyboard(
                 onSendKey = { keysSent.add(it) },
                 onSendCommand = {},
+                onSendText = {},
                 terminalOutput = "",
                 onInspectOutput = {}
             )
@@ -100,6 +104,7 @@ class MobileTerminalKeyboardTest {
             MobileTerminalKeyboard(
                 onSendKey = { keysSent.add(it) },
                 onSendCommand = {},
+                onSendText = {},
                 terminalOutput = "",
                 onInspectOutput = {}
             )
@@ -110,12 +115,14 @@ class MobileTerminalKeyboardTest {
     }
 
     @Test
-    fun `user typed terminal input is submitted only by the terminal input control`() {
+    fun `user typed terminal input echoes to the shell and submits only a newline`() {
+        val textsSent = mutableListOf<String>()
         val commandsSent = mutableListOf<String>()
         composeTestRule.setContent {
             MobileTerminalKeyboard(
                 onSendKey = {},
                 onSendCommand = { commandsSent.add(it) },
+                onSendText = { textsSent.add(it) },
                 terminalOutput = "",
                 onInspectOutput = {}
             )
@@ -124,16 +131,41 @@ class MobileTerminalKeyboardTest {
         composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("git status")
         composeTestRule.onNodeWithTag("terminal_input_submit").performClick()
 
-        assertEquals(listOf("git status"), commandsSent)
+        // Characters are forwarded to the PTY live so they echo on the terminal canvas.
+        assertEquals(listOf("git status"), textsSent)
+        // The text is already on the shell line; Enter just completes it.
+        assertEquals(listOf(""), commandsSent)
+    }
+
+    @Test
+    fun `deleting trailing characters sends backspace to the shell`() {
+        val keysSent = mutableListOf<String>()
+        val textsSent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = { keysSent.add(it) },
+                onSendCommand = {},
+                onSendText = { textsSent.add(it) },
+                terminalOutput = "",
+                onInspectOutput = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("abc")
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextReplacement("ab")
+
+        assertEquals(listOf("abc"), textsSent)
+        assertEquals(listOf("BACKSPACE"), keysSent)
     }
 
     @Test
     fun `empty terminal input sends an explicit Enter for interactive programs`() {
-        val commandsSent = mutableListOf<String>()
+        val textsSent = mutableListOf<String>()
         composeTestRule.setContent {
             MobileTerminalKeyboard(
                 onSendKey = {},
-                onSendCommand = { commandsSent.add(it) },
+                onSendCommand = {},
+                onSendText = { textsSent.add(it) },
                 terminalOutput = "",
                 onInspectOutput = {}
             )
@@ -141,7 +173,53 @@ class MobileTerminalKeyboardTest {
 
         composeTestRule.onNodeWithTag("terminal_input_submit").performClick()
 
-        assertEquals(listOf(""), commandsSent)
+        assertEquals(listOf("\r"), textsSent)
+    }
+
+    @Test
+    fun `submitting typed input reports the real command for history, not an empty string`() {
+        val commandsExecuted = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = {},
+                onSendCommand = {},
+                onSendText = {},
+                terminalOutput = "",
+                onInspectOutput = {},
+                onCommandExecuted = { commandsExecuted.add(it) }
+            )
+        }
+
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("git status")
+        composeTestRule.onNodeWithTag("terminal_input_submit").performClick()
+
+        assertEquals(listOf("git status"), commandsExecuted)
+    }
+
+    @Test
+    fun `history recall and interrupt stay reachable while the IME is visible`() {
+        val keysSent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = { keysSent.add(it) },
+                onSendCommand = {},
+                onSendText = {},
+                terminalOutput = "",
+                isKeyboardVisible = true,
+                onInspectOutput = {}
+            )
+        }
+
+        // These live outside the isKeyboardVisible-gated strips, unlike ESC/CTRL/SHIFT/PASTE.
+        composeTestRule.onNodeWithTag("key_up").assertExists().performClick()
+        composeTestRule.onNodeWithTag("key_down").assertExists().performClick()
+        composeTestRule.onNodeWithTag("key_tab").assertExists().performClick()
+        composeTestRule.onNodeWithTag("key_essential_ctrl_c").assertExists().performClick()
+
+        assertEquals(listOf("UP", "DOWN", "TAB", "CTRL_C"), keysSent)
+
+        // The gated power strip should not be present while the IME is up.
+        composeTestRule.onAllNodesWithTag("key_esc").assertCountEquals(0)
     }
 
     @Test
@@ -152,6 +230,7 @@ class MobileTerminalKeyboardTest {
             MobileTerminalKeyboard(
                 onSendKey = {},
                 onSendCommand = {},
+                onSendText = {},
                 terminalOutput = "",
                 onInspectOutput = {}
             )

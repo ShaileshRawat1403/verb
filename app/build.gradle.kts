@@ -15,13 +15,31 @@ android {
     minSdk = 24
     targetSdk = 36
     versionCode = 1
-    versionName = "1.0"
+    versionName = "0.1.0-beta.1"
 
     ndk {
       abiFilters.add("arm64-v8a")
     }
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+  }
+
+  flavorDimensions += "distribution"
+  productFlavors {
+    create("fullCli") {
+      dimension = "distribution"
+      // Android blocks execution from writable app storage for newer targets. This distribution
+      // keeps the Termux-compatible, proot-backed CLI available for direct distribution.
+      targetSdk = 28
+      buildConfigField("boolean", "FULL_CLI", "true")
+    }
+    create("play") {
+      dimension = "distribution"
+      applicationIdSuffix = ".play"
+      versionNameSuffix = "-play"
+      targetSdk = 36
+      buildConfigField("boolean", "FULL_CLI", "false")
+    }
   }
 
   externalNativeBuild {
@@ -49,7 +67,7 @@ android {
   buildTypes {
     release {
       isCrunchPngs = false
-      isMinifyEnabled = false
+      isMinifyEnabled = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }

@@ -25,7 +25,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class VerbUIRegressionTest {
 
     @get:Rule
@@ -50,22 +50,16 @@ class VerbUIRegressionTest {
     }
 
     @Test
-    fun unsupportedInputSubmitsTypedIntentUnsupportedIntent() {
-        var submittedIntent: VerbIntent? = null
+    fun unsupportedInputCannotBeSubmitted() {
         composeTestRule.setContent {
             VerbNaturalLanguageSheet(
                 onDismiss = {},
-                onSubmitIntent = { intent ->
-                    submittedIntent = intent
-                }
+                onSubmitIntent = {}
             )
         }
 
         composeTestRule.onNodeWithTag("verb_prompt_input").performTextReplacement("do a barrel roll")
-        composeTestRule.onNodeWithTag("verb_submit_intent_button").performClick()
-
-        assertNotNull(submittedIntent)
-        assertEquals("unsupported.intent", submittedIntent!!.id)
+        composeTestRule.onNodeWithTag("verb_submit_intent_button").assertIsNotEnabled()
     }
 
     @Test

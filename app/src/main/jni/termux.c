@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <android/log.h>
 #include <fcntl.h>
 #include <jni.h>
 #include <signal.h>
@@ -95,6 +96,10 @@ static int create_subprocess(JNIEnv* env,
             closedir(self_dir);
         }
 
+        // Env/argv used to be dumped to logcat here on every session start (including full
+        // proot bind-mount arguments and HOME/PREFIX values). That's unconditional in release
+        // builds and unnecessary now that startup is verified working, so it has been removed;
+        // the one-line arg/env counts logged in Java_..._createSubprocess above are kept.
         clearenv();
         if (envp) for (; *envp; ++envp) putenv(*envp);
 
@@ -128,6 +133,7 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
         jint cell_height)
 {
     jsize size = args ? (*env)->GetArrayLength(env, args) : 0;
+    __android_log_print(ANDROID_LOG_INFO, "VerbJNI", "args len=%d envVars len=%d", size, envVars ? (*env)->GetArrayLength(env, envVars) : -1);
     char** argv = NULL;
     if (size > 0) {
         argv = (char**) malloc((size + 1) * sizeof(char*));
@@ -162,7 +168,7 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
     char const* cmd_utf8 = (*env)->GetStringUTFChars(env, cmd, NULL);
     int ptm = create_subprocess(env, cmd_utf8, cmd_cwd, argv, envp, &procId, rows, columns, cell_width, cell_height);
     (*env)->ReleaseStringUTFChars(env, cmd, cmd_utf8);
-    (*env)->ReleaseStringUTFChars(env, cmd, cmd_cwd);
+    (*env)->ReleaseStringUTFChars(env, cwd, cmd_cwd);
 
     if (argv) {
         for (char** tmp = argv; *tmp; ++tmp) free(*tmp);

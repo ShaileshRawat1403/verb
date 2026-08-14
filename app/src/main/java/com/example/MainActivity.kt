@@ -1,20 +1,25 @@
 package com.example
 
-import android.net.Uri
 import android.os.Bundle
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -25,11 +30,21 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.verb.ui.AskScreen
 import com.example.verb.ui.AssistantScreen
@@ -43,37 +58,29 @@ import com.example.verb.viewmodel.VerbViewModel
 class MainActivity : ComponentActivity() {
 
     private val viewModel: VerbViewModel by viewModels()
-    private var selectedRuntimeZip: Uri? = null
-    private lateinit var runtimeChecksumPicker: ActivityResultLauncher<Array<String>>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        runtimeChecksumPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { checksumUri ->
-            val zipUri = selectedRuntimeZip
-            selectedRuntimeZip = null
-            if (zipUri != null && checksumUri != null) viewModel.importRuntime(zipUri, checksumUri)
-        }
-        val runtimeZipPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { zipUri ->
-            if (zipUri != null) {
-                selectedRuntimeZip = zipUri
-                runtimeChecksumPicker.launch(arrayOf("text/plain", "application/octet-stream", "*/*"))
-            }
+        // Edge-to-edge makes the IME insets dispatch reliably so keyboard visibility can be
+        // tracked from the decor view instead of guessing from Compose's isImeVisible read.
+        enableEdgeToEdge()
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
+            val imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+            viewModel.setKeyboardVisible(imeBottom > 0)
+            insets
         }
 
         setContent {
             VerbTheme {
-                VerbAppContent(viewModel = viewModel, onImportRuntime = {
-                    runtimeZipPicker.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
-                })
+                VerbAppContent(viewModel = viewModel)
             }
         }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
+fun VerbAppContent(viewModel: VerbViewModel) {
     val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
     val queryInput by viewModel.queryInput.collectAsStateWithLifecycle()
     val isExecuting by viewModel.isExecuting.collectAsStateWithLifecycle()
@@ -84,20 +91,80 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
     val aiProviderSettings by viewModel.aiProviderSettings.collectAsStateWithLifecycle()
     val assistantInput by viewModel.assistantInput.collectAsStateWithLifecycle()
     val assistantState by viewModel.assistantState.collectAsStateWithLifecycle()
-    val isImeVisible = WindowInsets.isImeVisible
+    val isKeyboardVisible by viewModel.isKeyboardVisible.collectAsStateWithLifecycle()
 
     val terminalOutput by viewModel.terminalRuntime.terminalOutput.collectAsStateWithLifecycle()
     val isSessionActive by viewModel.terminalRuntime.isSessionActive.collectAsStateWithLifecycle()
-    val terminalEnvironment by viewModel.terminalEnvironment.collectAsStateWithLifecycle()
-    val runtimeImportState by viewModel.runtimeImportState.collectAsStateWithLifecycle()
+    val terminalSessionState by viewModel.terminalRuntime.sessionState.collectAsStateWithLifecycle()
+    val terminalAiExplanation by viewModel.terminalAiExplanation.collectAsStateWithLifecycle()
+    val isTerminalAiExplaining by viewModel.isTerminalAiExplaining.collectAsStateWithLifecycle()
+    val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
+    val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
+    val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
+    val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
+    val projects by viewModel.projects.collectAsStateWithLifecycle()
+    val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
+
+    // System back at the root tab exits; otherwise it retraces visited tabs. Screen-level
+    // BackHandlers (sheets, dialogs, IME) register deeper in the tree and win first.
+    val activity = LocalActivity.current
+    BackHandler {
+        if (activity == null) return@BackHandler
+        if (!viewModel.navigateBack()) {
+            activity.finish()
+        }
+    }
+
+    // Lightweight feedback channel for one-shot events (failed link opens, clipboard copies)
+    // that don't warrant a dialog but should still be visible to the person acting on them.
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // A tap on a URL in the terminal canvas surfaces it here for the browser. Launching from the
+    // host activity also keeps the terminal session alive behind the browser.
+    val terminalUrlToOpen by viewModel.terminalRuntime.urlToOpen.collectAsStateWithLifecycle()
+    LaunchedEffect(terminalUrlToOpen) {
+        val url = terminalUrlToOpen
+        if (url != null) {
+            try {
+                activity?.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            } catch (e: Exception) {
+                android.util.Log.e("Verb", "Could not open terminal URL $url", e)
+                snackbarHostState.showSnackbar("Couldn't open link")
+            }
+            viewModel.terminalRuntime.consumeUrlToOpen()
+        }
+    }
+
+    // Confirms a terminal selection landed on the system clipboard, since there is otherwise no
+    // visible feedback for that action.
+    val clipboardCopyEvent by viewModel.terminalRuntime.clipboardCopyEvent.collectAsStateWithLifecycle()
+    LaunchedEffect(clipboardCopyEvent) {
+        val message = clipboardCopyEvent
+        if (message != null) {
+            snackbarHostState.showSnackbar(message)
+            viewModel.terminalRuntime.consumeClipboardCopyEvent()
+        }
+    }
+
+    // Terminal session color shown as a status dot on the Terminal tab.
+    val terminalStatusColor = when (terminalSessionState) {
+        com.example.verb.terminal.TerminalSessionState.RUNNING -> Color(0xFF22C55E)
+        com.example.verb.terminal.TerminalSessionState.STARTING,
+        com.example.verb.terminal.TerminalSessionState.STOPPING -> Color(0xFFEAB308)
+        com.example.verb.terminal.TerminalSessionState.EXITED -> Color(0xFF64748B)
+        else -> Color(0xFFEF4444)
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             // A terminal (or any text-entry surface) needs the limited portrait space above the
             // system keyboard. Removing navigation while the IME is visible keeps the active
             // command field docked directly above it rather than marooned mid-screen.
-            if (!isImeVisible || activeTab != VerbTab.TERMINAL) NavigationBar(
+            if (!isKeyboardVisible || activeTab != VerbTab.TERMINAL) NavigationBar(
                 modifier = Modifier
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .testTag("verb_bottom_navigation")
@@ -105,7 +172,13 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
                 NavigationBarItem(
                     selected = activeTab == VerbTab.ASK,
                     onClick = { viewModel.selectTab(VerbTab.ASK) },
-                    icon = { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Ask") },
+                    icon = {
+                        TabIconWithDot(
+                            icon = Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = "Ask",
+                            dotColor = if (confirmationPending != null) Color(0xFFF59E0B) else null
+                        )
+                    },
                     label = { Text("Ask") },
                     modifier = Modifier.testTag("tab_ask")
                 )
@@ -129,7 +202,13 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
                 NavigationBarItem(
                     selected = activeTab == VerbTab.TERMINAL,
                     onClick = { viewModel.selectTab(VerbTab.TERMINAL) },
-                    icon = { Icon(Icons.Default.Terminal, contentDescription = "Terminal") },
+                    icon = {
+                        TabIconWithDot(
+                            icon = Icons.Default.Terminal,
+                            contentDescription = "Terminal",
+                            dotColor = terminalStatusColor
+                        )
+                    },
                     label = { Text("Terminal") },
                     modifier = Modifier.testTag("tab_terminal")
                 )
@@ -140,6 +219,7 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .imePadding()
         ) {
             when (activeTab) {
                 VerbTab.ASK -> AskScreen(
@@ -148,6 +228,7 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
                     currentResult = currentResult,
                     historyList = historyList,
                     confirmationPending = confirmationPending,
+                    isKeyboardVisible = isKeyboardVisible,
                     onQueryChange = viewModel::updateQueryInput,
                     onSubmitQuery = viewModel::submitQuery,
                     onSubmitIntent = viewModel::submitIntent,
@@ -161,6 +242,7 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
                     providerSettings = aiProviderSettings,
                     prompt = assistantInput,
                     state = assistantState,
+                    isKeyboardVisible = isKeyboardVisible,
                     onPromptChange = viewModel::updateAssistantInput,
                     onSubmitPrompt = viewModel::submitAssistantPrompt,
                     onOpenProviderSettings = { viewModel.selectTab(VerbTab.SYSTEM) }
@@ -168,22 +250,39 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
 
                 VerbTab.SYSTEM -> SystemScreen(
                     isTerminalSessionActive = isSessionActive,
-                    terminalEnvironment = terminalEnvironment,
-                    runtimeImportState = runtimeImportState,
-                    onImportRuntime = onImportRuntime,
+                    terminalEnvironment = viewModel.terminalRuntime.environment,
                     aiProviderSettings = aiProviderSettings,
                     onSaveAiProviderSettings = viewModel::saveAiProviderSettings,
-                    onClearAiProviderApiKey = viewModel::clearAiProviderApiKey
+                    onClearAiProviderApiKey = viewModel::clearAiProviderApiKey,
+                    onOpenTerminal = viewModel::openTerminal,
+                    distributionName = if (BuildConfig.FULL_CLI) "Full CLI (direct distribution)" else "Play-safe system shell",
+                    runtimeProfileReports = runtimeProfileReports,
+                    installingRuntimeProfile = installingRuntimeProfile,
+                    runtimeInstallMessage = runtimeInstallMessage,
+                    onInstallRuntimeProfile = viewModel::installRuntimeProfile
                 )
 
                 VerbTab.TERMINAL -> TerminalScreen(
                     terminalOutput = terminalOutput,
                     terminalRuntime = viewModel.terminalRuntime,
-                    onSendCommand = viewModel.terminalRuntime::sendCommand,
+                    bootstrapState = terminalBootstrapState,
+                    isKeyboardVisible = isKeyboardVisible,
+                    onRetryBootstrap = viewModel::retryTermuxBootstrap,
+                    onSendCommand = viewModel::sendTerminalCommand,
                     onSendKey = viewModel.terminalRuntime::sendControlKey,
+                    onSendText = viewModel.terminalRuntime::sendText,
+                    onCommandExecuted = viewModel::recordTerminalCommand,
                     onClearTerminal = viewModel.terminalRuntime::clearBuffer,
                     onInspectText = viewModel::inspectSemanticText,
-                    onSubmitIntent = viewModel::submitIntent
+                    onSubmitIntent = viewModel::submitIntent,
+                    aiExplanation = terminalAiExplanation,
+                    isAiExplaining = isTerminalAiExplaining,
+                    onExplainOutput = viewModel::explainTerminalOutput,
+                    onDismissAiExplanation = viewModel::dismissTerminalAiExplanation,
+                    projects = projects,
+                    selectedProject = selectedProject,
+                    onCreateProject = viewModel::createProject,
+                    onSelectProject = viewModel::selectProject
                 )
             }
 
@@ -196,6 +295,26 @@ fun VerbAppContent(viewModel: VerbViewModel, onImportRuntime: () -> Unit = {}) {
                     onExecuteSuggestedIntent = viewModel::submitIntent
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun TabIconWithDot(
+    icon: ImageVector,
+    contentDescription: String?,
+    dotColor: Color?
+) {
+    Box {
+        Icon(icon, contentDescription)
+        if (dotColor != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 1.dp)
+                    .size(7.dp)
+                    .background(dotColor, CircleShape)
+            )
         }
     }
 }

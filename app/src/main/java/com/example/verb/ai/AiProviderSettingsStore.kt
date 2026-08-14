@@ -39,6 +39,10 @@ class AndroidKeystoreAiProviderSettingsStore(context: Context) : AiProviderSetti
     override fun save(config: AiProviderConfig, apiKey: String?) {
         require(config.model.isNotBlank()) { "A model is required." }
         require(config.baseUrl.isHttpsUrl()) { "Provider endpoint must use HTTPS." }
+        val savedProvider = preferences.getString(KEY_PROVIDER, null)
+        if (savedProvider != null && savedProvider != config.providerId.name && apiKey.isNullOrBlank()) {
+            throw IllegalArgumentException("Enter an API key for the newly selected provider.")
+        }
 
         preferences.edit()
             .putString(KEY_PROVIDER, config.providerId.name)
