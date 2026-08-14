@@ -16,8 +16,10 @@ has three deliberate modes:
 - `preflight-only` (the default) validates source pins, patches, and known upstream
   downloads in seconds. It never compiles a runtime.
 - `core-shell-git-release` is a one-time release build for the shell, certificates,
-  curl, and Git over HTTPS. It intentionally excludes Node LTS and npm; the pinned
+  curl, Git over HTTPS, and GNU `tar`. It intentionally excludes Node LTS and npm; the pinned
   upstream bootstrap's `command-not-found` dependency closure currently includes Python.
+  GNU `tar` is Essential and is required by `dpkg` to unpack packages (`apt` itself does
+  not depend on it), so it must ship in every bootstrap.
 - `developer-runtime-release` additionally adds Node LTS and npm (and explicitly
   verifies Python). It is a
   release-engineering operation, not a normal development command, and can take hours.
@@ -74,9 +76,28 @@ installer to Verb.
 ## Package-management boundary
 
 The first image is self-contained. `npm` can install pure JavaScript packages
-into the user's Verb home. `apt`/`pkg` must not be advertised for arbitrary
-post-bootstrap installs until we operate a Verb-specific package repository:
-official Termux packages are also path-bound to `com.termux`.
+into the user's Verb home. Verb also publishes a package registry on GitHub
+Pages: `https://shaileshrawat1403.github.io/verb/apt/`, a flat apt repository
+served from the `gh-pages` branch (`apt/Packages` + `apt/*.deb`).
+
+The bootstrap's on-device `sources.list` carries both the official Termux
+repository (for base runtime dependencies such as `clang`, which `dpkg-perl`
+requires) and Verb's flat registry (for Verb-specific packages), added as a
+trusted source because the minimal userland omits `gpgv`-based signature
+verification of arbitrary repos:
+
+```
+deb https://packages-cf.termux.dev/apt/termux-main/ stable main
+deb [trusted=yes] https://shaileshrawat1403.github.io/verb/apt/ ./
+```
+
+New Verb packages are published by rebuilding the flat repo with
+`runtime/scripts/build-verb-apt-repo.py --out apt/`, then pushing the
+`gh-pages` branch. Packages install into the Verb prefix
+(`/data/data/com.aistudio.verb.app/files`) like the bootstrap itself, so
+official Termux packages (whose metadata is path-bound to `com.termux`) must
+only be installed from inside the proot userland, where Verb's files directory
+is bound onto the `com.termux` guest path.
 
 ## Runtime independence
 

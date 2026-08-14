@@ -51,7 +51,7 @@ forbid_package() {
   fi
 }
 
-for package in ca-certificates libcurl git; do
+for package in ca-certificates libcurl git tar; do
   require_package "$package"
 done
 forbid_package openssh
