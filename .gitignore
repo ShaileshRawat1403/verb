@@ -15,6 +15,7 @@ build/
 .cxx
 local.properties
 .env
+runtime-artifact/
 debug.keystore
 .build-outputs/
 app/build/
