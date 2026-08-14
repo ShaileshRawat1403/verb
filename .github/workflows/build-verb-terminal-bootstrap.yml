@@ -82,12 +82,12 @@ jobs:
           scratch=$(mktemp -d)
           trap 'rm -rf "$scratch"' EXIT
 
-          printf '%s\n' ca-certificates libcurl git python > "$scratch/core-manifest"
+          printf '%s\n' ca-certificates libcurl git tar python > "$scratch/core-manifest"
           bash runtime/scripts/verify-bootstrap-profile.sh \
             --manifest "$scratch/core-manifest" \
             --profile core-shell-git-release
 
-          printf '%s\n' ca-certificates libcurl git nodejs-lts npm python > "$scratch/developer-manifest"
+          printf '%s\n' ca-certificates libcurl git tar nodejs-lts npm python > "$scratch/developer-manifest"
           bash runtime/scripts/verify-bootstrap-profile.sh \
             --manifest "$scratch/developer-manifest" \
             --profile developer-runtime-release
@@ -185,14 +185,16 @@ jobs:
         run: |
           case "${{ inputs.profile }}" in
             core-shell-git-release)
-              echo 'packages=ca-certificates,libcurl,git' >> "$GITHUB_OUTPUT"
+              # tar is Essential and required by dpkg to unpack packages (apt itself
+              # does not depend on it), so it must ship in every bootstrap.
+              echo 'packages=ca-certificates,libcurl,git,tar' >> "$GITHUB_OUTPUT"
               ;;
             developer-runtime-release)
               # OpenSSH is intentionally not part of the first userland. Its Kerberos
               # source is an optional dependency and made run #20 fail after hours of
               # successful compilation when kerberos.org timed out. Git over HTTPS
               # remains available; SSH is a future independently-built add-on.
-              echo 'packages=ca-certificates,libcurl,git,nodejs-lts,npm,python' >> "$GITHUB_OUTPUT"
+              echo 'packages=ca-certificates,libcurl,git,tar,nodejs-lts,npm,python' >> "$GITHUB_OUTPUT"
               ;;
             *)
               echo "Unsupported runtime profile: ${{ inputs.profile }}" >&2
