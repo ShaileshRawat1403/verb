@@ -27,6 +27,9 @@ class FakeTerminalRuntimeAdapter(
     private val _terminalContextState = MutableStateFlow(TerminalContextState())
     override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
 
+    private val commandTracker = CommandExecutionTracker()
+    override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+
     private val _urlToOpen = MutableStateFlow<String?>(null)
     override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
     override fun consumeUrlToOpen() {

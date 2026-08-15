@@ -61,6 +61,9 @@ class TermuxTerminalRuntimeAdapter(
     private val _terminalContextState = MutableStateFlow(TerminalContextState())
     override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
 
+    private val commandTracker = CommandExecutionTracker()
+    override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+
     private val _urlToOpen = MutableStateFlow<String?>(null)
     override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
     override fun consumeUrlToOpen() {
@@ -342,6 +345,7 @@ class TermuxTerminalRuntimeAdapter(
         pendingSnapshotSession = null
         _sessionState.value = TerminalSessionState.STOPPING
         _isSessionActive.value = false
+        commandTracker.onSessionEnded()
         session?.finishIfRunning()
         session = null
         refreshTerminalContext()
@@ -477,8 +481,39 @@ class TermuxTerminalRuntimeAdapter(
     }
     
     override fun onBell(session: TerminalSession) {}
-    
+
     override fun onColorsChanged(session: TerminalSession) {}
+
+    /**
+     * Advisory OSC 7/633 shell-integration marker from the vendored emulator (see
+     * [com.termux.terminal.TerminalOutput.onShellIntegrationOsc]). [ShellIntegrationParser] never
+     * throws, so a malformed or forged marker just fails to parse into an event and is dropped
+     * here -- it can never crash this callback or the emulator that invoked it.
+     *
+     * Diagnostics logged here are metadata only. OSC 633 `E` carries a user's typed command
+     * *before* [com.example.verb.semantic.SecretGuard] redaction reaches it (redaction happens
+     * inside [CommandExecutionTracker], not here), so `rawArgs`, command text, working directory,
+     * and full record contents (its `toString()` included -- it embeds both) must never be
+     * logged. Android logcat is a persistent, device-local, often-readable-by-other-apps sink;
+     * logging any of that would be a real secret leak, not a hypothetical one.
+     */
+    override fun onShellIntegrationOsc(session: TerminalSession, oscCode: Int, rawArgs: String) {
+        val event = ShellIntegrationParser.parse(oscCode, rawArgs)
+        // Shell Awareness P0 has no UI yet; this is the developer-only diagnostics surface for
+        // physical-device verification (matches the existing Log.i lifecycle logging in this
+        // class). Payload length and the event's type name are safe: neither reveals content.
+        android.util.Log.i(
+            TAG,
+            "shellIntegrationOsc osc=$oscCode payloadLength=${rawArgs.length} eventType=${event?.let { it::class.simpleName } ?: "null"}"
+        )
+        if (event == null) return
+        commandTracker.onEvent(event)
+        val last = commandTracker.history.value.lastOrNull()
+        android.util.Log.i(
+            TAG,
+            "commandHistory size=${commandTracker.history.value.size} lastState=${last?.state} lastExitCode=${last?.exitCode}"
+        )
+    }
     
     override fun onTerminalCursorStateChange(state: Boolean) {}
     

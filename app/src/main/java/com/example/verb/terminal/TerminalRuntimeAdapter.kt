@@ -29,6 +29,14 @@ interface TerminalRuntimeAdapter {
     val terminalContextState: StateFlow<TerminalContextState>
 
     /**
+     * Bounded, session-local, non-persistent command lifecycle history built from advisory
+     * OSC 7/633 shell-integration markers (see [CommandExecutionTracker]). Empty when shell
+     * integration hasn't loaded or produced no events yet -- this is a best-effort supplement to
+     * [terminalContextState], never a replacement for it, and never forwarded to any AI provider.
+     */
+    val commandHistory: StateFlow<List<CommandExecutionRecord>>
+
+    /**
      * Single-use URL detected from a tap on the terminal canvas. Set when the user taps a line
      * containing a link so the host can launch it in a browser; consumed (reset to null) once
      * collected, keeping it effectively a one-shot event.

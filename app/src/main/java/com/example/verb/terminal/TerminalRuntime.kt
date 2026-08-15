@@ -66,6 +66,7 @@ class TerminalRuntime(
     override val activeSelectionRange: StateFlow<TextRange> get() = delegate.activeSelectionRange
     override val isSessionActive: StateFlow<Boolean> get() = delegate.isSessionActive
     override val terminalContextState: StateFlow<TerminalContextState> get() = delegate.terminalContextState
+    override val commandHistory: StateFlow<List<CommandExecutionRecord>> get() = delegate.commandHistory
     override val urlToOpen: StateFlow<String?> get() = delegate.urlToOpen
     override fun consumeUrlToOpen() = delegate.consumeUrlToOpen()
     override val clipboardCopyEvent: StateFlow<String?> get() = delegate.clipboardCopyEvent

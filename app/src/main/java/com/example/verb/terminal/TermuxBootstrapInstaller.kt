@@ -138,11 +138,131 @@ object TermuxBootstrapInstaller {
             bashProfile.writeText(
                 "# Written once by Verb so login shells read the same startup file\n" +
                     "# (\$HOME/.bashrc) that most CLI installers write to. Safe to edit or remove.\n" +
-                    "[ -f \"\$HOME/.bashrc\" ] && . \"\$HOME/.bashrc\"\n"
+                    "[ -f \"\$HOME/.bashrc\" ] && . \"\$HOME/.bashrc\"\n" +
+                    SHELL_INTEGRATION_SOURCE_BLOCK
             )
         }.onFailure {
             TerminalSessionLogger.warn(LogCategory.IO, "Login shell bashrc bridge failed: ${it.message}")
         }
+    }
+
+    private const val SHELL_INTEGRATION_MARKER = "# >>> Verb shell integration >>>"
+    private const val SHELL_INTEGRATION_RELATIVE_PATH = "etc/verb/shell-integration.bash"
+    private val SHELL_INTEGRATION_SOURCE_BLOCK =
+        "$SHELL_INTEGRATION_MARKER\n" +
+            "[ -f \"\$PREFIX/$SHELL_INTEGRATION_RELATIVE_PATH\" ] && . \"\$PREFIX/$SHELL_INTEGRATION_RELATIVE_PATH\"\n" +
+            "# <<< Verb shell integration <<<\n"
+
+    /**
+     * Writes Verb's OSC 7 / OSC 633 shell-integration script, unconditionally, every launch. The
+     * file is 100% Verb-authored (see [shellIntegrationScript]) and never hand-edited, so
+     * overwriting it on every launch is always safe -- unlike `.bashrc`/`.bash_profile`, there is
+     * no user content here to preserve, and no drift is possible between installs.
+     */
+    fun writeShellIntegrationScript(filesDir: File) {
+        runCatching {
+            val target = File(filesDir, "usr/$SHELL_INTEGRATION_RELATIVE_PATH")
+            target.parentFile?.mkdirs()
+            target.writeText(shellIntegrationScript())
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Shell integration script write failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Repairs a `.bash_profile` that predates shell integration: appends exactly one clearly
+     * marked, idempotent source line (never touching anything else in the file), preserving a
+     * one-time backup first -- the same pattern as [migrateLegacyGuestPaths]. A `.bash_profile`
+     * [ensureLoginShellSourcesBashrc] creates fresh already includes this block, so this is a
+     * true no-op for both a brand-new file and a file already carrying the marker.
+     */
+    fun ensureShellIntegrationSourced(filesDir: File): Boolean {
+        val home = File(filesDir, "home")
+        val bashProfile = File(home, ".bash_profile")
+        if (!bashProfile.isFile) return false
+        val original = runCatching { bashProfile.readText() }.getOrNull() ?: return false
+        if (original.contains(SHELL_INTEGRATION_MARKER)) return false
+
+        return runCatching {
+            val backup = File(home, ".bash_profile.pre-verb-shell-integration")
+            if (!backup.exists()) backup.writeText(original)
+            val separator = if (original.isEmpty() || original.endsWith("\n")) "" else "\n"
+            bashProfile.appendText(separator + SHELL_INTEGRATION_SOURCE_BLOCK)
+            true
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Shell integration source line append failed: ${it.message}")
+        }.getOrDefault(false)
+    }
+
+    /**
+     * OSC 7 (CWD) + OSC 633 (lifecycle) shell-integration markers, targeting the vendored
+     * emulator patch in `com.termux.terminal.TerminalEmulator`/`TerminalSession` (see
+     * [ShellIntegrationParser] for the Kotlin side). Advisory only: never alters shell behavior,
+     * never prints visible sentinel text (every emission is a properly framed OSC escape, which
+     * the emulator consumes structurally and never renders), and grants no execution capability.
+     *
+     * Deliberately avoids a DEBUG trap (a shared, single-owner bash extension point a user's own
+     * dotfiles could silently overwrite); `PS0` and `PROMPT_COMMAND` are plain string variables
+     * that support safe idempotent chaining instead. Command text for the `E` marker comes from
+     * `history 1` (the just-entered line is already recorded by the time `PS0` is expanded), not
+     * `$BASH_COMMAND`, which is a DEBUG-trap-only mechanism.
+     */
+    private fun shellIntegrationScript(): String {
+        val d = "$" // shorthand so the bash template below reads like real bash, not escape soup
+        return """
+            |# Verb shell integration -- OSC 7 (CWD) + OSC 633 (lifecycle) markers.
+            |# Fully Verb-owned: rewritten on every launch, never hand-edited. Advisory only --
+            |# consumed solely by Verb's own terminal adapter to build local, non-persistent
+            |# command history. Never alters shell behavior, PTY input/output, or grants any
+            |# execution capability; any process on this PTY could emit the same bytes.
+            |
+            |if [ -n "$d{VERB_SHELL_INTEGRATION_LOADED:-}" ]; then
+            |    return 0 2>/dev/null || exit 0
+            |fi
+            |VERB_SHELL_INTEGRATION_LOADED=1
+            |
+            |case "$d-" in
+            |  *i*) ;;
+            |  *) return 0 2>/dev/null || exit 0 ;;
+            |esac
+            |
+            |__verb_osc7() {
+            |    printf '\033]7;file://%s\007' "$d{PWD}"
+            |}
+            |
+            |__verb_osc633_cmd_meta() {
+            |    local raw
+            |    raw=$d(HISTTIMEFORMAT= history 1 2>/dev/null | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]*//')
+            |    raw=$d(printf '%s' "$d{raw}" | tr -d '\000-\037' | cut -c1-200)
+            |    [ -n "$d{raw}" ] && printf '\033]633;E;%s\007' "$d{raw}"
+            |}
+            |
+            |__verb_ps0_hook() {
+            |    __verb_osc633_cmd_meta
+            |    printf '\033]633;C\007'
+            |}
+            |
+            |__verb_prompt_command_hook() {
+            |    local verb_status=$d?
+            |    printf '\033]633;D;%s\007' "$d{verb_status}"
+            |    __verb_osc7
+            |    printf '\033]633;A\007'
+            |    printf '\033]633;B\007'
+            |    return $d{verb_status}
+            |}
+            |
+            |case "$d{PS0:-}" in
+            |  *__verb_ps0_hook*) ;;
+            |  *) PS0="$d{PS0:-}\$d(__verb_ps0_hook)" ;;
+            |esac
+            |
+            |case "$d{PROMPT_COMMAND:-}" in
+            |  *__verb_prompt_command_hook*) ;;
+            |  *) PROMPT_COMMAND="__verb_prompt_command_hook$d{PROMPT_COMMAND:+; }$d{PROMPT_COMMAND:-}" ;;
+            |esac
+            |
+            |printf '\033]633;P;Verb=1\007'
+            |""".trimMargin()
     }
 
     /** One guest shell startup file that had a legacy `com.termux` path replaced. */
@@ -223,6 +343,8 @@ object TermuxBootstrapInstaller {
     fun ensureGuestShellStartupCurrent(filesDir: File) {
         ensureLoginShellSourcesBashrc(filesDir)
         migrateLegacyGuestPaths(filesDir)
+        writeShellIntegrationScript(filesDir)
+        ensureShellIntegrationSourced(filesDir)
     }
 
     /**

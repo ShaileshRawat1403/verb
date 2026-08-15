@@ -201,4 +201,111 @@ class TermuxBootstrapInstallerTest {
         assertEquals(contents, File(home, ".bashrc").readText())
         assertFalse(File(home, ".bashrc.pre-verb-identity-migration").exists())
     }
+
+    // --- Shell integration injection (Shell Awareness P0) ---
+
+    @Test
+    fun `writeShellIntegrationScript emits OSC 7 and OSC 633 emitters under PREFIX`() {
+        val filesDir = temporaryFolder.newFolder("files")
+
+        TermuxBootstrapInstaller.writeShellIntegrationScript(filesDir)
+
+        val script = File(filesDir, "usr/etc/verb/shell-integration.bash")
+        assertTrue(script.isFile)
+        val contents = script.readText()
+        assertTrue(contents.contains("]7;file://"))
+        assertTrue(contents.contains("]633;"))
+        assertTrue(contents.contains("P;Verb=1"))
+        // No DEBUG trap for v1 -- PS0/PROMPT_COMMAND chaining only.
+        assertFalse(contents.contains("trap"))
+    }
+
+    @Test
+    fun `writeShellIntegrationScript unconditionally overwrites -- it is never user content`() {
+        val filesDir = temporaryFolder.newFolder("files")
+        val script = File(filesDir, "usr/etc/verb/shell-integration.bash").apply {
+            parentFile?.mkdirs()
+            writeText("# stale content from a previous Verb version\n")
+        }
+
+        TermuxBootstrapInstaller.writeShellIntegrationScript(filesDir)
+
+        assertFalse(script.readText().contains("stale content"))
+        assertTrue(script.readText().contains("Verb shell integration"))
+    }
+
+    @Test
+    fun `a fresh Verb-created bash_profile already sources the integration script after bashrc`() {
+        val filesDir = temporaryFolder.newFolder("files")
+
+        TermuxBootstrapInstaller.ensureLoginShellSourcesBashrc(filesDir)
+        val sourced = TermuxBootstrapInstaller.ensureShellIntegrationSourced(filesDir)
+
+        val contents = File(filesDir, "home/.bash_profile").readText()
+        val bashrcIndex = contents.indexOf(".bashrc")
+        val integrationIndex = contents.indexOf("shell-integration.bash")
+        assertTrue(bashrcIndex >= 0 && integrationIndex >= 0)
+        assertTrue("integration source line must come after the bashrc source line", integrationIndex > bashrcIndex)
+        // Already present from creation -- ensureShellIntegrationSourced has nothing to add.
+        assertFalse(sourced)
+    }
+
+    @Test
+    fun `an existing bash_profile predating shell integration gets exactly one marked source line appended, with a backup`() {
+        val filesDir = temporaryFolder.newFolder("files")
+        val home = File(filesDir, "home").apply { mkdirs() }
+        val original = "# my own login shell setup\nexport EDITOR=nano\n"
+        File(home, ".bash_profile").writeText(original)
+
+        val sourced = TermuxBootstrapInstaller.ensureShellIntegrationSourced(filesDir)
+
+        assertTrue(sourced)
+        val updated = File(home, ".bash_profile").readText()
+        assertTrue(updated.startsWith(original))
+        assertTrue(updated.contains("shell-integration.bash"))
+        val backup = File(home, ".bash_profile.pre-verb-shell-integration")
+        assertTrue(backup.isFile)
+        assertEquals(original, backup.readText())
+    }
+
+    @Test
+    fun `ensureShellIntegrationSourced is idempotent -- no duplicate line, no backup clobber`() {
+        val filesDir = temporaryFolder.newFolder("files")
+        val home = File(filesDir, "home").apply { mkdirs() }
+        val original = "# my own login shell setup\n"
+        File(home, ".bash_profile").writeText(original)
+
+        val first = TermuxBootstrapInstaller.ensureShellIntegrationSourced(filesDir)
+        val afterFirst = File(home, ".bash_profile").readText()
+        val second = TermuxBootstrapInstaller.ensureShellIntegrationSourced(filesDir)
+
+        assertTrue(first)
+        assertFalse(second)
+        assertEquals(afterFirst, File(home, ".bash_profile").readText())
+        // The opening marker line is unique per appended block (the closing marker uses "<<<"
+        // instead of ">>>", and the source line itself legitimately mentions the script path
+        // twice: once in the `-f` test, once in the `.` source command).
+        val occurrences = afterFirst.split("# >>> Verb shell integration >>>").size - 1
+        assertEquals(1, occurrences)
+    }
+
+    @Test
+    fun `ensureShellIntegrationSourced does not fabricate a bash_profile that does not exist`() {
+        val filesDir = temporaryFolder.newFolder("files")
+
+        val sourced = TermuxBootstrapInstaller.ensureShellIntegrationSourced(filesDir)
+
+        assertFalse(sourced)
+        assertFalse(File(filesDir, "home/.bash_profile").exists())
+    }
+
+    @Test
+    fun `ensureGuestShellStartupCurrent wires the script and the source line together end to end`() {
+        val filesDir = temporaryFolder.newFolder("files")
+
+        TermuxBootstrapInstaller.ensureGuestShellStartupCurrent(filesDir)
+
+        assertTrue(File(filesDir, "usr/etc/verb/shell-integration.bash").isFile)
+        assertTrue(File(filesDir, "home/.bash_profile").readText().contains("shell-integration.bash"))
+    }
 }
