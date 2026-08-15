@@ -77,6 +77,15 @@ fun RuntimeProfilesCard(
                         if (report.missingCommands.isNotEmpty()) {
                             add("Commands: ${report.missingCommands.joinToString()}")
                         }
+                        if (report.nonExecutableCommands.isNotEmpty()) {
+                            add("Not executable: ${report.nonExecutableCommands.joinToString()}")
+                        }
+                        if (report.unverifiedCommands.isNotEmpty()) {
+                            add("Failed verification: ${report.unverifiedCommands.joinToString()}")
+                        }
+                        if (report.timedOutCommands.isNotEmpty()) {
+                            add("Verification timed out: ${report.timedOutCommands.joinToString()}")
+                        }
                         if (blocked) {
                             add("Incompatible: ${report.incompatibleCommands.joinToString()}")
                         }

@@ -54,7 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.verb.terminal.TerminalRuntimeAdapter
-import com.example.verb.terminal.TermuxGuestPaths
+import com.example.verb.terminal.VerbGuestPaths
 import java.io.File
 import java.util.Locale
 
@@ -390,10 +390,10 @@ private fun displayPath(file: File, prefixDir: File?, homeDir: File?): String {
 private fun terminalPath(file: File, prefixDir: File?, homeDir: File?): String {
     val absolute = file.absolutePath
     if (homeDir != null && absolute.startsWith(homeDir.absolutePath)) {
-        return TermuxGuestPaths.HOME + absolute.removePrefix(homeDir.absolutePath)
+        return VerbGuestPaths.HOME + absolute.removePrefix(homeDir.absolutePath)
     }
     if (prefixDir != null && absolute.startsWith(prefixDir.absolutePath)) {
-        return TermuxGuestPaths.PREFIX + absolute.removePrefix(prefixDir.absolutePath)
+        return VerbGuestPaths.PREFIX + absolute.removePrefix(prefixDir.absolutePath)
     }
     return absolute
 }

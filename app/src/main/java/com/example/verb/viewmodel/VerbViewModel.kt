@@ -200,6 +200,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // install, so already-provisioned devices also get the fix.
         TermuxBootstrapInstaller.ensureGuestLinkerConfig(context.filesDir)
         TermuxBootstrapInstaller.ensureSecureAptSources(context.filesDir)
+        // Same "every launch, not just install" requirement as the two calls above: this used to
+        // only run inside TermuxBootstrapInstaller.install(), so it silently never executed once a
+        // device already had a bootstrap (the common case after the first launch).
+        TermuxBootstrapInstaller.ensureGuestShellStartupCurrent(context.filesDir)
         if (TermuxBootstrapInstaller.isInstalled(context)) {
             _terminalBootstrapState.value = TermuxBootstrapInstaller.State.Ready
             TermuxBootstrapInstaller.ensureGuestDns(context)

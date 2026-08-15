@@ -114,6 +114,118 @@ object TermuxBootstrapInstaller {
     }
 
     /**
+     * Bash login shells (which the guest's `login` starts) only read `.bash_profile`,
+     * `.bash_login`, or `.profile` -- the first one found, and never `.bashrc` -- while the
+     * overwhelming majority of third-party CLI installers append their PATH change to `.bashrc`
+     * because that is what *interactive non-login* shells read. Verb's guest HOME starts out
+     * empty, so without this bridge nothing an installer writes to `.bashrc` is ever read by any
+     * session, current or future. This is a generic shell-startup fix, not specific to any CLI.
+     *
+     * Written only when `.bash_profile` is absent, so a user's own login-shell setup (or a prior
+     * run of this same function) is never overwritten. Called from [ensureGuestShellStartupCurrent]
+     * on every launch -- fresh install or already-provisioned -- so it also repairs installs that
+     * predate this fix. Physical-device testing (Runtime Truth sprint) found the guest's bash
+     * already sources `.bashrc` for interactive shells without this bridge; it is kept anyway as an
+     * explicit, tested guarantee rather than relying on that upstream behavior implicitly. The
+     * already-running terminal session still needs a restart to pick up any resulting PATH change,
+     * matching normal bash behavior on any other Linux system.
+     */
+    fun ensureLoginShellSourcesBashrc(filesDir: File) {
+        runCatching {
+            val home = File(filesDir, "home").apply { mkdirs() }
+            val bashProfile = File(home, ".bash_profile")
+            if (bashProfile.exists()) return
+            bashProfile.writeText(
+                "# Written once by Verb so login shells read the same startup file\n" +
+                    "# (\$HOME/.bashrc) that most CLI installers write to. Safe to edit or remove.\n" +
+                    "[ -f \"\$HOME/.bashrc\" ] && . \"\$HOME/.bashrc\"\n"
+            )
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Login shell bashrc bridge failed: ${it.message}")
+        }
+    }
+
+    /** One guest shell startup file that had a legacy `com.termux` path replaced. */
+    data class MigratedStartupFile(val fileName: String, val replacementCount: Int)
+
+    /** Result of [migrateLegacyGuestPaths]: empty when there was nothing to migrate. */
+    data class LegacyPathMigrationResult(val migratedFiles: List<MigratedStartupFile>) {
+        val migrated: Boolean get() = migratedFiles.isNotEmpty()
+    }
+
+    private const val LEGACY_HOME = "/data/data/com.termux/files/home"
+    private const val LEGACY_PREFIX = "/data/data/com.termux/files/usr"
+
+    /**
+     * Conservative, idempotent migration for the two specific legacy `com.termux` absolute paths
+     * that third-party installers (Codex, OpenCode, and others predating Verb's own identity on a
+     * given device) hard-code into guest shell startup files. Only those two exact substrings are
+     * ever replaced -- `/data/data/com.termux/files/home` with [VerbGuestPaths.HOME] and
+     * `/data/data/com.termux/files/usr` with [VerbGuestPaths.PREFIX] -- so HOME/PREFIX/PATH stay
+     * Verb-branded wherever a user can see them, without touching any other line, any other path
+     * (the bare `/data/data/com.termux` compatibility mount itself is deliberately left alone; see
+     * [VerbGuestPaths]), or any of the user's own shell code.
+     *
+     * A file with neither legacy substring is left completely untouched -- not re-read for a
+     * pointless backup, not rewritten -- so re-running this on every launch is a true no-op once a
+     * file is migrated (or never needed it). The first time a file *is* modified, its pre-migration
+     * contents are preserved once at `<name>.pre-verb-identity-migration` (never overwritten by a
+     * later run), before the file itself is rewritten.
+     */
+    fun migrateLegacyGuestPaths(filesDir: File): LegacyPathMigrationResult {
+        val home = File(filesDir, "home")
+        val migrated = STARTUP_FILE_NAMES.mapNotNull { name -> migrateStartupFile(home, name) }
+        if (migrated.isNotEmpty()) {
+            TerminalSessionLogger.info(
+                LogCategory.IO,
+                "Migrated legacy com.termux paths to Verb identity in: " +
+                    migrated.joinToString { "${it.fileName} (${it.replacementCount})" }
+            )
+        }
+        return LegacyPathMigrationResult(migrated)
+    }
+
+    private fun migrateStartupFile(home: File, name: String): MigratedStartupFile? {
+        val file = File(home, name)
+        if (!file.isFile) return null
+        val original = runCatching { file.readText() }.getOrNull() ?: return null
+
+        var updated = original
+        var replacements = 0
+        for ((legacy, current) in listOf(LEGACY_HOME to VerbGuestPaths.HOME, LEGACY_PREFIX to VerbGuestPaths.PREFIX)) {
+            val occurrences = updated.split(legacy).size - 1
+            if (occurrences == 0) continue
+            replacements += occurrences
+            updated = updated.replace(legacy, current)
+        }
+        if (replacements == 0) return null
+
+        return runCatching {
+            val backup = File(home, "$name.pre-verb-identity-migration")
+            if (!backup.exists()) backup.writeText(original)
+            file.writeText(updated)
+            MigratedStartupFile(name, replacements)
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Legacy path migration failed for $name: ${it.message}")
+        }.getOrNull()
+    }
+
+    private val STARTUP_FILE_NAMES = listOf(".bashrc", ".bash_profile", ".profile")
+
+    /**
+     * Single entry point for keeping the guest shell startup files current, called unconditionally
+     * on every launch -- fresh install ([install]) and already-provisioned
+     * (`VerbViewModel.installTermuxBootstrap`'s early-return path) alike -- so the two paths can
+     * never drift out of sync with each other the way [ensureLoginShellSourcesBashrc] alone once
+     * did (it was only reachable through [install], so it silently never ran once a device already
+     * had a bootstrap installed).
+     */
+    fun ensureGuestShellStartupCurrent(filesDir: File) {
+        ensureLoginShellSourcesBashrc(filesDir)
+        migrateLegacyGuestPaths(filesDir)
+    }
+
+    /**
      * Runs the install. Intended to be called from a background dispatcher; state transitions are
      * reported through [onState] from the calling thread.
      */
@@ -122,6 +234,7 @@ object TermuxBootstrapInstaller {
         val filesDir = context.filesDir
         ensureGuestLinkerConfig(filesDir)
         ensureSecureAptSources(filesDir)
+        ensureGuestShellStartupCurrent(filesDir)
         if (isInstalled(context)) {
             onState(State.Ready)
             return
