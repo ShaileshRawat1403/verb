@@ -29,6 +29,7 @@ class FakeTerminalRuntimeAdapter(
 
     private val commandTracker = CommandExecutionTracker()
     override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+    override val shellIntegrationActive: StateFlow<Boolean> = commandTracker.shellIntegrationActive
 
     private val _urlToOpen = MutableStateFlow<String?>(null)
     override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()

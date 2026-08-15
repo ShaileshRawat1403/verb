@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,10 +27,14 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +60,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -100,6 +106,8 @@ fun TerminalScreen(
     var showDiagnosticsSheet by remember { mutableStateOf(false) }
     var showFileExplorerSheet by remember { mutableStateOf(false) }
     var showProjectSheet by remember { mutableStateOf(false) }
+    var showRunsSheet by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
     val focusManager: FocusManager = LocalFocusManager.current
     val clipboardManager = LocalClipboardManager.current
@@ -120,16 +128,29 @@ fun TerminalScreen(
     // handler retraces tab history. Enables are mutually exclusive so the innermost surface wins.
     val keyboardController = LocalSoftwareKeyboardController.current
     val anyOverlayOpen = showFileExplorerSheet || showProjectSheet || showDiagnosticsSheet || showNaturalLanguageSheet ||
-        (aiExplanation != null || isAiExplaining)
-    BackHandler(enabled = showFileExplorerSheet) { showFileExplorerSheet = false }
-    BackHandler(enabled = !showFileExplorerSheet && showProjectSheet) { showProjectSheet = false }
-    BackHandler(enabled = !showFileExplorerSheet && !showProjectSheet && showDiagnosticsSheet) { showDiagnosticsSheet = false }
-    BackHandler(enabled = !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && showNaturalLanguageSheet) {
+        showRunsSheet || showOverflowMenu || (aiExplanation != null || isAiExplaining)
+    // Overflow menu is the innermost surface (a DropdownMenu can appear over any sheet's trigger),
+    // so it takes priority over every other back handler below.
+    BackHandler(enabled = showOverflowMenu) { showOverflowMenu = false }
+    BackHandler(enabled = !showOverflowMenu && showFileExplorerSheet) { showFileExplorerSheet = false }
+    BackHandler(enabled = !showOverflowMenu && !showFileExplorerSheet && showProjectSheet) { showProjectSheet = false }
+    BackHandler(
+        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && showDiagnosticsSheet
+    ) { showDiagnosticsSheet = false }
+    BackHandler(
+        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && showRunsSheet
+    ) {
+        showRunsSheet = false
+    }
+    BackHandler(
+        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && !showRunsSheet &&
+            showNaturalLanguageSheet
+    ) {
         showNaturalLanguageSheet = false
     }
     BackHandler(
-        enabled = !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && !showNaturalLanguageSheet &&
-            (aiExplanation != null || isAiExplaining)
+        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && !showRunsSheet &&
+            !showNaturalLanguageSheet && (aiExplanation != null || isAiExplaining)
     ) { onDismissAiExplanation() }
     BackHandler(enabled = !anyOverlayOpen && isKeyboardVisible) {
         keyboardController?.hide()
@@ -209,11 +230,20 @@ fun TerminalScreen(
                             onClick = { showProjectSheet = true },
                             modifier = Modifier.testTag("terminal_project_selector")
                         ) {
+                            // Capped and ellipsized -- an untruncated long project id (e.g.
+                            // "mobile-kit-30603ae7") was measured on the Vivo I2202 to consume
+                            // over a third of the header's width by itself, leaving no room for
+                            // the action row on the right (Runs' and the overflow menu's touch
+                            // targets both measured 0x0 before this cap was added).
                             Text(
                                 text = selectedProject?.id ?: "project",
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    .widthIn(max = 56.dp),
                                 fontSize = 11.sp,
-                                color = Color(0xFFCBD5E1)
+                                color = Color(0xFFCBD5E1),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
@@ -264,73 +294,105 @@ fun TerminalScreen(
                         }
                     }
 
-                    // Quick Action Buttons
+                    // Quick Action Buttons. Only Runs stays directly visible alongside the
+                    // overflow menu -- on-device verification found the project-id pill on the
+                    // left already consumes most of this header's width on typical devices, so a
+                    // full row of direct icons is not reliably reachable (see PR discussion). Every
+                    // other action lives in the overflow menu with a text label, not icon-only.
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         IconButton(
-                            onClick = { showDiagnosticsSheet = true },
+                            onClick = { showRunsSheet = true },
                             modifier = Modifier
-                                .size(32.dp)
-                                .testTag("btn_terminal_diagnostics")
+                                .size(48.dp)
+                                .testTag("btn_terminal_runs")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.BugReport,
-                                contentDescription = "Session diagnostics",
+                                imageVector = Icons.Default.History,
+                                contentDescription = "Command run history",
                                 tint = Color(0xFF94A3B8),
                                 modifier = Modifier.size(18.dp)
                             )
                         }
-                        IconButton(
-                            onClick = { showFileExplorerSheet = true },
-                            modifier = Modifier
-                                .size(32.dp)
-                                .testTag("btn_terminal_files")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Folder,
-                                contentDescription = "Browse files",
-                                tint = Color(0xFF94A3B8),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = onExplainOutput,
-                            enabled = !isAiExplaining,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .testTag("btn_terminal_ai_explain")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Psychology,
-                                contentDescription = "Explain terminal output with AI",
-                                tint = Color(0xFF94A3B8),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { terminalRuntime?.restartSession() },
-                            modifier = Modifier.size(32.dp),
-                            enabled = terminalRuntime != null
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Restart terminal session",
-                                tint = Color(0xFF94A3B8),
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = onClearTerminal,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.CleaningServices,
-                                contentDescription = "Clear terminal",
-                                tint = Color(0xFF94A3B8),
-                                modifier = Modifier.size(18.dp)
-                            )
+                        Box {
+                            IconButton(
+                                onClick = { showOverflowMenu = true },
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .testTag("btn_terminal_overflow")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.MoreVert,
+                                    contentDescription = "More terminal actions",
+                                    tint = Color(0xFF94A3B8),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showOverflowMenu,
+                                onDismissRequest = { showOverflowMenu = false },
+                                modifier = Modifier.testTag("terminal_overflow_menu")
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Diagnostics") },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.BugReport, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showDiagnosticsSheet = true
+                                    },
+                                    modifier = Modifier.testTag("btn_diagnostics_overflow")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Browse Files") },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Folder, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showFileExplorerSheet = true
+                                    },
+                                    modifier = Modifier.testTag("btn_files_overflow")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Explain with AI") },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Psychology, contentDescription = null)
+                                    },
+                                    enabled = !isAiExplaining,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onExplainOutput()
+                                    },
+                                    modifier = Modifier.testTag("btn_ai_explain_overflow")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Restart Session") },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null)
+                                    },
+                                    enabled = terminalRuntime != null,
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        terminalRuntime?.restartSession()
+                                    },
+                                    modifier = Modifier.testTag("btn_restart_overflow")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Clear Terminal") },
+                                    leadingIcon = {
+                                        Icon(imageVector = Icons.Default.CleaningServices, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onClearTerminal()
+                                    },
+                                    modifier = Modifier.testTag("btn_clear_terminal_overflow")
+                                )
+                            }
                         }
                     }
                 }
@@ -504,6 +566,14 @@ fun TerminalScreen(
         TerminalDiagnosticsSheet(
             terminalRuntime = terminalRuntime,
             onDismiss = { showDiagnosticsSheet = false }
+        )
+    }
+
+    // Command Runs Sheet
+    if (showRunsSheet) {
+        RunsSheet(
+            terminalRuntime = terminalRuntime,
+            onDismiss = { showRunsSheet = false }
         )
     }
 

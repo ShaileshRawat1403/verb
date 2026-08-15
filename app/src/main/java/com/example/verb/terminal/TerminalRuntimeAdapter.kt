@@ -37,6 +37,14 @@ interface TerminalRuntimeAdapter {
     val commandHistory: StateFlow<List<CommandExecutionRecord>>
 
     /**
+     * True once the one-shot Verb shell-integration handshake (OSC 633;P;Verb=1) has been seen
+     * this session -- i.e. whether [commandHistory] can be expected to populate at all. False both
+     * before the guest shell has started and if shell integration never loaded; an empty
+     * [commandHistory] alone can't distinguish those from "nothing has run yet".
+     */
+    val shellIntegrationActive: StateFlow<Boolean>
+
+    /**
      * Single-use URL detected from a tap on the terminal canvas. Set when the user taps a line
      * containing a link so the host can launch it in a browser; consumed (reset to null) once
      * collected, keeping it effectively a one-shot event.
