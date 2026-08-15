@@ -18,7 +18,14 @@ enum class RuntimeProfileId {
 data class RuntimeRequirement(
     val command: String,
     val packageName: String,
-    val maxVersionExclusive: String? = null
+    val maxVersionExclusive: String? = null,
+    /**
+     * Catalog-owned, fixed argument list (e.g. `["--version"]`) used to bounded-probe the
+     * resolved binary once it is executable. Never derived from user input. Left null for
+     * apt-tracked packages, where dpkg's Version field already gives a reliable signal and
+     * spawning a process on every check would be unnecessary overhead.
+     */
+    val versionProbeArgs: List<String>? = null
 )
 
 data class RuntimeProfile(
@@ -36,14 +43,47 @@ data class RuntimeProfile(
             ?: "apt-get update && apt-get install -y --no-install-recommends ${packages.joinToString(" ")}"
 }
 
+/**
+ * Where a single requirement sits on the preflight -> install -> resolve -> execute/version probe
+ * -> ready pipeline. Distinguishes readiness signals a plain "is the command present" check would
+ * conflate: a package can be recorded installed by dpkg without its command file existing yet
+ * (mid-install), a command file can exist without its executable bit set, a command can be
+ * executable yet still fail when actually run (wrong ABI, crashing launcher, etc.), and a probe
+ * that ran out of time is a distinct, actionable state from one that ran and failed outright.
+ */
+enum class ReadinessStage {
+    MISSING,
+    INSTALLED_UNRESOLVED,
+    RESOLVED_NOT_EXECUTABLE,
+    EXECUTABLE_INCOMPATIBLE,
+    PROBE_TIMEOUT,
+    READY
+}
+
 data class RuntimeProfileReport(
     val profile: RuntimeProfile,
     val missingPackages: List<String>,
     val missingCommands: List<String>,
-    val incompatibleCommands: List<String>
+    val incompatibleCommands: List<String>,
+    val nonExecutableCommands: List<String> = emptyList(),
+    val unverifiedCommands: List<String> = emptyList(),
+    val timedOutCommands: List<String> = emptyList()
 ) {
     val isReady: Boolean
-        get() = missingPackages.isEmpty() && missingCommands.isEmpty() && incompatibleCommands.isEmpty()
+        get() = missingPackages.isEmpty() && missingCommands.isEmpty() &&
+            incompatibleCommands.isEmpty() && nonExecutableCommands.isEmpty() &&
+            unverifiedCommands.isEmpty() && timedOutCommands.isEmpty()
+
+    fun stageFor(requirement: RuntimeRequirement): ReadinessStage = when {
+        requirement.packageName.isNotEmpty() && missingPackages.contains(requirement.packageName) ->
+            ReadinessStage.MISSING
+        requirement.command in missingCommands -> ReadinessStage.INSTALLED_UNRESOLVED
+        requirement.command in nonExecutableCommands -> ReadinessStage.RESOLVED_NOT_EXECUTABLE
+        requirement.command in timedOutCommands -> ReadinessStage.PROBE_TIMEOUT
+        requirement.command in incompatibleCommands || requirement.command in unverifiedCommands ->
+            ReadinessStage.EXECUTABLE_INCOMPATIBLE
+        else -> ReadinessStage.READY
+    }
 }
 
 object RuntimeProfiles {
@@ -84,7 +124,7 @@ object RuntimeProfiles {
             RuntimeProfileId.CODEX,
             "Codex CLI",
             emptyList(),
-            listOf(RuntimeRequirement("codex", "")),
+            listOf(RuntimeRequirement("codex", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
             installCommandOverride = "npm install -g @openai/codex",
             postInstallHint = "In Terminal, run codex and complete its sign-in flow."
@@ -93,7 +133,7 @@ object RuntimeProfiles {
             RuntimeProfileId.CLAUDE_CODE,
             "Claude Code",
             emptyList(),
-            listOf(RuntimeRequirement("claude", "")),
+            listOf(RuntimeRequirement("claude", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
             installCommandOverride = "npm install -g @anthropic-ai/claude-code",
             postInstallHint = "In Terminal, run claude and complete its sign-in flow."
@@ -102,7 +142,7 @@ object RuntimeProfiles {
             RuntimeProfileId.GEMINI_CLI,
             "Gemini CLI",
             emptyList(),
-            listOf(RuntimeRequirement("gemini", "")),
+            listOf(RuntimeRequirement("gemini", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
             installCommandOverride = "npm install -g @google/gemini-cli",
             postInstallHint = "In Terminal, run gemini and complete its sign-in flow."
@@ -141,8 +181,19 @@ object RuntimeProfiles {
     fun forId(id: RuntimeProfileId): RuntimeProfile = all.first { it.id == id }
 }
 
+/**
+ * Reports readiness for the catalog's [RuntimeProfile]s. Presence/executable-bit checks on
+ * apt-tracked commands stay host-side file stats (cheap, no process spawn, and dpkg's own Version
+ * field is already a reliable compatibility signal for them). Commands that declare a
+ * [RuntimeRequirement.versionProbeArgs] -- currently the npm-installed agent CLIs, which apt never
+ * tracks -- are instead verified with a real, bounded probe run inside the same proot guest
+ * environment the terminal itself uses, via [GuestCommandRunner]. That is what makes "Ready" mean
+ * "resolves in the guest PATH and `<tool> --version` exits 0 inside the guest", not "a file exists
+ * on the host's view of the guest filesystem".
+ */
 class RuntimeCapabilityDetector(
-    private val filesDir: File
+    private val filesDir: File,
+    private val guestCommandRunner: GuestCommandRunner = GuestCommandRunner(filesDir)
 ) {
     private val prefixDir = File(filesDir, "usr")
     private val statusFile = File(prefixDir, "var/lib/dpkg/status")
@@ -150,15 +201,45 @@ class RuntimeCapabilityDetector(
     fun inspect(profile: RuntimeProfile): RuntimeProfileReport {
         val packages = installedPackages()
         val missingPackages = profile.packages.filterNot(packages::contains)
-        val missingCommands = profile.requirements
-            .filterNot { commandFile(it.command).isFile }
-            .map { it.command }
-        val incompatibleCommands = profile.requirements.mapNotNull { requirement ->
+
+        val (probedRequirements, fileCheckedRequirements) = profile.requirements.partition { it.versionProbeArgs != null }
+
+        val resolved = fileCheckedRequirements.filter { commandFile(it.command).isFile }
+        val missingFileCommands = (fileCheckedRequirements - resolved.toSet()).map { it.command }
+        val executable = resolved.filter { commandFile(it.command).canExecute() }
+        val nonExecutableFileCommands = (resolved - executable.toSet()).map { it.command }
+        val incompatibleCommands = fileCheckedRequirements.mapNotNull { requirement ->
             val version = packages[requirement.packageName] ?: return@mapNotNull null
             val maximum = requirement.maxVersionExclusive ?: return@mapNotNull null
             if (compareVersions(version, maximum) >= 0) requirement.command else null
         }
-        return RuntimeProfileReport(profile, missingPackages, missingCommands, incompatibleCommands)
+
+        val missingProbeCommands = mutableListOf<String>()
+        val nonExecutableProbeCommands = mutableListOf<String>()
+        val unverifiedCommands = mutableListOf<String>()
+        val timedOutCommands = mutableListOf<String>()
+        for (requirement in probedRequirements) {
+            when (guestCommandRunner.probe(requirement).outcome) {
+                GuestCommandRunner.Outcome.READY -> Unit
+                GuestCommandRunner.Outcome.TIMEOUT -> timedOutCommands += requirement.command
+                GuestCommandRunner.Outcome.GUEST_UNAVAILABLE,
+                GuestCommandRunner.Outcome.NOT_FOUND -> missingProbeCommands += requirement.command
+                GuestCommandRunner.Outcome.NOT_EXECUTABLE -> nonExecutableProbeCommands += requirement.command
+                GuestCommandRunner.Outcome.NONZERO_EXIT,
+                GuestCommandRunner.Outcome.LAUNCH_FAILED,
+                GuestCommandRunner.Outcome.REFUSED -> unverifiedCommands += requirement.command
+            }
+        }
+
+        return RuntimeProfileReport(
+            profile = profile,
+            missingPackages = missingPackages,
+            missingCommands = missingFileCommands + missingProbeCommands,
+            incompatibleCommands = incompatibleCommands,
+            nonExecutableCommands = nonExecutableFileCommands + nonExecutableProbeCommands,
+            unverifiedCommands = unverifiedCommands,
+            timedOutCommands = timedOutCommands
+        )
     }
 
     private fun commandFile(command: String): File = File(prefixDir, "bin/$command")
