@@ -41,7 +41,9 @@ class AgentRuntimeInstaller(
         val staging = File(paths.root, ".staging-${manifest.runtimeVersion}-${System.nanoTime()}")
         val stagedRootfs = File(staging, "rootfs")
         try {
-            require(stagedRootfs.mkdirs()) { "Could not create agent runtime staging directory." }
+            require(stagedRootfs.mkdirs() || stagedRootfs.isDirectory) {
+                "Could not create agent runtime staging directory."
+            }
             TarGzipExtractor.extract(archive, stagedRootfs)
             validateRootfs(stagedRootfs, manifest)
 
