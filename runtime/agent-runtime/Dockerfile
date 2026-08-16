@@ -15,6 +15,7 @@ RUN apt-get update \
     && ln -s "/opt/node-v${NODE_VERSION}-linux-arm64/bin/node" /usr/local/bin/node \
     && ln -s "/opt/node-v${NODE_VERSION}-linux-arm64/bin/npm" /usr/local/bin/npm \
     && ln -s "/opt/node-v${NODE_VERSION}-linux-arm64/bin/npx" /usr/local/bin/npx \
+    && npm config set prefix /usr/local \
     && npm install --global --foreground-scripts --ignore-scripts=false --allow-scripts=@anthropic-ai/claude-code,opencode-ai "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
     && node --version && npm --version && claude --version && opencode --version \
     && rm -rf /tmp/node.tar.xz /root/.npm
