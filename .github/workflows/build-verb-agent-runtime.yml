@@ -35,15 +35,19 @@ jobs:
         run: |
           mkdir -p out
           container=$(docker create verb-agent-runtime:${RUNTIME_VERSION})
-          docker export "\$container" | gzip -n > out/agent-runtime-rootfs.tar.gz
-          docker rm "\$container"
+          docker export "$container" | gzip -n > out/agent-runtime-rootfs.tar.gz
+          docker rm "$container"
           sha256sum out/agent-runtime-rootfs.tar.gz > out/agent-runtime-rootfs.tar.gz.sha256
           printf '%s\n' \
             "runtimeVersion=${RUNTIME_VERSION}" \
             "architecture=aarch64" \
+            "distro=debian-bookworm-arm64" \
             "nodeVersion=${NODE_VERSION}" \
             "claudeVersion=${CLAUDE_VERSION}" \
             "openCodeVersion=${OPENCODE_VERSION}" \
+            "minimumVerbVersion=1.0.0" \
+            "createdAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "requiredCommands=/bin/bash,/usr/local/bin/node,/usr/local/bin/npm,/usr/local/bin/claude,/usr/local/bin/opencode" \
             "rootfsSha256=$(cut -d' ' -f1 out/agent-runtime-rootfs.tar.gz.sha256)" \
             > out/agent-runtime-manifest.txt
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/node'
