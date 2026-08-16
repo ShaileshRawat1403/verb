@@ -54,6 +54,7 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.terminal.TerminalEnvironment
+import com.example.verb.terminal.AgentRuntimeInstaller
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.ui.theme.SecondaryCyan
@@ -72,6 +73,18 @@ fun SystemScreen(
     installingRuntimeProfile: RuntimeProfileId? = null,
     runtimeInstallMessage: String? = null,
     onInstallRuntimeProfile: (RuntimeProfileId) -> Unit = {},
+    agentRuntime: AgentRuntimeInstaller.InstalledRuntime? = null,
+    agentRuntimeImporting: Boolean = false,
+    agentRuntimeMessage: String? = null,
+    agentArchiveName: String? = null,
+    agentChecksumName: String? = null,
+    agentManifestName: String? = null,
+    onPickAgentArchive: () -> Unit = {},
+    onPickAgentChecksum: () -> Unit = {},
+    onPickAgentManifest: () -> Unit = {},
+    onImportAgentRuntime: () -> Unit = {},
+    onOpenAgentRuntime: () -> Unit = {},
+    onReturnToVerbRuntime: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -216,6 +229,23 @@ fun SystemScreen(
             installingProfile = installingRuntimeProfile,
             message = runtimeInstallMessage,
             onInstall = onInstallRuntimeProfile
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        AgentRuntimeCard(
+            runtime = agentRuntime,
+            importing = agentRuntimeImporting,
+            message = agentRuntimeMessage,
+            archiveName = agentArchiveName,
+            checksumName = agentChecksumName,
+            manifestName = agentManifestName,
+            onPickArchive = onPickAgentArchive,
+            onPickChecksum = onPickAgentChecksum,
+            onPickManifest = onPickAgentManifest,
+            onImport = onImportAgentRuntime,
+            onOpen = onOpenAgentRuntime,
+            onReturnToVerb = onReturnToVerbRuntime
         )
 
         Spacer(modifier = Modifier.height(16.dp))

@@ -45,6 +45,10 @@ class AgentRuntimeEnvironment(
             variables = arrayOf(
                 "TERM=xterm-256color",
                 "COLORTERM=truecolor",
+                "HOME=${filesDir.absolutePath}/home",
+                "PATH=${filesDir.absolutePath}/usr/bin:${filesDir.absolutePath}/usr/bin/applets",
+                "LD_LIBRARY_PATH=${filesDir.absolutePath}/usr/lib",
+                "TMPDIR=${filesDir.absolutePath}/usr/tmp",
                 "PROOT_TMP_DIR=${filesDir.absolutePath}/usr/tmp"
             ),
             rootfsDir = rootfs,

@@ -24,6 +24,8 @@ import com.example.verb.project.VerbProject
 import com.example.verb.semantic.SecretGuard
 import com.example.verb.semantic.SemanticEngine
 import com.example.verb.terminal.BundledToolBootstrap
+import com.example.verb.terminal.AgentRuntimeInstaller
+import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.RuntimeCapabilityDetector
 import com.example.verb.terminal.RuntimeProfileId
@@ -64,6 +66,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = VerbRepository.getInstance(application.applicationContext)
     private val projectRepository = ProjectRepository(application.applicationContext)
     private val runtimeCapabilityDetector = RuntimeCapabilityDetector(application.filesDir)
+    private val agentRuntimeInstaller = AgentRuntimeInstaller(application.filesDir)
 
     /**
      * Installs bundled CLI tools (busybox/curl/jq + CA bundle) with ELF validation. The terminal
@@ -100,6 +103,15 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _runtimeInstallMessage = MutableStateFlow<String?>(null)
     val runtimeInstallMessage: StateFlow<String?> = _runtimeInstallMessage.asStateFlow()
+
+    private val _agentRuntime = MutableStateFlow(agentRuntimeInstaller.active())
+    val agentRuntime: StateFlow<AgentRuntimeInstaller.InstalledRuntime?> = _agentRuntime.asStateFlow()
+
+    private val _agentRuntimeImporting = MutableStateFlow(false)
+    val agentRuntimeImporting: StateFlow<Boolean> = _agentRuntimeImporting.asStateFlow()
+
+    private val _agentRuntimeMessage = MutableStateFlow<String?>(null)
+    val agentRuntimeMessage: StateFlow<String?> = _agentRuntimeMessage.asStateFlow()
 
     // The terminal is the primary product surface, so the app lands on it at launch rather than
     // the query/assistant tabs where raw shell commands would appear to do nothing.
@@ -227,6 +239,59 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     fun retryTermuxBootstrap() {
         installTermuxBootstrap()
+    }
+
+    /** Imports a verified CI artifact into a versioned, rollback-safe Agent Runtime slot. */
+    fun importAgentRuntime(archiveUri: android.net.Uri, checksumUri: android.net.Uri, manifestUri: android.net.Uri) {
+        if (_agentRuntimeImporting.value) return
+        _agentRuntimeImporting.value = true
+        _agentRuntimeMessage.value = "Verifying and installing Agent Runtime…"
+        val context = getApplication<Application>()
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching {
+                val staging = File(context.cacheDir, "agent-runtime-import")
+                staging.deleteRecursively()
+                require(staging.mkdirs()) { "Could not create Agent Runtime staging storage." }
+                val archive = File(staging, "agent-runtime-rootfs.tar.gz")
+                val checksum = File(staging, "agent-runtime-rootfs.tar.gz.sha256")
+                val manifest = File(staging, "agent-runtime-manifest.txt")
+                copyDocument(context.contentResolver, archiveUri, archive)
+                copyDocument(context.contentResolver, checksumUri, checksum)
+                copyDocument(context.contentResolver, manifestUri, manifest)
+                agentRuntimeInstaller.install(archive, checksum, manifest).getOrThrow()
+            }
+            withContext(Dispatchers.Main.immediate) {
+                _agentRuntimeImporting.value = false
+                result.onSuccess { installed ->
+                    _agentRuntime.value = installed
+                    _agentRuntimeMessage.value = "Agent Runtime ${installed.manifest.runtimeVersion} is ready."
+                }.onFailure { error ->
+                    _agentRuntimeMessage.value = "Agent Runtime import failed: ${error.message ?: "invalid artifact"}"
+                }
+            }
+        }
+    }
+
+    fun openAgentRuntime() {
+        val runtime = _agentRuntime.value
+        if (runtime == null) {
+            _agentRuntimeMessage.value = "Import an Agent Runtime artifact first."
+            return
+        }
+        runCatching { terminalRuntime.activateAgentRuntime(runtime) }
+            .onSuccess { selectTab(VerbTab.TERMINAL) }
+            .onFailure { _agentRuntimeMessage.value = it.message ?: "Could not open Agent Runtime." }
+    }
+
+    fun returnToVerbRuntime() {
+        terminalRuntime.deactivateAgentRuntime()
+        _agentRuntimeMessage.value = "Returned to the Verb CLI userland."
+    }
+
+    private fun copyDocument(resolver: android.content.ContentResolver, uri: android.net.Uri, destination: File) {
+        resolver.openInputStream(uri)?.use { input ->
+            destination.outputStream().use { output -> input.copyTo(output) }
+        } ?: error("Could not read selected Agent Runtime document.")
     }
 
     fun installRuntimeProfile(profileId: RuntimeProfileId) {

@@ -2,6 +2,7 @@ package com.example.verb.terminal
 
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class AgentRuntimeManifestTest {
     private fun manifest(
@@ -35,5 +36,25 @@ class AgentRuntimeManifestTest {
 
     @Test fun relativeCommandPathIsRejected() {
         assertTrue(manifest(required = listOf("bin/bash")).validateForArm64().isFailure)
+    }
+
+    @Test fun propertiesRoundTrip() {
+        val file = File.createTempFile("verb-agent-manifest", ".txt")
+        try {
+            file.writeText(manifest().toPropertiesText())
+            assertTrue(AgentRuntimeManifest.fromFile(file).getOrThrow() == manifest())
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test fun malformedPropertiesAreRejected() {
+        val file = File.createTempFile("verb-agent-manifest", ".txt")
+        try {
+            file.writeText("runtimeVersion=1.0.0\narchitecture=aarch64\n")
+            assertTrue(AgentRuntimeManifest.fromFile(file).isFailure)
+        } finally {
+            file.delete()
+        }
     }
 }

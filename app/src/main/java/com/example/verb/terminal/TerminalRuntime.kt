@@ -16,6 +16,7 @@ class TerminalRuntime(
 ) : TerminalRuntimeAdapter {
 
     private var projectDirectory: File? = initialProjectDirectory
+    private var activeAgentRuntime: AgentRuntimeInstaller.InstalledRuntime? = null
 
     var environment: TerminalEnvironment =
         TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
@@ -44,7 +45,9 @@ class TerminalRuntime(
      * proot-backed Termux userland without recreating this runtime (and losing the bound view).
      */
     fun refreshEnvironment() {
-        environment = TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
+        environment = activeAgentRuntime?.let { runtime ->
+            AgentRuntimeEnvironment(workingDir, requireProjectDirectory(), runtime.manifest).resolve(runtime.rootfs)
+        } ?: TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
         if (useFakeForTesting) return
         (delegate as? TermuxTerminalRuntimeAdapter)?.reconfigure(
             shellExecutable = environment.shellExecutable,
@@ -59,6 +62,22 @@ class TerminalRuntime(
         projectDirectory = directory
         refreshEnvironment()
     }
+
+    /** Switches the existing PTY to the separately installed Linux agent rootfs. */
+    fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime) {
+        activeAgentRuntime = runtime
+        refreshEnvironment()
+    }
+
+    /** Returns the PTY to the normal Verb CLI userland. */
+    fun deactivateAgentRuntime() {
+        activeAgentRuntime = null
+        refreshEnvironment()
+    }
+
+    private fun requireProjectDirectory(): File =
+        projectDirectory?.takeIf { it.isDirectory }
+            ?: error("Select a Verb project before opening the Agent Runtime.")
 
     override val sessionState: StateFlow<TerminalSessionState> get() = delegate.sessionState
     override val terminalOutput: StateFlow<String> get() = delegate.terminalOutput
