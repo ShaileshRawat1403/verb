@@ -8,14 +8,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libc6 libstdc++6 openssh-client tar tzdata \
     && rm -rf /var/lib/apt/lists/* \
-    && arch="\$(dpkg --print-architecture)" \
-    && test "\$arch" = arm64 \
-    && curl -fsSL "https://nodejs.org/dist/v\${NODE_VERSION}/node-v\${NODE_VERSION}-linux-arm64.tar.xz" -o /tmp/node.tar.xz \
+    && arch="$(dpkg --print-architecture)" \
+    && test "$arch" = arm64 \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz" -o /tmp/node.tar.xz \
     && tar -xJf /tmp/node.tar.xz -C /opt \
-    && ln -s "/opt/node-v\${NODE_VERSION}-linux-arm64/bin/node" /usr/local/bin/node \
-    && ln -s "/opt/node-v\${NODE_VERSION}-linux-arm64/bin/npm" /usr/local/bin/npm \
-    && ln -s "/opt/node-v\${NODE_VERSION}-linux-arm64/bin/npx" /usr/local/bin/npx \
-    && npm install --global --foreground-scripts --ignore-scripts=false --allow-scripts=@anthropic-ai/claude-code,opencode-ai "@anthropic-ai/claude-code@\${CLAUDE_VERSION}" "opencode-ai@\${OPENCODE_VERSION}" \
+    && ln -s "/opt/node-v${NODE_VERSION}-linux-arm64/bin/node" /usr/local/bin/node \
+    && ln -s "/opt/node-v${NODE_VERSION}-linux-arm64/bin/npm" /usr/local/bin/npm \
+    && ln -s "/opt/node-v${NODE_VERSION}-linux-arm64/bin/npx" /usr/local/bin/npx \
+    && npm install --global --foreground-scripts --ignore-scripts=false --allow-scripts=@anthropic-ai/claude-code,opencode-ai "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "opencode-ai@${OPENCODE_VERSION}" \
     && node --version && npm --version && claude --version && opencode --version \
     && rm -rf /tmp/node.tar.xz /root/.npm
 
