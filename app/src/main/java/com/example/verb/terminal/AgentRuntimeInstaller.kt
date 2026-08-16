@@ -138,7 +138,9 @@ private object TarGzipExtractor {
     }
 
     private fun extractFile(input: InputStream, target: File, size: Long, mode: Long) {
-        require(target.parentFile?.mkdirs() != false) { "Could not create ${target.parent}." }
+        require(target.parentFile?.let { it.mkdirs() || it.isDirectory } != false) {
+            "Could not create ${target.parent}."
+        }
         target.outputStream().use { output ->
             var remaining = size
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -156,7 +158,9 @@ private object TarGzipExtractor {
 
     private fun createSymlink(target: File, linkName: String) {
         require(linkName.isNotEmpty() && !linkName.split('/').contains("..")) { "Unsafe symlink in agent runtime." }
-        require(target.parentFile?.mkdirs() != false) { "Could not create ${target.parent}." }
+        require(target.parentFile?.let { it.mkdirs() || it.isDirectory } != false) {
+            "Could not create ${target.parent}."
+        }
         if (target.exists() || target.isSymbolicLinkCompat()) target.delete()
         Os.symlink(linkName, target.absolutePath)
     }
@@ -165,7 +169,9 @@ private object TarGzipExtractor {
         require(!linkName.startsWith('/') && !linkName.split('/').contains("..")) { "Unsafe hardlink in agent runtime." }
         val source = File(destination, linkName)
         require(source.isFile) { "Hardlink target is missing: $linkName." }
-        require(target.parentFile?.mkdirs() != false) { "Could not create ${target.parent}." }
+        require(target.parentFile?.let { it.mkdirs() || it.isDirectory } != false) {
+            "Could not create ${target.parent}."
+        }
         Os.link(source.absolutePath, target.absolutePath)
     }
 
