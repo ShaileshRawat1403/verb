@@ -32,13 +32,17 @@ data class TerminalEnvironment(
         ANDROID_SYSTEM_SHELL,
 
         /** A Termux-compatible bootstrap (proot + login) is present and ready to run. */
-        VERB_LOCAL_USERLAND
+        VERB_LOCAL_USERLAND,
+
+        /** A separate Linux rootfs launched directly by Android through the existing PRoot binary. */
+        VERB_AGENT_LINUX_USERLAND
     }
 
     val displayName: String
         get() = when (kind) {
             Kind.ANDROID_SYSTEM_SHELL -> "Android system shell (limited)"
             Kind.VERB_LOCAL_USERLAND -> "Verb CLI userland (proot)"
+            Kind.VERB_AGENT_LINUX_USERLAND -> "Verb Agent Linux runtime (proot)"
         }
 
     override fun equals(other: Any?): Boolean {
