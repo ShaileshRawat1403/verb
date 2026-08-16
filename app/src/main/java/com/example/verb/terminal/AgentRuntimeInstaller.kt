@@ -126,7 +126,7 @@ private object TarGzipExtractor {
                 val target = File(destination, path)
                 when (type) {
                     '5' -> require(target.mkdirs() || target.isDirectory) { "Could not create $path." }
-                    '2' -> createSymlink(target, linkName)
+                    '2' -> createSymlink(target, linkName, destination)
                     '1' -> createHardlink(target, linkName, destination)
                     '\u0000', '0' -> extractFile(input, target, size, mode)
                     else -> skip(input, size)
@@ -156,8 +156,9 @@ private object TarGzipExtractor {
         if (mode and 73L != 0L) target.setExecutable(true, false)
     }
 
-    private fun createSymlink(target: File, linkName: String) {
-        require(linkName.isNotEmpty() && !linkName.split('/').contains("..")) { "Unsafe symlink in agent runtime." }
+    private fun createSymlink(target: File, linkName: String, destination: File) {
+        require(linkName.isNotEmpty() && !linkName.startsWith('/')) { "Unsafe symlink in agent runtime." }
+        require(resolvesInsideRootfs(target, linkName, destination)) { "Unsafe symlink in agent runtime." }
         require(target.parentFile?.let { it.mkdirs() || it.isDirectory } != false) {
             "Could not create ${target.parent}."
         }
@@ -174,6 +175,14 @@ private object TarGzipExtractor {
         }
         Os.link(source.absolutePath, target.absolutePath)
     }
+
+    /** Docker rootfs archives legitimately contain links such as ../lib/foo; they stay safe only
+     * when their normalized target remains below [destination]. */
+    private fun resolvesInsideRootfs(target: File, linkName: String, destination: File): Boolean = runCatching {
+        val root = destination.canonicalFile
+        val resolved = File(target.parentFile, linkName).canonicalFile
+        resolved.path == root.path || resolved.path.startsWith(root.path + File.separator)
+    }.getOrDefault(false)
 
     private fun skip(input: InputStream, count: Long) {
         var remaining = count
