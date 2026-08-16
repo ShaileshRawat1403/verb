@@ -6,7 +6,7 @@ import java.io.File
 class AgentRuntimePaths(filesDir: File) {
     val root: File = File(filesDir, "agent-runtime")
     val versions: File = File(root, "versions")
-    val activeManifest: File = File(root, "active.json")
+    val activeManifest: File = File(root, "active.properties")
     val homes: File = File(root, "homes")
     val cache: File = File(root, "cache")
 

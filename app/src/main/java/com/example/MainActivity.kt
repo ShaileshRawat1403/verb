@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -36,7 +38,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -102,8 +106,24 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
+    val agentRuntime by viewModel.agentRuntime.collectAsStateWithLifecycle()
+    val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
+    val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
+
+    var agentArchiveUri by remember { mutableStateOf<Uri?>(null) }
+    var agentChecksumUri by remember { mutableStateOf<Uri?>(null) }
+    var agentManifestUri by remember { mutableStateOf<Uri?>(null) }
+    val agentArchivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        agentArchiveUri = it
+    }
+    val agentChecksumPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        agentChecksumUri = it
+    }
+    val agentManifestPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        agentManifestUri = it
+    }
 
     // System back at the root tab exits; otherwise it retraces visited tabs. Screen-level
     // BackHandlers (sheets, dialogs, IME) register deeper in the tree and win first.
@@ -259,7 +279,26 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     runtimeProfileReports = runtimeProfileReports,
                     installingRuntimeProfile = installingRuntimeProfile,
                     runtimeInstallMessage = runtimeInstallMessage,
-                    onInstallRuntimeProfile = viewModel::installRuntimeProfile
+                    onInstallRuntimeProfile = viewModel::installRuntimeProfile,
+                    agentRuntime = agentRuntime,
+                    agentRuntimeImporting = agentRuntimeImporting,
+                    agentRuntimeMessage = agentRuntimeMessage,
+                    agentArchiveName = agentArchiveUri?.lastPathSegment,
+                    agentChecksumName = agentChecksumUri?.lastPathSegment,
+                    agentManifestName = agentManifestUri?.lastPathSegment,
+                    onPickAgentArchive = { agentArchivePicker.launch(arrayOf("application/gzip", "application/octet-stream", "*/*")) },
+                    onPickAgentChecksum = { agentChecksumPicker.launch(arrayOf("text/plain", "*/*")) },
+                    onPickAgentManifest = { agentManifestPicker.launch(arrayOf("text/plain", "*/*")) },
+                    onImportAgentRuntime = {
+                        val archive = agentArchiveUri
+                        val checksum = agentChecksumUri
+                        val manifest = agentManifestUri
+                        if (archive != null && checksum != null && manifest != null) {
+                            viewModel.importAgentRuntime(archive, checksum, manifest)
+                        }
+                    },
+                    onOpenAgentRuntime = viewModel::openAgentRuntime,
+                    onReturnToVerbRuntime = viewModel::returnToVerbRuntime
                 )
 
                 VerbTab.TERMINAL -> TerminalScreen(
