@@ -30,28 +30,28 @@ jobs:
             --build-arg NODE_VERSION \
             --build-arg CLAUDE_VERSION \
             --build-arg OPENCODE_VERSION \
-            -t verb-agent-runtime:\${RUNTIME_VERSION} runtime/agent-runtime
+            -t verb-agent-runtime:${RUNTIME_VERSION} runtime/agent-runtime
       - name: Export and verify rootfs
         run: |
           mkdir -p out
-          container=\$(docker create verb-agent-runtime:\${RUNTIME_VERSION})
+          container=$(docker create verb-agent-runtime:${RUNTIME_VERSION})
           docker export "\$container" | gzip -n > out/agent-runtime-rootfs.tar.gz
           docker rm "\$container"
           sha256sum out/agent-runtime-rootfs.tar.gz > out/agent-runtime-rootfs.tar.gz.sha256
           printf '%s\n' \
-            "runtimeVersion=\${RUNTIME_VERSION}" \
+            "runtimeVersion=${RUNTIME_VERSION}" \
             "architecture=aarch64" \
-            "nodeVersion=\${NODE_VERSION}" \
-            "claudeVersion=\${CLAUDE_VERSION}" \
-            "openCodeVersion=\${OPENCODE_VERSION}" \
-            "rootfsSha256=\$(cut -d' ' -f1 out/agent-runtime-rootfs.tar.gz.sha256)" \
+            "nodeVersion=${NODE_VERSION}" \
+            "claudeVersion=${CLAUDE_VERSION}" \
+            "openCodeVersion=${OPENCODE_VERSION}" \
+            "rootfsSha256=$(cut -d' ' -f1 out/agent-runtime-rootfs.tar.gz.sha256)" \
             > out/agent-runtime-manifest.txt
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/node'
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/claude'
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/opencode'
       - uses: actions/upload-artifact@v4
         with:
-          name: verb-agent-runtime-aarch64-\${{ env.RUNTIME_VERSION }}
+          name: verb-agent-runtime-aarch64-${{ env.RUNTIME_VERSION }}
           path: out/
           if-no-files-found: error
           retention-days: 14
