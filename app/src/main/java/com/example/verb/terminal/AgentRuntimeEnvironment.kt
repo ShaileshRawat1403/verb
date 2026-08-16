@@ -26,7 +26,7 @@ class AgentRuntimeEnvironment(
             if (File(path).isDirectory) args += listOf("-b", path)
         }
         args += listOf(
-            "-b", "\${projectDirectory.absolutePath}:/workspace",
+            "-b", "${projectDirectory.absolutePath}:/workspace",
             "-w", "/workspace",
             "/usr/bin/env",
             "HOME=/home/verb",
@@ -45,7 +45,7 @@ class AgentRuntimeEnvironment(
             variables = arrayOf(
                 "TERM=xterm-256color",
                 "COLORTERM=truecolor",
-                "PROOT_TMP_DIR=\${filesDir.absolutePath}/usr/tmp"
+                "PROOT_TMP_DIR=${filesDir.absolutePath}/usr/tmp"
             ),
             rootfsDir = rootfs,
             prefixDir = File(rootfs, "usr")
