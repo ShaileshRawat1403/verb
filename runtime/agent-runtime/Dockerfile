@@ -6,7 +6,7 @@ ARG OPENCODE_VERSION=1.18.18
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libc6 libstdc++6 openssh-client tar tzdata \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libc6 libstdc++6 openssh-client tar tzdata xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && arch="$(dpkg --print-architecture)" \
     && test "$arch" = arm64 \
