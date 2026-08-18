@@ -20,6 +20,8 @@ class AgentRuntimeEnvironment(
 
         val proot = File(filesDir, "usr/bin/proot")
         require(proot.isFile && proot.canExecute()) { "Verb PRoot is unavailable." }
+        val agentHome = AgentRuntimePaths(filesDir).agentHome("default")
+        require(agentHome.mkdirs() || agentHome.isDirectory) { "Could not create Agent Runtime home." }
 
         val args = mutableListOf(proot.absolutePath, "--link2symlink", "-r", rootfs.absolutePath)
         listOf("/dev", "/proc", "/sys", "/system", "/apex", "/vendor").forEach { path ->
@@ -27,6 +29,7 @@ class AgentRuntimeEnvironment(
         }
         args += listOf(
             "-b", "${projectDirectory.absolutePath}:/workspace",
+            "-b", "${agentHome.absolutePath}:/home/verb",
             "-w", "/workspace",
             "/usr/bin/env",
             "HOME=/home/verb",
@@ -34,6 +37,10 @@ class AgentRuntimeEnvironment(
             "TERM=xterm-256color",
             "LANG=C.UTF-8",
             "SHELL=/bin/bash",
+            // PRoot itself needs Verb's Bionic loader path, but the Debian processes it starts
+            // must not inherit those Android/Termux loader overrides.
+            "LD_LIBRARY_PATH=",
+            "LD_PRELOAD=",
             "/bin/bash", "--login"
         )
 
