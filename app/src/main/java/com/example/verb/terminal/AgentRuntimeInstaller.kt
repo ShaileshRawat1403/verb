@@ -71,7 +71,9 @@ class AgentRuntimeInstaller(
     private fun validateRootfs(rootfs: File, manifest: AgentRuntimeManifest) {
         manifest.requiredCommands.forEach { absolutePath ->
             val command = File(rootfs, absolutePath.removePrefix("/"))
-            require(command.isFile && command.canExecute()) {
+            // Absolute Linux symlinks (for example /usr/local/bin/node -> /opt/...) cannot be
+            // followed by Android's File APIs, but are valid once PRoot resolves them in-guest.
+            require((command.isFile && command.canExecute()) || command.isSymbolicLinkCompat()) {
                 "Agent runtime is missing executable ${absolutePath}."
             }
         }
@@ -99,6 +101,11 @@ class AgentRuntimeInstaller(
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
+
+    private fun File.isSymbolicLinkCompat(): Boolean = runCatching {
+        val stat = android.system.Os.lstat(absolutePath)
+        android.system.OsConstants.S_ISLNK(stat.st_mode)
+    }.getOrDefault(false)
 }
 
 /** Minimal tar reader for Docker-exported rootfs archives; rejects path traversal. */
@@ -157,32 +164,48 @@ private object TarGzipExtractor {
     }
 
     private fun createSymlink(target: File, linkName: String, destination: File) {
-        require(linkName.isNotEmpty() && !linkName.startsWith('/')) { "Unsafe symlink in agent runtime." }
-        require(resolvesInsideRootfs(target, linkName, destination)) { "Unsafe symlink in agent runtime." }
+        require(linkName.isNotEmpty() && isSafeGuestSymlink(target, linkName, destination)) {
+            "Unsafe symlink in agent runtime."
+        }
         require(target.parentFile?.let { it.mkdirs() || it.isDirectory } != false) {
             "Could not create ${target.parent}."
         }
         if (target.exists() || target.isSymbolicLinkCompat()) target.delete()
-        Os.symlink(linkName, target.absolutePath)
+        runCatching { Os.symlink(linkName, target.absolutePath) }.getOrElse { cause ->
+            throw IllegalStateException("Could not create agent runtime symlink $target -> $linkName.", cause)
+        }
     }
 
     private fun createHardlink(target: File, linkName: String, destination: File) {
         require(!linkName.startsWith('/') && !linkName.split('/').contains("..")) { "Unsafe hardlink in agent runtime." }
         val source = File(destination, linkName)
         require(source.isFile) { "Hardlink target is missing: $linkName." }
-        require(target.parentFile?.let { it.mkdirs() || it.isDirectory } != false) {
-            "Could not create ${target.parent}."
-        }
-        Os.link(source.absolutePath, target.absolutePath)
+        // Android permits symlinks in app-private storage but rejects hardlinks. Docker's rootfs
+        // hardlinks are immutable package aliases, so an in-guest absolute symlink preserves the
+        // required path semantics without relying on the forbidden host hardlink operation.
+        createSymlink(target, "/$linkName", destination)
     }
 
-    /** Docker rootfs archives legitimately contain links such as ../lib/foo; they stay safe only
-     * when their normalized target remains below [destination]. */
+    /** Docker rootfs archives legitimately contain relative links and conventional absolute guest
+     * links such as /usr/local/bin/node -> /opt/node-.../bin/node. Absolute links are never
+     * resolved on Android; they are accepted only for the Linux guest namespaces below. */
+    private fun isSafeGuestSymlink(target: File, linkName: String, destination: File): Boolean =
+        if (linkName.startsWith('/')) {
+            GUEST_SYMLINK_ROOTS.any { root -> linkName == root || linkName.startsWith("$root/") }
+        } else {
+            resolvesInsideRootfs(target, linkName, destination)
+        }
+
+    /** Relative links must normalize below [destination]. */
     private fun resolvesInsideRootfs(target: File, linkName: String, destination: File): Boolean = runCatching {
         val root = destination.canonicalFile
         val resolved = File(target.parentFile, linkName).canonicalFile
         resolved.path == root.path || resolved.path.startsWith(root.path + File.separator)
     }.getOrDefault(false)
+
+    private val GUEST_SYMLINK_ROOTS = listOf(
+        "/bin", "/sbin", "/lib", "/lib64", "/usr", "/etc", "/opt", "/proc", "/run"
+    )
 
     private fun skip(input: InputStream, count: Long) {
         var remaining = count
