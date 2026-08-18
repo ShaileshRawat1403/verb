@@ -2,6 +2,7 @@ package com.example.verb.terminal
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -117,6 +118,83 @@ class CommandExecutionTrackerTest {
 
         tracker.onSessionEnded()
         assertEquals(false, tracker.shellIntegrationActive.value)
+    }
+
+    @Test
+    fun `current working directory starts unknown`() {
+        assertNull(CommandExecutionTracker().currentWorkingDirectory.value)
+    }
+
+    @Test
+    fun `a valid OSC 7 event updates the current working directory`() {
+        val tracker = CommandExecutionTracker()
+
+        tracker.onEvent(ShellIntegrationEvent.CurrentDirectory("/data/data/com.aistudio.verb.app/files/projects/demo"))
+
+        assertEquals(
+            "/data/data/com.aistudio.verb.app/files/projects/demo",
+            tracker.currentWorkingDirectory.value
+        )
+    }
+
+    @Test
+    fun `a later OSC 7 event replaces the previous working directory`() {
+        val tracker = CommandExecutionTracker()
+
+        tracker.onEvent(ShellIntegrationEvent.CurrentDirectory("/first"))
+        tracker.onEvent(ShellIntegrationEvent.CurrentDirectory("/second"))
+
+        assertEquals("/second", tracker.currentWorkingDirectory.value)
+    }
+
+    @Test
+    fun `no event other than OSC 7 ever sets the working directory`() {
+        val tracker = CommandExecutionTracker()
+
+        tracker.onEvent(ShellIntegrationEvent.Handshake)
+        tracker.onEvent(ShellIntegrationEvent.PromptStart)
+        tracker.onEvent(ShellIntegrationEvent.PromptEnd)
+        tracker.onEvent(ShellIntegrationEvent.CommandMetadata("cd /somewhere"))
+        tracker.onEvent(ShellIntegrationEvent.CommandStart)
+        tracker.onEvent(ShellIntegrationEvent.CommandEnd(0))
+
+        assertNull(tracker.currentWorkingDirectory.value)
+    }
+
+    /**
+     * Session end covers restart and reconfigure too: both go through
+     * [TermuxTerminalRuntimeAdapter.destroy], which calls [CommandExecutionTracker.onSessionEnded].
+     * The next session must not inherit the previous session's directory -- a project switch or an
+     * Agent Runtime activation restarts the PTY somewhere else entirely.
+     */
+    @Test
+    fun `session end clears the current working directory`() {
+        val tracker = CommandExecutionTracker()
+        tracker.onEvent(ShellIntegrationEvent.CurrentDirectory("/old/session/dir"))
+
+        tracker.onSessionEnded()
+
+        assertNull(tracker.currentWorkingDirectory.value)
+    }
+
+    @Test
+    fun `after a session end the directory stays unknown until the next OSC 7`() {
+        val tracker = CommandExecutionTracker()
+        tracker.onEvent(ShellIntegrationEvent.CurrentDirectory("/old/session/dir"))
+        tracker.onSessionEnded()
+
+        // A full command lifecycle in the new session, with no OSC 7 yet.
+        tracker.onEvent(ShellIntegrationEvent.CommandMetadata("echo hi"))
+        tracker.onEvent(ShellIntegrationEvent.CommandStart)
+        assertNull(tracker.currentWorkingDirectory.value)
+        tracker.onEvent(ShellIntegrationEvent.CommandEnd(0))
+
+        assertNull(tracker.currentWorkingDirectory.value)
+        // The record must not carry the previous session's directory either.
+        assertNull(tracker.history.value.last().workingDirectory)
+
+        tracker.onEvent(ShellIntegrationEvent.CurrentDirectory("/new/session/dir"))
+        assertEquals("/new/session/dir", tracker.currentWorkingDirectory.value)
     }
 
     @Test

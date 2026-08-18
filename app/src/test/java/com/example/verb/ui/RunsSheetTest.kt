@@ -15,9 +15,11 @@ import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalContextState
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.TerminalSessionState
+import com.example.verb.terminal.TerminalWorkingDirectory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -63,7 +65,8 @@ private class TestTerminalRuntimeAdapter(
     override fun notifySelectionChanged(selectedRange: TextRange, selectedText: String) {}
     override fun addSelectionChangeListener(listener: SelectionChangeListener) {}
     override fun removeSelectionChangeListener(listener: SelectionChangeListener) {}
-    override fun currentWorkingDirectory(): String = "/"
+    override val launchWorkingDirectory: File = File("/")
+    override val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?> = MutableStateFlow(null)
     override fun clearBuffer() {}
     override fun restartSession() { onRestartSession() }
     override fun destroy() {}

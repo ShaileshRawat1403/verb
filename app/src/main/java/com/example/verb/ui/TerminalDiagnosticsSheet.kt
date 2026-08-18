@@ -1,6 +1,14 @@
 package com.example.verb.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -65,7 +73,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun TerminalDiagnosticsSheet(
     terminalRuntime: TerminalRuntimeAdapter?,
@@ -76,6 +84,12 @@ fun TerminalDiagnosticsSheet(
     val logs by TerminalSessionLogger.logs.collectAsStateWithLifecycle()
     val sessionState by (terminalRuntime?.sessionState?.collectAsStateWithLifecycle()
         ?: remember { mutableStateOf(TerminalSessionState.FAILED) })
+    val currentWorkingDirectory by (terminalRuntime?.currentWorkingDirectory?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(null) })
+    val launchWorkingDirectory = terminalRuntime?.launchWorkingDirectory
+    // Where a host-side diagnostic probe should actually run: the shell's real directory when Verb
+    // could map it, otherwise the launch directory. Never a guest path handed to File().
+    val probeDirectory = currentWorkingDirectory?.hostPath ?: launchWorkingDirectory
 
     var selectedCategoryFilter by remember { mutableStateOf<LogCategory?>(null) }
     var copyNoticeVisible by remember { mutableStateOf(false) }
@@ -104,10 +118,19 @@ fun TerminalDiagnosticsSheet(
         contentColor = Color(0xFFE2E8F0),
         modifier = Modifier.testTag("terminal_diagnostics_sheet")
     ) {
+        // The bottom action row (Clear Logs / Copy Report) used to be laid out past the bottom of
+        // the sheet on tall devices and was unreachable: the sheet claimed a fixed 0.85 of its
+        // container without reserving the navigation-bar inset, so the last child fell underneath
+        // the system bars with nothing to scroll it into view. The fixed fraction is now a maximum
+        // rather than an exact height, the system insets are consumed here, and the only region
+        // allowed to grow is the log list -- so the actions keep their place above the insets at
+        // any font scale, without shrinking any touch target.
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.85f)
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Row(
@@ -186,11 +209,26 @@ fun TerminalDiagnosticsSheet(
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
+                    // Two distinct facts, never collapsed into one line. "Launch directory" is
+                    // where the PTY process was started and never moves; "Current directory" is
+                    // where the shell actually is, and is honestly reported as unknown wherever
+                    // shell integration does not run (the Agent Runtime, a non-bash shell, or
+                    // before the first prompt of a session).
                     Text(
-                        text = "Working Dir: ${terminalRuntime?.currentWorkingDirectory() ?: "Unknown"}",
+                        text = "Launch directory (device path): ${launchWorkingDirectory?.absolutePath ?: "Unknown"}",
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = Color(0xFF94A3B8)
+                        color = Color(0xFF94A3B8),
+                        modifier = Modifier.testTag("diagnostics_launch_directory")
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Current directory (terminal path): " +
+                            (currentWorkingDirectory?.guestPath ?: "Unknown — shell integration unavailable"),
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color(0xFF94A3B8),
+                        modifier = Modifier.testTag("diagnostics_current_directory")
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -199,9 +237,7 @@ fun TerminalDiagnosticsSheet(
                             coroutineScope.launch {
                                 isVerifyingShell = true
                                 shellVerification = withContext(Dispatchers.IO) {
-                                    TerminalDiagnostics.executeShellVerification(
-                                        terminalRuntime?.currentWorkingDirectory()?.let(::File)
-                                    )
+                                    TerminalDiagnostics.executeShellVerification(probeDirectory)
                                 }
                                 isVerifyingShell = false
                             }
@@ -236,8 +272,12 @@ fun TerminalDiagnosticsSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Horizontally scrollable: the category set grows with LogCategory, and an unscrollable
+            // Row would either clip the last chips or force the sheet wider than the screen.
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -258,9 +298,13 @@ fun TerminalDiagnosticsSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // The only child allowed to absorb leftover height, and the only one allowed to shrink:
+            // `fill = false` lets it give space back at large font scales instead of pushing the
+            // action row below the sheet, while heightIn keeps it usable rather than collapsing.
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f, fill = false)
+                    .heightIn(min = 96.dp)
                     .fillMaxWidth()
                     .background(Color(0xFF090A0E), RoundedCornerShape(8.dp))
                     .border(1.dp, Color(0xFF222630), RoundedCornerShape(8.dp))
@@ -285,10 +329,15 @@ fun TerminalDiagnosticsSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // FlowRow, not Row: at large font scales the two labelled buttons no longer fit side by
+            // side, and a plain Row would clip "Copy Report" rather than move it. Wrapping onto a
+            // second line keeps both actions fully visible and full-size.
+            FlowRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("diagnostics_actions"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
                     onClick = { TerminalSessionLogger.clear() },
@@ -309,7 +358,8 @@ fun TerminalDiagnosticsSheet(
                     onClick = {
                         val report = TerminalSessionLogger.exportDiagnosticReport(
                             sessionState = sessionState,
-                            workingDir = terminalRuntime?.currentWorkingDirectory(),
+                            launchWorkingDir = launchWorkingDirectory?.absolutePath,
+                            currentWorkingDir = currentWorkingDirectory?.guestPath,
                             shellExecutable = "/system/bin/sh"
                         )
                         clipboardManager.setText(AnnotatedString(report))

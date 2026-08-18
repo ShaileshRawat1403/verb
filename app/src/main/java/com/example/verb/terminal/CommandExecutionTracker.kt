@@ -25,14 +25,25 @@ class CommandExecutionTracker {
     private val _shellIntegrationActive = MutableStateFlow(false)
     val shellIntegrationActive: StateFlow<Boolean> = _shellIntegrationActive.asStateFlow()
 
+    /**
+     * The shell's last reported working directory, as a guest path, or null when it is genuinely
+     * unknown -- before the first valid OSC 7 of a session, and again after the session ends.
+     *
+     * Only a valid [ShellIntegrationEvent.CurrentDirectory] ever sets this. It is never inferred
+     * from prompt text, transcript contents, the session's launch arguments, or
+     * `TerminalSession.getCwd()` (which reports the PTY leader's cwd -- proot's, not the guest
+     * shell's -- and would therefore be wrong rather than merely unavailable).
+     */
+    private val _currentWorkingDirectory = MutableStateFlow<String?>(null)
+    val currentWorkingDirectory: StateFlow<String?> = _currentWorkingDirectory.asStateFlow()
+
     private var runningRecord: CommandExecutionRecord? = null
     private var pendingCommandText: String? = null
-    private var lastKnownCwd: String? = null
 
     @Synchronized
     fun onEvent(event: ShellIntegrationEvent) {
         when (event) {
-            is ShellIntegrationEvent.CurrentDirectory -> lastKnownCwd = event.path
+            is ShellIntegrationEvent.CurrentDirectory -> _currentWorkingDirectory.value = event.path
             is ShellIntegrationEvent.CommandMetadata -> pendingCommandText = redact(event.commandText)
             ShellIntegrationEvent.CommandStart -> startRecord()
             is ShellIntegrationEvent.CommandEnd -> endRecord(event.exitCode)
@@ -47,11 +58,18 @@ class CommandExecutionTracker {
      * rather than left RUNNING forever. Past history is intentionally preserved across a restart
      * (still process-lifetime-only, never persisted) since the records describe commands that did
      * run, not the session's own lifecycle.
+     *
+     * [currentWorkingDirectory] is cleared, not preserved: it describes where the *shell* is right
+     * now, and once the session is gone there is no shell. Carrying it over would let a restarted
+     * or reconfigured session report the previous session's directory as if it were live -- and
+     * would stamp it onto the first command of the new session, which may well start somewhere
+     * else entirely (a project switch and an Agent Runtime activation both restart the PTY).
      */
     @Synchronized
     fun onSessionEnded() {
         abandonRunningRecord()
         pendingCommandText = null
+        _currentWorkingDirectory.value = null
         _shellIntegrationActive.value = false
     }
 
@@ -62,7 +80,7 @@ class CommandExecutionTracker {
         runningRecord = CommandExecutionRecord(
             id = UUID.randomUUID().toString(),
             commandText = pendingCommandText.orEmpty(),
-            workingDirectory = lastKnownCwd,
+            workingDirectory = _currentWorkingDirectory.value,
             startedAtEpochMs = System.currentTimeMillis()
         )
         pendingCommandText = null

@@ -61,16 +61,24 @@ object TerminalSessionLogger {
         _logs.value = emptyList()
     }
 
+    /**
+     * @param launchWorkingDir host directory the session's process was launched in.
+     * @param currentWorkingDir the shell's own directory (guest path), or null when unknown. The
+     *   two are reported as separate lines because they are separate facts: conflating them is what
+     *   previously made a stale launch directory read as the live one.
+     */
     fun exportDiagnosticReport(
         sessionState: TerminalSessionState?,
-        workingDir: String?,
+        launchWorkingDir: String?,
+        currentWorkingDir: String?,
         shellExecutable: String?
     ): String {
         val sb = StringBuilder()
         sb.appendLine("=== VERB TERMINAL DIAGNOSTIC REPORT ===")
         sb.appendLine("Timestamp: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())}")
         sb.appendLine("Session State: ${sessionState ?: "UNKNOWN"}")
-        sb.appendLine("Working Directory: ${workingDir ?: "Unknown"}")
+        sb.appendLine("Launch Directory (device path): ${launchWorkingDir ?: "Unknown"}")
+        sb.appendLine("Current Directory (terminal path): ${currentWorkingDir ?: "Unknown (shell integration unavailable)"}")
         sb.appendLine("Shell Executable: ${shellExecutable ?: "Unknown"}")
         sb.appendLine("Total Log Entries: ${_logs.value.size}")
         sb.appendLine("\n--- RECENT LOGS ---")

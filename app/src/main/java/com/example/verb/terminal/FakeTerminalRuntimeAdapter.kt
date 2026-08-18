@@ -31,6 +31,17 @@ class FakeTerminalRuntimeAdapter(
     override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
     override val shellIntegrationActive: StateFlow<Boolean> = commandTracker.shellIntegrationActive
 
+    override val launchWorkingDirectory: File get() = workingDir
+
+    /**
+     * Always null: the fake never runs a shell, so it never receives an OSC 7 marker. It reports
+     * the live directory as unknown rather than echoing [launchWorkingDirectory], so headless and
+     * unit-test surfaces exercise the same "unknown" path a real Agent Runtime session takes.
+     */
+    private val _currentWorkingDirectory = MutableStateFlow<TerminalWorkingDirectory?>(null)
+    override val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?> =
+        _currentWorkingDirectory.asStateFlow()
+
     private val _urlToOpen = MutableStateFlow<String?>(null)
     override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
     override fun consumeUrlToOpen() {
@@ -112,8 +123,6 @@ class FakeTerminalRuntimeAdapter(
     override fun removeSelectionChangeListener(listener: SelectionChangeListener) {
         selectionListeners.remove(listener)
     }
-
-    override fun currentWorkingDirectory(): String = workingDir.absolutePath
 
     override fun clearBuffer() {
         _terminalOutput.value = "$ "

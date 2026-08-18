@@ -559,7 +559,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 repository.recordTerminalOutput(
                     command = SecretGuard.redactKnownSensitiveText(cmd),
                     output = SecretGuard.redactKnownSensitiveText(terminalRuntime.terminalOutput.value).takeLast(4_000),
-                    workingDir = terminalRuntime.currentWorkingDirectory()
+                    // The shell's own directory at submission time, as a guest path, or null when
+                    // it is unknown. The launch directory is deliberately NOT substituted here: a
+                    // stored row claiming a directory the command did not run in is worse than a
+                    // row that admits it does not know. The column is already nullable.
+                    workingDir = terminalRuntime.currentWorkingDirectory.value?.guestPath
                 )
             }
         }
@@ -580,7 +584,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 TerminalAiHelper.analyze(
                     service = aiAssistantService,
                     output = output,
-                    workingDir = terminalRuntime.currentWorkingDirectory(),
+                    workingDir = terminalRuntime.currentWorkingDirectory.value?.guestPath,
                     sessionState = terminalRuntime.sessionState.value
                 )
             } catch (e: Exception) {

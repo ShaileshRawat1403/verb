@@ -304,6 +304,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 VerbTab.TERMINAL -> TerminalScreen(
                     terminalOutput = terminalOutput,
                     terminalRuntime = viewModel.terminalRuntime,
+                    sessionState = terminalSessionState,
                     bootstrapState = terminalBootstrapState,
                     isKeyboardVisible = isKeyboardVisible,
                     onRetryBootstrap = viewModel::retryTermuxBootstrap,
