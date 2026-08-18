@@ -72,6 +72,7 @@ import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalRuntimeAdapter
+import com.example.verb.terminal.TerminalSessionState
 import com.example.verb.terminal.TermuxBootstrapInstaller
 import com.example.verb.terminal.TermuxTerminalRuntimeAdapter
 import com.example.verb.project.VerbProject
@@ -82,6 +83,14 @@ import com.termux.view.TerminalView
 fun TerminalScreen(
     terminalOutput: String,
     terminalRuntime: TerminalRuntimeAdapter? = null,
+    /**
+     * Collected by the caller (see MainActivity) and passed in, rather than read off
+     * `terminalRuntime.sessionState.value` here. A `.value` read is not a Compose snapshot read, so
+     * the status pill only refreshed when some unrelated recomposition happened to fire -- usually
+     * a [terminalOutput] change. A session that died without producing output kept showing a green
+     * "running" pill. Passing the already-collected value keeps this a single collection.
+     */
+    sessionState: TerminalSessionState? = null,
     bootstrapState: TermuxBootstrapInstaller.State = TermuxBootstrapInstaller.State.Ready,
     isKeyboardVisible: Boolean = false,
     onRetryBootstrap: () -> Unit = {},
@@ -116,7 +125,6 @@ fun TerminalScreen(
         is TerminalRuntime -> terminalRuntime.termuxDelegate
         else -> null
     }
-    val sessionState = terminalRuntime?.sessionState?.value
 
     // A Compose text field on another tab may retain IME focus across navigation. Release it as
     // Terminal opens so the explicit terminal input field can claim text focus when the user taps.

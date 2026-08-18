@@ -48,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,15 +75,31 @@ fun FileExplorerDrawer(
     isDark: Boolean,
     onFileClicked: (String) -> Unit
 ) {
-    val workingDir = remember(terminalRuntime) {
-        terminalRuntime?.currentWorkingDirectory()?.let { File(it) }
+    val launchDir = terminalRuntime?.launchWorkingDirectory
+
+    // A SNAPSHOT, deliberately not a subscription. The browser opens wherever the shell currently
+    // is, and from then on the user owns navigation: a later `cd` in the terminal must not yank an
+    // open browser out from under someone who has navigated somewhere else. This composable is
+    // mounted only while the sheet is open (see TerminalScreen), so closing and reopening it
+    // re-runs this `remember` and takes a fresh snapshot -- which is the intended way to resync.
+    //
+    // Only a MAPPED host path is ever used. A guest path Verb could not translate through a known
+    // bind (`/system`, `/etc`, ...) has a null hostPath and falls back to the launch directory --
+    // never a `File(guestPath)`, and never `/`.
+    val initialDir = remember(terminalRuntime) {
+        terminalRuntime?.currentWorkingDirectory?.value?.hostPath ?: launchDir
     }
-    // The terminal starts in filesDir/home, while Prefix lives beside home at filesDir/usr.
-    val appFilesDir = workingDir?.takeIf { it.name == "home" }?.parentFile ?: workingDir
+
+    // The terminal starts in filesDir/home, while Prefix lives beside home at filesDir/usr. Derived
+    // from the launch directory, which is stable for the session, so the $PREFIX / ~ labels below
+    // do not move around as the user browses.
+    val appFilesDir = launchDir?.takeIf { it.name == "home" }?.parentFile ?: launchDir
     val prefixDir = appFilesDir?.let { File(it, "usr") }
     val homeDir = appFilesDir?.let { File(it, "home") }
 
-    var currentDir by remember { mutableStateOf(workingDir ?: File("/")) }
+    // File("/") only when there is no runtime at all (preview/headless). It is never used as a
+    // fallback for a guest path that failed to map.
+    var currentDir by remember(terminalRuntime) { mutableStateOf(initialDir ?: File("/")) }
     var files by remember { mutableStateOf(emptyList<File>()) }
     var error by remember { mutableStateOf<String?>(null) }
     var copiedPath by remember { mutableStateOf<String?>(null) }
@@ -92,13 +109,6 @@ fun FileExplorerDrawer(
     val headerBg = if (isDark) Color(0xFF161820) else Color(0xFFE2E8F0)
     val rowHoverBg = if (isDark) Color(0xFF1B1E26) else Color(0xFFF1F5F9)
     val chipBg = if (isDark) Color(0xFF222630) else Color(0xFFE2E8F0)
-
-    // Track the shell's working directory when it changes under us.
-    LaunchedEffect(terminalRuntime, workingDir) {
-        if (workingDir != null) {
-            currentDir = workingDir
-        }
-    }
 
     LaunchedEffect(currentDir) {
         val list = currentDir.listFiles()
@@ -140,7 +150,9 @@ fun FileExplorerDrawer(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         color = textPrimary,
-                        modifier = Modifier.weight(1f, fill = false)
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .testTag("file_explorer_current_path")
                     )
                 }
 
@@ -196,16 +208,22 @@ fun FileExplorerDrawer(
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            listOf(
-                Triple(Icons.Default.Home, "Home", homeDir),
-                Triple(Icons.Default.Rocket, "Prefix", prefixDir),
-                Triple(Icons.Default.StarBorder, "Root", File("/")),
-                Triple(Icons.Default.Terminal, "Current", workingDir)
-            ).forEach { (icon, label, target) ->
+            // "Shell" resolves the live directory at TAP time, not at composition time. That keeps
+            // it a truthful manual resync -- the browser follows the shell only when the user asks
+            // it to -- and it still refuses an unmapped guest path, falling back to the launch
+            // directory rather than navigating somewhere the guest path does not name on the host.
+            listOf<Triple<ImageVector, String, () -> File?>>(
+                Triple(Icons.Default.Home, "Home") { homeDir },
+                Triple(Icons.Default.Rocket, "Prefix") { prefixDir },
+                Triple(Icons.Default.StarBorder, "Root") { File("/") },
+                Triple(Icons.Default.Terminal, "Shell") {
+                    terminalRuntime?.currentWorkingDirectory?.value?.hostPath ?: launchDir
+                }
+            ).forEach { (icon, label, resolveTarget) ->
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = chipBg,
-                    onClick = { target?.let { currentDir = it } }
+                    onClick = { resolveTarget()?.let { currentDir = it } }
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

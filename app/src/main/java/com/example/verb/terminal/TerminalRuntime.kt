@@ -28,8 +28,23 @@ class TerminalRuntime(
             workingDir = environment.workingDirectory,
             shellExecutable = environment.shellExecutable,
             arguments = environment.arguments,
-            sessionEnvironment = environment.variables
+            sessionEnvironment = environment.variables,
+            guestPathMapper = guestPathMapper()
         )
+    }
+
+    /**
+     * The guest->host binds valid for the environment currently resolved. Rebuilt alongside the
+     * environment in [refreshEnvironment] so the two can never describe different runtimes: the
+     * Agent Runtime binds the selected project at `/workspace`, while the Verb CLI userland binds
+     * this app's files directory at [VerbGuestPaths.FILES]. Android's system shell establishes no
+     * guest filesystem at all, so nothing is mappable there.
+     */
+    private fun guestPathMapper(): GuestPathMapper = when (environment.kind) {
+        TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND ->
+            projectDirectory?.let(GuestPathMapper::agentRuntime) ?: GuestPathMapper.NONE
+        TerminalEnvironment.Kind.VERB_LOCAL_USERLAND -> GuestPathMapper.verbUserland(workingDir)
+        TerminalEnvironment.Kind.ANDROID_SYSTEM_SHELL -> GuestPathMapper.NONE
     }
 
     /**
@@ -53,7 +68,8 @@ class TerminalRuntime(
             shellExecutable = environment.shellExecutable,
             arguments = environment.arguments,
             workingDirectory = environment.workingDirectory,
-            sessionEnvironment = environment.variables
+            sessionEnvironment = environment.variables,
+            guestPathMapper = guestPathMapper()
         )
     }
 
@@ -108,7 +124,10 @@ class TerminalRuntime(
     override fun removeSelectionChangeListener(listener: SelectionChangeListener) =
         delegate.removeSelectionChangeListener(listener)
 
-    override fun currentWorkingDirectory(): String = delegate.currentWorkingDirectory()
+    override val launchWorkingDirectory: File get() = delegate.launchWorkingDirectory
+    override val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?>
+        get() = delegate.currentWorkingDirectory
+
     override fun clearBuffer() = delegate.clearBuffer()
     override fun restartSession() = delegate.restartSession()
     override fun destroy() = delegate.destroy()
