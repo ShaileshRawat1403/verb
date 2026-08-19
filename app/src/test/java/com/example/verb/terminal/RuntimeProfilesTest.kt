@@ -45,8 +45,13 @@ class RuntimeProfilesTest {
         assertTrue(report.isInstallable)
     }
 
+    /**
+     * A compatible interpreter is necessary but not sufficient. Hermes reported Ready for months on
+     * the strength of `python3.13` existing while the agent itself was never installed, which is
+     * exactly the "installed does not mean runnable" failure this catalog is meant to prevent.
+     */
     @Test
-    fun `Hermes is ready once the versioned interpreter is installed`() {
+    fun `Hermes is not ready on the strength of the interpreter alone`() {
         val filesDir = temporaryFolder.newFolder("files")
         File(filesDir, "usr/var/lib/dpkg/status").apply {
             parentFile?.mkdirs()
@@ -64,7 +69,8 @@ class RuntimeProfilesTest {
 
         val report = RuntimeCapabilityDetector(filesDir).inspect(RuntimeProfiles.forId(RuntimeProfileId.HERMES))
 
-        assertTrue(report.isReady)
+        assertFalse("the agent itself is still missing", report.isReady)
+        assertTrue(report.missingCommands.contains("hermes"))
     }
 
     @Test

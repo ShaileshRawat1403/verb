@@ -96,6 +96,21 @@ class MuslAgentSupportTest {
         }
     }
 
+    /**
+     * DeepSeek Harness is plain JavaScript with no platform binary, so it must not acquire the musl
+     * machinery the Bun-compiled agents need.
+     */
+    @Test
+    fun `the deepseek harness installs plainly, with no musl wrapper`() {
+        val command = RuntimeProfiles.forId(RuntimeProfileId.DEEPSEEK_HARNESS).installCommand
+
+        assertEquals("npm install -g @deepseek-ai/dsh", command)
+        assertEquals(
+            listOf(RuntimeProfileId.JAVASCRIPT),
+            RuntimeProfiles.forId(RuntimeProfileId.DEEPSEEK_HARNESS).prerequisiteProfiles
+        )
+    }
+
     /** Codex is statically linked and needs no loader, so it must not be changed to a musl install. */
     @Test
     fun `codex keeps its plain install`() {
