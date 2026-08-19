@@ -39,8 +39,10 @@ class AgentRuntimeCompatibilityProbe(
      */
     fun check(runtime: AgentRuntimeInstaller.InstalledRuntime): AgentCompatibilityState {
         val workspace = probeWorkspace() ?: return AgentCompatibilityState.CHECK_FAILED
+        // Probes the backend the session will actually use, so "compatible" is never claimed on
+        // the strength of a different launch path than the one the user gets.
         val environment = runCatching {
-            AgentRuntimeEnvironment(filesDir, workspace, runtime.manifest)
+            QemuAgentRuntimeEnvironment(filesDir, workspace, runtime.manifest)
                 .resolveGuestCommand(runtime.rootfs, PROBE_COMMAND)
         }.getOrNull() ?: return AgentCompatibilityState.CHECK_FAILED
 
@@ -81,11 +83,20 @@ class AgentRuntimeCompatibilityProbe(
 
     companion object {
         /**
-         * Deliberately the smallest thing that proves execution end to end: it loads the guest
-         * dynamic loader and libc, runs a real glibc binary, and exits 0 without reading any
-         * configuration or startup file.
+         * Probes an actual agent launcher, not `/bin/bash`.
+         *
+         * Bash was the original probe and it was too weak to be meaningful: it survives on devices
+         * where no agent can run. Measured on the validation device, inside the app process, the
+         * runtime reaches a working Debian shell while the agent launchers die with `SIGSYS` --
+         * Android's seccomp policy permits the small syscall set bash uses and refuses the ones the
+         * Bun-compiled agents make. A probe that answers "yes" there would recreate exactly the
+         * failure this class exists to prevent, one level deeper: a launch button for a runtime that
+         * opens a shell but cannot run the thing the user opened it for.
+         *
+         * `--version` still starts the real binary and exits on its own, so nothing is authenticated
+         * and no network call is required.
          */
-        private val PROBE_COMMAND = listOf("/bin/bash", "--version")
+        private val PROBE_COMMAND = listOf("/usr/local/bin/claude", "--version")
 
         const val TIMEOUT_MS = 5_000L
     }

@@ -61,7 +61,7 @@ class TerminalRuntime(
      */
     fun refreshEnvironment() {
         environment = activeAgentRuntime?.let { runtime ->
-            AgentRuntimeEnvironment(workingDir, requireProjectDirectory(), runtime.manifest).resolve(runtime.rootfs)
+            QemuAgentRuntimeEnvironment(workingDir, requireProjectDirectory(), runtime.manifest).resolve(runtime.rootfs)
         } ?: TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
         if (useFakeForTesting) return
         (delegate as? TermuxTerminalRuntimeAdapter)?.reconfigure(

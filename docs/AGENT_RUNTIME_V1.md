@@ -100,3 +100,61 @@ thermal cost under sustained use.
 Emulation carries a constant-factor cost that a version probe does not reveal. Whether the QEMU
 backend is a product or only a demonstration depends on the cost of one real agent turn, which has
 not been measured. That measurement should precede any commitment to a production QEMU backend.
+
+## Working backend: PRoot for paths, QEMU for execution
+
+Neither tool alone is sufficient, and the reason is different in each case.
+
+PRoot alone cannot execute the rootfs: a glibc binary launched from the app process exits 255.
+QEMU alone can execute it, but `qemu-user` does not chroot -- it only redirects the ELF interpreter
+-- so the guest sees Android's filesystem, where `/etc/resolv.conf` and `/etc/ssl/certs` do not
+exist. The glibc resolver falls back to `127.0.0.1:53` and every lookup fails `ECONNREFUSED`.
+
+Pairing them works:
+
+```
+PRoot   filesystem view: /etc/resolv.conf, CA bundle, /workspace, /home/verb
+  -> QEMU   execution: emulates the aarch64 glibc binaries
+    -> agent
+```
+
+PRoot's first exec is QEMU, a Bionic binary Android runs natively. QEMU emulates everything after
+it, so the kernel is never asked to execute a glibc binary directly. This is one layer, not nested
+PRoot, and it is not PRoot's `-q` option (which resolves the emulator path on the host before the
+guest root exists, and did not work here).
+
+Details that are easy to rediscover painfully:
+
+1. The app directory must be bound onto itself. QEMU is launched by absolute host path, so that
+   exact path must also resolve inside the guest, or PRoot reports `execve(...): No such file or
+   directory`.
+2. `/linkerconfig` must be bound from Verb's app-local copy; QEMU is a Bionic binary and its loader
+   needs it.
+3. Guest environment is set with QEMU's `-E`/`-U`, never inherited: Verb's Bionic `LD_LIBRARY_PATH`
+   reaching the guest breaks the glibc loader with `libc.so: cannot open shared object file`.
+4. Node needs `--jitless`; `JSC_useJIT`/`BUN_JSC_useJIT` are JavaScriptCore settings and cover only
+   the Bun-compiled agents.
+
+Measured on the validation device, inside Verb: an interactive Debian shell at `/workspace`, DNS
+resolving, TLS verifying against the guest CA bundle (`authorized=true`, TLSv1.3), and `curl`
+reaching an external HTTPS endpoint.
+
+### Open: agents die with SIGSYS on a TTY
+
+The agent launchers behave differently depending on how they are started, in the same app process
+with the same seccomp filter:
+
+| How it is launched | Result |
+| --- | --- |
+| Non-interactively (bounded probe, pipes) | `claude --version` exits 0 |
+| Interactively in Verb's PTY | `Bad system call` (SIGSYS) |
+| Under `run-as`, which carries no app seccomp filter | exits 0 either way |
+
+So the earlier "seccomp cannot be the discriminator" note was itself too strong. What the evidence
+now supports: Android's seccomp policy permits the narrow syscall set `bash` uses, and refuses at
+least one syscall the Bun-compiled agents make when stdout is a terminal. QEMU emulates CPU
+instructions but passes syscalls through to the real kernel, so the app's filter still applies.
+
+Which syscall is refused has not been identified, and no product surface claims one. Until it is,
+the interactive agent path is unproven, and the compatibility probe deliberately runs an agent
+launcher rather than `bash`, which would answer "yes" on a device where no agent can run.
