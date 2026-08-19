@@ -20,6 +20,9 @@ class DefaultAiProviderClientFactory(
         AiProviderId.OPENAI -> OpenAiResponsesClient(httpClient)
         AiProviderId.ANTHROPIC -> AnthropicMessagesClient(httpClient)
         AiProviderId.GEMINI -> GeminiGenerateContentClient(httpClient)
+        // Same wire format as any other OpenAI-compatible endpoint; only the default
+        // base URL and model suggestions differ.
+        AiProviderId.DEEPSEEK -> OpenAiCompatibleClient(httpClient)
         AiProviderId.OPENAI_COMPATIBLE -> OpenAiCompatibleClient(httpClient)
     }
 

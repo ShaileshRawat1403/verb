@@ -11,6 +11,13 @@ enum class AiProviderId(
     OPENAI("OpenAI", "https://api.openai.com/v1"),
     ANTHROPIC("Anthropic", "https://api.anthropic.com"),
     GEMINI("Gemini", "https://generativelanguage.googleapis.com/v1beta"),
+    /**
+     * DeepSeek serves an OpenAI-compatible chat-completions API, so it reuses that transport rather
+     * than getting a client of its own. It is listed separately anyway because a first-class entry
+     * carries the correct base URL and model suggestions, which "OpenAI-compatible" cannot: that
+     * option leaves the user to find and type the endpoint themselves.
+     */
+    DEEPSEEK("DeepSeek", "https://api.deepseek.com/v1"),
     OPENAI_COMPATIBLE("OpenAI-compatible", "")
 }
 
@@ -23,6 +30,9 @@ object AiModelPresets {
         AiProviderId.OPENAI -> listOf("gpt-5", "gpt-5-mini", "gpt-4.1")
         AiProviderId.ANTHROPIC -> listOf("claude-sonnet-4", "claude-opus-4", "claude-3-5-haiku-latest")
         AiProviderId.GEMINI -> listOf("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash")
+        // Suggestions only, as above: the account and endpoint decide what actually exists, and a
+        // model id typed by the user is always allowed.
+        AiProviderId.DEEPSEEK -> listOf("deepseek-chat", "deepseek-reasoner")
         AiProviderId.OPENAI_COMPATIBLE -> emptyList()
     }
 }
