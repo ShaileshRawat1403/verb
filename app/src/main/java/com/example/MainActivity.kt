@@ -106,7 +106,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
-    val agentRuntime by viewModel.agentRuntime.collectAsStateWithLifecycle()
+    val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
     val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
     val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
@@ -280,7 +280,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     installingRuntimeProfile = installingRuntimeProfile,
                     runtimeInstallMessage = runtimeInstallMessage,
                     onInstallRuntimeProfile = viewModel::installRuntimeProfile,
-                    agentRuntime = agentRuntime,
+                    agentRuntimeStatus = agentRuntimeStatus,
                     agentRuntimeImporting = agentRuntimeImporting,
                     agentRuntimeMessage = agentRuntimeMessage,
                     agentArchiveName = agentArchiveUri?.lastPathSegment,
@@ -298,6 +298,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                         }
                     },
                     onOpenAgentRuntime = viewModel::openAgentRuntime,
+                    onCheckAgentRuntime = viewModel::checkAgentRuntimeCompatibility,
                     onReturnToVerbRuntime = viewModel::returnToVerbRuntime
                 )
 

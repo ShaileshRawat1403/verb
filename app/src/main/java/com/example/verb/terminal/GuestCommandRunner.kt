@@ -1,8 +1,6 @@
 package com.example.verb.terminal
 
 import java.io.File
-import java.io.InputStream
-import java.util.concurrent.TimeUnit
 
 /**
  * Runs a single, bounded, catalog-owned command inside the same proot guest the user's interactive
@@ -85,68 +83,35 @@ class GuestCommandRunner(private val resolver: TerminalEnvironmentResolver) {
     /** Visible to tests so execution mechanics (timeout/bounded output) can be verified against a
      * hand-built [TerminalEnvironment] without needing a real installed guest userland. */
     internal fun execute(environment: TerminalEnvironment, timeoutMs: Long): GuestProbeResult {
-        return try {
-            val builder = ProcessBuilder(environment.arguments.toList())
-                .redirectErrorStream(true)
-            if (environment.workingDirectory.isDirectory) {
-                builder.directory(environment.workingDirectory)
-            }
-            builder.environment().clear()
-            for (entry in environment.variables) {
-                val separator = entry.indexOf('=')
-                if (separator > 0) {
-                    builder.environment()[entry.substring(0, separator)] = entry.substring(separator + 1)
+        val result = BoundedProcessRunner.run(
+            argv = environment.arguments.toList(),
+            environment = environment.variables,
+            workingDirectory = environment.workingDirectory,
+            timeoutMs = timeoutMs
+        )
+        return when (result.outcome) {
+            BoundedProcessRunner.Outcome.TIMEOUT ->
+                GuestProbeResult(Outcome.TIMEOUT, null, result.output)
+            BoundedProcessRunner.Outcome.LAUNCH_FAILED ->
+                GuestProbeResult(Outcome.LAUNCH_FAILED, null, result.output)
+            BoundedProcessRunner.Outcome.COMPLETED -> {
+                // The guest `env` wrapper's own exit conventions are what distinguish "not on PATH"
+                // from "on PATH but not runnable" -- interpretation stays here, with the catalog.
+                val exit = result.exitCode
+                val outcome = when (exit) {
+                    0 -> Outcome.READY
+                    ENV_COMMAND_NOT_FOUND -> Outcome.NOT_FOUND
+                    ENV_COMMAND_NOT_EXECUTABLE -> Outcome.NOT_EXECUTABLE
+                    else -> Outcome.NONZERO_EXIT
                 }
-            }
-
-            val process = builder.start()
-            val output = StringBuilder()
-            val drainer = Thread { drainBounded(process.inputStream, output) }.apply {
-                isDaemon = true
-                start()
-            }
-
-            val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
-            if (!finished) {
-                process.destroyForcibly()
-                drainer.join(500)
-                return GuestProbeResult(Outcome.TIMEOUT, null, output.toString())
-            }
-            drainer.join(2_000)
-
-            val exit = process.exitValue()
-            val outcome = when (exit) {
-                0 -> Outcome.READY
-                ENV_COMMAND_NOT_FOUND -> Outcome.NOT_FOUND
-                ENV_COMMAND_NOT_EXECUTABLE -> Outcome.NOT_EXECUTABLE
-                else -> Outcome.NONZERO_EXIT
-            }
-            GuestProbeResult(outcome, exit, output.toString())
-        } catch (e: Exception) {
-            GuestProbeResult(Outcome.LAUNCH_FAILED, null, (e.message ?: e.javaClass.simpleName).take(MAX_OUTPUT_CHARS))
-        }
-    }
-
-    /** Reads [stream] to completion so the child never blocks on a full pipe, keeping only a bounded prefix. */
-    private fun drainBounded(stream: InputStream, sink: StringBuilder) {
-        val charBuffer = CharArray(1024)
-        var captured = 0
-        stream.bufferedReader().use { reader ->
-            while (true) {
-                val read = reader.read(charBuffer)
-                if (read == -1) break
-                if (captured >= MAX_OUTPUT_CHARS) continue
-                val take = minOf(read, MAX_OUTPUT_CHARS - captured)
-                sink.append(charBuffer, 0, take)
-                captured += take
-                if (captured >= MAX_OUTPUT_CHARS) sink.append("...[truncated]")
+                GuestProbeResult(outcome, exit, result.output)
             }
         }
     }
 
     companion object {
         const val MAX_TIMEOUT_MS = 3_000L
-        const val MAX_OUTPUT_CHARS = 2_000
+        const val MAX_OUTPUT_CHARS = BoundedProcessRunner.MAX_OUTPUT_CHARS
 
         /** POSIX `env`'s exit code convention for "command not found" via PATH search. */
         private const val ENV_COMMAND_NOT_FOUND = 127
