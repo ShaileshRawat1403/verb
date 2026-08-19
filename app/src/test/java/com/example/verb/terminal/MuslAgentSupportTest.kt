@@ -1,0 +1,105 @@
+package com.example.verb.terminal
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+
+/**
+ * Agent CLIs published only as musl builds -- Claude Code, OpenCode, anything Bun-compiled -- are
+ * aarch64 ELFs whose one unmet dependency on Android is their interpreter. These tests pin the two
+ * things that make them start, both found by measurement rather than reasoning:
+ *
+ * 1. `/lib/ld-musl-aarch64.so.1` must exist, or the kernel refuses the exec with `ENOENT` and
+ *    reports "No such file or directory" for a file that is plainly there.
+ * 2. Verb's Bionic `termux-exec` preload must not be injected into a musl process, or it fails with
+ *    `__register_atfork: symbol not found`.
+ */
+class MuslAgentSupportTest {
+
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
+    private fun resolverWithBootstrap(): Pair<TerminalEnvironmentResolver, File> {
+        val filesDir = temporaryFolder.newFolder("files")
+        val prefix = File(filesDir, "usr").apply { mkdirs() }
+        // Minimum for the resolver to treat this as a complete userland.
+        File(prefix, "bin/login").apply { parentFile?.mkdirs(); createNewFile(); setExecutable(true) }
+        File(prefix, "bin/proot").apply { createNewFile(); setExecutable(true) }
+        File(prefix, "lib/libtermux-exec.so").apply { parentFile?.mkdirs(); createNewFile() }
+        return TerminalEnvironmentResolver(filesDir) to filesDir
+    }
+
+    @Test
+    fun `the musl loader is bound at the path the binaries hard-code`() {
+        val (resolver, filesDir) = resolverWithBootstrap()
+        val loader = File(filesDir, MuslLoaderBootstrap.RELATIVE_INSTALL_PATH)
+            .apply { parentFile?.mkdirs(); createNewFile() }
+
+        val args = resolver.resolve().arguments.toList()
+
+        val bindIndex = args.indexOfFirst { it == "${loader.absolutePath}:${MuslLoaderBootstrap.GUEST_LOADER_PATH}" }
+        assertTrue("musl loader must be bound into the guest", bindIndex > 0)
+        assertEquals("-b", args[bindIndex - 1])
+    }
+
+    @Test
+    fun `no musl bind is added when the loader is absent`() {
+        val (resolver, _) = resolverWithBootstrap()
+
+        val args = resolver.resolve().arguments.toList()
+
+        assertTrue(args.none { it.endsWith(MuslLoaderBootstrap.GUEST_LOADER_PATH) })
+    }
+
+    @Test
+    fun `the loader path is the one musl binaries actually request`() {
+        assertEquals("/lib/ld-musl-aarch64.so.1", MuslLoaderBootstrap.GUEST_LOADER_PATH)
+    }
+
+    /**
+     * npm rejects musl packages on Android because Bionic reports no libc at all
+     * (`Actual libc: undefined`), so the override is required for a package that is genuinely the
+     * correct architecture.
+     */
+    @Test
+    fun `musl agent installs force past npm's libc check`() {
+        listOf(RuntimeProfileId.CLAUDE_CODE, RuntimeProfileId.OPENCODE).forEach { id ->
+            val command = RuntimeProfiles.forId(id).installCommand
+            assertTrue("$id must force the musl package", command.contains("npm install -g --force"))
+            assertTrue("$id must install a musl build", command.contains("-musl"))
+        }
+    }
+
+    @Test
+    fun `musl agent installs write a wrapper that clears the bionic preload`() {
+        listOf(RuntimeProfileId.CLAUDE_CODE, RuntimeProfileId.OPENCODE).forEach { id ->
+            val command = RuntimeProfiles.forId(id).installCommand
+            // Cleared with shell builtins, not `env`: Termux's `env` reintroduces the exec shim
+            // that rejects these non-PIE binaries with "has unexpected e_type: 2".
+            assertTrue("$id wrapper must clear the preload", command.contains("unset LD_PRELOAD LD_LIBRARY_PATH"))
+            assertTrue("$id must invoke the musl loader", command.contains(MuslLoaderBootstrap.GUEST_LOADER_PATH))
+            assertTrue("$id wrapper must be executable", command.contains("chmod +x"))
+        }
+    }
+
+    @Test
+    fun `musl agents still require JavaScript for npm`() {
+        listOf(RuntimeProfileId.CLAUDE_CODE, RuntimeProfileId.OPENCODE).forEach { id ->
+            assertEquals(
+                listOf(RuntimeProfileId.JAVASCRIPT),
+                RuntimeProfiles.forId(id).prerequisiteProfiles
+            )
+        }
+    }
+
+    /** Codex is statically linked and needs no loader, so it must not be changed to a musl install. */
+    @Test
+    fun `codex keeps its plain install`() {
+        val command = RuntimeProfiles.forId(RuntimeProfileId.CODEX).installCommand
+
+        assertEquals("npm install -g @openai/codex", command)
+    }
+}

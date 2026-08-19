@@ -103,14 +103,17 @@ class RuntimeProfilesTest {
         val gemini = RuntimeProfiles.forId(RuntimeProfileId.GEMINI_CLI)
 
         assertEquals("npm install -g @openai/codex", codex.installCommand)
-        assertEquals("npm install -g @anthropic-ai/claude-code", claude.installCommand)
+        // Claude and OpenCode publish no android build; their musl builds run here once the
+        // interpreter exists, so they install the platform package directly. Asserted in detail by
+        // MuslAgentSupportTest -- here we only pin that they are still npm-installed agent CLIs.
+        assertTrue(claude.installCommand.contains("@anthropic-ai/claude-code-linux-arm64-musl"))
         assertEquals("npm install -g @google/gemini-cli", gemini.installCommand)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), codex.prerequisiteProfiles)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), claude.prerequisiteProfiles)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), gemini.prerequisiteProfiles)
 
         val opencode = RuntimeProfiles.forId(RuntimeProfileId.OPENCODE)
-        assertEquals("npm install -g opencode-ai", opencode.installCommand)
+        assertTrue(opencode.installCommand.contains("opencode-linux-arm64-musl"))
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), opencode.prerequisiteProfiles)
     }
 
