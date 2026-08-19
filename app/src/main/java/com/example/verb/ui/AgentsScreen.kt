@@ -1,0 +1,211 @@
+package com.example.verb.ui
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import com.example.verb.terminal.RuntimeProfileReport
+
+/**
+ * The agents surface: what you open, separated from what you install.
+ *
+ * Every agent used to sit in one flat list of thirteen runtime profiles, alongside Core CLI, the
+ * package repository and the native toolchain, all at equal weight and eight scrolls deep. That
+ * ordering described how Verb is built rather than what it is for. Agents are the product, so they
+ * get their own surface and the toolchains move behind them.
+ *
+ * Launching writes the command into the terminal and runs it there, rather than starting anything
+ * invisibly. The user sees exactly what was run, can interrupt it, can retype it, and learns the
+ * command by watching it happen -- which is also the difference between a launcher and a black box.
+ */
+@Composable
+fun AgentsScreen(
+    reports: List<RuntimeProfileReport>,
+    keyStatus: List<AgentKeyStatus>,
+    onLaunch: (String) -> Unit,
+    onInstall: (com.example.verb.terminal.RuntimeProfileId) -> Unit,
+    onEditKeys: () -> Unit,
+    installingProfile: com.example.verb.terminal.RuntimeProfileId? = null,
+    message: String? = null,
+    modifier: Modifier = Modifier
+) {
+    val agents = reports.filter { it.profile.isAgent }
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp)
+            .testTag("agents_screen")
+    ) {
+        Text("Agents", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            "Opening an agent types its command into the terminal, so you can always see and stop what is running.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+        )
+
+        agents.forEach { report ->
+            AgentRow(
+                report = report,
+                installing = installingProfile == report.profile.id,
+                anyInstalling = installingProfile != null,
+                onLaunch = onLaunch,
+                onInstall = onInstall
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+        }
+
+        message?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 8.dp).testTag("agents_message")
+            )
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+        KeysCard(keyStatus = keyStatus, onEditKeys = onEditKeys)
+    }
+}
+
+@Composable
+private fun AgentRow(
+    report: RuntimeProfileReport,
+    installing: Boolean,
+    anyInstalling: Boolean,
+    onLaunch: (String) -> Unit,
+    onInstall: (com.example.verb.terminal.RuntimeProfileId) -> Unit
+) {
+    val profile = report.profile
+    val launch = profile.launchCommand ?: return
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("agent_${profile.id.name.lowercase()}"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(profile.displayName, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    when {
+                        installing -> "Installing"
+                        report.isReady -> "Ready"
+                        report.isUnsatisfiable -> "Unavailable"
+                        else -> "Not installed"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = when {
+                        report.isReady -> MaterialTheme.colorScheme.primary
+                        report.isUnsatisfiable -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
+            // The command is shown whether or not it is ready: it is how the agent is actually
+            // started, and seeing it is what makes the button non-magical.
+            Text(
+                launch,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+
+            if (report.isUnsatisfiable) {
+                Text(
+                    "Cannot run on this device. No install will resolve this.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            when {
+                report.isReady -> Button(
+                    onClick = { onLaunch(launch) },
+                    modifier = Modifier.testTag("agent_open_${profile.id.name.lowercase()}")
+                ) { Text("Open ${profile.displayName}") }
+
+                report.isInstallable -> OutlinedButton(
+                    onClick = { onInstall(profile.id) },
+                    enabled = !anyInstalling,
+                    modifier = Modifier.testTag("agent_install_${profile.id.name.lowercase()}")
+                ) { Text(if (installing) "Installing…" else "Install") }
+            }
+        }
+    }
+}
+
+/** Whether a key is present. Deliberately never its value. */
+data class AgentKeyStatus(val variable: String, val isSet: Boolean)
+
+@Composable
+private fun KeysCard(keyStatus: List<AgentKeyStatus>, onEditKeys: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("agent_keys_card"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Text("API keys", style = MaterialTheme.typography.titleSmall)
+            Text(
+                // Presence only. A value is never rendered, so a screenshot of this screen can
+                // never leak a key.
+                "Whether a key is set, never its value. Stored in ~/.env, readable only by you.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)
+            )
+            keyStatus.forEach { status ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        status.variable,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        if (status.isSet) "set" else "not set",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (status.isSet) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+            OutlinedButton(
+                onClick = onEditKeys,
+                modifier = Modifier.testTag("agent_keys_edit")
+            ) { Text("Edit keys in terminal") }
+        }
+    }
+}

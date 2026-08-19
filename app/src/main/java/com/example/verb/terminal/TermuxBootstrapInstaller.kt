@@ -147,7 +147,8 @@ object TermuxBootstrapInstaller {
     }
 
     private const val AGENT_ENV_MARKER = "# >>> Verb agent environment >>>"
-    private const val AGENT_ENV_RELATIVE_PATH = ".verb/agent-env"
+    /** One file, in the obvious place: `$HOME/.env`. */
+    private const val AGENT_ENV_RELATIVE_PATH = ".env"
 
     /**
      * One place for the API keys the agent CLIs read from their environment.

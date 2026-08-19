@@ -62,7 +62,23 @@ This is worth fixing beyond Hermes: it blocks **every** Rust-backed Python packa
 alternative for Hermes specifically is dropping the `[crypto]` extra, since everything else it needs
 is pure Python.
 
-### 4. Agent wrappers lose PATH precedence
+### 4. Agent wrappers are overwritten and shadowed (top priority)
+
+Measured after the Agents surface landed, which made it visible: `claude` on PATH is broken, so the
+UI correctly reports Claude Code as not installed while it is in fact installed and authenticated.
+
+Two separate causes, both of which must be handled:
+
+- `$PREFIX/bin/claude` was **overwritten by npm** with a symlink to `claude.exe` when the wrapper
+  package installed, destroying Verb's generated wrapper.
+- `$HOME/.local/bin/claude` was added by Claude's **own self-installer**, points at
+  `~/.local/share/claude/versions/<version>`, wins PATH, and fails with `e_type: 2`.
+
+Verb's wrapper still works when called by full path (`$PREFIX/bin/opencode` survived and runs), so
+the fix is about surviving vendor installers and self-updates rather than about capability. A
+version-resolving wrapper placed where it wins PATH is the likely shape.
+
+### 4b. Original note: agent wrappers lose PATH precedence
 
 `claude` and `codex` install their own launchers into `~/.local/bin` and `~/.codex`, which exec their
 standalone binaries directly and hit Termux's exec shim:
@@ -96,4 +112,4 @@ capability limit. Verb's wrappers need to win, or the vendor launchers need wrap
 
 1. UI/UX review for ease of use.
 2. Testing and hardening the agent path with real API keys.
-3. Key handling — see `$HOME/.verb/agent-env`, added this sprint.
+3. Key handling — see `$HOME/.env`, added this sprint.

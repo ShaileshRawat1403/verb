@@ -41,8 +41,20 @@ data class RuntimeProfile(
     val requirements: List<RuntimeRequirement>,
     val prerequisiteProfiles: List<RuntimeProfileId> = emptyList(),
     val installCommandOverride: String? = null,
-    val postInstallHint: String? = null
+    val postInstallHint: String? = null,
+    /**
+     * The command a user types to start this profile, when it is something you *use* rather than
+     * something you install once and forget.
+     *
+     * Separating the two is what lets the UI stop presenting a toolchain and an agent as equal
+     * rows in one long list: Core CLI and Python are setup, `claude` and `codex` are the product.
+     * Null means the profile is plumbing and has nothing to launch.
+     */
+    val launchCommand: String? = null
 ) {
+    /** True when this profile is something to open, not merely something to install. */
+    val isAgent: Boolean get() = launchCommand != null
+
     /** Safe because package names are catalog-owned, not user-provided shell input. */
     val installCommand: String
         get() = installCommandOverride
@@ -247,7 +259,8 @@ object RuntimeProfiles {
                         venvName = "hermes",
                         pipSpec = "hermes-agent"
                     ),
-            postInstallHint = "Hermes runs on python3.13 in its own venv; `python` stays at 3.14."
+            postInstallHint = "Hermes runs on python3.13 in its own venv; `python` stays at 3.14.",
+            launchCommand = "hermes"
         ),
         RuntimeProfile(
             RuntimeProfileId.JAVASCRIPT,
@@ -265,7 +278,8 @@ object RuntimeProfiles {
             listOf(RuntimeRequirement("codex", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
             installCommandOverride = "npm install -g @openai/codex",
-            postInstallHint = "In Terminal, run codex and complete its sign-in flow."
+            postInstallHint = "In Terminal, run codex and complete its sign-in flow.",
+            launchCommand = "codex"
         ),
         RuntimeProfile(
             RuntimeProfileId.CLAUDE_CODE,
@@ -281,7 +295,8 @@ object RuntimeProfiles {
                 command = "claude",
                 binaryRelativePath = "claude"
             ),
-            postInstallHint = "In Terminal, run claude and complete its sign-in flow."
+            postInstallHint = "In Terminal, run claude and complete its sign-in flow.",
+            launchCommand = "claude"
         ),
         RuntimeProfile(
             RuntimeProfileId.GEMINI_CLI,
@@ -290,7 +305,8 @@ object RuntimeProfiles {
             listOf(RuntimeRequirement("gemini", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
             installCommandOverride = "npm install -g @google/gemini-cli",
-            postInstallHint = "In Terminal, run gemini and complete its sign-in flow."
+            postInstallHint = "In Terminal, run gemini and complete its sign-in flow.",
+            launchCommand = "gemini"
         ),
         RuntimeProfile(
             RuntimeProfileId.OPENCODE,
@@ -303,7 +319,8 @@ object RuntimeProfiles {
                 command = "opencode",
                 binaryRelativePath = "bin/opencode"
             ),
-            postInstallHint = "In Terminal, run opencode and complete its sign-in flow."
+            postInstallHint = "In Terminal, run opencode and complete its sign-in flow.",
+            launchCommand = "opencode"
         ),
         RuntimeProfile(
             RuntimeProfileId.DEEPSEEK_HARNESS,
@@ -314,7 +331,8 @@ object RuntimeProfiles {
             // Pure JavaScript with no platform-specific binary, so unlike Claude Code and OpenCode
             // it needs neither a musl build nor a wrapper -- a plain global install is enough.
             installCommandOverride = "npm install -g @deepseek-ai/dsh",
-            postInstallHint = "In Terminal, run dsh to boot a DeepSeek Harness profile."
+            postInstallHint = "In Terminal, run dsh to boot a DeepSeek Harness profile.",
+            launchCommand = "dsh"
         ),
         RuntimeProfile(
             RuntimeProfileId.NATIVE,

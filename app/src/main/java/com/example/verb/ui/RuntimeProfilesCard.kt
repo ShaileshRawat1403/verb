@@ -36,13 +36,16 @@ fun RuntimeProfilesCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Runtime Capabilities", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Install only the toolchains you need. Verb checks package and version requirements before running apt.",
+                "Toolchains the agents build on. Verb checks package and version requirements before running apt, and installs prerequisites for you.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
             )
 
-            reports.forEachIndexed { index, report ->
+            // Agents have their own surface now; this card is the toolchains behind them. Showing
+            // both here made a thirteen-row list where setup and product looked identical.
+            val toolchains = reports.filterNot { it.profile.isAgent }
+            toolchains.forEachIndexed { index, report ->
                 if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                 val installing = installingProfile == report.profile.id
                 // Unsatisfiable: a version constraint is violated by what is already installed,

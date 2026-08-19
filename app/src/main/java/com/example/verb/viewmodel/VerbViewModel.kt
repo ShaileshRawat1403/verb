@@ -32,6 +32,7 @@ import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.MuslLoaderBootstrap
+import com.example.verb.ui.AgentKeyStatus
 import com.example.verb.terminal.RuntimeCapabilityDetector
 import com.example.verb.terminal.RuntimeProfile
 import com.example.verb.terminal.RuntimeProfileId
@@ -52,6 +53,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 enum class VerbTab {
+    AGENTS,
     ASK,
     ASSISTANT,
     SYSTEM,
@@ -157,6 +159,14 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
+        /** The variables the bundled agent CLIs read. Names only; values are never held here. */
+        val AGENT_KEY_VARIABLES = listOf(
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "GEMINI_API_KEY"
+        )
+
         const val MAX_TAB_BACK_STACK = 8
         const val PROFILE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000L
     }
@@ -500,6 +510,54 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             .ifEmpty { report.incompatibleCommands.joinToString() }
         return "${profile.displayName} cannot run on this device: it needs $detail, and the package " +
             "repository does not provide a compatible version. No install will resolve this."
+    }
+
+    /**
+     * Which agent keys are present. Presence only -- the value is read to test emptiness and then
+     * discarded, never stored in state, never rendered, never logged.
+     */
+    private val _agentKeyStatus = MutableStateFlow(readAgentKeyStatus())
+    val agentKeyStatus: StateFlow<List<AgentKeyStatus>> = _agentKeyStatus.asStateFlow()
+
+    private fun readAgentKeyStatus(): List<AgentKeyStatus> {
+        val envFile = File(File(getApplication<Application>().filesDir, "home"), ".env")
+        val declared = runCatching {
+            if (!envFile.isFile) emptyMap() else envFile.readLines()
+                .map { it.trim() }
+                .filterNot { it.startsWith("#") }
+                .mapNotNull { line ->
+                    val body = line.removePrefix("export ").trim()
+                    val separator = body.indexOf('=')
+                    if (separator <= 0) null else body.substring(0, separator).trim() to
+                        body.substring(separator + 1).trim().trim('"', '\'')
+                }
+                .toMap()
+        }.getOrDefault(emptyMap())
+
+        return AGENT_KEY_VARIABLES.map { name ->
+            AgentKeyStatus(variable = name, isSet = declared[name]?.isNotEmpty() == true)
+        }
+    }
+
+    /** Re-reads key presence, e.g. after the user has edited the file in the terminal. */
+    fun refreshAgentKeyStatus() {
+        _agentKeyStatus.value = readAgentKeyStatus()
+    }
+
+    /**
+     * Starts an agent by typing its command into the real terminal and running it there, rather
+     * than launching it out of sight. The user sees the command, can interrupt it, and can run it
+     * again by hand next time.
+     */
+    fun launchAgent(command: String) {
+        selectTab(VerbTab.TERMINAL)
+        sendTerminalCommand(command)
+    }
+
+    /** Opens the key file in the terminal's editor; Verb never displays or edits key values itself. */
+    fun editAgentKeys() {
+        selectTab(VerbTab.TERMINAL)
+        sendTerminalCommand("nano ~/.env")
     }
 
     fun selectTab(tab: VerbTab) {
