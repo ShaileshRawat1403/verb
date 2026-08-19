@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.verb.terminal.RuntimeProfileId
+import com.example.verb.terminal.RuntimeProfiles
 import com.example.verb.terminal.RuntimeProfileReport
 
 @Composable
@@ -44,7 +45,9 @@ fun RuntimeProfilesCard(
             reports.forEachIndexed { index, report ->
                 if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                 val installing = installingProfile == report.profile.id
-                val blocked = report.incompatibleCommands.isNotEmpty()
+                // Unsatisfiable: a version constraint is violated by what is already installed,
+                // so no install action can ever resolve it. Distinct from "not installed yet".
+                val unsatisfiable = report.isUnsatisfiable
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -59,12 +62,12 @@ fun RuntimeProfilesCard(
                             when {
                                 installing -> "Installing"
                                 report.isReady -> "Ready"
-                                blocked -> "Blocked"
+                                unsatisfiable -> "Unavailable"
                                 else -> "Available"
                             },
                             color = when {
                                 report.isReady -> MaterialTheme.colorScheme.primary
-                                blocked -> MaterialTheme.colorScheme.error
+                                unsatisfiable -> MaterialTheme.colorScheme.error
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant
                             },
                             style = MaterialTheme.typography.labelMedium
@@ -86,27 +89,46 @@ fun RuntimeProfilesCard(
                         if (report.timedOutCommands.isNotEmpty()) {
                             add("Verification timed out: ${report.timedOutCommands.joinToString()}")
                         }
-                        if (blocked) {
-                            add("Incompatible: ${report.incompatibleCommands.joinToString()}")
+                        if (unsatisfiable) {
+                            // Name the required version and say no action helps, rather than the bare
+                            // "Incompatible: python", which reads like something the user got wrong.
+                            val needed = report.profile.requirements
+                                .filter { it.command in report.incompatibleCommands && it.maxVersionExclusive != null }
+                                .joinToString { "${it.command} below ${it.maxVersionExclusive}" }
+                                .ifEmpty { report.incompatibleCommands.joinToString() }
+                            add("Needs $needed; the package repository has no compatible version.")
+                            add("No install can resolve this. The rest of Verb is unaffected.")
                         }
                     }
                     if (details.isNotEmpty()) {
                         Text(
                             details.joinToString("\n"),
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (blocked) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (unsatisfiable) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }
                     report.profile.postInstallHint?.let { hint ->
                         Text(
-                            text = if (report.isReady) hint else "Requires JavaScript. Verb never copies Assistant API keys into CLI agents.",
+                            text = if (report.isReady) hint else "Verb never copies Assistant API keys into CLI agents.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp)
                         )
                     }
-                    if (!report.isReady && !blocked) {
+                    if (report.isInstallable) {
+                        val prerequisites = report.profile.prerequisiteProfiles
+                            .map { RuntimeProfiles.forId(it).displayName }
+                        if (prerequisites.isNotEmpty()) {
+                            // Verb installs these itself; the user is told what will happen, not
+                            // handed a list of chores to do first.
+                            Text(
+                                "Installs ${prerequisites.joinToString()} first if needed.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                         Spacer(modifier = Modifier.height(8.dp))
                         Button(
                             onClick = { onInstall(report.profile.id) },

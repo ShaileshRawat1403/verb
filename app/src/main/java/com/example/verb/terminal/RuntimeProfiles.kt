@@ -74,6 +74,23 @@ data class RuntimeProfileReport(
             incompatibleCommands.isEmpty() && nonExecutableCommands.isEmpty() &&
             unverifiedCommands.isEmpty() && timedOutCommands.isEmpty()
 
+    /**
+     * True when no amount of installing can make this profile ready.
+     *
+     * A version constraint is violated by the version that is *already installed*, and the only way
+     * out would be a downgrade -- which Verb does not perform, and which would break every other
+     * profile depending on the newer version. Distinguishing this from an ordinary "not installed
+     * yet" state is the difference between a button that will work and a button that never can:
+     * Hermes requires Python below 3.14 while the package repository ships only 3.14, so offering
+     * an install action for it is an invitation to fail.
+     *
+     * Deliberately derived rather than stored, so it cannot drift from the report it describes.
+     */
+    val isUnsatisfiable: Boolean get() = incompatibleCommands.isNotEmpty()
+
+    /** True when the profile is not ready but installing could still resolve it. */
+    val isInstallable: Boolean get() = !isReady && !isUnsatisfiable
+
     fun stageFor(requirement: RuntimeRequirement): ReadinessStage = when {
         requirement.packageName.isNotEmpty() && missingPackages.contains(requirement.packageName) ->
             ReadinessStage.MISSING
@@ -179,6 +196,39 @@ object RuntimeProfiles {
     )
 
     fun forId(id: RuntimeProfileId): RuntimeProfile = all.first { it.id == id }
+
+    /**
+     * The profiles that must be installed, in order, to make [id] ready -- prerequisites first,
+     * [id] last.
+     *
+     * Verb used to detect a missing prerequisite and refuse, telling the user to go and install it
+     * themselves. It already knew the dependency graph, so that was busywork handed back to the
+     * person: asking for Codex CLI means asking for whatever Codex needs. This resolves the graph
+     * instead.
+     *
+     * Depth-first with a visited set, so a diamond dependency appears once and a cycle in the
+     * catalog terminates rather than recursing forever. [isReady] profiles are skipped, so a plan
+     * contains only real work. A profile that is [RuntimeProfileReport.isUnsatisfiable] is still
+     * included -- the caller must refuse the whole plan rather than silently install part of it and
+     * leave the user with a half-provisioned runtime.
+     */
+    fun installPlan(
+        id: RuntimeProfileId,
+        isReady: (RuntimeProfileId) -> Boolean
+    ): List<RuntimeProfile> {
+        val ordered = mutableListOf<RuntimeProfile>()
+        val visited = mutableSetOf<RuntimeProfileId>()
+
+        fun visit(current: RuntimeProfileId) {
+            if (!visited.add(current)) return
+            val profile = forId(current)
+            profile.prerequisiteProfiles.forEach(::visit)
+            if (!isReady(current)) ordered += profile
+        }
+
+        visit(id)
+        return ordered
+    }
 }
 
 /**
