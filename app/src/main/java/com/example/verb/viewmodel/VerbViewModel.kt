@@ -32,6 +32,7 @@ import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.RuntimeCapabilityDetector
+import com.example.verb.terminal.RuntimeProfile
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
@@ -391,16 +392,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             refreshRuntimeProfiles()
             return
         }
-        val missingPrerequisites = profile.prerequisiteProfiles.filter { prerequisite ->
-            !runtimeCapabilityDetector.inspect(RuntimeProfiles.forId(prerequisite)).isReady
-        }
-        if (missingPrerequisites.isNotEmpty()) {
-            _runtimeInstallMessage.value = "Install ${missingPrerequisites.joinToString { RuntimeProfiles.forId(it).displayName }} before ${profile.displayName}."
-            return
-        }
-        if (report.incompatibleCommands.isNotEmpty()) {
-            _runtimeInstallMessage.value =
-                "${profile.displayName} is blocked: incompatible ${report.incompatibleCommands.joinToString()}."
+        if (report.isUnsatisfiable) {
+            _runtimeInstallMessage.value = unsatisfiableMessage(profile, report)
             return
         }
         if (_terminalBootstrapState.value !is TermuxBootstrapInstaller.State.Ready) {
@@ -408,47 +401,102 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val marker = "__VERB_PROFILE_${profileId.name}_${System.currentTimeMillis()}__"
-        val command = "${profile.installCommand}; profile_status=${'$'}?; printf '\\n$marker:%s\\n' \"${'$'}profile_status\""
-        _runtimeInstallingProfile.value = profileId
-        _runtimeInstallMessage.value = "Installing ${profile.displayName}..."
+        // Resolve the dependency graph instead of handing it back to the user. Asking for Codex CLI
+        // means asking for whatever Codex needs, and Verb already knows what that is.
+        val plan = RuntimeProfiles.installPlan(profileId) { runtimeCapabilityDetector.inspect(RuntimeProfiles.forId(it)).isReady }
+        if (plan.isEmpty()) {
+            _runtimeInstallMessage.value = "${profile.displayName} is already ready."
+            refreshRuntimeProfiles()
+            return
+        }
+        // Refuse the whole plan rather than installing part of it: a prerequisite that can never be
+        // satisfied would otherwise leave the user with a half-provisioned runtime and no signal.
+        val blocked = plan.firstOrNull { runtimeCapabilityDetector.inspect(it).isUnsatisfiable }
+        if (blocked != null) {
+            _runtimeInstallMessage.value =
+                unsatisfiableMessage(blocked, runtimeCapabilityDetector.inspect(blocked)) +
+                    if (blocked.id != profileId) " ${profile.displayName} depends on it." else ""
+            return
+        }
 
+        _runtimeInstallingProfile.value = profileId
         viewModelScope.launch(Dispatchers.IO) {
-            withContext(Dispatchers.Main.immediate) {
-                terminalRuntime.sendCommand(command)
-                recordTerminalCommand(command)
-            }
-            val completed: String? = withTimeoutOrNull(PROFILE_INSTALL_TIMEOUT_MS) {
-                var result: String? = null
-                while (result == null) {
-                    val output = terminalRuntime.terminalOutput.value
-                    if (output.contains(marker)) {
-                        result = output
-                        continue
-                    }
-                    // The terminal transcript is intentionally throttled. Capability state is a
-                    // second completion signal so a successful package install is not hidden by a
-                    // missed snapshot publication.
-                    if (runtimeCapabilityDetector.inspect(profile).isReady) {
-                        result = "profile-ready"
-                        continue
-                    }
-                    delay(500)
+            var failure: String? = null
+            for ((index, step) in plan.withIndex()) {
+                val progress = if (plan.size > 1) " (${index + 1} of ${plan.size})" else ""
+                withContext(Dispatchers.Main.immediate) {
+                    _runtimeInstallMessage.value = "Installing ${step.displayName}$progress..."
                 }
-                result
+                val outcome = installOneProfile(step)
+                if (outcome != null) {
+                    failure = outcome
+                    break
+                }
             }
             withContext(Dispatchers.Main.immediate) {
                 refreshRuntimeProfiles()
                 _runtimeInstallingProfile.value = null
-                _runtimeInstallMessage.value = if (completed == null) {
-                    "${profile.displayName} timed out; inspect the terminal output."
-                } else if (completed == "profile-ready" || completed.substringAfter("$marker:").trim().startsWith("0")) {
-                    "${profile.displayName} installed."
+                _runtimeInstallMessage.value = failure ?: if (plan.size > 1) {
+                    "${profile.displayName} installed, with ${plan.size - 1} prerequisite" +
+                        (if (plan.size > 2) "s." else ".")
                 } else {
-                    "${profile.displayName} failed; inspect the terminal output."
+                    "${profile.displayName} installed."
                 }
             }
         }
+    }
+
+    /**
+     * Runs one profile's install command in the real terminal and waits for it to finish.
+     * Returns null on success, or a user-facing failure message.
+     *
+     * Completion is still detected by the transcript marker plus a capability re-probe, unchanged
+     * from before: the marker proves the command's own exit status, and the re-probe covers a
+     * snapshot the throttled transcript may have coalesced away.
+     */
+    private suspend fun installOneProfile(profile: RuntimeProfile): String? {
+        val marker = "__VERB_PROFILE_${profile.id.name}_${System.currentTimeMillis()}__"
+        val command = "${profile.installCommand}; profile_status=${'$'}?; printf '\\n$marker:%s\\n' \"${'$'}profile_status\""
+        withContext(Dispatchers.Main.immediate) {
+            terminalRuntime.sendCommand(command)
+            recordTerminalCommand(command)
+        }
+        val completed: String? = withTimeoutOrNull(PROFILE_INSTALL_TIMEOUT_MS) {
+            var result: String? = null
+            while (result == null) {
+                val output = terminalRuntime.terminalOutput.value
+                if (output.contains(marker)) {
+                    result = output
+                    continue
+                }
+                if (runtimeCapabilityDetector.inspect(profile).isReady) {
+                    result = "profile-ready"
+                    continue
+                }
+                delay(500)
+            }
+            result
+        }
+        return when {
+            completed == null -> "${profile.displayName} timed out; inspect the terminal output."
+            completed == "profile-ready" -> null
+            completed.substringAfter("$marker:").trim().startsWith("0") -> null
+            else -> "${profile.displayName} failed; inspect the terminal output."
+        }
+    }
+
+    /**
+     * Says plainly that nothing the user can do will help, and why. Naming the required version
+     * matters: "Incompatible: python" reads like a mistake the user made, when in fact the package
+     * repository simply does not ship a version this profile can use.
+     */
+    private fun unsatisfiableMessage(profile: RuntimeProfile, report: RuntimeProfileReport): String {
+        val detail = profile.requirements
+            .filter { it.command in report.incompatibleCommands && it.maxVersionExclusive != null }
+            .joinToString { "${it.command} below ${it.maxVersionExclusive}" }
+            .ifEmpty { report.incompatibleCommands.joinToString() }
+        return "${profile.displayName} cannot run on this device: it needs $detail, and the package " +
+            "repository does not provide a compatible version. No install will resolve this."
     }
 
     fun selectTab(tab: VerbTab) {
