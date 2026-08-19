@@ -31,6 +31,20 @@ object MuslLoaderBootstrap {
 
     private const val ASSET_NAME = "ld-musl-aarch64.so.1"
 
+    /** Where the musl-side shared libraries live inside Verb's prefix. */
+    const val RELATIVE_LIB_DIR = "usr/lib/musl"
+
+    /**
+     * The C++ runtime some musl agent builds link against. OpenCode needs both; without them it
+     * fails with `Error loading shared library libstdc++.so.6`. Bionic's own C++ runtime is not
+     * ABI-compatible, so the musl builds are installed into a directory of their own and reached
+     * only through the generated wrapper's `LD_LIBRARY_PATH`, never Verb's normal library path.
+     */
+    private val LIB_ASSETS = mapOf(
+        "libstdc++.so.6.0.34" to "libstdc++.so.6",
+        "libgcc_s.so.1" to null
+    )
+
     /**
      * Copies the loader into the prefix if it is missing or invalid. Safe to call on every launch:
      * an already-valid loader is left untouched.
@@ -60,11 +74,40 @@ object MuslLoaderBootstrap {
             staged.delete()
             return null
         }
+        installSupportLibraries(context)
         TerminalSessionLogger.info(LogCategory.IO, "musl loader installed for musl-built agent CLIs")
         target
     }.onFailure {
         TerminalSessionLogger.warn(LogCategory.IO, "musl loader install failed: ${it.message}")
     }.getOrNull()
+
+    /**
+     * Installs the musl C++ runtime beside the loader, with the `.so.6` soname link the binaries
+     * actually request. Best-effort: a musl agent that does not need C++ still starts without it.
+     */
+    private fun installSupportLibraries(context: Context) {
+        val libDir = File(context.filesDir, RELATIVE_LIB_DIR).apply { mkdirs() }
+        for ((asset, soname) in LIB_ASSETS) {
+            runCatching {
+                val target = File(libDir, asset)
+                if (!target.isFile) {
+                    context.assets.open(asset).use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    target.setReadable(true, false)
+                }
+                if (soname != null) {
+                    val link = File(libDir, soname)
+                    if (!link.exists()) {
+                        runCatching { android.system.Os.symlink(asset, link.absolutePath) }
+                            .onFailure { target.copyTo(link, overwrite = true) }
+                    }
+                }
+            }.onFailure {
+                TerminalSessionLogger.warn(LogCategory.IO, "musl support library $asset failed: ${it.message}")
+            }
+        }
+    }
 
     /** True when a valid loader is present, so musl binaries can be expected to start. */
     fun isInstalled(filesDir: File): Boolean =

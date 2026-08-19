@@ -147,7 +147,10 @@ object RuntimeProfiles {
         return "npm install -g --force $platformPackage && " +
             "printf '%s\\n' " +
             "'#!/bin/sh' " +
-            "'unset LD_PRELOAD LD_LIBRARY_PATH' " +
+            "'unset LD_PRELOAD' " +
+            // musl builds link against the musl C++ runtime, which is not ABI-compatible with
+            // Bionic's. Point them at the musl library directory only -- never Verb's own lib path.
+            "'LD_LIBRARY_PATH=\$PREFIX/lib/musl; export LD_LIBRARY_PATH' " +
             "'exec ${MuslLoaderBootstrap.GUEST_LOADER_PATH} \"$binary\" \"\$@\"' " +
             "> $wrapper && chmod +x $wrapper"
     }

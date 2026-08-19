@@ -53,3 +53,13 @@ run; nothing is patched or rebuilt.
 - Upstream: musl libc, <https://musl.libc.org/>
 - Source package: Alpine Linux `musl` 1.2.6-r2 (aarch64)
 - License: MIT
+
+## musl C++ runtime (`libstdc++.so.6`, `libgcc_s.so.1`)
+
+Bundled alongside the musl loader and installed into `usr/lib/musl` by `MuslLoaderBootstrap`.
+Some musl agent builds (OpenCode) link against the musl C++ runtime, which is not ABI-compatible
+with Bionic's. They are reached only through the generated agent wrapper's `LD_LIBRARY_PATH`, never
+Verb's own library path.
+
+- Source packages: Alpine Linux `libstdc++` and `libgcc` 15.2.0-r5 (aarch64)
+- License: GPL-3.0-or-later WITH GCC-exception-3.1
