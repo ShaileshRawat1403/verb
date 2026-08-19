@@ -6,6 +6,8 @@ enum class RuntimeProfileId {
     CORE,
     /** The Termux User Repository, which carries versioned toolchains the main repo does not. */
     TUR,
+    /** qemu-user, which executes the Linux agent rootfs's glibc binaries. */
+    AGENT_EMULATOR,
     PYTHON,
     HERMES,
     JAVASCRIPT,
@@ -129,6 +131,15 @@ object RuntimeProfiles {
             // command, or every later resolve still sees the old package list.
             installCommandOverride =
                 "apt-get update && apt-get install -y --no-install-recommends tur-repo && apt-get update"
+        ),
+        RuntimeProfile(
+            RuntimeProfileId.AGENT_EMULATOR,
+            "Agent Emulator",
+            listOf("qemu-user-aarch64"),
+            listOf(RuntimeRequirement("qemu-aarch64", "qemu-user-aarch64")),
+            postInstallHint =
+                "Lets the Linux Agent Runtime execute Claude Code and OpenCode, which publish no " +
+                    "android-arm64 build."
         ),
         RuntimeProfile(
             RuntimeProfileId.PYTHON,
