@@ -15,6 +15,7 @@ enum class RuntimeProfileId {
     CLAUDE_CODE,
     GEMINI_CLI,
     OPENCODE,
+    DEEPSEEK_HARNESS,
     NATIVE,
     REMOTE,
     DATA_MEDIA
@@ -155,6 +156,37 @@ object RuntimeProfiles {
             "> $wrapper && chmod +x $wrapper"
     }
 
+    /**
+     * Install command for a Python agent that pins an interpreter older than the default.
+     *
+     * The system `python` is whatever the repository ships -- currently 3.14 -- and Verb will not
+     * downgrade it, because every other Python profile depends on it. An agent declaring
+     * `requires-python < 3.14` therefore cannot be installed globally at all, which is why Hermes
+     * spent so long reported as permanently unavailable.
+     *
+     * A virtual environment on the pinned interpreter resolves that without touching anything else:
+     * the agent gets the version it asks for, `python` stays where it is, and the two never meet.
+     *
+     * Console scripts are discovered rather than declared. After the install, every new executable
+     * in the venv's `bin/` that is not part of the venv's own scaffolding is wrapped onto PATH, so
+     * the catalog does not have to know or maintain a package's entry-point names -- `hermes-agent`
+     * ships three -- and they cannot drift when the package changes them.
+     */
+    private fun pythonAgentInstall(
+        interpreter: String,
+        venvName: String,
+        pipSpec: String
+    ): String {
+        val venv = "\$HOME/.venvs/$venvName"
+        return "$interpreter -m venv $venv && " +
+            "$venv/bin/pip install --upgrade --quiet $pipSpec && " +
+            // Skip the venv's own tooling; wrap whatever the package actually installed.
+            "for f in $venv/bin/*; do n=\$(basename \"\$f\"); " +
+            "case \"\$n\" in python*|pip*|activate*|Activate*|wheel|easy_install*) continue;; esac; " +
+            "printf '%s\\n' '#!/bin/sh' \"exec $venv/bin/\$n \\\"\\\$@\\\"\" > \$PREFIX/bin/\$n; " +
+            "chmod +x \$PREFIX/bin/\$n; done"
+    }
+
     val all: List<RuntimeProfile> = listOf(
         RuntimeProfile(
             RuntimeProfileId.CORE,
@@ -201,9 +233,21 @@ object RuntimeProfiles {
             // Repository carries versioned interpreters, so Hermes targets python3.13 explicitly
             // instead of the unversioned `python` whose only candidate it can never use.
             listOf("python3.13"),
-            listOf(RuntimeRequirement("python3.13", "python3.13")),
+            // Ready means the agent runs, not merely that a compatible interpreter exists. The
+            // probe executes the console script the package installs.
+            listOf(
+                RuntimeRequirement("python3.13", "python3.13"),
+                RuntimeRequirement("hermes", "", versionProbeArgs = listOf("--help"))
+            ),
             prerequisiteProfiles = listOf(RuntimeProfileId.TUR),
-            postInstallHint = "Hermes runs on python3.13; the default `python` stays at 3.14."
+            installCommandOverride =
+                "apt-get update && apt-get install -y --no-install-recommends python3.13 && " +
+                    pythonAgentInstall(
+                        interpreter = "python3.13",
+                        venvName = "hermes",
+                        pipSpec = "hermes-agent"
+                    ),
+            postInstallHint = "Hermes runs on python3.13 in its own venv; `python` stays at 3.14."
         ),
         RuntimeProfile(
             RuntimeProfileId.JAVASCRIPT,
@@ -260,6 +304,17 @@ object RuntimeProfiles {
                 binaryRelativePath = "bin/opencode"
             ),
             postInstallHint = "In Terminal, run opencode and complete its sign-in flow."
+        ),
+        RuntimeProfile(
+            RuntimeProfileId.DEEPSEEK_HARNESS,
+            "DeepSeek Harness",
+            emptyList(),
+            listOf(RuntimeRequirement("dsh", "", versionProbeArgs = listOf("--version"))),
+            prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
+            // Pure JavaScript with no platform-specific binary, so unlike Claude Code and OpenCode
+            // it needs neither a musl build nor a wrapper -- a plain global install is enough.
+            installCommandOverride = "npm install -g @deepseek-ai/dsh",
+            postInstallHint = "In Terminal, run dsh to boot a DeepSeek Harness profile."
         ),
         RuntimeProfile(
             RuntimeProfileId.NATIVE,

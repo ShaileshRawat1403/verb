@@ -113,9 +113,10 @@ class RuntimeProfileSatisfiabilityTest {
     @Test
     fun `hermes targets a compatible interpreter instead of an unsatisfiable constraint`() {
         val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
-        val requirement = hermes.requirements.single()
+        val interpreter = hermes.requirements.single { it.command == "python3.13" }
 
-        assertEquals("python3.13", requirement.command)
-        assertEquals(null, requirement.maxVersionExclusive)
+        assertEquals(null, interpreter.maxVersionExclusive)
+        // Readiness also depends on the agent itself, not only on an interpreter existing.
+        assertTrue(hermes.requirements.any { it.command == "hermes" })
     }
 }
