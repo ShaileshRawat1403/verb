@@ -12,6 +12,11 @@ class RuntimeProfilesTest {
     @get:Rule
     val temporaryFolder = TemporaryFolder()
 
+    /**
+     * A stock userland has the 3.14 `python` from the main repository and no `python3.13`, so
+     * Hermes reports the versioned interpreter as missing -- work an install can do -- rather than
+     * as an incompatible version, which no install could ever fix.
+     */
     @Test
     fun `reports missing commands and packages`() {
         val filesDir = temporaryFolder.newFolder("files")
@@ -32,24 +37,26 @@ class RuntimeProfilesTest {
         val report = RuntimeCapabilityDetector(filesDir).inspect(RuntimeProfiles.forId(RuntimeProfileId.HERMES))
 
         assertTrue(status.isFile)
-        assertTrue(report.isReady.not())
-        assertTrue(report.incompatibleCommands.contains("python"))
-        assertEquals(emptyList<String>(), report.missingPackages)
-        assertEquals(emptyList<String>(), report.missingCommands)
+        assertFalse(report.isReady)
+        assertTrue(report.missingPackages.contains("python3.13"))
+        assertTrue(report.missingCommands.contains("python3.13"))
+        // The unversioned 3.14 interpreter no longer blocks Hermes, so this stays installable.
+        assertFalse(report.isUnsatisfiable)
+        assertTrue(report.isInstallable)
     }
 
     @Test
-    fun `accepts a supported Hermes Python version`() {
+    fun `Hermes is ready once the versioned interpreter is installed`() {
         val filesDir = temporaryFolder.newFolder("files")
         File(filesDir, "usr/var/lib/dpkg/status").apply {
             parentFile?.mkdirs()
             writeText("""
-                Package: python
+                Package: python3.13
                 Status: install ok installed
-                Version: 3.13.9-1
+                Version: 3.13.13
             """.trimIndent())
         }
-        File(filesDir, "usr/bin/python").apply {
+        File(filesDir, "usr/bin/python3.13").apply {
             parentFile?.mkdirs()
             createNewFile()
             setExecutable(true)
@@ -58,7 +65,28 @@ class RuntimeProfilesTest {
         val report = RuntimeCapabilityDetector(filesDir).inspect(RuntimeProfiles.forId(RuntimeProfileId.HERMES))
 
         assertTrue(report.isReady)
-        assertFalse(report.incompatibleCommands.contains("python"))
+    }
+
+    @Test
+    fun `Hermes pulls in the extra package repository that carries its interpreter`() {
+        val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
+
+        assertEquals(listOf(RuntimeProfileId.TUR), hermes.prerequisiteProfiles)
+        assertEquals(listOf("python3.13"), hermes.packages)
+        assertEquals(
+            listOf(RuntimeProfileId.TUR, RuntimeProfileId.HERMES),
+            RuntimeProfiles.installPlan(RuntimeProfileId.HERMES) { false }.map { it.id }
+        )
+    }
+
+    /** The repository index must be refreshed after the key-bearing package lands, or nothing new resolves. */
+    @Test
+    fun `the extra repository profile updates the index after installing itself`() {
+        val command = RuntimeProfiles.forId(RuntimeProfileId.TUR).installCommand
+
+        assertTrue(command.startsWith("apt-get update &&"))
+        assertTrue(command.contains("install -y --no-install-recommends tur-repo"))
+        assertTrue(command.endsWith("&& apt-get update"))
     }
 
     @Test
@@ -75,11 +103,18 @@ class RuntimeProfilesTest {
         val gemini = RuntimeProfiles.forId(RuntimeProfileId.GEMINI_CLI)
 
         assertEquals("npm install -g @openai/codex", codex.installCommand)
-        assertEquals("npm install -g @anthropic-ai/claude-code", claude.installCommand)
+        // The vendor postinstall that fetches the native binary does not run here, so the
+        // launcher's own installer follows immediately; without it `claude` reports
+        // "native binary not installed" while the profile would otherwise read Ready.
+        assertEquals("npm install -g @anthropic-ai/claude-code && claude install", claude.installCommand)
         assertEquals("npm install -g @google/gemini-cli", gemini.installCommand)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), codex.prerequisiteProfiles)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), claude.prerequisiteProfiles)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), gemini.prerequisiteProfiles)
+
+        val opencode = RuntimeProfiles.forId(RuntimeProfileId.OPENCODE)
+        assertEquals("npm install -g opencode-ai", opencode.installCommand)
+        assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), opencode.prerequisiteProfiles)
     }
 
     @Test

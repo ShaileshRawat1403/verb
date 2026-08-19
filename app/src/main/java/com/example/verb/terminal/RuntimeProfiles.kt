@@ -4,12 +4,15 @@ import java.io.File
 
 enum class RuntimeProfileId {
     CORE,
+    /** The Termux User Repository, which carries versioned toolchains the main repo does not. */
+    TUR,
     PYTHON,
     HERMES,
     JAVASCRIPT,
     CODEX,
     CLAUDE_CODE,
     GEMINI_CLI,
+    OPENCODE,
     NATIVE,
     REMOTE,
     DATA_MEDIA
@@ -117,6 +120,17 @@ object RuntimeProfiles {
             )
         ),
         RuntimeProfile(
+            RuntimeProfileId.TUR,
+            "Extra package repository",
+            listOf("tur-repo"),
+            listOf(RuntimeRequirement("tur-repo", "tur-repo")),
+            // The repository is only useful once its index has been fetched, and its signing key
+            // ships inside the package itself -- so the update must follow the install, in the same
+            // command, or every later resolve still sees the old package list.
+            installCommandOverride =
+                "apt-get update && apt-get install -y --no-install-recommends tur-repo && apt-get update"
+        ),
+        RuntimeProfile(
             RuntimeProfileId.PYTHON,
             "Python",
             listOf("python"),
@@ -125,8 +139,14 @@ object RuntimeProfiles {
         RuntimeProfile(
             RuntimeProfileId.HERMES,
             "Hermes Agent",
-            listOf("python"),
-            listOf(RuntimeRequirement("python", "python", maxVersionExclusive = "3.14"))
+            // Hermes needs an interpreter below 3.14, and the main repository ships only 3.14. The
+            // fix is a compatible package rather than a permanent refusal: the Termux User
+            // Repository carries versioned interpreters, so Hermes targets python3.13 explicitly
+            // instead of the unversioned `python` whose only candidate it can never use.
+            listOf("python3.13"),
+            listOf(RuntimeRequirement("python3.13", "python3.13")),
+            prerequisiteProfiles = listOf(RuntimeProfileId.TUR),
+            postInstallHint = "Hermes runs on python3.13; the default `python` stays at 3.14."
         ),
         RuntimeProfile(
             RuntimeProfileId.JAVASCRIPT,
@@ -152,7 +172,11 @@ object RuntimeProfiles {
             emptyList(),
             listOf(RuntimeRequirement("claude", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
-            installCommandOverride = "npm install -g @anthropic-ai/claude-code",
+            // `npm install -g` alone leaves "claude native binary not installed" here: the
+            // package's postinstall step, which downloads the platform binary, does not run. The
+            // launcher's own installer is invoked straight afterwards so the profile is not
+            // reported ready with a command that cannot start.
+            installCommandOverride = "npm install -g @anthropic-ai/claude-code && claude install",
             postInstallHint = "In Terminal, run claude and complete its sign-in flow."
         ),
         RuntimeProfile(
@@ -163,6 +187,15 @@ object RuntimeProfiles {
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
             installCommandOverride = "npm install -g @google/gemini-cli",
             postInstallHint = "In Terminal, run gemini and complete its sign-in flow."
+        ),
+        RuntimeProfile(
+            RuntimeProfileId.OPENCODE,
+            "OpenCode",
+            emptyList(),
+            listOf(RuntimeRequirement("opencode", "", versionProbeArgs = listOf("--version"))),
+            prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
+            installCommandOverride = "npm install -g opencode-ai",
+            postInstallHint = "In Terminal, run opencode and complete its sign-in flow."
         ),
         RuntimeProfile(
             RuntimeProfileId.NATIVE,
