@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.verb.ui.AgentsScreen
 import com.example.verb.ui.AskScreen
 import com.example.verb.ui.AssistantScreen
 import com.example.verb.ui.SemanticLensSheet
@@ -107,6 +108,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
     val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
+    val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
     val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
     val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
@@ -190,6 +192,20 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     .testTag("verb_bottom_navigation")
             ) {
                 NavigationBarItem(
+                    selected = activeTab == VerbTab.AGENTS,
+                    onClick = { viewModel.selectTab(VerbTab.AGENTS) },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Agents",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    label = { Text("Agents") },
+                    modifier = Modifier.testTag("tab_agents")
+                )
+
+                NavigationBarItem(
                     selected = activeTab == VerbTab.ASK,
                     onClick = { viewModel.selectTab(VerbTab.ASK) },
                     icon = {
@@ -242,6 +258,16 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 .imePadding()
         ) {
             when (activeTab) {
+                VerbTab.AGENTS -> AgentsScreen(
+                    reports = runtimeProfileReports,
+                    keyStatus = agentKeyStatus,
+                    onLaunch = viewModel::launchAgent,
+                    onInstall = viewModel::installRuntimeProfile,
+                    onEditKeys = viewModel::editAgentKeys,
+                    installingProfile = installingRuntimeProfile,
+                    message = runtimeInstallMessage
+                )
+
                 VerbTab.ASK -> AskScreen(
                     queryInput = queryInput,
                     isExecuting = isExecuting,

@@ -20,7 +20,7 @@ class AgentEnvironmentFileTest {
 
     private fun filesDir() = temporaryFolder.newFolder("files").also { File(it, "home").mkdirs() }
 
-    private fun envFile(filesDir: File) = File(filesDir, "home/.verb/agent-env")
+    private fun envFile(filesDir: File) = File(filesDir, "home/.env")
 
     @Test
     fun `the file is created with placeholders and no key of any kind`() {
@@ -97,6 +97,6 @@ class AgentEnvironmentFileTest {
         )
 
         assertFalse(report.contains("API_KEY"))
-        assertFalse(report.contains("agent-env"))
+        assertFalse(report.contains("/.env"))
     }
 }
