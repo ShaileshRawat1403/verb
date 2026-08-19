@@ -79,7 +79,8 @@ class MuslAgentSupportTest {
             val command = RuntimeProfiles.forId(id).installCommand
             // Cleared with shell builtins, not `env`: Termux's `env` reintroduces the exec shim
             // that rejects these non-PIE binaries with "has unexpected e_type: 2".
-            assertTrue("$id wrapper must clear the preload", command.contains("unset LD_PRELOAD LD_LIBRARY_PATH"))
+            assertTrue("$id wrapper must clear the preload", command.contains("unset LD_PRELOAD"))
+            assertTrue("$id must use the musl library path", command.contains("LD_LIBRARY_PATH=\$PREFIX/lib/musl"))
             assertTrue("$id must invoke the musl loader", command.contains(MuslLoaderBootstrap.GUEST_LOADER_PATH))
             assertTrue("$id wrapper must be executable", command.contains("chmod +x"))
         }

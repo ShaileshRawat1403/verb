@@ -230,6 +230,14 @@ class TerminalEnvironmentResolver(
             args += "-b"
             args += "${muslLoader.absolutePath}:${MuslLoaderBootstrap.GUEST_LOADER_PATH}"
         }
+        // A writable /tmp. Agent CLIs create scratch state there unconditionally; OpenCode aborts
+        // with `EROFS: read-only file system, mkdir '/tmp'` without it, because Android's real /tmp
+        // does not exist and the fallback is read-only.
+        val guestTmp = File(rootfs, "usr/tmp")
+        if (guestTmp.isDirectory || guestTmp.mkdirs()) {
+            args += "-b"
+            args += "${guestTmp.absolutePath}:/tmp"
+        }
         // Static musl tools such as Codex read /etc/resolv.conf, while the Termux userland keeps
         // its resolver under $PREFIX/etc. Bind the synced file into the conventional path too.
         val guestResolver = File(rootfs, "usr/etc/resolv.conf")
