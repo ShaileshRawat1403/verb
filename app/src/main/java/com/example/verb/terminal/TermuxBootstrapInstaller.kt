@@ -146,6 +146,79 @@ object TermuxBootstrapInstaller {
         }
     }
 
+    private const val AGENT_ENV_MARKER = "# >>> Verb agent environment >>>"
+    private const val AGENT_ENV_RELATIVE_PATH = ".verb/agent-env"
+
+    /**
+     * One place for the API keys the agent CLIs read from their environment.
+     *
+     * This is deliberately separate from the Assistant's provider key, which lives in the Android
+     * Keystore: `claude`, `codex` and `dsh` are ordinary processes that read ordinary environment
+     * variables, so a Keystore-backed secret cannot reach them without Verb handing it over, which
+     * it never does (see the Assistant's own boundary note).
+     *
+     * The trade-off is stated rather than hidden: this file is plaintext. It is protected by being
+     * inside app-private storage, created 0600 so other users on the device cannot read it, and
+     * never written to logs, never included in the diagnostics report, and never sent to any AI
+     * provider. It is created with placeholders only -- Verb never writes a real key into it.
+     */
+    private val AGENT_ENV_SOURCE_BLOCK =
+        "$AGENT_ENV_MARKER\n" +
+            "# Keys for agent CLIs. Edit \$HOME/$AGENT_ENV_RELATIVE_PATH, then restart the session.\n" +
+            "[ -f \"\$HOME/$AGENT_ENV_RELATIVE_PATH\" ] && . \"\$HOME/$AGENT_ENV_RELATIVE_PATH\"\n" +
+            "# <<< Verb agent environment <<<\n"
+
+    /**
+     * Creates the agent key file with placeholders if it does not exist, and never touches it again
+     * -- a user's real keys are never overwritten, and a key is never generated or guessed.
+     */
+    fun ensureAgentEnvFile(filesDir: File) {
+        runCatching {
+            val target = File(File(filesDir, "home"), AGENT_ENV_RELATIVE_PATH)
+            if (target.isFile) return
+            target.parentFile?.mkdirs()
+            target.writeText(
+                """
+                |# Verb agent environment -- API keys for the agent CLIs.
+                |#
+                |# Read by claude, codex, opencode and dsh from the shell environment. Fill in the
+                |# ones you use and leave the rest commented out. Restart the terminal session
+                |# afterwards so a running shell picks them up.
+                |#
+                |# This file is plaintext inside Verb's private storage, readable only by you. It is
+                |# never logged, never included in the diagnostics report, and never sent to any AI
+                |# provider. Do not commit it anywhere.
+                |
+                |# export ANTHROPIC_API_KEY=
+                |# export OPENAI_API_KEY=
+                |# export DEEPSEEK_API_KEY=
+                |# export GEMINI_API_KEY=
+                |""".trimMargin()
+            )
+            // Owner-only: other apps cannot reach app-private storage, but other users on a shared
+            // device should not read it either.
+            target.setReadable(false, false)
+            target.setWritable(false, false)
+            target.setReadable(true, true)
+            target.setWritable(true, true)
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Agent environment file could not be created")
+        }
+    }
+
+    /** Appends the one idempotent source line, preserving anything the user already wrote. */
+    fun ensureAgentEnvSourced(filesDir: File): Boolean {
+        val bashProfile = File(File(filesDir, "home"), ".bash_profile")
+        if (!bashProfile.isFile) return false
+        val original = runCatching { bashProfile.readText() }.getOrNull() ?: return false
+        if (original.contains(AGENT_ENV_MARKER)) return false
+        return runCatching {
+            val separator = if (original.isEmpty() || original.endsWith("\n")) "" else "\n"
+            bashProfile.appendText(separator + AGENT_ENV_SOURCE_BLOCK)
+            true
+        }.getOrDefault(false)
+    }
+
     private const val SHELL_INTEGRATION_MARKER = "# >>> Verb shell integration >>>"
     private const val SHELL_INTEGRATION_RELATIVE_PATH = "etc/verb/shell-integration.bash"
     private val SHELL_INTEGRATION_SOURCE_BLOCK =
@@ -345,6 +418,8 @@ object TermuxBootstrapInstaller {
         migrateLegacyGuestPaths(filesDir)
         writeShellIntegrationScript(filesDir)
         ensureShellIntegrationSourced(filesDir)
+        ensureAgentEnvFile(filesDir)
+        ensureAgentEnvSourced(filesDir)
     }
 
     /**
