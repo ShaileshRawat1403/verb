@@ -54,7 +54,7 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.terminal.TerminalEnvironment
-import com.example.verb.terminal.AgentRuntimeInstaller
+import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.ui.theme.SecondaryCyan
@@ -73,7 +73,7 @@ fun SystemScreen(
     installingRuntimeProfile: RuntimeProfileId? = null,
     runtimeInstallMessage: String? = null,
     onInstallRuntimeProfile: (RuntimeProfileId) -> Unit = {},
-    agentRuntime: AgentRuntimeInstaller.InstalledRuntime? = null,
+    agentRuntimeStatus: AgentRuntimeStatus = AgentRuntimeStatus(),
     agentRuntimeImporting: Boolean = false,
     agentRuntimeMessage: String? = null,
     agentArchiveName: String? = null,
@@ -84,6 +84,7 @@ fun SystemScreen(
     onPickAgentManifest: () -> Unit = {},
     onImportAgentRuntime: () -> Unit = {},
     onOpenAgentRuntime: () -> Unit = {},
+    onCheckAgentRuntime: () -> Unit = {},
     onReturnToVerbRuntime: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -234,7 +235,7 @@ fun SystemScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         AgentRuntimeCard(
-            runtime = agentRuntime,
+            status = agentRuntimeStatus,
             importing = agentRuntimeImporting,
             message = agentRuntimeMessage,
             archiveName = agentArchiveName,
@@ -245,6 +246,7 @@ fun SystemScreen(
             onPickManifest = onPickAgentManifest,
             onImport = onImportAgentRuntime,
             onOpen = onOpenAgentRuntime,
+            onCheckCompatibility = onCheckAgentRuntime,
             onReturnToVerb = onReturnToVerbRuntime
         )
 

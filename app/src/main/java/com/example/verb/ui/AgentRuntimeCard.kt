@@ -17,12 +17,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import com.example.verb.terminal.AgentRuntimeInstaller
+import com.example.verb.terminal.AgentCompatibilityState
+import com.example.verb.terminal.AgentRuntimeStatus
 
 /** Entry point for the optional Linux runtime that hosts Claude Code and OpenCode. */
 @Composable
 fun AgentRuntimeCard(
-    runtime: AgentRuntimeInstaller.InstalledRuntime?,
+    status: AgentRuntimeStatus,
     importing: Boolean,
     message: String?,
     archiveName: String?,
@@ -33,10 +34,12 @@ fun AgentRuntimeCard(
     onPickManifest: () -> Unit,
     onImport: () -> Unit,
     onOpen: () -> Unit,
+    onCheckCompatibility: () -> Unit,
     onReturnToVerb: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val complete = archiveName != null && checksumName != null && manifestName != null
+    val runtime = status.runtime
     Card(
         modifier = modifier.fillMaxWidth().testTag("agent_runtime_card"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -53,8 +56,31 @@ fun AgentRuntimeCard(
             Text(
                 runtime?.let { "Installed: ${it.manifest.runtimeVersion} · ${it.manifest.distro}" } ?: "Not installed",
                 style = MaterialTheme.typography.labelLarge,
-                color = if (runtime != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (runtime != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("agent_runtime_artifact_state")
             )
+            // Deliberately a second line, not merged into the one above: "installed" and "runs here"
+            // are different claims, and merging them is what previously let a launch button appear
+            // for a runtime that could not execute.
+            if (status.isInstalled) {
+                Text(
+                    when (status.compatibility) {
+                        AgentCompatibilityState.NOT_CHECKED -> "Compatibility: not checked yet"
+                        AgentCompatibilityState.CHECKING -> "Compatibility: checking…"
+                        AgentCompatibilityState.COMPATIBLE -> "Compatibility: runs on this device"
+                        AgentCompatibilityState.INCOMPATIBLE -> "Compatibility: cannot run on this device"
+                        AgentCompatibilityState.CHECK_FAILED -> "Compatibility: check could not run"
+                        AgentCompatibilityState.CHECK_TIMED_OUT -> "Compatibility: check timed out"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = when (status.compatibility) {
+                        AgentCompatibilityState.COMPATIBLE -> MaterialTheme.colorScheme.primary
+                        AgentCompatibilityState.INCOMPATIBLE -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(top = 2.dp).testTag("agent_runtime_compatibility_state")
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text("Choose the three files from the GitHub Actions artifact:", style = MaterialTheme.typography.bodySmall)
             FileChoiceRow("Rootfs", archiveName, onPickArchive)
@@ -66,15 +92,30 @@ fun AgentRuntimeCard(
                     enabled = complete && !importing,
                     modifier = Modifier.testTag("agent_runtime_import")
                 ) { Text(if (importing) "Verifying…" else "Install runtime") }
-                if (runtime != null) {
-                    OutlinedButton(onClick = onOpen, modifier = Modifier.testTag("agent_runtime_open")) {
+                if (status.isInstalled) {
+                    // Enabled only for COMPATIBLE. VerbViewModel.openAgentRuntime() enforces the
+                    // same rule, so this is the visible half of a guard, not the whole of it.
+                    OutlinedButton(
+                        onClick = onOpen,
+                        enabled = status.canOpen,
+                        modifier = Modifier.testTag("agent_runtime_open")
+                    ) {
                         Text("Open agent terminal")
                     }
                 }
             }
-            if (runtime != null) {
-                OutlinedButton(onClick = onReturnToVerb, modifier = Modifier.testTag("agent_runtime_return")) {
-                    Text("Use normal Verb terminal")
+            if (status.isInstalled) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = onCheckCompatibility,
+                        enabled = status.canCheck,
+                        modifier = Modifier.testTag("agent_runtime_check")
+                    ) { Text("Retry check") }
+                    // Always available: the normal Verb terminal is unaffected by an incompatible
+                    // Agent Runtime, and the installed rootfs is never deleted automatically.
+                    OutlinedButton(onClick = onReturnToVerb, modifier = Modifier.testTag("agent_runtime_return")) {
+                        Text("Use normal Verb terminal")
+                    }
                 }
             }
             message?.let {

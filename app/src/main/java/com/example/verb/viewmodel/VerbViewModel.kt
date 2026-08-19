@@ -24,7 +24,11 @@ import com.example.verb.project.VerbProject
 import com.example.verb.semantic.SecretGuard
 import com.example.verb.semantic.SemanticEngine
 import com.example.verb.terminal.BundledToolBootstrap
+import com.example.verb.terminal.AgentArtifactState
+import com.example.verb.terminal.AgentCompatibilityState
+import com.example.verb.terminal.AgentRuntimeCompatibilityProbe
 import com.example.verb.terminal.AgentRuntimeInstaller
+import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.RuntimeCapabilityDetector
@@ -104,8 +108,24 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _runtimeInstallMessage = MutableStateFlow<String?>(null)
     val runtimeInstallMessage: StateFlow<String?> = _runtimeInstallMessage.asStateFlow()
 
-    private val _agentRuntime = MutableStateFlow(agentRuntimeInstaller.active())
-    val agentRuntime: StateFlow<AgentRuntimeInstaller.InstalledRuntime?> = _agentRuntime.asStateFlow()
+    private val agentRuntimeProbe = AgentRuntimeCompatibilityProbe(application.filesDir)
+
+    /**
+     * Artifact presence and executability, kept as separate facts. Verb used to offer a launch
+     * button on the strength of files existing on disk; on a device where the runtime cannot
+     * execute, that produced a session that died instantly with no explanation.
+     */
+    private val _agentRuntimeStatus = MutableStateFlow(
+        agentRuntimeInstaller.active().let { installed ->
+            AgentRuntimeStatus(
+                artifact = if (installed != null) AgentArtifactState.INSTALLED else AgentArtifactState.NOT_INSTALLED,
+                compatibility = AgentCompatibilityState.NOT_CHECKED,
+                runtime = installed
+            )
+        }
+    )
+    val agentRuntimeStatus: StateFlow<AgentRuntimeStatus> = _agentRuntimeStatus.asStateFlow()
+
 
     private val _agentRuntimeImporting = MutableStateFlow(false)
     val agentRuntimeImporting: StateFlow<Boolean> = _agentRuntimeImporting.asStateFlow()
@@ -183,6 +203,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
         installTermuxBootstrap()
 
+        // An artifact found on disk at startup is unverified until proven otherwise, so check it
+        // once here rather than presenting it as launchable.
+        checkAgentRuntimeCompatibility()
+
         // Mirror persisted command history into UI state as it changes
         viewModelScope.launch(Dispatchers.IO) {
             repository.commandHistory.collect { _persistedCommandHistory.value = it }
@@ -239,6 +263,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     fun retryTermuxBootstrap() {
         installTermuxBootstrap()
+
+        // An artifact found on disk at startup is unverified until proven otherwise, so check it
+        // once here rather than presenting it as launchable.
+        checkAgentRuntimeCompatibility()
     }
 
     /** Imports a verified CI artifact into a versioned, rollback-safe Agent Runtime slot. */
@@ -263,8 +291,15 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.Main.immediate) {
                 _agentRuntimeImporting.value = false
                 result.onSuccess { installed ->
-                    _agentRuntime.value = installed
-                    _agentRuntimeMessage.value = "Agent Runtime ${installed.manifest.runtimeVersion} is ready."
+                    // "installed", never "ready": the artifact verified and extracted, which says
+                    // nothing about whether it can execute. Readiness is claimed only by the probe.
+                    _agentRuntimeStatus.value = AgentRuntimeStatus(
+                        artifact = AgentArtifactState.INSTALLED,
+                        compatibility = AgentCompatibilityState.NOT_CHECKED,
+                        runtime = installed
+                    )
+                    _agentRuntimeMessage.value = "Agent Runtime ${installed.manifest.runtimeVersion} installed."
+                    checkAgentRuntimeCompatibility()
                 }.onFailure { error ->
                     _agentRuntimeMessage.value = "Agent Runtime import failed: ${error.message ?: "invalid artifact"}"
                 }
@@ -272,10 +307,58 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Runs the bounded compatibility probe for the installed runtime. Called once when an existing
+     * artifact is found at startup, once after a successful import, and on explicit retry -- never
+     * on a timer and never in a loop: [AgentRuntimeStatus.canCheck] is false while one is in flight,
+     * so a repeated trigger is a no-op rather than a second probe.
+     */
+    fun checkAgentRuntimeCompatibility() {
+        val status = _agentRuntimeStatus.value
+        val runtime = status.runtime ?: return
+        if (!status.canCheck) return
+
+        _agentRuntimeStatus.value = status.copy(compatibility = AgentCompatibilityState.CHECKING)
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = agentRuntimeProbe.check(runtime)
+            withContext(Dispatchers.Main.immediate) {
+                _agentRuntimeStatus.value = _agentRuntimeStatus.value.copy(compatibility = result)
+                _agentRuntimeMessage.value = agentRuntimeMessageFor(result, runtime.manifest.runtimeVersion)
+            }
+        }
+    }
+
+    /**
+     * User-facing wording. It never names a specific Android policy: the device evidence showed the
+     * runtime cannot execute here, but which restriction is fatal was never uniquely identified, and
+     * claiming one would be a guess presented as a fact.
+     */
+    private fun agentRuntimeMessageFor(state: AgentCompatibilityState, version: String): String = when (state) {
+        AgentCompatibilityState.COMPATIBLE -> "Agent Runtime $version is ready."
+        AgentCompatibilityState.INCOMPATIBLE ->
+            "Installed, but incompatible on this device. This Linux runtime cannot execute inside " +
+                "this Android app sandbox. The normal Verb terminal is unaffected."
+        AgentCompatibilityState.CHECK_TIMED_OUT ->
+            "Compatibility check timed out. The Agent Runtime is installed but unverified."
+        AgentCompatibilityState.CHECK_FAILED ->
+            "Compatibility check could not run. The Agent Runtime is installed but unverified."
+        AgentCompatibilityState.CHECKING -> "Checking Agent Runtime compatibility…"
+        AgentCompatibilityState.NOT_CHECKED -> "Agent Runtime $version installed."
+    }
+
+    /**
+     * Refuses unless the runtime has been proven to execute. This is the programmatic guard behind
+     * the disabled button: reaching the runtime by any other path must not bypass the check.
+     */
     fun openAgentRuntime() {
-        val runtime = _agentRuntime.value
+        val status = _agentRuntimeStatus.value
+        val runtime = status.runtime
         if (runtime == null) {
             _agentRuntimeMessage.value = "Import an Agent Runtime artifact first."
+            return
+        }
+        if (!status.canOpen) {
+            _agentRuntimeMessage.value = agentRuntimeMessageFor(status.compatibility, runtime.manifest.runtimeVersion)
             return
         }
         runCatching { terminalRuntime.activateAgentRuntime(runtime) }

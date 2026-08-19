@@ -13,7 +13,20 @@ class AgentRuntimeEnvironment(
     private val projectDirectory: File,
     private val manifest: AgentRuntimeManifest
 ) {
-    fun resolve(rootfs: File): TerminalEnvironment {
+    /** The interactive session: a login shell in the selected project, mounted at `/workspace`. */
+    fun resolve(rootfs: File): TerminalEnvironment =
+        resolveGuestCommand(rootfs, listOf("/bin/bash", "--login"))
+
+    /**
+     * Builds a single bounded, non-interactive invocation of [guestCommand] against the same rootfs,
+     * binds, working directory, guest environment and loader isolation the interactive session uses.
+     *
+     * Shared with [resolve] so a compatibility probe can never drift from the environment it claims
+     * to be testing -- a probe that ran under different binds would prove nothing about the session
+     * the user is about to open. [guestCommand] is supplied only by Verb's own callers as a literal
+     * argv list; nothing here accepts user or AI input, and nothing is passed through a shell.
+     */
+    fun resolveGuestCommand(rootfs: File, guestCommand: List<String>): TerminalEnvironment {
         require(manifest.validateForArm64().isSuccess) { "Invalid agent runtime manifest." }
         require(rootfs.isDirectory) { "Agent runtime rootfs is unavailable." }
         require(projectDirectory.isDirectory) { "Selected project directory is unavailable." }
@@ -40,9 +53,9 @@ class AgentRuntimeEnvironment(
             // PRoot itself needs Verb's Bionic loader path, but the Debian processes it starts
             // must not inherit those Android/Termux loader overrides.
             "LD_LIBRARY_PATH=",
-            "LD_PRELOAD=",
-            "/bin/bash", "--login"
+            "LD_PRELOAD="
         )
+        args += guestCommand
 
         return TerminalEnvironment(
             kind = TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND,
