@@ -106,12 +106,16 @@ class RuntimeProfileSatisfiabilityTest {
         assertFalse(r.isInstallable)
     }
 
-    /** The constraint that makes Hermes unsatisfiable on this device is still declared. */
+    /**
+     * Hermes is no longer a dead end: it targets the versioned interpreter that satisfies its
+     * constraint, so the profile is ordinary installable work rather than a permanent refusal.
+     */
     @Test
-    fun `hermes still declares its python upper bound`() {
-        val requirement = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
-            .requirements.single { it.command == "python" }
+    fun `hermes targets a compatible interpreter instead of an unsatisfiable constraint`() {
+        val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
+        val requirement = hermes.requirements.single()
 
-        assertEquals("3.14", requirement.maxVersionExclusive)
+        assertEquals("python3.13", requirement.command)
+        assertEquals(null, requirement.maxVersionExclusive)
     }
 }
