@@ -31,6 +31,7 @@ import com.example.verb.terminal.AgentRuntimeInstaller
 import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
+import com.example.verb.terminal.MuslLoaderBootstrap
 import com.example.verb.terminal.RuntimeCapabilityDetector
 import com.example.verb.terminal.RuntimeProfile
 import com.example.verb.terminal.RuntimeProfileId
@@ -235,6 +236,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // Best-effort app-local copy of the linker config so proot can bind /linkerconfig without
         // hitting the Android 12+ EACCES on the real directory. Runs every launch, not just on
         // install, so already-provisioned devices also get the fix.
+        // musl-built agent CLIs need their interpreter present before any session starts.
+        MuslLoaderBootstrap.install(context)
         TermuxBootstrapInstaller.ensureGuestLinkerConfig(context.filesDir)
         TermuxBootstrapInstaller.ensureSecureAptSources(context.filesDir)
         // Same "every launch, not just install" requirement as the two calls above: this used to

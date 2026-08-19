@@ -109,6 +109,49 @@ data class RuntimeProfileReport(
 }
 
 object RuntimeProfiles {
+
+    /**
+     * Install command for an agent CLI published only as a musl build.
+     *
+     * Two things have to happen that a plain `npm install -g` does not do here:
+     *
+     * 1. npm refuses musl packages on Android -- Bionic reports no libc, so npm sees
+     *    `Actual libc: undefined` against `Valid libc: musl` and calls the package unsupported.
+     *    `--force` is the documented override, and the package genuinely is the right architecture.
+     * 2. The launcher must run without Verb's `termux-exec` preload. That library is Bionic; loading
+     *    it into a musl process fails with `__register_atfork: symbol not found`. A one-line wrapper
+     *    on PATH clears `LD_PRELOAD`/`LD_LIBRARY_PATH` and execs the real binary, so the user still
+     *    just types the command name.
+     */
+    /**
+     * Install command for an agent CLI published only as a musl build.
+     *
+     * Three things have to happen that a plain `npm install -g` does not, each found by running it:
+     *
+     * 1. npm refuses musl packages on Android. Bionic reports no libc, so npm sees
+     *    `Actual libc: undefined` against `Valid libc: musl` and calls a package unsupported that is
+     *    in fact the correct architecture. `--force` is the documented override.
+     * 2. The binary is `ET_EXEC` (non-PIE). Termux's exec shim rejects it outright with
+     *    `has unexpected e_type: 2` before the kernel ever sees it. Invoking the musl loader
+     *    explicitly sidesteps that check -- the loader is itself static-PIE, and loading a
+     *    non-PIE program is exactly its job.
+     * 3. Verb's `termux-exec` preload is a Bionic library and cannot be injected into a musl
+     *    process; it fails with `__register_atfork: symbol not found`. The wrapper clears it with
+     *    shell builtins rather than `env`, which would reintroduce the shim from point 2.
+     *
+     * The result is a one-line wrapper on PATH, so the user still just types the command name.
+     */
+    private fun muslAgentInstall(platformPackage: String, command: String, binaryRelativePath: String): String {
+        val binary = "\$PREFIX/lib/node_modules/$platformPackage/$binaryRelativePath"
+        val wrapper = "\$PREFIX/bin/$command"
+        return "npm install -g --force $platformPackage && " +
+            "printf '%s\\n' " +
+            "'#!/bin/sh' " +
+            "'unset LD_PRELOAD LD_LIBRARY_PATH' " +
+            "'exec ${MuslLoaderBootstrap.GUEST_LOADER_PATH} \"$binary\" \"\$@\"' " +
+            "> $wrapper && chmod +x $wrapper"
+    }
+
     val all: List<RuntimeProfile> = listOf(
         RuntimeProfile(
             RuntimeProfileId.CORE,
@@ -183,13 +226,15 @@ object RuntimeProfiles {
             emptyList(),
             listOf(RuntimeRequirement("claude", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
-            installCommandOverride = "npm install -g @anthropic-ai/claude-code",
-            // Verified on-device: the vendor postinstall reports "Native binaries for
-            // linux-arm64-android are not available on this release channel" and lists only
-            // darwin/linux/win32 targets. The npm package installs, but the launcher has no binary
-            // to run, so this profile cannot become ready in the phone-native userland -- it needs
-            // the Debian-based Agent Runtime, where the platform is linux-arm64.
-            postInstallHint = "Needs the Linux Agent Runtime: no android-arm64 build is published."
+            // No android-arm64 build is published, but the musl build runs here once its
+            // interpreter exists (see MuslLoaderBootstrap). Installed directly rather than through
+            // the wrapper package, whose postinstall only looks for an android binary.
+            installCommandOverride = muslAgentInstall(
+                platformPackage = "@anthropic-ai/claude-code-linux-arm64-musl",
+                command = "claude",
+                binaryRelativePath = "claude"
+            ),
+            postInstallHint = "In Terminal, run claude and complete its sign-in flow."
         ),
         RuntimeProfile(
             RuntimeProfileId.GEMINI_CLI,
@@ -206,7 +251,11 @@ object RuntimeProfiles {
             emptyList(),
             listOf(RuntimeRequirement("opencode", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
-            installCommandOverride = "npm install -g opencode-ai",
+            installCommandOverride = muslAgentInstall(
+                platformPackage = "opencode-linux-arm64-musl",
+                command = "opencode",
+                binaryRelativePath = "bin/opencode"
+            ),
             postInstallHint = "In Terminal, run opencode and complete its sign-in flow."
         ),
         RuntimeProfile(

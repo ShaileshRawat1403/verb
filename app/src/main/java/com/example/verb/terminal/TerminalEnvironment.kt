@@ -221,6 +221,15 @@ class TerminalEnvironmentResolver(
                 args += linkerConfig.absolutePath
             }
         }
+        // Agent CLIs published as musl builds (Claude Code, OpenCode, anything Bun-compiled) are
+        // aarch64 ELFs whose only unmet dependency is their interpreter. Binding the bundled loader
+        // at the absolute path they hard-code is what lets them exec at all; without it the kernel
+        // refuses with ENOENT and reports "No such file or directory" for a file that exists.
+        val muslLoader = File(rootfs, MuslLoaderBootstrap.RELATIVE_INSTALL_PATH)
+        if (muslLoader.isFile) {
+            args += "-b"
+            args += "${muslLoader.absolutePath}:${MuslLoaderBootstrap.GUEST_LOADER_PATH}"
+        }
         // Static musl tools such as Codex read /etc/resolv.conf, while the Termux userland keeps
         // its resolver under $PREFIX/etc. Bind the synced file into the conventional path too.
         val guestResolver = File(rootfs, "usr/etc/resolv.conf")
