@@ -103,10 +103,7 @@ class RuntimeProfilesTest {
         val gemini = RuntimeProfiles.forId(RuntimeProfileId.GEMINI_CLI)
 
         assertEquals("npm install -g @openai/codex", codex.installCommand)
-        // The vendor postinstall that fetches the native binary does not run here, so the
-        // launcher's own installer follows immediately; without it `claude` reports
-        // "native binary not installed" while the profile would otherwise read Ready.
-        assertEquals("npm install -g @anthropic-ai/claude-code && claude install", claude.installCommand)
+        assertEquals("npm install -g @anthropic-ai/claude-code", claude.installCommand)
         assertEquals("npm install -g @google/gemini-cli", gemini.installCommand)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), codex.prerequisiteProfiles)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), claude.prerequisiteProfiles)

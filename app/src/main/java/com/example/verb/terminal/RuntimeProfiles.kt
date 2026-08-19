@@ -172,12 +172,13 @@ object RuntimeProfiles {
             emptyList(),
             listOf(RuntimeRequirement("claude", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
-            // `npm install -g` alone leaves "claude native binary not installed" here: the
-            // package's postinstall step, which downloads the platform binary, does not run. The
-            // launcher's own installer is invoked straight afterwards so the profile is not
-            // reported ready with a command that cannot start.
-            installCommandOverride = "npm install -g @anthropic-ai/claude-code && claude install",
-            postInstallHint = "In Terminal, run claude and complete its sign-in flow."
+            installCommandOverride = "npm install -g @anthropic-ai/claude-code",
+            // Verified on-device: the vendor postinstall reports "Native binaries for
+            // linux-arm64-android are not available on this release channel" and lists only
+            // darwin/linux/win32 targets. The npm package installs, but the launcher has no binary
+            // to run, so this profile cannot become ready in the phone-native userland -- it needs
+            // the Debian-based Agent Runtime, where the platform is linux-arm64.
+            postInstallHint = "Needs the Linux Agent Runtime: no android-arm64 build is published."
         ),
         RuntimeProfile(
             RuntimeProfileId.GEMINI_CLI,
