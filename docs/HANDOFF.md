@@ -1,143 +1,133 @@
 # Handoff
 
-Written 2026-08-20 at the close of the agent-runtime sprint. Read this with `docs/NEXT_SPRINT.md`,
-which holds the blocker detail, and `docs/AGENT_RUNTIME_V1.md`, which holds the backend evidence.
+Written 2026-08-20. Read with `docs/DURABLE_SESSION.md` (the evidence behind the next piece of work)
+and `docs/NEXT_SPRINT.md` (carried-over blockers).
 
 ## State
 
-- Branch `agent/runtime-truth-hardening`, clean, pushed.
-- `332 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
-- Nothing uncommitted, nothing half-applied, no temporary instrumentation anywhere.
-- Validation device: Vivo I2202 (Android 13, arm64). Agent-launch hardening was installed and
-  verified on it; device scratch files were cleaned up afterwards.
+- Branch `agent/runtime-truth-hardening`, clean, pushed, HEAD `34832ad`.
+- `342 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
+- Nothing uncommitted, no temporary instrumentation, device scratch cleaned up.
+- Validation device: Vivo I2202 (Android 13, arm64), connected during this session.
 
 ## What Verb does now
 
-Phone-native, all verified on device:
-
-- Real PTY terminal, live working directory from OSC 7, command history with exit codes, Ctrl-C.
-- Diagnostics showing launch directory and current directory as separate facts, with a reachable
-  Copy Report.
-- Projects, file browser, session restart, project switching.
-- Package installs that resolve prerequisites automatically, and refuse honestly when nothing can
-  resolve a constraint.
-- Agents tab: per-agent state, the command each runs, one-tap open, and a keys card showing presence
-  only.
-
-Agents:
-
 | Agent | State |
 | --- | --- |
-| Codex CLI | Runs (`0.147.0`) through the emulator. Authenticated. |
-| Claude Code | Runs (`2.1.235`). Authenticated. `claude` on PATH is fixed and verified on device. |
-| OpenCode | Launches (`1.18.18`). No authenticated session yet. |
-| DeepSeek Harness (`dsh`) | Launches (`0.1.0-rc.7`). No authenticated session yet. |
-| Bun runtime | Runs (`1.3.14`). |
-| DAX | Installs and starts; missing `@opentui/solid/bun-plugin`. |
+| Claude Code | Runs (`2.1.235`). Signed in. Spawns subprocesses during real tasks. |
+| Codex CLI | Runs (`0.147.0`) through `qemu-aarch64`. Signed in. |
+| OpenCode | Runs (`1.18.18`). Sign-in state unknown to Verb. |
+| DeepSeek Harness (`dsh`) | Runs (`0.1.0-rc.7`). Sign-in state unknown to Verb. |
+| Gemini CLI | Not installed. |
 | Hermes | Blocked on building `cryptography`. |
+| DAX | Blocked on `@opentui/solid/bun-plugin`. |
 
-## The one idea that explains the whole sprint
+Plus: PTY terminal with truthful cwd, projects, file browser, diagnostics, package installs that
+resolve prerequisites, an Agents surface with per-agent sign-in, and a terminal dock that occupies
+~27% of the screen instead of ~38%.
 
-**A binary runs on-device when its ELF interpreter exists.**
+## The four things this session established
 
-Static musl and Bionic builds run as-is. Dynamically linked musl builds run once
-`/lib/ld-musl-aarch64.so.1` and the musl C++ runtime are installed — Verb bundles both and binds the
-loader. glibc builds do not run.
+**1. A binary runs when the thing it needs exists — and there are three cases, not one.**
+Dynamically linked musl needs the bundled loader. Static `ET_EXEC` is refused by *proot* and needs
+`qemu-aarch64`. Scripts and Bionic builds exec as they are. `AgentWrapperBootstrap` reads the ELF
+interpreter at launch and picks; nothing is assumed from the catalog.
 
-Everything that looked like a sandbox restriction during this sprint turned out to be a missing
-file. Two conclusions were published and later disproved (Android's seccomp filter; "abandon
-on-device agents, go remote"). Prefer a trace over an inference here.
+**2. Launching must not be an install-time artifact.** Wrappers live in `$PREFIX/libexec/verb/bin`
+(Verb-owned, first on PATH, rewritten every launch) and resolve their binary at exec time. npm
+overwriting `$PREFIX/bin/claude` and a vendor self-installer winning PATH both stopped mattering.
+
+**3. A base PATH is only a starting point.** `$HOME/.bashrc` runs afterwards, and the Codex installer
+had prepended `$HOME/.local/bin` there. Verb keeps a marked block *last* in `.bashrc`, re-appended
+every launch.
+
+**4. Keeping a process alive and keeping the user's work alive are different problems.** Claude and
+Codex already persist transcripts to disk, and `claude` supports `--continue`/`--resume`. Those
+survive force-stop. See `docs/DURABLE_SESSION.md`.
+
+## Next: Durable Session, step 2
+
+Step 1 (lifecycle ownership) landed in `34832ad`. Step 2 is session identity, and the shape the user
+specified:
+
+```
+Verb Session
+├── sessionId            ├── agent
+├── project              ├── agent resume identity   <- may outlive the process
+├── runtime              └── lifecycle state
+├── last known cwd
+└── terminal process     <- may be alive or dead
+```
+
+surfaced as three states rather than one:
+
+```
+LIVE         process running                      [Attach]
+RECOVERABLE  process gone, transcript on disk      [Resume]
+ENDED        neither                               [Start new]
+```
+
+The promise this supports, which is better than the one it replaces: **if the process survives, Verb
+reconnects you; if it dies, Verb helps you continue.** Do not promise that a process never dies.
+
+Project switching should become navigation across sessions, not process destruction. `onCleared()`
+still calls `destroy()` — that is step 2's to remove, once something owns lifetime other than the
+screen.
+
+Explicitly **not** decided yet: foreground service, `tmux` vs `dtach`. `docs/DURABLE_SESSION.md`
+compares them and explains why the multiplexer choice should come last.
 
 ## Working method — worth keeping
 
-- **Verify in the app process, not under `run-as`.** `run-as` carries no app seccomp filter and gave
-  false positives twice this sprint. A result from `adb shell run-as` does not transfer.
-- **Read the artifact rather than guessing.** Entry points came from the wheel's `entry_points.txt`;
-  the package came from PyPI metadata. One commit shipped a guessed command (`claude install`) and
-  had to be reverted in `3607272`.
-- Device driving: helper at `scratchpad/verb.sh` (`dump`, `tapText`, `run`, `diag`, `browse`).
-  `run-as … sh -c` is broken on this Vivo — push a script and run `run-as … sh files/x.sh`.
+- **Launch the build and read logcat before claiming anything is done.** No test constructs
+  `VerbViewModel`, so the whole suite can pass while the app cannot start. It did: 332 green, crash
+  on every launch. Verifying through `adb shell run-as` never exercises the UI process.
+  ```
+  adb shell am start -n com.aistudio.verb.app/com.example.MainActivity
+  adb logcat -d | grep -c "FATAL EXCEPTION"      # must be 0
+  adb shell dumpsys window | grep mCurrentFocus  # must be MainActivity
+  ```
+- **A green card is not evidence.** `GuestCommandRunner` never sources shell startup files, so the
+  Agents tab and the terminal can disagree completely. Verify with `bash -lc 'command -v <agent>'`.
+- **Read the artifact.** Codex's vendor path came from `codex.js`; its triple from the published
+  tarball; entry points from `entry_points.txt`. Two conclusions were published and later disproved
+  this sprint by guessing — including a `strings` search returning nothing, read as proof of absence
+  when `strings` was simply absent.
+- Environment: `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home`; `adb` at
+  `/opt/homebrew/share/android-commandlinetools/platform-tools/adb`; `run-as … sh -c` is broken on
+  this Vivo, so push a script and run `run-as … sh x.sh`; `PROOT_TMP_DIR` must be exported to drive
+  proot by hand.
 
-## Done this session: agent launch survives installers
+## Open, in rough priority order
 
-`claude` on PATH was broken, so the Agents tab reported Claude Code as not installed while it was
-installed *and* authenticated. Both causes were reproduced on the device first:
+1. **Step 2, Durable Session.** Above.
+2. **One acceptance gap from step 1:** project switch and "restart applies the pending change" are
+   unit-tested but were not driven on the device. Switch projects on the phone; the terminal should
+   keep running and show the restart banner.
+3. **Codex/OpenCode/dsh sign-in markers.** Only Claude and Codex have observed credential paths.
+   OpenCode and `dsh` reference a bare `auth.json` built at runtime; add a marker once either is
+   signed into. One-line catalog change.
+4. **Hermes** — `cryptography` has no Android wheel and cargo cannot execute the build scripts it
+   compiles. Blocks every Rust-backed Python package. Cheapest path for Hermes alone is dropping the
+   `PyJWT[crypto]` extra.
+5. **DAX** — `bun install` succeeds but `@opentui/solid/bun-plugin` does not resolve.
+6. **`bun run` under proot** — `CouldntReadCurrentDirectory`; `bun <file>` works.
+7. **Keystore-backed key injection**, deferred by the user. Keys currently live plaintext in
+   `$HOME/.env`, `0600`, app-private, never logged, never in diagnostics, never sent to a provider.
+   Doing this makes Verb a credential broker — a trust-model change to decide deliberately.
 
-- `$PREFIX/bin/claude` had been overwritten by npm with a symlink to `claude.exe`.
-- `$HOME/.local/bin/claude`, added by Claude's own self-installer, won PATH and failed with
-  `has unexpected e_type: 2`.
+## Two things not to confuse
 
-Two fixes were needed, and stopping after the first produced a wrong "done" claim worth learning
-from.
+- **`qemu-aarch64`** (the Agent Emulator profile) is now **load-bearing**: Codex does not run without
+  it. Do not remove it.
+- **The Agent Runtime** (Debian rootfs under PRoot+QEMU) is a different thing, still redundant for
+  agents — it runs one process but cannot exec a second, so nothing that forks works inside it. Keep,
+  gate, or remove is still an open question for the user.
 
-**The launcher was written once, at install time, into a directory other people's installers own.**
-`AgentWrapperBootstrap` now owns launching in `$PREFIX/libexec/verb/bin` — Verb-only, first on the
-base PATH, rewritten every launch — and each wrapper resolves its binary when it runs, newest-first,
-reading the ELF interpreter out of the file rather than assuming it.
+## Not verified anywhere
 
-**A base PATH is only a starting point.** `$HOME/.bashrc` runs afterwards, and the Codex installer
-had put `export PATH="$HOME/.local/bin:$PATH"` there, re-shadowing Verb's launchers in every real
-shell. A Verb-owned block is now kept *last* in `.bashrc` and re-appended each launch, with the same
-correction in `shell-integration.bash` for login shells.
-
-**The lesson worth keeping:** `GuestCommandRunner` never sources user startup files, so the Agents
-tab reported **Ready** while the terminal failed. A green card is not proof. Verify a real login
-shell — `bash -lc 'command -v claude'` — before calling an agent fixed.
-
-Verified on device after installing: `claude` `2.1.235`, `opencode` `1.18.18`, `dsh` `0.1.0-rc.7`
-all Ready; `claude` resolves to Verb's wrapper in login, nested-interactive and non-interactive
-shells; and tapping **Open Claude Code** starts the real signed-in TUI. `docs/NEXT_SPRINT.md` §4
-has the measurements.
-
-## Next, in priority order
-
-### 1. (done) Codex — resolved, and a correction
-
-Codex works again: `codex --version` -> `codex-cli 0.147.0`, Agents tab **Ready**.
-
-Two causes. Its real binary ships in an optional npm dependency that npm skips here, which Verb now
-resolves by unpacking the published platform tarball into the fallback location `codex.js` reads.
-And its build is static `ET_EXEC`, which **proot** refuses -- not Codex's own launcher, as this
-document previously claimed. That earlier conclusion came from a `strings` search returning nothing,
-which was read as evidence of absence; `grep -a` finds the string in `proot`, and `proot --version`
-run *inside* proot reproduces the refusal on proot's own binary. `qemu-aarch64` runs it, and Verb
-already shipped that as the Agent Emulator profile.
-
-The general rule, now encoded in the wrapper: try the musl loader, the emulator, or a platform-package
-install before telling the user an agent cannot launch. See `docs/NEXT_SPRINT.md` §4b.
-
-### 2. (done) UI/UX
-
-The terminal dock went from ~38% of the screen to ~27%, and the Agent Runtime file pickers no
-longer sit in the thumb-scroll path -- they are behind a disclosure, which opens on its own once a
-file is picked. See `docs/NEXT_SPRINT.md`.
-
-### 3. (done) Signed-in state per agent, and subprocess spawning
-
-Agent cards now report sign-in separately from readiness, for Claude Code and Codex; OpenCode and
-`dsh` say nothing rather than guess. And an agent spawning subprocesses during real work is verified:
-`claude -p "Run: git --version"` called its Bash tool and answered `git version 2.55.0`.
-
-### 4. Deferred by the user, in order
-
-- Keystore-backed key injection. Currently keys live in `$HOME/.env`, plaintext, `0600`, app-private,
-  never logged, never in the diagnostics report, never sent to a provider. Keystore injection would
-  make Verb a credential broker — a trust-model change to decide deliberately, not by default.
-- `bun run` fails under PRoot (`CouldntReadCurrentDirectory`); `bun <file>` works.
-- DAX missing `@opentui/solid/bun-plugin` — workspace resolution in the DAX repo.
-- Hermes' `cryptography` build: cargo cannot execute the build scripts it just compiled. Blocks every
-  Rust-backed Python package, not just Hermes. Cheapest path for Hermes alone is dropping the
-  `PyJWT[crypto]` extra in the user's fork.
-
-## Open questions for the user
-
-- Hermes: is `cryptography` actually needed, or can the `[crypto]` extra go?
-- DAX: is `@opentui/solid` meant to resolve from the workspace, or be installed separately?
-- The QEMU/PRoot Debian Agent Runtime works for a single process but cannot exec a second one, so
-  nothing that forks runs inside it. It is now redundant for agents. Keep, gate, or remove?
-
-## Not yet verified anywhere
-
-Authenticated sessions for OpenCode, `dsh` and DAX. Whether an agent can spawn subprocesses (`git`,
-`rg`) during a real task — agents do this constantly, and it is the gap between "launches" and
-"usable". Battery, thermal and memory cost under sustained use. Long interactive TUI sessions.
+- Authenticated sessions for OpenCode, `dsh`, DAX.
+- Battery, thermal and memory cost under sustained agent use.
+- Long interactive TUI sessions.
+- Whether `tmux` exists in the Termux repository for this ABI, and its size.
+- Whether Codex or OpenCode expose a resume flag equivalent to Claude's.
