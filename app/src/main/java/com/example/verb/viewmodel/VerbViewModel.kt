@@ -106,6 +106,25 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _runtimeProfileReports = MutableStateFlow(runtimeReports())
     val runtimeProfileReports: StateFlow<List<RuntimeProfileReport>> = _runtimeProfileReports.asStateFlow()
 
+    /**
+     * Whether each agent has an authenticated session. Presence of a credential file only -- the
+     * files are never opened. Recomputed alongside the readiness reports, since signing in happens
+     * in the terminal and the tab must reflect it without a restart.
+     *
+     * Declared here, beside [_runtimeProfileReports], and not further down the file: the `init`
+     * block below reaches [refreshRuntimeProfiles], which writes both flows, and a Kotlin property
+     * declared after that block is still null when it runs. Putting these anywhere else crashes the
+     * app on launch with a NullPointerException inside the ViewModel constructor.
+     */
+    private val agentSignInDetector =
+        com.example.verb.terminal.AgentSignInDetector(getApplication<Application>().filesDir)
+    private val _agentSignInStates = MutableStateFlow(readAgentSignInStates())
+    val agentSignInStates: StateFlow<Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState>> =
+        _agentSignInStates.asStateFlow()
+
+    private fun readAgentSignInStates(): Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState> =
+        RuntimeProfiles.all.filter { it.isAgent }.associate { it.id to agentSignInDetector.stateFor(it) }
+
     private val _runtimeInstallingProfile = MutableStateFlow<RuntimeProfileId?>(null)
     val runtimeInstallingProfile: StateFlow<RuntimeProfileId?> = _runtimeInstallingProfile.asStateFlow()
 
@@ -520,20 +539,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _agentKeyStatus = MutableStateFlow(readAgentKeyStatus())
     val agentKeyStatus: StateFlow<List<AgentKeyStatus>> = _agentKeyStatus.asStateFlow()
 
-    /**
-     * Whether each agent has an authenticated session. Presence of a credential file only -- the
-     * files are never opened. Recomputed alongside the readiness reports, since signing in happens
-     * in the terminal and the tab must reflect it without a restart.
-     */
-    private val agentSignInDetector =
-        com.example.verb.terminal.AgentSignInDetector(getApplication<Application>().filesDir)
-    private val _agentSignInStates =
-        MutableStateFlow(readAgentSignInStates())
-    val agentSignInStates: StateFlow<Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState>> =
-        _agentSignInStates.asStateFlow()
-
-    private fun readAgentSignInStates(): Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState> =
-        RuntimeProfiles.all.filter { it.isAgent }.associate { it.id to agentSignInDetector.stateFor(it) }
 
     private fun readAgentKeyStatus(): List<AgentKeyStatus> {
         val envFile = File(File(getApplication<Application>().filesDir, "home"), ".env")
