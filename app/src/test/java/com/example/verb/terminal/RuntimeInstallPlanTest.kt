@@ -21,23 +21,38 @@ class RuntimeInstallPlanTest {
 
     @Test
     fun `prerequisites are planned before the profile that needs them`() {
+        val ordered = plan(RuntimeProfileId.CLAUDE_CODE)
+
+        assertEquals(listOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.CLAUDE_CODE), ordered)
+    }
+
+    /**
+     * Codex needs two: npm to fetch it, and the emulator to run it. Its only aarch64 build is
+     * statically linked, and proot refuses to exec a static binary -- so planning the emulator is
+     * what turns "cannot launch" into an install that actually works.
+     */
+    @Test
+    fun `codex plans the emulator it needs to run at all`() {
         val ordered = plan(RuntimeProfileId.CODEX)
 
-        assertEquals(listOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.CODEX), ordered)
+        assertEquals(
+            listOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.AGENT_EMULATOR, RuntimeProfileId.CODEX),
+            ordered
+        )
     }
 
     @Test
     fun `an already-ready prerequisite is skipped but the profile still installs`() {
-        val ordered = plan(RuntimeProfileId.CODEX, ready = setOf(RuntimeProfileId.JAVASCRIPT))
+        val ordered = plan(RuntimeProfileId.CLAUDE_CODE, ready = setOf(RuntimeProfileId.JAVASCRIPT))
 
-        assertEquals(listOf(RuntimeProfileId.CODEX), ordered)
+        assertEquals(listOf(RuntimeProfileId.CLAUDE_CODE), ordered)
     }
 
     @Test
     fun `a fully ready profile plans no work at all`() {
         val ordered = plan(
-            RuntimeProfileId.CODEX,
-            ready = setOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.CODEX)
+            RuntimeProfileId.CLAUDE_CODE,
+            ready = setOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.CLAUDE_CODE)
         )
 
         assertTrue(ordered.isEmpty())
@@ -47,10 +62,11 @@ class RuntimeInstallPlanTest {
     fun `every agent CLI resolves its javascript prerequisite`() {
         listOf(RuntimeProfileId.CODEX, RuntimeProfileId.CLAUDE_CODE, RuntimeProfileId.GEMINI_CLI)
             .forEach { id ->
-                assertEquals(
-                    "install plan for $id",
-                    listOf(RuntimeProfileId.JAVASCRIPT, id),
-                    plan(id)
+                val ordered = plan(id)
+                assertEquals("install plan for $id ends with it", id, ordered.last())
+                assertTrue(
+                    "install plan for $id fetches npm first",
+                    ordered.indexOf(RuntimeProfileId.JAVASCRIPT) == 0
                 )
             }
     }

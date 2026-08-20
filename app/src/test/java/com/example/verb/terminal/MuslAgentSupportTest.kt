@@ -128,11 +128,17 @@ class MuslAgentSupportTest {
         )
     }
 
-    /** Codex is statically linked and needs no loader, so it must not be changed to a musl install. */
+    /**
+     * Codex is statically linked, so the musl loader is the wrong answer for it -- the loader
+     * reports `Not a valid dynamic program`. It must never acquire the musl machinery.
+     */
     @Test
-    fun `codex keeps its plain install`() {
+    fun `codex is not treated as a musl agent`() {
         val command = RuntimeProfiles.forId(RuntimeProfileId.CODEX).installCommand
+        val script = AgentWrapperBootstrap.wrapperScript(RuntimeProfiles.forId(RuntimeProfileId.CODEX))
 
-        assertEquals("npm install -g @openai/codex", command)
+        assertTrue(command.startsWith("npm install -g @openai/codex"))
+        assertTrue("codex must not be forced past npm's libc check", !command.contains("--force"))
+        assertTrue("codex's own build must not go through the loader", !script.contains("verb_exec_musl \"\$verb_bin\""))
     }
 }

@@ -6,7 +6,7 @@ which holds the blocker detail, and `docs/AGENT_RUNTIME_V1.md`, which holds the 
 ## State
 
 - Branch `agent/runtime-truth-hardening`, clean, pushed.
-- `318 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
+- `323 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
 - Nothing uncommitted, nothing half-applied, no temporary instrumentation anywhere.
 - Validation device: Vivo I2202 (Android 13, arm64). Agent-launch hardening was installed and
   verified on it; device scratch files were cleaned up afterwards.
@@ -28,7 +28,7 @@ Agents:
 
 | Agent | State |
 | --- | --- |
-| Codex CLI | Blocked. Authenticated, but neither installed copy executes — see below. |
+| Codex CLI | Runs (`0.147.0`) through the emulator. Authenticated. |
 | Claude Code | Runs (`2.1.235`). Authenticated. `claude` on PATH is fixed and verified on device. |
 | OpenCode | Launches (`1.18.18`). No authenticated session yet. |
 | DeepSeek Harness (`dsh`) | Launches (`0.1.0-rc.7`). No authenticated session yet. |
@@ -91,22 +91,20 @@ has the measurements.
 
 ## Next, in priority order
 
-### 1. Codex is now the one agent that does not launch
+### 1. (done) Codex — resolved, and a correction
 
-Wrapper survival is done (see the section above); Codex is what is left, and its old diagnosis was wrong.
+Codex works again: `codex --version` -> `codex-cli 0.147.0`, Agents tab **Ready**.
 
-Both of its installed copies fail, and neither failure is PATH ordering or Termux's exec shim:
+Two causes. Its real binary ships in an optional npm dependency that npm skips here, which Verb now
+resolves by unpacking the published platform tarball into the fallback location `codex.js` reads.
+And its build is static `ET_EXEC`, which **proot** refuses -- not Codex's own launcher, as this
+document previously claimed. That earlier conclusion came from a `strings` search returning nothing,
+which was read as evidence of absence; `grep -a` finds the string in `proot`, and `proot --version`
+run *inside* proot reproduces the refusal on proot's own binary. `qemu-aarch64` runs it, and Verb
+already shipped that as the Agent Emulator profile.
 
-- `$HOME/.local/bin/codex` reaches Codex's own standalone launcher, which rejects its own release
-  binary with `has unexpected e_type: 2`. That message appears in neither `proot` nor either
-  `termux-exec` library, and clearing `LD_PRELOAD` does not change it — so it is Codex's launcher
-  talking, not Verb's runtime. The release binary is static musl, so it needs no loader at all.
-- `$PREFIX/bin/codex` reaches `codex.js`, which stops with
-  `Missing optional dependency @openai/codex-linux-arm64`.
-
-The npm path names its own fix and is the one to pursue. Read the package metadata for what
-platform packages actually exist before installing anything — the guessed-command mistake in
-`3607272` started exactly this way.
+The general rule, now encoded in the wrapper: try the musl loader, the emulator, or a platform-package
+install before telling the user an agent cannot launch. See `docs/NEXT_SPRINT.md` §4b.
 
 ### 2. Two small UI fixes
 

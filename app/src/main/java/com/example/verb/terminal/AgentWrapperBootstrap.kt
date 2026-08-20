@@ -64,6 +64,9 @@ object AgentWrapperBootstrap {
     /** POSIX `env`'s convention for "found but not executable". */
     private const val EXIT_NOT_EXECUTABLE = 126
 
+    /** The emulator that runs statically linked builds proot refuses. See [AgentBinaryAbi.STATIC]. */
+    private const val QEMU_COMMAND = "qemu-aarch64"
+
     /**
      * Writes one wrapper per launchable agent and removes anything else in the directory.
      *
@@ -161,6 +164,7 @@ object AgentWrapperBootstrap {
             |#   $EXIT_NOT_FOUND -> nothing installed to run;  $EXIT_NOT_EXECUTABLE -> found, but not executable.
             |
             |VERB_MUSL_LOADER=${MuslLoaderBootstrap.GUEST_LOADER_PATH}
+            |VERB_QEMU=$QEMU_COMMAND
             |VERB_MUSL_LIB=${VerbGuestPaths.PREFIX}/lib/musl
             |
             |# A musl build is ET_EXEC (non-PIE), which Termux's exec shim rejects outright before the
@@ -178,12 +182,30 @@ object AgentWrapperBootstrap {
             |    exec "${'$'}VERB_MUSL_LOADER" "${'$'}verb_target" "${'$'}@"
             |}
             |
-            |# Bionic build, static binary, or ordinary script. LD_PRELOAD is deliberately left alone:
-            |# a script with a `#!/usr/bin/env node` shebang needs termux-exec to resolve it.
+            |# Bionic build or ordinary script. LD_PRELOAD is deliberately left alone: a script with a
+            |# `#!/usr/bin/env node` shebang needs termux-exec to resolve it.
             |verb_exec_native() {
             |    verb_target=${'$'}1
             |    shift
             |    exec "${'$'}verb_target" "${'$'}@"
+            |}
+            |
+            |# Statically linked, non-PIE (ET_EXEC). These run fine on the device -- Android's own
+            |# shell executes them -- but proot refuses them with
+            |#   error: "<path>" has unexpected e_type: 2
+            |# and a terminal session is always inside proot, which nothing can escape from within.
+            |# qemu maps the ELF itself instead of handing it to proot's loader, so the refusal never
+            |# happens. Verb's own proot binary is such a build, and `proot --version` inside proot
+            |# reproduces the same message -- which is how this was finally attributed.
+            |verb_exec_static() {
+            |    verb_target=${'$'}1
+            |    shift
+            |    if command -v ${'$'}VERB_QEMU >/dev/null 2>&1; then
+            |        exec ${'$'}VERB_QEMU "${'$'}verb_target" "${'$'}@"
+            |    fi
+            |    printf '%s\n' "verb: $command needs the Agent Emulator (${'$'}VERB_QEMU) to run its statically linked build." >&2
+            |    printf '%s\n' "verb: install it from the Agents tab, then run $command again." >&2
+            |    exit $EXIT_NOT_EXECUTABLE
             |}
             |
             |# A binary runs on-device when its ELF interpreter exists -- so read the interpreter out
@@ -193,11 +215,24 @@ object AgentWrapperBootstrap {
             |    verb_target=${'$'}1
             |    shift
             |    if command -v head >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
-            |        if head -c 4096 "${'$'}verb_target" 2>/dev/null | grep -q ld-musl-aarch64; then
-            |            verb_exec_musl "${'$'}verb_target" "${'$'}@"
-            |        else
+            |        # Each test pipes the bytes straight into grep. Capturing them in a variable
+            |        # would truncate at the first NUL, which every ELF has within a few bytes.
+            |        # Every branch execs, so the first match wins and nothing falls through.
+            |        if head -c 2 "${'$'}verb_target" 2>/dev/null | grep -q '#!'; then
             |            verb_exec_native "${'$'}verb_target" "${'$'}@"
             |        fi
+            |        # An ELF names its interpreter in .interp, within the first few hundred bytes.
+            |        if head -c 4096 "${'$'}verb_target" 2>/dev/null | grep -q ld-musl-aarch64; then
+            |            verb_exec_musl "${'$'}verb_target" "${'$'}@"
+            |        fi
+            |        if head -c 4096 "${'$'}verb_target" 2>/dev/null | grep -qE 'ld-android|linker64|ld-linux'; then
+            |            verb_exec_native "${'$'}verb_target" "${'$'}@"
+            |        fi
+            |        # An ELF naming no interpreter at all is static, and proot will refuse it.
+            |        if head -c 4 "${'$'}verb_target" 2>/dev/null | grep -q 'ELF'; then
+            |            verb_exec_static "${'$'}verb_target" "${'$'}@"
+            |        fi
+            |        verb_exec_native "${'$'}verb_target" "${'$'}@"
             |    fi
             |    # No tools to read the interpreter with. Every binary that has reached this branch so
             |    # far has been a musl build, and the loader is the branch that works for them.
@@ -234,6 +269,7 @@ object AgentWrapperBootstrap {
     private fun execFunction(abi: AgentBinaryAbi): String = when (abi) {
         AgentBinaryAbi.MUSL -> "verb_exec_musl"
         AgentBinaryAbi.NATIVE -> "verb_exec_native"
+        AgentBinaryAbi.STATIC -> "verb_exec_static"
         AgentBinaryAbi.DETECT -> "verb_exec_detect"
     }
 

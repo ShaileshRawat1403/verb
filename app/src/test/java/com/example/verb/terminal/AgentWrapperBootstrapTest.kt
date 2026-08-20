@@ -155,17 +155,76 @@ class AgentWrapperBootstrapTest {
     }
 
     /**
+     * Codex's only aarch64 build is static, and proot refuses to exec a static binary -- the same
+     * `has unexpected e_type: 2` proot gives for its own binary. Verb owns a way to run it
+     * (`qemu-aarch64`), so reporting "cannot launch" would be giving up on something resolvable.
+     */
+    @Test
+    fun `codex launches its static build through the emulator`() {
+        val script = AgentWrapperBootstrap.wrapperScript(RuntimeProfiles.forId(RuntimeProfileId.CODEX))
+
+        assertTrue(script.contains("verb_exec_static"))
+        assertTrue(script.contains("VERB_QEMU=qemu-aarch64"))
+        val vendor = script.indexOf("@openai/codex/vendor/aarch64-unknown-linux-musl/bin/codex")
+        val standalone = script.indexOf(".codex/packages/standalone/releases")
+        assertTrue("Verb's own build must be searched", vendor > 0)
+        assertTrue("Verb's own build must come first", vendor < standalone)
+    }
+
+    /** Refusing is only honest when nothing can resolve it -- and then it must say what would. */
+    @Test
+    fun `a missing emulator is reported as an actionable install, not a dead end`() {
+        val script = AgentWrapperBootstrap.wrapperScript(RuntimeProfiles.forId(RuntimeProfileId.CODEX))
+
+        assertTrue(script.contains("command -v \$VERB_QEMU"))
+        assertTrue(script.contains("Agent Emulator"))
+        assertTrue(script.contains("install it from the Agents tab"))
+    }
+
+    /**
+     * Three ABIs now, not two, and which one is chosen decides whether a binary runs at all.
+     * Detection pipes bytes into grep rather than capturing them: a shell variable truncates at the
+     * first NUL, which every ELF has within a few bytes.
+     */
+    @Test
+    fun `detection tells scripts, musl, bionic and static builds apart`() {
+        val script = AgentWrapperBootstrap.wrapperScript(claude())
+
+        assertTrue("a shebang must run as a script", script.contains("head -c 2 \"\$verb_target\" 2>/dev/null | grep -q '#!'"))
+        assertTrue("a musl interpreter routes to the loader", script.contains("grep -q ld-musl-aarch64"))
+        assertTrue("a Bionic interpreter execs directly", script.contains("grep -qE 'ld-android|linker64|ld-linux'"))
+        assertTrue("an ELF naming no interpreter is static", script.contains("head -c 4 \"\$verb_target\" 2>/dev/null | grep -q 'ELF'"))
+        assertFalse("bytes must never be captured into a variable", script.contains("verb_head="))
+    }
+
+    /**
+     * Codex's real binary ships in an optional dependency npm skips here. Verb resolves it instead
+     * of reporting the agent as unlaunchable, and takes the version from the launcher actually
+     * installed so the two cannot drift apart.
+     */
+    @Test
+    fun `the codex install resolves the platform build npm skipped`() {
+        val command = RuntimeProfiles.forId(RuntimeProfileId.CODEX).installCommand
+
+        assertTrue(command.startsWith("npm install -g @openai/codex"))
+        assertTrue("the version must come from the installed launcher", command.contains("require('"))
+        assertTrue("npm must resolve the tarball location itself", command.contains("npm pack"))
+        assertTrue(command.contains("-linux-arm64"))
+        assertTrue("it must unpack into the fallback codex.js reads", command.contains("/vendor"))
+    }
+
+    /**
      * An agent the catalog knows nothing specific about still needs to survive a vendor installer,
      * so the two installer-writable locations are appended for every agent.
      */
     @Test
     fun `an agent with no declared candidates still gets the default search`() {
-        val codex = RuntimeProfiles.forId(RuntimeProfileId.CODEX)
-        assertTrue(codex.binaryCandidates.isEmpty())
+        val gemini = RuntimeProfiles.forId(RuntimeProfileId.GEMINI_CLI)
+        assertTrue(gemini.binaryCandidates.isEmpty())
 
-        val candidates = AgentWrapperBootstrap.candidatesFor(codex).map { it.path }
+        val candidates = AgentWrapperBootstrap.candidatesFor(gemini).map { it.path }
 
-        assertEquals(listOf("\$PREFIX/bin/codex", "\$HOME/.local/bin/codex"), candidates)
+        assertEquals(listOf("\$PREFIX/bin/gemini", "\$HOME/.local/bin/gemini"), candidates)
     }
 
     /**

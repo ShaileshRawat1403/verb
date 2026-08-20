@@ -108,13 +108,21 @@ class RuntimeProfilesTest {
         val claude = RuntimeProfiles.forId(RuntimeProfileId.CLAUDE_CODE)
         val gemini = RuntimeProfiles.forId(RuntimeProfileId.GEMINI_CLI)
 
-        assertEquals("npm install -g @openai/codex", codex.installCommand)
+        // Codex's launcher is only half of it: the real binary ships in an optional dependency npm
+        // skips here, so the install resolves that too. Asserted in detail by
+        // AgentWrapperBootstrapTest.
+        assertTrue(codex.installCommand.startsWith("npm install -g @openai/codex"))
         // Claude and OpenCode publish no android build; their musl builds run here once the
         // interpreter exists, so they install the platform package directly. Asserted in detail by
         // MuslAgentSupportTest -- here we only pin that they are still npm-installed agent CLIs.
         assertTrue(claude.installCommand.contains("@anthropic-ai/claude-code-linux-arm64-musl"))
         assertEquals("npm install -g @google/gemini-cli", gemini.installCommand)
-        assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), codex.prerequisiteProfiles)
+        // Codex additionally needs the emulator, because its only aarch64 build is static and
+        // proot refuses to exec a static binary.
+        assertEquals(
+            listOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.AGENT_EMULATOR),
+            codex.prerequisiteProfiles
+        )
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), claude.prerequisiteProfiles)
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), gemini.prerequisiteProfiles)
 
