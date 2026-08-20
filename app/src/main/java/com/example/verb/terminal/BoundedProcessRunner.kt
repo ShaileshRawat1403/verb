@@ -82,8 +82,21 @@ internal object BoundedProcessRunner {
         }
     }
 
-    /** Reads [stream] to completion so the child never blocks on a full pipe, keeping a bounded prefix. */
-    private fun drainBounded(stream: InputStream, sink: StringBuilder) {
+    /**
+     * Reads [stream] to completion so the child never blocks on a full pipe, keeping a bounded
+     * prefix.
+     *
+     * Runs on a bare `Thread`, where an escaping exception is fatal to the whole app rather than to
+     * the probe. Timing out is the normal case that produces one: `destroyForcibly()` closes this
+     * stream while the read is parked in it, and the read fails with
+     * `InterruptedIOException: read interrupted by close() on another thread`. That crashed Verb a
+     * few seconds after launch once Codex's readiness probe began running through `qemu-aarch64`,
+     * which is slow enough to exceed the bound reliably.
+     *
+     * Whatever has been captured so far is still the probe's output, and the timeout is already
+     * reported by the caller, so there is nothing to propagate: the drain simply stops.
+     */
+    private fun drainBounded(stream: InputStream, sink: StringBuilder) = runCatching {
         val charBuffer = CharArray(1024)
         var captured = 0
         stream.bufferedReader().use { reader ->
@@ -97,5 +110,5 @@ internal object BoundedProcessRunner {
                 if (captured >= MAX_OUTPUT_CHARS) sink.append("...[truncated]")
             }
         }
-    }
+    }.getOrElse { }
 }

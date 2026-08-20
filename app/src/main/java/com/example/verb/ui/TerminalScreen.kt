@@ -67,7 +67,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalRuntime
@@ -504,6 +506,51 @@ fun TerminalScreen(
                         fontSize = 12.sp,
                         color = Color(0xFF94A3B8)
                     )
+                }
+            }
+        }
+
+        // A change that needs a new shell, stated instead of acted on. Selecting a project, finishing
+        // the bootstrap or switching the Agent Runtime used to destroy and restart the PTY, which
+        // silently ended whatever was running in it. The session is left alone and the user decides
+        // when the new environment takes effect.
+        val pendingEnvironmentChange by ((terminalRuntime as? com.example.verb.terminal.TerminalRuntime)
+            ?.pendingEnvironmentChange
+            ?: remember { MutableStateFlow(false) }).collectAsState()
+        if (pendingEnvironmentChange) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = Color(0xFF2A2418),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .testTag("pending_environment_change")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        "Environment updated — restart the session to apply it.",
+                        fontSize = 12.sp,
+                        color = Color(0xFFFCD34D),
+                        modifier = Modifier.weight(1f)
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFF6366F1),
+                        onClick = { terminalRuntime?.restartSession() },
+                        modifier = Modifier.testTag("apply_environment_restart")
+                    ) {
+                        Text(
+                            "Restart",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
                 }
             }
         }

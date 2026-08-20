@@ -180,7 +180,7 @@ class GuestCommandRunnerTest {
     }
 
     @Test
-    fun `timeout is always clamped to the 3 second bound even if a caller asks for longer`() {
+    fun `timeout is always clamped to the upper bound even if a caller asks for longer`() {
         val filesDir = temporaryFolder.newFolder("files")
         setUpGuestBootstrap(filesDir)
         writeGuestTool(filesDir, "hanging-tool", "#!/bin/sh\nread _unused\necho done\n")
@@ -193,7 +193,12 @@ class GuestCommandRunnerTest {
         val elapsedMs = (System.nanoTime() - started) / 1_000_000
 
         assertEquals(GuestCommandRunner.Outcome.TIMEOUT, result.outcome)
-        assertTrue("probe ran for ${elapsedMs}ms, expected it clamped near the 3s bound", elapsedMs < 5_000)
+        // The bound moved from 3s to 15s when Codex began running under qemu, but the invariant is
+        // unchanged and is what this test exists for: a caller asking for a minute does not get one.
+        assertTrue(
+            "probe ran for ${elapsedMs}ms, expected it clamped near the ${GuestCommandRunner.MAX_TIMEOUT_MS}ms bound",
+            elapsedMs < GuestCommandRunner.MAX_TIMEOUT_MS + 5_000
+        )
     }
 
     @Test
