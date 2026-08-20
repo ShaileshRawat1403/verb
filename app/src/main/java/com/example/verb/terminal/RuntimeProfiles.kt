@@ -37,16 +37,32 @@ data class RuntimeRequirement(
 /**
  * How a resolved agent binary has to be handed to the kernel.
  *
- * The one rule that decides everything on-device: **a binary runs when its ELF interpreter
- * exists.** Static musl and Bionic builds run as-is; a dynamically linked musl build runs only when
- * it is launched through the bundled musl loader (see [MuslLoaderBootstrap]).
+ * The rule this started from -- **a binary runs when its ELF interpreter exists** -- turned out to
+ * be only half of it. A dynamically linked musl build runs once launched through the bundled musl
+ * loader ([MuslLoaderBootstrap]). A *static* build has no interpreter to supply, and proot refuses
+ * it outright, so it needs `qemu-aarch64` instead. Scripts and Bionic builds exec as they are.
  */
 enum class AgentBinaryAbi {
     /** Launch through the bundled musl loader, with the musl C++ runtime on LD_LIBRARY_PATH. */
     MUSL,
 
-    /** Exec directly: a Bionic build, a static binary, or an ordinary script. */
+    /** Exec directly: a Bionic build or an ordinary script. */
     NATIVE,
+
+    /**
+     * A statically linked, non-PIE (`ET_EXEC`) binary, launched through `qemu-aarch64`.
+     *
+     * These run perfectly on the device -- executing one from Android's own shell works -- but
+     * **proot rejects them**: `error: "<path>" has unexpected e_type: 2`. Verb's own `proot` binary
+     * is itself such a build, and running `proot --version` *inside* proot reproduces the same
+     * refusal, which is how the message was finally attributed. Since a terminal session is always
+     * inside proot and nothing can escape a ptrace-based sandbox from within, the binary cannot
+     * simply be exec'd.
+     *
+     * `qemu-aarch64` maps the ELF itself instead of handing it to proot's loader, so the rejection
+     * never happens. Codex ships exactly this kind of build and is why the branch exists.
+     */
+    STATIC,
 
     /**
      * Read the interpreter out of the file at launch time and pick the branch it asks for.
@@ -193,6 +209,42 @@ object RuntimeProfiles {
         "\$PREFIX/lib/node_modules/$platformPackage/$binaryRelativePath"
 
     /**
+     * The target triple Codex names its aarch64 build after, read from the published tarball
+     * (`package/vendor/aarch64-unknown-linux-musl/bin/codex`) rather than assumed.
+     */
+    private const val CODEX_TARGET_TRIPLE = "aarch64-unknown-linux-musl"
+
+    /**
+     * Install command for Codex, which needs its platform build fetched by hand.
+     *
+     * `@openai/codex` is a launcher whose real binary lives in an *optional* dependency, declared as
+     * an alias (`"@openai/codex-linux-arm64": "npm:@openai/codex@0.147.0-linux-arm64"`). npm skips
+     * it here, and the launcher then stops with
+     * `Missing optional dependency @openai/codex-linux-arm64`. Verb reporting that as "cannot
+     * launch" would be giving up on a dependency it can plainly resolve.
+     *
+     * So it is resolved. `codex.js` falls back to `<package>/vendor/<triple>/bin/codex` when the
+     * optional package is absent (read from `codex.js`, not guessed), so unpacking the published
+     * platform tarball there is enough -- no npm platform check to fight, and the version is taken
+     * from the launcher actually installed, so the two can never drift apart.
+     *
+     * `npm pack` is used rather than a hand-built registry URL so npm resolves the tarball location
+     * itself.
+     */
+    private fun codexInstall(): String {
+        val pkg = "\$PREFIX/lib/node_modules/@openai/codex"
+        val work = "\$TMPDIR/verb-codex-platform"
+        return "npm install -g @openai/codex && " +
+            "codex_version=\$(node -p \"require('$pkg/package.json').version\") && " +
+            "rm -rf $work && mkdir -p $work && " +
+            "(cd $work && npm pack --silent \"@openai/codex@\${'$'}{codex_version}-linux-arm64\") && " +
+            "mkdir -p $pkg/vendor && " +
+            "tar -xzf $work/*.tgz -C $pkg/vendor --strip-components=2 package/vendor && " +
+            "chmod -R +x $pkg/vendor/$CODEX_TARGET_TRIPLE/bin && " +
+            "rm -rf $work"
+    }
+
+    /**
      * Install command for a Python agent that pins an interpreter older than the default.
      *
      * The system `python` is whatever the repository ships -- currently 3.14 -- and Verb will not
@@ -252,8 +304,8 @@ object RuntimeProfiles {
             listOf("qemu-user-aarch64"),
             listOf(RuntimeRequirement("qemu-aarch64", "qemu-user-aarch64")),
             postInstallHint =
-                "Lets the Linux Agent Runtime execute Claude Code and OpenCode, which publish no " +
-                    "android-arm64 build."
+                "Runs statically linked agent builds that proot refuses to exec directly, such as " +
+                    "Codex's."
         ),
         RuntimeProfile(
             RuntimeProfileId.PYTHON,
@@ -305,10 +357,24 @@ object RuntimeProfiles {
             "Codex CLI",
             emptyList(),
             listOf(RuntimeRequirement("codex", "", versionProbeArgs = listOf("--version"))),
-            prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
-            installCommandOverride = "npm install -g @openai/codex",
+            // qemu is not optional here: Codex's only aarch64 build is static, and proot refuses to
+            // exec a static binary. See AgentBinaryAbi.STATIC.
+            prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.AGENT_EMULATOR),
+            installCommandOverride = codexInstall(),
             postInstallHint = "In Terminal, run codex and complete its sign-in flow.",
-            launchCommand = "codex"
+            launchCommand = "codex",
+            binaryCandidates = listOf(
+                // The build Verb fetches itself, so its ABI is certain.
+                AgentBinaryCandidate(
+                    "\$PREFIX/lib/node_modules/@openai/codex/vendor/$CODEX_TARGET_TRIPLE/bin/codex",
+                    AgentBinaryAbi.STATIC
+                ),
+                // Codex's own standalone installer keeps every release it has fetched; newest wins.
+                AgentBinaryCandidate(
+                    "\$HOME/.codex/packages/standalone/releases/*/bin/codex",
+                    AgentBinaryAbi.STATIC
+                )
+            )
         ),
         RuntimeProfile(
             RuntimeProfileId.CLAUDE_CODE,

@@ -126,30 +126,61 @@ the bundled loader, and the self-installer's `versions/2.1.235` declares
 `/lib/ld-musl-aarch64.so.1` and runs through the same loader once detection routes it there. So the
 fallback that would carry a future self-update is verified, not assumed.
 
-### 4b. Codex — still broken, and it is not PATH ordering
+### 4b. Codex — FIXED. Verb now resolves what it can, and proot was the real obstacle
 
-Carried over, with the diagnosis corrected. Codex was already failing before this sprint's change
-(measured both ways), so this is not a regression from it, but the old explanation was wrong.
+Two separate things were wrong, and an earlier note in this document blamed the wrong component for
+the second. Corrected here, with how it was actually established.
+
+**The dependency npm skipped.** `@openai/codex` is a launcher; the real binary ships in an
+*optional* dependency declared as an alias:
 
 ```
-$HOME/.local/bin/codex  -> .codex/packages/standalone/current/bin/codex
-  -> error: ".../releases/0.147.0-aarch64-unknown-linux-musl/bin/codex" has unexpected e_type: 2
-$PREFIX/bin/codex       -> node_modules/@openai/codex/bin/codex.js
-  -> Error: Missing optional dependency @openai/codex-linux-arm64
+"@openai/codex-linux-arm64": "npm:@openai/codex@0.147.0-linux-arm64"
 ```
 
-Two things this sprint established:
+npm skips it here, and `codex.js` then stops with `Missing optional dependency`. Verb calling that
+"cannot launch" would be giving up on something plainly resolvable, so it is resolved: `codex.js`
+falls back to `<package>/vendor/<triple>/bin/codex` when the optional package is absent — read out
+of `codex.js`, not guessed — and Verb's install unpacks the published platform tarball there.
+`npm pack` resolves the tarball location, and the version comes from the launcher actually
+installed, so the two cannot drift.
 
-- **The `e_type: 2` message is not Termux's exec shim.** `strings` finds it in neither `proot`,
-  `libtermux-exec.so`, nor `libtermux-exec-ld-preload.so`. It is emitted by Codex's *own* standalone
-  launcher rejecting its own release binary. Clearing `LD_PRELOAD` changes nothing, which rules out
-  the preload explanation this document previously gave.
-- The release binary is `aarch64-unknown-linux-musl` but is **static** — the musl loader answers
-  `Not a valid dynamic program` — so it needs neither the loader nor the wrapper's musl branch.
+**proot refuses static binaries — and that is what `e_type: 2` always meant.** The earlier claim in
+this document, that the message came from Codex's own launcher and not from Verb's runtime, was
+wrong. It came from a `strings` search that returned nothing and was read as evidence of absence.
+Re-run with `grep -a`, `proot` does contain the string. The decisive checks:
 
-The npm path is the more actionable of the two, since it names its own fix: it wants a platform
-package. Whether `@openai/codex-linux-arm64` has a musl sibling is unverified — read the package
-metadata before acting on that, rather than guessing a name.
+```
+codex (static musl, ET_EXEC) run from Android's shell   -> codex-cli 0.147.0
+the same binary run inside proot                        -> error: "..." has unexpected e_type: 2
+proot --version, run inside proot                       -> error: "..." has unexpected e_type: 2
+```
+
+Verb's own `proot` is such a build, so proot refusing itself is the tell. A terminal session is
+always inside proot and nothing escapes a ptrace sandbox from within, so the binary cannot simply be
+exec'd.
+
+`qemu-aarch64` maps the ELF itself rather than handing it to proot's loader, and runs it:
+`codex-cli 0.147.0`. Verb already shipped that as the **Agent Emulator** profile, so Codex now
+declares it a prerequisite and the wrapper routes static builds through it. The emulator's
+description, which claimed it was for Claude Code and OpenCode, was stale and has been corrected.
+
+Verified on device: `codex --version` -> `codex-cli 0.147.0`; Agents tab shows Codex CLI **Ready**.
+No reinstall was needed — the wrapper picked up the standalone build already present.
+
+### The general rule this establishes
+
+A launch failure is only worth reporting to the user once Verb has tried what it owns:
+
+| Failure | Resolution |
+| --- | --- |
+| npm skipped a platform package (`os`/`cpu`/`libc` mismatch on Android) | install it with `--force`, or unpack the published tarball where the launcher looks |
+| Dynamically linked musl build, no interpreter on Android | bundled musl loader |
+| Static `ET_EXEC` build, refused by proot | `qemu-aarch64` |
+| glibc-only build | genuinely unresolvable — say so |
+
+The wrapper reads the ELF interpreter at launch to decide which of these applies, so a binary Verb
+has never seen still lands in the right branch. "Cannot launch" is reserved for the last row.
 
 ## Not yet verified
 
