@@ -220,6 +220,88 @@ object TermuxBootstrapInstaller {
         }.getOrDefault(false)
     }
 
+    private const val AGENT_PATH_MARKER = "# >>> Verb agent PATH >>>"
+    private const val AGENT_PATH_END_MARKER = "# <<< Verb agent PATH <<<"
+
+    /**
+     * Puts Verb's agent launcher directory back at the front of PATH.
+     *
+     * Verb sets a base PATH with this directory first (see [TerminalEnvironmentResolver]), but a
+     * base PATH is only a starting point: shell startup files run afterwards and can reorder it.
+     * One of them does. The Codex installer writes
+     * `export PATH="$HOME/.local/bin:$PATH"` into `$HOME/.bashrc`, which puts the vendor
+     * self-installer launchers back in front of Verb's -- and `$HOME/.local/bin/claude` is exactly
+     * the launcher that fails with `has unexpected e_type: 2`.
+     *
+     * That is why an installed, authenticated Claude Code was still unreachable from the terminal
+     * while Verb's own readiness probe reported it Ready: [GuestCommandRunner] deliberately never
+     * sources user startup files, so the two disagreed about what `claude` even resolves to. This
+     * closes that gap from the shell side, where the reordering happens.
+     *
+     * Written as a `case` on PATH rather than a plain prepend so re-sourcing a startup file cannot
+     * grow PATH without bound.
+     */
+    private fun agentPathGuard(): String =
+        """
+        |case "${'$'}{PATH}" in
+        |  "${AgentWrapperBootstrap.GUEST_BIN_DIR}:"*) ;;
+        |  *) PATH="${AgentWrapperBootstrap.GUEST_BIN_DIR}:${'$'}{PATH}"; export PATH ;;
+        |esac
+        |""".trimMargin()
+
+    private fun agentPathGuardBlock(): String =
+        "$AGENT_PATH_MARKER\n" +
+            "# Verb's agent launchers must win PATH. Installers prepend their own directory from\n" +
+            "# this file -- Codex's does -- which is how an installed, authenticated agent became\n" +
+            "# unreachable. Verb keeps this block last and rewrites it every launch, so a later\n" +
+            "# installer cannot outrank it. Safe to delete; it comes back.\n" +
+            agentPathGuard() +
+            "$AGENT_PATH_END_MARKER\n"
+
+    /**
+     * Keeps the PATH guard as the **last** thing `.bashrc` does.
+     *
+     * Position is the whole point, so this is not a write-once-and-leave-alone helper like
+     * [ensureAgentEnvFile]: an installer that appends to `.bashrc` after Verb did would otherwise
+     * outrank the guard, and the bug would come back exactly as it did the first time. Verb's own
+     * marked block is removed and re-appended on every launch; nothing outside the markers is ever
+     * touched, and the file is only rewritten when the result actually differs, so a `.bashrc` that
+     * is already correct is left alone entirely.
+     *
+     * Returns true when the file was changed.
+     */
+    fun ensureAgentPathGuardLast(filesDir: File): Boolean = runCatching {
+        val home = File(filesDir, "home").apply { mkdirs() }
+        val bashrc = File(home, ".bashrc")
+        val original = if (bashrc.isFile) bashrc.readText() else ""
+
+        val withoutGuard = removeMarkedBlock(original)
+        val separator = if (withoutGuard.isEmpty() || withoutGuard.endsWith("\n")) "" else "\n"
+        val updated = withoutGuard + separator + agentPathGuardBlock()
+        if (updated == original) return false
+
+        // One-time backup the first time Verb modifies a file the user may have written in.
+        if (original.isNotEmpty()) {
+            val backup = File(home, ".bashrc.pre-verb-agent-path")
+            if (!backup.exists()) backup.writeText(original)
+        }
+        bashrc.writeText(updated)
+        TerminalSessionLogger.info(LogCategory.IO, "Agent PATH guard placed last in .bashrc")
+        true
+    }.onFailure {
+        TerminalSessionLogger.warn(LogCategory.IO, "Agent PATH guard failed: ${'$'}{it.message}")
+    }.getOrDefault(false)
+
+    /** Drops a previous guard block, markers included, leaving every other line untouched. */
+    private fun removeMarkedBlock(contents: String): String {
+        val start = contents.indexOf(AGENT_PATH_MARKER)
+        if (start < 0) return contents
+        val endMarker = contents.indexOf(AGENT_PATH_END_MARKER, start)
+        if (endMarker < 0) return contents
+        val end = (contents.indexOf('\n', endMarker) + 1).takeIf { it > 0 } ?: contents.length
+        return contents.removeRange(start, end)
+    }
+
     private const val SHELL_INTEGRATION_MARKER = "# >>> Verb shell integration >>>"
     private const val SHELL_INTEGRATION_RELATIVE_PATH = "etc/verb/shell-integration.bash"
     private val SHELL_INTEGRATION_SOURCE_BLOCK =
@@ -284,11 +366,26 @@ object TermuxBootstrapInstaller {
     private fun shellIntegrationScript(): String {
         val d = "$" // shorthand so the bash template below reads like real bash, not escape soup
         return """
-            |# Verb shell integration -- OSC 7 (CWD) + OSC 633 (lifecycle) markers.
+            |# Verb shell integration -- agent PATH guard + OSC 7 (CWD) / OSC 633 (lifecycle) markers.
             |# Fully Verb-owned: rewritten on every launch, never hand-edited. Advisory only --
             |# consumed solely by Verb's own terminal adapter to build local, non-persistent
             |# command history. Never alters shell behavior, PTY input/output, or grants any
             |# execution capability; any process on this PTY could emit the same bytes.
+            |
+            |__verb_fix_agent_path() {
+            |    case "$d{PATH}" in
+            |      "${AgentWrapperBootstrap.GUEST_BIN_DIR}:"*) ;;
+            |      *) PATH="${AgentWrapperBootstrap.GUEST_BIN_DIR}:$d{PATH}"; export PATH ;;
+            |    esac
+            |}
+            |
+            |# Deliberately ahead of both early returns below. The base PATH Verb sets already has
+            |# this directory first, but ${'$'}HOME/.bashrc runs afterwards and the Codex installer
+            |# prepends ${'$'}HOME/.local/bin there -- which put a launcher that fails with
+            |# "has unexpected e_type: 2" back in front of Verb's working one. PATH has to be right
+            |# for non-interactive shells and re-sourced files too, so it is fixed before anything
+            |# else can return.
+            |__verb_fix_agent_path
             |
             |if [ -n "$d{VERB_SHELL_INTEGRATION_LOADED:-}" ]; then
             |    return 0 2>/dev/null || exit 0
@@ -421,6 +518,9 @@ object TermuxBootstrapInstaller {
         ensureShellIntegrationSourced(filesDir)
         ensureAgentEnvFile(filesDir)
         ensureAgentEnvSourced(filesDir)
+        // Last, and after the wrappers exist: a shell startup file can reorder the base PATH Verb
+        // set, and one on this device does. See ensureAgentPathGuardLast.
+        ensureAgentPathGuardLast(filesDir)
         // Unconditional, like writeShellIntegrationScript above and for the same reason: these
         // files are entirely Verb-authored, so there is no user content to preserve and rewriting
         // them every launch is what repairs one a vendor installer damaged. See

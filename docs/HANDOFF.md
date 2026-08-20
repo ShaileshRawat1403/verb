@@ -6,7 +6,7 @@ which holds the blocker detail, and `docs/AGENT_RUNTIME_V1.md`, which holds the 
 ## State
 
 - Branch `agent/runtime-truth-hardening`, clean, pushed.
-- `310 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
+- `318 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
 - Nothing uncommitted, nothing half-applied, no temporary instrumentation anywhere.
 - Validation device: Vivo I2202 (Android 13, arm64). Agent-launch hardening was installed and
   verified on it; device scratch files were cleaned up afterwards.
@@ -67,14 +67,27 @@ installed *and* authenticated. Both causes were reproduced on the device first:
 - `$HOME/.local/bin/claude`, added by Claude's own self-installer, won PATH and failed with
   `has unexpected e_type: 2`.
 
-The root cause was structural rather than either symptom: the launcher was written *once*, at
-install time, into a directory other people's installers own. `AgentWrapperBootstrap` now owns
-launching in `$PREFIX/libexec/verb/bin` — Verb-only, first on PATH, rewritten every launch — and
-each wrapper resolves its binary when it runs, newest-first, reading the ELF interpreter out of the
-file rather than assuming it. `docs/NEXT_SPRINT.md` §4 has the full detail and the measurements.
+Two fixes were needed, and stopping after the first produced a wrong "done" claim worth learning
+from.
 
-Verified on device after installing: `claude` `2.1.235`, `opencode` `1.18.18`, `dsh` `0.1.0-rc.7`,
-all three **Ready** in the Agents tab, sign-in intact.
+**The launcher was written once, at install time, into a directory other people's installers own.**
+`AgentWrapperBootstrap` now owns launching in `$PREFIX/libexec/verb/bin` — Verb-only, first on the
+base PATH, rewritten every launch — and each wrapper resolves its binary when it runs, newest-first,
+reading the ELF interpreter out of the file rather than assuming it.
+
+**A base PATH is only a starting point.** `$HOME/.bashrc` runs afterwards, and the Codex installer
+had put `export PATH="$HOME/.local/bin:$PATH"` there, re-shadowing Verb's launchers in every real
+shell. A Verb-owned block is now kept *last* in `.bashrc` and re-appended each launch, with the same
+correction in `shell-integration.bash` for login shells.
+
+**The lesson worth keeping:** `GuestCommandRunner` never sources user startup files, so the Agents
+tab reported **Ready** while the terminal failed. A green card is not proof. Verify a real login
+shell — `bash -lc 'command -v claude'` — before calling an agent fixed.
+
+Verified on device after installing: `claude` `2.1.235`, `opencode` `1.18.18`, `dsh` `0.1.0-rc.7`
+all Ready; `claude` resolves to Verb's wrapper in login, nested-interactive and non-interactive
+shells; and tapping **Open Claude Code** starts the real signed-in TUI. `docs/NEXT_SPRINT.md` §4
+has the measurements.
 
 ## Next, in priority order
 
