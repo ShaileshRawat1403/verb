@@ -72,7 +72,7 @@ class GuestCommandRunner(private val resolver: TerminalEnvironmentResolver) {
      * bare command name -- never a resolved host path -- through the guest's `env`, so PATH
      * resolution happens inside the guest exactly as it would for a user typing the command.
      */
-    fun probe(requirement: RuntimeRequirement, timeoutMs: Long = MAX_TIMEOUT_MS): GuestProbeResult {
+    fun probe(requirement: RuntimeRequirement, timeoutMs: Long = DEFAULT_TIMEOUT_MS): GuestProbeResult {
         val args = requirement.versionProbeArgs
             ?: return GuestProbeResult(Outcome.REFUSED, null, "no registered probe for '${requirement.command}'")
         val environment = resolver.resolveGuestCommand(listOf(requirement.command) + args)
@@ -110,7 +110,17 @@ class GuestCommandRunner(private val resolver: TerminalEnvironmentResolver) {
     }
 
     companion object {
-        const val MAX_TIMEOUT_MS = 3_000L
+        /**
+         * Upper bound for any probe. Raised from 3s once Codex began running through
+         * `qemu-aarch64`: emulated startup on a large static binary regularly exceeded the old
+         * bound, so a working agent probed as absent. Individual requirements still ask for less
+         * (the default), so only the agents that need the headroom pay for it -- see
+         * [RuntimeRequirement.probeTimeoutMs].
+         */
+        const val MAX_TIMEOUT_MS = 15_000L
+
+        /** What a probe gets when its requirement does not ask for more. */
+        const val DEFAULT_TIMEOUT_MS = 3_000L
         const val MAX_OUTPUT_CHARS = BoundedProcessRunner.MAX_OUTPUT_CHARS
 
         /** POSIX `env`'s exit code convention for "command not found" via PATH search. */

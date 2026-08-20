@@ -31,7 +31,17 @@ data class RuntimeRequirement(
      * apt-tracked packages, where dpkg's Version field already gives a reliable signal and
      * spawning a process on every check would be unnecessary overhead.
      */
-    val versionProbeArgs: List<String>? = null
+    val versionProbeArgs: List<String>? = null,
+
+    /**
+     * How long this command's probe may take, when the default is not enough.
+     *
+     * Codex's build is static and runs through `qemu-aarch64`, whose startup on a 300 MB binary
+     * exceeds the default bound often enough that the probe timed out and the Agents tab reported an
+     * installed, working Codex as not installed. The bound is per-command rather than global so one
+     * slow emulated agent cannot make every other probe slower.
+     */
+    val probeTimeoutMs: Long? = null
 )
 
 /**
@@ -366,7 +376,8 @@ object RuntimeProfiles {
             RuntimeProfileId.CODEX,
             "Codex CLI",
             emptyList(),
-            listOf(RuntimeRequirement("codex", "", versionProbeArgs = listOf("--version"))),
+            // Emulated through qemu, so it needs longer than a natively executed binary.
+            listOf(RuntimeRequirement("codex", "", versionProbeArgs = listOf("--version"), probeTimeoutMs = 12_000L)),
             // qemu is not optional here: Codex's only aarch64 build is static, and proot refuses to
             // exec a static binary. See AgentBinaryAbi.STATIC.
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT, RuntimeProfileId.AGENT_EMULATOR),
@@ -559,7 +570,10 @@ class RuntimeCapabilityDetector(
         val unverifiedCommands = mutableListOf<String>()
         val timedOutCommands = mutableListOf<String>()
         for (requirement in probedRequirements) {
-            when (guestCommandRunner.probe(requirement).outcome) {
+            val outcome = requirement.probeTimeoutMs
+                ?.let { guestCommandRunner.probe(requirement, timeoutMs = it) }
+                ?: guestCommandRunner.probe(requirement)
+            when (outcome.outcome) {
                 GuestCommandRunner.Outcome.READY -> Unit
                 GuestCommandRunner.Outcome.TIMEOUT -> timedOutCommands += requirement.command
                 GuestCommandRunner.Outcome.GUEST_UNAVAILABLE,
