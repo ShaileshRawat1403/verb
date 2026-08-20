@@ -8,6 +8,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import com.example.verb.terminal.MobileTerminalKeyboard
@@ -39,9 +40,14 @@ class MobileTerminalKeyboardTest {
             )
         }
 
-        composeTestRule.onNodeWithTag("key_quick_/").assertExists().performClick()
-        composeTestRule.onNodeWithTag("key_quick_|").assertExists().performClick()
-        
+        // Collapsed by default: the symbol row is one tap away, not permanently on screen.
+        composeTestRule.onAllNodesWithTag("key_quick_/").assertCountEquals(0)
+
+        composeTestRule.onNodeWithTag("btn_toggle_key_panel").performClick()
+
+        composeTestRule.onNodeWithTag("key_quick_/").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("key_quick_|").performScrollTo().performClick()
+
         assertEquals(listOf("/", "|"), keysSent)
     }
 
@@ -62,10 +68,10 @@ class MobileTerminalKeyboardTest {
         composeTestRule.onAllNodesWithTag("key_ctrl_C").assertCountEquals(0)
 
         // Tap CTRL
-        composeTestRule.onNodeWithTag("key_ctrl").performClick()
+        composeTestRule.onNodeWithTag("key_ctrl").performScrollTo().performClick()
 
         // Now Ctrl+C should be visible
-        composeTestRule.onNodeWithTag("key_ctrl_C").assertExists().performClick()
+        composeTestRule.onNodeWithTag("key_ctrl_C").performScrollTo().performClick()
         
         // Emits CTRL_C and exits Ctrl mode
         assertEquals(listOf("CTRL_C"), keysSent)
@@ -86,14 +92,15 @@ class MobileTerminalKeyboardTest {
         }
 
         // Tap TAB normally
-        composeTestRule.onNodeWithTag("key_tab").performClick()
+        composeTestRule.onNodeWithTag("key_tab").performScrollTo().performClick()
         assertEquals(listOf("TAB"), keysSent)
         keysSent.clear()
-        
-        // Tap SHIFT
-        composeTestRule.onNodeWithTag("key_shift").performClick()
-        composeTestRule.onNodeWithTag("key_tab").performClick()
-        
+
+        // SHIFT is a rarely used modifier, so it lives in the expandable panel.
+        composeTestRule.onNodeWithTag("btn_toggle_key_panel").performClick()
+        composeTestRule.onNodeWithTag("key_shift").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("key_tab").performScrollTo().performClick()
+
         assertEquals(listOf("SHIFT_TAB"), keysSent)
     }
 
@@ -110,7 +117,7 @@ class MobileTerminalKeyboardTest {
             )
         }
 
-        composeTestRule.onNodeWithTag("key_paste").assertExists().performClick()
+        composeTestRule.onNodeWithTag("key_paste").performScrollTo().performClick()
         assertEquals(listOf("PASTE"), keysSent)
     }
 
@@ -197,7 +204,7 @@ class MobileTerminalKeyboardTest {
     }
 
     @Test
-    fun `history recall and interrupt stay reachable while the IME is visible`() {
+    fun `the resting key row stays reachable while the IME is visible`() {
         val keysSent = mutableListOf<String>()
         composeTestRule.setContent {
             MobileTerminalKeyboard(
@@ -210,16 +217,15 @@ class MobileTerminalKeyboardTest {
             )
         }
 
-        // These live outside the isKeyboardVisible-gated strips, unlike ESC/CTRL/SHIFT/PASTE.
-        composeTestRule.onNodeWithTag("key_up").assertExists().performClick()
-        composeTestRule.onNodeWithTag("key_down").assertExists().performClick()
-        composeTestRule.onNodeWithTag("key_tab").assertExists().performClick()
-        composeTestRule.onNodeWithTag("key_essential_ctrl_c").assertExists().performClick()
+        composeTestRule.onNodeWithTag("key_up").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("key_down").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("key_tab").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("key_essential_ctrl_c").performScrollTo().performClick()
+        // ESC used to be hidden the moment the IME appeared, which is precisely when a terminal
+        // user reaches for it. The resting row is no longer gated on keyboard visibility.
+        composeTestRule.onNodeWithTag("key_esc").performScrollTo().performClick()
 
-        assertEquals(listOf("UP", "DOWN", "TAB", "CTRL_C"), keysSent)
-
-        // The gated power strip should not be present while the IME is up.
-        composeTestRule.onAllNodesWithTag("key_esc").assertCountEquals(0)
+        assertEquals(listOf("UP", "DOWN", "TAB", "CTRL_C", "ESC"), keysSent)
     }
 
     @Test
@@ -236,8 +242,10 @@ class MobileTerminalKeyboardTest {
             )
         }
 
-        // Just verify the settings button is there since testing ModalBottomSheet is flaky in Robolectric
-        composeTestRule.onNodeWithTag("btn_edit_quick_keys").assertExists()
+        // Just verify the settings button is there since testing ModalBottomSheet is flaky in
+        // Robolectric. It moved into the expandable panel along with the quick keys themselves.
+        composeTestRule.onNodeWithTag("btn_toggle_key_panel").performClick()
+        composeTestRule.onNodeWithTag("btn_edit_quick_keys").performScrollTo().assertExists()
         assertTrue(true)
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,12 +24,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -40,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,10 +91,10 @@ fun MobileTerminalKeyboard(
     var ctrlActive by remember { mutableStateOf(false) }
     var shiftActive by remember { mutableStateOf(false) }
     var isSheetOpen by remember { mutableStateOf(false) }
+    // Survives rotation and process recreation: a user who opened the panel should not have to
+    // reopen it because the screen turned.
+    var keysExpanded by rememberSaveable { mutableStateOf(false) }
     var terminalInput by remember { mutableStateOf("") }
-    // The command field stays available while the IME is open. The auxiliary strips are useful
-    // for terminal navigation, but keeping them mounted beside the IME turns the entire dock into
-    // a large, distracting panel and leaves too little room for terminal output.
     
     val scrollState1 = rememberScrollState()
     val scrollState2 = rememberScrollState()
@@ -143,7 +148,7 @@ fun MobileTerminalKeyboard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                    .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
@@ -151,9 +156,22 @@ fun MobileTerminalKeyboard(
                     onValueChange = ::handleInputChange,
                     modifier = Modifier
                         .weight(1f)
+                        .heightIn(min = 46.dp)
                         .testTag("terminal_input_field"),
-                    placeholder = { Text("$ type a command", color = Color(0xFF94A3B8)) },
+                    placeholder = {
+                        Text(
+                            "$ type a command",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    },
+                    textStyle = LocalTextStyle.current.copy(
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace
+                    ),
                     singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { submitTerminalInput() }),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -163,10 +181,9 @@ fun MobileTerminalKeyboard(
                         unfocusedBorderColor = Color(0xFF3B4252)
                     )
                 )
-                Spacer(modifier = Modifier.width(8.dp))
                 IconButton(
                     onClick = ::submitTerminalInput,
-                    modifier = Modifier.testTag("terminal_input_submit")
+                    modifier = Modifier.size(44.dp).testTag("terminal_input_submit")
                 ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
@@ -174,16 +191,35 @@ fun MobileTerminalKeyboard(
                         tint = Color(0xFF818CF8)
                     )
                 }
+                // One control for the whole auxiliary panel. Collapsed is the default because the
+                // dock used to occupy roughly 40% of the screen at rest, which is space the
+                // terminal output needs far more than a permanently visible symbol row does.
+                IconButton(
+                    onClick = { keysExpanded = !keysExpanded },
+                    modifier = Modifier.size(36.dp).testTag("btn_toggle_key_panel")
+                ) {
+                    Icon(
+                        imageVector = if (keysExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                        contentDescription = if (keysExpanded) "Hide extra keys" else "Show extra keys",
+                        tint = Color(0xFF94A3B8),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
 
-            // History recall, tab completion, and interrupt are needed mid-typing, not just
-            // after the IME is dismissed, so this strip stays visible regardless of keyboard
-            // state. Kept to four keys to avoid eating into the terminal output above it.
+            // The keys worth permanent space, and no more: history, completion, interrupt, escape,
+            // the CTRL modifier and paste. Seven fit without scrolling on a normal phone, which is
+            // the point -- a resting row you have to scroll is a row you stop using. SHIFT, the
+            // arrows and the symbol keys live one tap away in the panel above. It stays
+            // mounted whether or not the IME is up: history recall, tab completion, interrupt and
+            // ESC are wanted *while* typing, and hiding them behind the soft keyboard -- which is
+            // what the previous layout did -- removed them at exactly the moment they were needed.
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(scrollState1)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 KeyButton(label = "▲", testTag = "key_up") { onSendKey("UP") }
@@ -195,17 +231,27 @@ fun MobileTerminalKeyboard(
                 KeyButton(label = "^C", testTag = "key_essential_ctrl_c", isAccent = true) {
                     onSendKey("CTRL_C")
                 }
+                KeyButton(label = "ESC", testTag = "key_esc") { onSendKey("ESC") }
+                KeyButton(label = "CTRL", testTag = "key_ctrl", isAccent = ctrlActive) {
+                    ctrlActive = !ctrlActive
+                    shiftActive = false
+                }
+                KeyButton(label = "PASTE", testTag = "key_paste") {
+                    // PASTE action is routed to TermuxTerminalRuntimeAdapter.
+                    onSendKey("PASTE")
+                }
             }
 
-            if (!isKeyboardVisible && ctrlActive) {
-                // Ctrl combinations row
+            // Arming CTRL is a request for the key that follows it, so the combinations appear
+            // regardless of whether the panel is expanded, and disappear again once one is sent.
+            if (ctrlActive) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
                         .background(Color(0xFF222630))
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val ctrlKeys = listOf("C", "D", "L", "U", "Z", "A", "R", "W", "K")
@@ -216,24 +262,31 @@ fun MobileTerminalKeyboard(
                         }
                     }
                 }
-            } else if (!isKeyboardVisible) {
-                // Quick keys row
+            }
+
+            if (keysExpanded) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(scrollState2)
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    KeyButton(label = "SHIFT", testTag = "key_shift", isAccent = shiftActive) {
+                        shiftActive = !shiftActive
+                        ctrlActive = false
+                    }
+                    KeyButton(label = "◄", testTag = "key_left") { onSendKey("LEFT") }
+                    KeyButton(label = "►", testTag = "key_right") { onSendKey("RIGHT") }
                     quickKeys.forEach { keyStr ->
-                        KeyButton(label = keyStr, testTag = "key_quick_$keyStr") { 
-                            onSendKey(keyStr) 
+                        KeyButton(label = keyStr, testTag = "key_quick_$keyStr") {
+                            onSendKey(keyStr)
                         }
                     }
                     IconButton(
                         onClick = { isSheetOpen = true },
-                        modifier = Modifier.size(34.dp).testTag("btn_edit_quick_keys")
+                        modifier = Modifier.size(32.dp).testTag("btn_edit_quick_keys")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Settings,
@@ -242,35 +295,6 @@ fun MobileTerminalKeyboard(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                }
-            }
-            
-            if (!isKeyboardVisible) {
-                // Core power strip is deliberately hidden with the IME. It returns immediately
-                // after keyboard dismissal, while the compact command field remains in place.
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(scrollState1)
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    KeyButton(label = "ESC", testTag = "key_esc") { onSendKey("ESC") }
-                    KeyButton(label = "CTRL", testTag = "key_ctrl", isAccent = ctrlActive) {
-                        ctrlActive = !ctrlActive
-                        shiftActive = false
-                    }
-                    KeyButton(label = "SHIFT", testTag = "key_shift", isAccent = shiftActive) {
-                        shiftActive = !shiftActive
-                        ctrlActive = false
-                    }
-                    KeyButton(label = "PASTE", testTag = "key_paste") {
-                        // PASTE action is routed to TermuxTerminalRuntimeAdapter.
-                        onSendKey("PASTE")
-                    }
-                    KeyButton(label = "◄", testTag = "key_left") { onSendKey("LEFT") }
-                    KeyButton(label = "►", testTag = "key_right") { onSendKey("RIGHT") }
                 }
             }
         }
@@ -370,6 +394,15 @@ fun MobileTerminalKeyboard(
     }
 }
 
+/**
+ * A terminal key.
+ *
+ * Deliberately not an [OutlinedButton]: Material's button enforces a 58dp minimum width, which made
+ * a two-character key as wide as a five-character one and meant only five keys fitted across a
+ * normal phone -- CTRL and PASTE were cut off the edge of the resting row, which is the same as not
+ * shipping them. Sizing to content instead fits the whole row without scrolling, and the taller
+ * 38dp target is easier to hit than the 34dp it replaces despite the row being narrower overall.
+ */
 @Composable
 private fun KeyButton(
     label: String,
@@ -377,22 +410,25 @@ private fun KeyButton(
     isAccent: Boolean = false,
     onClick: () -> Unit
 ) {
-    OutlinedButton(
-        onClick = onClick,
+    Surface(
+        shape = RoundedCornerShape(9.dp),
+        color = if (isAccent) Color(0xFF6366F1) else Color(0xFF222630),
         modifier = Modifier
-            .height(34.dp)
-            .testTag(testTag),
-        contentPadding = ButtonDefaults.ContentPadding,
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (isAccent) Color(0xFF6366F1) else Color(0xFF222630),
-            contentColor = if (isAccent) Color.White else Color(0xFFE2E8F0)
-        )
+            .height(38.dp)
+            .clickable(onClick = onClick)
+            .testTag(testTag)
     ) {
-        Text(
-            text = label,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                color = if (isAccent) Color.White else Color(0xFFE2E8F0),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace
+            )
+        }
     }
 }

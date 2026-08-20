@@ -194,11 +194,35 @@ has never seen still lands in the right branch. "Cannot launch" is reserved for 
 
 - **Diagnostics `Copy Report` sits in a bottom action row** that was clipped on the validation
   device. Fixed, but the same layout pattern exists elsewhere and is worth auditing.
+- **The terminal dock was rebuilt** (see below). The Agent Runtime "Choose" buttons sitting under
+  the scrolling thumb is still open.
 - **The Agent Runtime (QEMU/PRoot Debian rootfs)** works for a single process but cannot exec a
   second one, so nothing that forks can run inside it. It is currently redundant now that agents run
   natively; decide whether to keep, gate, or remove it.
 - **Remote SSH backend** — discovery written, no code. Still the answer for heavy workloads
   regardless of what runs on-device.
+
+## The terminal dock — done
+
+At rest the dock took roughly 40% of the screen: a command field, then three stacked key rows, then
+the navigation bar. Two of those rows were also gated on `!isKeyboardVisible`, so ESC / CTRL / PASTE
+disappeared the moment the soft keyboard opened — precisely when a terminal user reaches for them.
+
+Now two rows, and nothing is gated on the keyboard:
+
+- Command field, send, and one chevron that opens the rest.
+- One resting key row: `▲ ▼ TAB ^C ESC CTRL PASTE`. All seven fit across a 1080px phone without
+  scrolling, which was the constraint that decided the set — a resting row you have to scroll is a
+  row you stop using.
+- The chevron adds `SHIFT ◄ ►` and the editable symbol keys. Arming CTRL still reveals the `^X`
+  combinations on its own, expanded or not, since arming it is a request for the key that follows.
+
+`KeyButton` stopped being a Material `OutlinedButton`, whose 58dp minimum width made a two-character
+key as wide as a five-character one and let only five keys fit. Sizing to content fits all seven and
+allowed the touch target to grow from 34dp to 38dp at the same time.
+
+Measured on the device: dock plus navigation went from ~38% of the screen to ~27%, so the terminal
+output area gained about a fifth of its height.
 
 ## Next up (agreed)
 
