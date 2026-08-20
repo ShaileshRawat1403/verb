@@ -73,16 +73,33 @@ class MuslAgentSupportTest {
         }
     }
 
+    /**
+     * The launcher is no longer written by the install command, and that is the point: a file
+     * written once into `$PREFIX/bin` was overwritten by npm and shadowed by a vendor
+     * self-installer. Launching belongs to [AgentWrapperBootstrap]; the install must not recreate a
+     * competing copy for either of them to destroy again.
+     */
     @Test
-    fun `musl agent installs write a wrapper that clears the bionic preload`() {
+    fun `musl agent installs no longer write a launcher of their own`() {
         listOf(RuntimeProfileId.CLAUDE_CODE, RuntimeProfileId.OPENCODE).forEach { id ->
             val command = RuntimeProfiles.forId(id).installCommand
+            assertTrue("$id must not write into \$PREFIX/bin", !command.contains("\$PREFIX/bin/"))
+            assertTrue("$id must not generate a launcher", !command.contains("chmod +x"))
+        }
+    }
+
+    @Test
+    fun `the generated wrapper clears the bionic preload and uses the musl loader`() {
+        listOf(RuntimeProfileId.CLAUDE_CODE, RuntimeProfileId.OPENCODE).forEach { id ->
+            val script = AgentWrapperBootstrap.wrapperScript(RuntimeProfiles.forId(id))
             // Cleared with shell builtins, not `env`: Termux's `env` reintroduces the exec shim
             // that rejects these non-PIE binaries with "has unexpected e_type: 2".
-            assertTrue("$id wrapper must clear the preload", command.contains("unset LD_PRELOAD"))
-            assertTrue("$id must use the musl library path", command.contains("LD_LIBRARY_PATH=\$PREFIX/lib/musl"))
-            assertTrue("$id must invoke the musl loader", command.contains(MuslLoaderBootstrap.GUEST_LOADER_PATH))
-            assertTrue("$id wrapper must be executable", command.contains("chmod +x"))
+            assertTrue("$id wrapper must clear the preload", script.contains("unset LD_PRELOAD"))
+            assertTrue(
+                "$id must use the musl library path",
+                script.contains("VERB_MUSL_LIB=${VerbGuestPaths.PREFIX}/lib/musl")
+            )
+            assertTrue("$id must invoke the musl loader", script.contains(MuslLoaderBootstrap.GUEST_LOADER_PATH))
         }
     }
 

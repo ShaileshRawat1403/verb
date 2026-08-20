@@ -421,6 +421,11 @@ object TermuxBootstrapInstaller {
         ensureShellIntegrationSourced(filesDir)
         ensureAgentEnvFile(filesDir)
         ensureAgentEnvSourced(filesDir)
+        // Unconditional, like writeShellIntegrationScript above and for the same reason: these
+        // files are entirely Verb-authored, so there is no user content to preserve and rewriting
+        // them every launch is what repairs one a vendor installer damaged. See
+        // AgentWrapperBootstrap for why an install-time launcher could not survive.
+        AgentWrapperBootstrap.install(filesDir)
     }
 
     /**
