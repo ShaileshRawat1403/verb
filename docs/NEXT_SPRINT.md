@@ -71,8 +71,10 @@ $PREFIX/bin/claude        -> ../lib/node_modules/@anthropic-ai/claude-code/bin/c
 $HOME/.local/bin/claude   -> $HOME/.local/share/claude/versions/2.1.235                     (self-installer)
 ```
 
-The mistake was writing the launcher *once*, at install time, into a directory other people's
-installers own. Nothing written there can survive them. Launching is now
+There were **two** causes, and finding only the first is what made an earlier "fixed" claim wrong.
+
+**Cause A — the launcher was written once, at install time, into a directory other people's
+installers own.** Nothing written there can survive them. Launching is now
 `AgentWrapperBootstrap`'s, and holds because of three properties rather than a repair:
 
 1. `$PREFIX/libexec/verb/bin` is Verb-owned — npm writes to `$PREFIX/bin`, vendor self-installers
@@ -80,6 +82,30 @@ installers own. Nothing written there can survive them. Launching is now
 2. It is **first** on the guest PATH, ahead of both.
 3. It is rewritten on every launch, like the shell-integration script. A wrapper anything manages
    to damage is repaired by the next app start.
+
+**Cause B — a shell startup file put the broken launcher back in front.** Fixing the base PATH is
+necessary but not sufficient: a base PATH is a starting point, and `$HOME/.bashrc` runs afterwards.
+The Codex installer had written this into it:
+
+```
+# >>> Codex installer >>>
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+so every real shell re-prepended the vendor directory ahead of Verb's, and `claude` resolved back to
+the launcher that fails with `e_type: 2`.
+
+This is also why the Agents tab and the terminal disagreed. `GuestCommandRunner` deliberately never
+sources user startup files, so the probe resolved `claude` through Verb's base PATH and reported
+**Ready**, while the terminal — a login shell that *does* source them — got the broken one. Any
+future "the card says Ready but it does not run" belongs to this same gap: **check a real login
+shell, not just the probe.**
+
+The shell-side fix is a Verb-owned marked block kept *last* in `.bashrc`, re-appended on every
+launch so a later installer cannot outrank it, plus the same correction at the top of
+`shell-integration.bash` ahead of both of that script's early returns (login shells read
+`.bash_profile`, not `.bashrc`). It prepends only when the directory is not already leading, so
+re-sourcing cannot grow PATH without bound.
 
 Resolution moved from install time to launch time, which is what makes a self-update a non-event:
 each wrapper walks a candidate list, resolving globs newest-first, and reads the ELF interpreter out
