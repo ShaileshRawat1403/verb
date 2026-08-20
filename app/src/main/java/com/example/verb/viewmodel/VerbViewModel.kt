@@ -230,6 +230,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun refreshRuntimeProfiles() {
         _runtimeProfileReports.value = runtimeReports()
+        _agentSignInStates.value = readAgentSignInStates()
     }
 
     /**
@@ -518,6 +519,21 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _agentKeyStatus = MutableStateFlow(readAgentKeyStatus())
     val agentKeyStatus: StateFlow<List<AgentKeyStatus>> = _agentKeyStatus.asStateFlow()
+
+    /**
+     * Whether each agent has an authenticated session. Presence of a credential file only -- the
+     * files are never opened. Recomputed alongside the readiness reports, since signing in happens
+     * in the terminal and the tab must reflect it without a restart.
+     */
+    private val agentSignInDetector =
+        com.example.verb.terminal.AgentSignInDetector(getApplication<Application>().filesDir)
+    private val _agentSignInStates =
+        MutableStateFlow(readAgentSignInStates())
+    val agentSignInStates: StateFlow<Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState>> =
+        _agentSignInStates.asStateFlow()
+
+    private fun readAgentSignInStates(): Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState> =
+        RuntimeProfiles.all.filter { it.isAgent }.associate { it.id to agentSignInDetector.stateFor(it) }
 
     private fun readAgentKeyStatus(): List<AgentKeyStatus> {
         val envFile = File(File(getApplication<Application>().filesDir, "home"), ".env")

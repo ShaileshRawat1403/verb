@@ -12,6 +12,10 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -82,17 +86,44 @@ fun AgentRuntimeCard(
                 )
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Text("Choose the three files from the GitHub Actions artifact:", style = MaterialTheme.typography.bodySmall)
-            FileChoiceRow("Rootfs", archiveName, onPickArchive)
-            FileChoiceRow("Checksum", checksumName, onPickChecksum)
-            FileChoiceRow("Manifest", manifestName, onPickManifest)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(
-                    onClick = onImport,
-                    enabled = complete && !importing,
-                    modifier = Modifier.testTag("agent_runtime_import")
-                ) { Text(if (importing) "Verifying…" else "Install runtime") }
-                if (status.isInstalled) {
+
+            // Importing a CI artifact is a rare, deliberate act, but its three file-picker rows
+            // used to sit permanently in the card -- full-width rows whose "Choose" button lands
+            // exactly where a thumb rests while scrolling the page, so scrolling opened the system
+            // file picker by accident. Collapsing them removes that surface entirely between
+            // imports. It opens on its own once any file has been picked, so work in progress is
+            // never hidden behind a control the user would have to remember to reopen.
+            val importStarted = archiveName != null || checksumName != null || manifestName != null
+            var importExpanded by rememberSaveable { mutableStateOf(false) }
+            val showImportControls = importExpanded || importStarted || importing
+
+            if (!showImportControls) {
+                OutlinedButton(
+                    onClick = { importExpanded = true },
+                    modifier = Modifier.testTag("agent_runtime_import_disclosure")
+                ) { Text(if (status.isInstalled) "Replace runtime…" else "Install a runtime…") }
+            } else {
+                Text("Choose the three files from the GitHub Actions artifact:", style = MaterialTheme.typography.bodySmall)
+                FileChoiceRow("Rootfs", archiveName, onPickArchive)
+                FileChoiceRow("Checksum", checksumName, onPickChecksum)
+                FileChoiceRow("Manifest", manifestName, onPickManifest)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        onClick = onImport,
+                        enabled = complete && !importing,
+                        modifier = Modifier.testTag("agent_runtime_import")
+                    ) { Text(if (importing) "Verifying…" else "Install runtime") }
+                    if (!importStarted && !importing) {
+                        OutlinedButton(
+                            onClick = { importExpanded = false },
+                            modifier = Modifier.testTag("agent_runtime_import_cancel")
+                        ) { Text("Cancel") }
+                    }
+                }
+            }
+
+            if (status.isInstalled) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     // Enabled only for COMPATIBLE. VerbViewModel.openAgentRuntime() enforces the
                     // same rule, so this is the visible half of a guard, not the whole of it.
                     OutlinedButton(

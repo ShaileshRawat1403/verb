@@ -6,7 +6,7 @@ which holds the blocker detail, and `docs/AGENT_RUNTIME_V1.md`, which holds the 
 ## State
 
 - Branch `agent/runtime-truth-hardening`, clean, pushed.
-- `323 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
+- `332 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
 - Nothing uncommitted, nothing half-applied, no temporary instrumentation anywhere.
 - Validation device: Vivo I2202 (Android 13, arm64). Agent-launch hardening was installed and
   verified on it; device scratch files were cleaned up afterwards.
@@ -106,15 +106,17 @@ already shipped that as the Agent Emulator profile.
 The general rule, now encoded in the wrapper: try the musl loader, the emulator, or a platform-package
 install before telling the user an agent cannot launch. See `docs/NEXT_SPRINT.md` §4b.
 
-### 2. Two small UI fixes
+### 2. (done) UI/UX
 
-- The soft keyboard hides the `ESC` / `CTRL` / `PASTE` strip, which is exactly when it is wanted.
-- The Agent Runtime "Choose" buttons sit where the thumb scrolls; the file picker opens by accident.
+The terminal dock went from ~38% of the screen to ~27%, and the Agent Runtime file pickers no
+longer sit in the thumb-scroll path -- they are behind a disclosure, which opens on its own once a
+file is picked. See `docs/NEXT_SPRINT.md`.
 
-### 3. Signed-in state per agent
+### 3. (done) Signed-in state per agent, and subprocess spawning
 
-"Ready" means the binary runs, not that you are authenticated. Codex and Claude are signed in;
-OpenCode and `dsh` are not, and nothing in the UI distinguishes them.
+Agent cards now report sign-in separately from readiness, for Claude Code and Codex; OpenCode and
+`dsh` say nothing rather than guess. And an agent spawning subprocesses during real work is verified:
+`claude -p "Run: git --version"` called its Bash tool and answered `git version 2.55.0`.
 
 ### 4. Deferred by the user, in order
 

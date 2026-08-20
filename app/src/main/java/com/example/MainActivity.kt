@@ -109,6 +109,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
     val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
     val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
+    val agentSignInStates by viewModel.agentSignInStates.collectAsStateWithLifecycle()
     val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
     val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
@@ -261,6 +262,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 VerbTab.AGENTS -> AgentsScreen(
                     reports = runtimeProfileReports,
                     keyStatus = agentKeyStatus,
+                    signInStates = agentSignInStates,
                     onLaunch = viewModel::launchAgent,
                     onInstall = viewModel::installRuntimeProfile,
                     onEditKeys = viewModel::editAgentKeys,
