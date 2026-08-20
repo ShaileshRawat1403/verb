@@ -40,6 +40,7 @@ import com.example.verb.terminal.RuntimeProfileReport
 fun AgentsScreen(
     reports: List<RuntimeProfileReport>,
     keyStatus: List<AgentKeyStatus>,
+    signInStates: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.terminal.AgentSignInState> = emptyMap(),
     onLaunch: (String) -> Unit,
     onInstall: (com.example.verb.terminal.RuntimeProfileId) -> Unit,
     onEditKeys: () -> Unit,
@@ -67,6 +68,8 @@ fun AgentsScreen(
         agents.forEach { report ->
             AgentRow(
                 report = report,
+                signInState = signInStates[report.profile.id]
+                    ?: com.example.verb.terminal.AgentSignInState.UNKNOWN,
                 installing = installingProfile == report.profile.id,
                 anyInstalling = installingProfile != null,
                 onLaunch = onLaunch,
@@ -92,6 +95,7 @@ fun AgentsScreen(
 @Composable
 private fun AgentRow(
     report: RuntimeProfileReport,
+    signInState: com.example.verb.terminal.AgentSignInState,
     installing: Boolean,
     anyInstalling: Boolean,
     onLaunch: (String) -> Unit,
@@ -134,6 +138,27 @@ private fun AgentRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 2.dp)
             )
+
+            // "Ready" only ever meant the binary runs. Whether you are signed in is a separate
+            // fact, and the one that decides what happens when you tap Open. Shown only once the
+            // agent is installed -- sign-in is not a question you can act on before then -- and
+            // only when Verb actually knows: an agent whose credential location has not been
+            // observed says nothing rather than implying you are signed out.
+            if (report.isReady && signInState != com.example.verb.terminal.AgentSignInState.UNKNOWN) {
+                val signedIn = signInState == com.example.verb.terminal.AgentSignInState.SIGNED_IN
+                Text(
+                    if (signedIn) "Signed in" else "Not signed in — run $launch to sign in",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (signedIn) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .testTag("agent_signin_${profile.id.name.lowercase()}")
+                )
+            }
 
             if (report.isUnsatisfiable) {
                 Text(

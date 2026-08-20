@@ -224,9 +224,46 @@ allowed the touch target to grow from 34dp to 38dp at the same time.
 Measured on the device: dock plus navigation went from ~38% of the screen to ~27%, so the terminal
 output area gained about a fifth of its height.
 
+## Subprocess spawning — verified, and it was the real question
+
+The gap between "launches" and "usable". Measured on the device:
+
+```
+git 2.55.0 / rg 15.2.0 / node v24.18.0 / bash 5.3.15 / grep / find / sed   all resolve
+node -e child_process.execSync("git --version")                            works
+bash -c "bash -c 'git --version'"  (nested to depth 3)                     works
+claude -p "Run: git --version"  -> tool call -> subprocess -> output       git version 2.55.0
+```
+
+The last line is the one that matters: Claude Code took a prompt on the phone, called its Bash tool,
+spawned `git`, captured the output and answered with it. An agent doing real work is no longer
+unverified.
+
+## Signed-in state per agent — mechanism done, two agents covered
+
+"Ready" only ever meant the binary runs, which is not what a user is asking. Each agent card now
+also reports sign-in, from the **presence** of a credential file -- never opened, never logged,
+never in the diagnostics report, the same boundary the API keys card holds.
+
+Observed on the device while both were authenticated:
+
+| Agent | Marker |
+| --- | --- |
+| Claude Code | `.claude/.credentials.json`, `.claude.json` |
+| Codex CLI | `.codex/auth.json` |
+
+OpenCode and `dsh` report **UNKNOWN**, and the card says nothing for them rather than implying
+"signed out". Both binaries reference a bare `auth.json` with the path built at runtime, and neither
+has been signed into, so there is nothing to observe yet. `AgentSignInState.UNKNOWN` exists
+precisely so Verb does not invent the fact. Adding a marker once one is seen is a one-line catalog
+change.
+
+**Not yet seen on device:** the sign-in line itself. It is unit-tested and builds, but the app would
+not return to the foreground after an Android USB dialog interrupted the session, so the rendered
+label is unconfirmed.
+
 ## Next up (agreed)
 
-0. Codex (4b) — the one agent that no longer launches.
-1. UI/UX review for ease of use.
+1. A persistent agent session for the terminal.
 2. Testing and hardening the agent path with real API keys.
 3. Key handling — see `$HOME/.env`, added this sprint.

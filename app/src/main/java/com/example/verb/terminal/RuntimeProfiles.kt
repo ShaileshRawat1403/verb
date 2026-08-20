@@ -112,7 +112,17 @@ data class RuntimeProfile(
      * [AgentWrapperBootstrap.candidatesFor] covers with a default list -- so an agent still gets a
      * wrapper that survives a vendor installer even when the catalog knows nothing specific.
      */
-    val binaryCandidates: List<AgentBinaryCandidate> = emptyList()
+    val binaryCandidates: List<AgentBinaryCandidate> = emptyList(),
+
+    /**
+     * Paths, relative to the guest `$HOME`, whose **existence** means this agent has an
+     * authenticated session. Checked by [AgentSignInDetector], which never opens them.
+     *
+     * Empty means Verb does not know where this agent keeps credentials, and it will say so rather
+     * than report a sign-in state it cannot support. Add an entry only once the file has been seen
+     * on a real device -- a guessed path reporting "signed out" is worse than admitting ignorance.
+     */
+    val signedInMarkers: List<String> = emptyList()
 ) {
     /** True when this profile is something to open, not merely something to install. */
     val isAgent: Boolean get() = launchCommand != null
@@ -363,6 +373,8 @@ object RuntimeProfiles {
             installCommandOverride = codexInstall(),
             postInstallHint = "In Terminal, run codex and complete its sign-in flow.",
             launchCommand = "codex",
+            // Observed on the validation device while Codex was authenticated.
+            signedInMarkers = listOf(".codex/auth.json"),
             binaryCandidates = listOf(
                 // The build Verb fetches itself, so its ABI is certain.
                 AgentBinaryCandidate(
@@ -388,6 +400,9 @@ object RuntimeProfiles {
             installCommandOverride = muslAgentInstall("@anthropic-ai/claude-code-linux-arm64-musl"),
             postInstallHint = "In Terminal, run claude and complete its sign-in flow.",
             launchCommand = "claude",
+            // Observed on the validation device while Claude Code was authenticated. Both are
+            // listed because the CLI has moved this between releases.
+            signedInMarkers = listOf(".claude/.credentials.json", ".claude.json"),
             // Ordered by how much Verb knows about each. The npm platform package is the build Verb
             // installed itself, so its ABI is certain. Claude Code also self-updates into
             // $HOME/.local/share/claude/versions, which is why that entry is a glob resolved newest

@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.example.verb.terminal.AgentArtifactState
 import com.example.verb.terminal.AgentCompatibilityState
 import com.example.verb.terminal.AgentRuntimeInstaller
@@ -131,5 +132,64 @@ class AgentRuntimeCardTest {
         composeTestRule.onNodeWithText("Not installed").assertIsDisplayed()
         composeTestRule.onNodeWithTag("agent_runtime_open").assertDoesNotExist()
         composeTestRule.onNodeWithTag("agent_runtime_check").assertDoesNotExist()
+    }
+
+    /**
+     * The three file-picker rows used to sit permanently in the card. Each is a full-width row
+     * whose "Choose" button lands where a thumb rests while scrolling, so scrolling the page opened
+     * the system file picker by accident. Between imports there is now nothing there to hit.
+     */
+    @Test
+    fun `the file pickers are not in the scroll path until asked for`() {
+        show(installed(AgentCompatibilityState.COMPATIBLE))
+
+        composeTestRule.onNodeWithTag("agent_runtime_import_disclosure").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Choose").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("agent_runtime_import").assertDoesNotExist()
+    }
+
+    @Test
+    fun `asking for the import reveals the pickers`() {
+        show(installed(AgentCompatibilityState.COMPATIBLE))
+
+        composeTestRule.onNodeWithTag("agent_runtime_import_disclosure").performClick()
+
+        composeTestRule.onNodeWithTag("agent_runtime_import").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("agent_runtime_import_cancel").assertIsDisplayed()
+    }
+
+    /** Work already begun must never be hidden behind a control the user has to remember to reopen. */
+    @Test
+    fun `a picked file opens the import section on its own`() {
+        composeTestRule.setContent {
+            AgentRuntimeCard(
+                status = installed(AgentCompatibilityState.COMPATIBLE),
+                importing = false,
+                message = null,
+                archiveName = "agent-runtime-rootfs.tar.gz",
+                checksumName = null,
+                manifestName = null,
+                onPickArchive = {},
+                onPickChecksum = {},
+                onPickManifest = {},
+                onImport = {},
+                onOpen = {},
+                onCheckCompatibility = {},
+                onReturnToVerb = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("agent_runtime_import").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("agent_runtime_import_disclosure").assertDoesNotExist()
+        // Cancelling would strand the already-picked file, so it is not offered.
+        composeTestRule.onNodeWithTag("agent_runtime_import_cancel").assertDoesNotExist()
+    }
+
+    /** Opening the runtime is the common action and must stay reachable without any disclosure. */
+    @Test
+    fun `opening the runtime needs no disclosure`() {
+        show(installed(AgentCompatibilityState.COMPATIBLE))
+
+        composeTestRule.onNodeWithTag("agent_runtime_open").assertIsDisplayed().assertIsEnabled()
     }
 }
