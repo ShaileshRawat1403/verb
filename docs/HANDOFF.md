@@ -5,11 +5,11 @@ which holds the blocker detail, and `docs/AGENT_RUNTIME_V1.md`, which holds the 
 
 ## State
 
-- Branch `agent/runtime-truth-hardening`, clean, pushed, HEAD `7b2bc32`.
-- `295 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
+- Branch `agent/runtime-truth-hardening`, clean, pushed.
+- `310 tests, 0 failures` on both `fullCliDebug` and `playDebug`; both APKs build.
 - Nothing uncommitted, nothing half-applied, no temporary instrumentation anywhere.
-- Validation device: Vivo I2202 (Android 13, arm64). **Not currently connected** — ask before
-  assuming device work can run.
+- Validation device: Vivo I2202 (Android 13, arm64). Agent-launch hardening was installed and
+  verified on it; device scratch files were cleaned up afterwards.
 
 ## What Verb does now
 
@@ -28,8 +28,8 @@ Agents:
 
 | Agent | State |
 | --- | --- |
-| Codex CLI | Runs. Authenticated, real session completed. |
-| Claude Code | Runs and is authenticated, but `claude` on PATH is currently broken — see below. |
+| Codex CLI | Blocked. Authenticated, but neither installed copy executes — see below. |
+| Claude Code | Runs (`2.1.235`). Authenticated. `claude` on PATH is fixed and verified on device. |
 | OpenCode | Launches (`1.18.18`). No authenticated session yet. |
 | DeepSeek Harness (`dsh`) | Launches (`0.1.0-rc.7`). No authenticated session yet. |
 | Bun runtime | Runs (`1.3.14`). |
@@ -58,22 +58,42 @@ on-device agents, go remote"). Prefer a trace over an inference here.
 - Device driving: helper at `scratchpad/verb.sh` (`dump`, `tapText`, `run`, `diag`, `browse`).
   `run-as … sh -c` is broken on this Vivo — push a script and run `run-as … sh files/x.sh`.
 
-## Next, in priority order
+## Done this session: agent launch survives installers
 
-### 1. Wrapper survival (user-visible, do this first)
+`claude` on PATH was broken, so the Agents tab reported Claude Code as not installed while it was
+installed *and* authenticated. Both causes were reproduced on the device first:
 
-`claude` on PATH is broken, so the Agents tab reports Claude Code as not installed while it is
-installed and authenticated. The card is telling the truth; the underlying state is wrong. Two
-causes, both measured:
-
-- `$PREFIX/bin/claude` was overwritten by npm with a symlink to `claude.exe`, destroying Verb's
-  generated wrapper.
-- `$HOME/.local/bin/claude` was added by Claude's own self-installer, wins PATH, and fails with
+- `$PREFIX/bin/claude` had been overwritten by npm with a symlink to `claude.exe`.
+- `$HOME/.local/bin/claude`, added by Claude's own self-installer, won PATH and failed with
   `has unexpected e_type: 2`.
 
-`$PREFIX/bin/opencode` survived and works, which shows the capability is fine and the problem is
-surviving vendor installers and self-updates. A version-resolving wrapper placed where it wins PATH
-is the likely shape.
+The root cause was structural rather than either symptom: the launcher was written *once*, at
+install time, into a directory other people's installers own. `AgentWrapperBootstrap` now owns
+launching in `$PREFIX/libexec/verb/bin` — Verb-only, first on PATH, rewritten every launch — and
+each wrapper resolves its binary when it runs, newest-first, reading the ELF interpreter out of the
+file rather than assuming it. `docs/NEXT_SPRINT.md` §4 has the full detail and the measurements.
+
+Verified on device after installing: `claude` `2.1.235`, `opencode` `1.18.18`, `dsh` `0.1.0-rc.7`,
+all three **Ready** in the Agents tab, sign-in intact.
+
+## Next, in priority order
+
+### 1. Codex is now the one agent that does not launch
+
+Wrapper survival is done (see the section above); Codex is what is left, and its old diagnosis was wrong.
+
+Both of its installed copies fail, and neither failure is PATH ordering or Termux's exec shim:
+
+- `$HOME/.local/bin/codex` reaches Codex's own standalone launcher, which rejects its own release
+  binary with `has unexpected e_type: 2`. That message appears in neither `proot` nor either
+  `termux-exec` library, and clearing `LD_PRELOAD` does not change it — so it is Codex's launcher
+  talking, not Verb's runtime. The release binary is static musl, so it needs no loader at all.
+- `$PREFIX/bin/codex` reaches `codex.js`, which stops with
+  `Missing optional dependency @openai/codex-linux-arm64`.
+
+The npm path names its own fix and is the one to pursue. Read the package metadata for what
+platform packages actually exist before installing anything — the guessed-command mistake in
+`3607272` started exactly this way.
 
 ### 2. Two small UI fixes
 

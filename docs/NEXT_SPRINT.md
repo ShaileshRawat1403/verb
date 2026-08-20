@@ -7,8 +7,8 @@ Vivo I2202 or explicitly marked as unverified.
 
 | Agent | State |
 | --- | --- |
-| Codex CLI | Runs. Authenticated, real session completed. |
-| Claude Code | Runs. Authenticated. |
+| Codex CLI | Blocked. Authenticated, but neither installed copy executes — see 4b. |
+| Claude Code | Runs (`2.1.235`). Authenticated. Launch hardened; see 4. |
 | OpenCode | Launches (`1.18.18`). No authenticated session yet. |
 | DeepSeek Harness (`dsh`) | Launches (`0.1.0-rc.7`). No authenticated session yet. |
 | Bun runtime | Runs (`1.3.14`). |
@@ -62,33 +62,68 @@ This is worth fixing beyond Hermes: it blocks **every** Rust-backed Python packa
 alternative for Hermes specifically is dropping the `[crypto]` extra, since everything else it needs
 is pure Python.
 
-### 4. Agent wrappers are overwritten and shadowed (top priority)
+### 4. Agent wrappers are overwritten and shadowed — FIXED, verified on device
 
-Measured after the Agents surface landed, which made it visible: `claude` on PATH is broken, so the
-UI correctly reports Claude Code as not installed while it is in fact installed and authenticated.
-
-Two separate causes, both of which must be handled:
-
-- `$PREFIX/bin/claude` was **overwritten by npm** with a symlink to `claude.exe` when the wrapper
-  package installed, destroying Verb's generated wrapper.
-- `$HOME/.local/bin/claude` was added by Claude's **own self-installer**, points at
-  `~/.local/share/claude/versions/<version>`, wins PATH, and fails with `e_type: 2`.
-
-Verb's wrapper still works when called by full path (`$PREFIX/bin/opencode` survived and runs), so
-the fix is about surviving vendor installers and self-updates rather than about capability. A
-version-resolving wrapper placed where it wins PATH is the likely shape.
-
-### 4b. Original note: agent wrappers lose PATH precedence
-
-`claude` and `codex` install their own launchers into `~/.local/bin` and `~/.codex`, which exec their
-standalone binaries directly and hit Termux's exec shim:
+Both causes were reproduced on the Vivo before the fix and are gone after it.
 
 ```
-has unexpected e_type: 2
+$PREFIX/bin/claude        -> ../lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe   (npm)
+$HOME/.local/bin/claude   -> $HOME/.local/share/claude/versions/2.1.235                     (self-installer)
 ```
 
-Both run correctly through Verb's generated wrapper, so this is PATH ordering rather than a
-capability limit. Verb's wrappers need to win, or the vendor launchers need wrapping too.
+The mistake was writing the launcher *once*, at install time, into a directory other people's
+installers own. Nothing written there can survive them. Launching is now
+`AgentWrapperBootstrap`'s, and holds because of three properties rather than a repair:
+
+1. `$PREFIX/libexec/verb/bin` is Verb-owned — npm writes to `$PREFIX/bin`, vendor self-installers
+   to `$HOME/.local/bin`, and neither has any reason to touch it.
+2. It is **first** on the guest PATH, ahead of both.
+3. It is rewritten on every launch, like the shell-integration script. A wrapper anything manages
+   to damage is repaired by the next app start.
+
+Resolution moved from install time to launch time, which is what makes a self-update a non-event:
+each wrapper walks a candidate list, resolving globs newest-first, and reads the ELF interpreter out
+of the file instead of assuming it. Exit codes are POSIX `env`'s 127/126, so an agent that is
+genuinely absent still probes as MISSING rather than hiding behind a wrapper that always exists.
+
+Measured after installing the fix:
+
+| Command | Result |
+| --- | --- |
+| `claude --version` | `2.1.235 (Claude Code)`, exit 0. Agents tab: **Ready**. Sign-in intact. |
+| `opencode --version` | `1.18.18`, exit 0. Agents tab: **Ready**. |
+| `dsh --version` | `0.1.0-rc.7`, exit 0. Agents tab: **Ready**. |
+| `command -v claude` | Verb's wrapper — the `$HOME/.local/bin` launcher no longer shadows it. |
+
+Both Claude candidates were checked, not just the one that won: the npm musl package runs through
+the bundled loader, and the self-installer's `versions/2.1.235` declares
+`/lib/ld-musl-aarch64.so.1` and runs through the same loader once detection routes it there. So the
+fallback that would carry a future self-update is verified, not assumed.
+
+### 4b. Codex — still broken, and it is not PATH ordering
+
+Carried over, with the diagnosis corrected. Codex was already failing before this sprint's change
+(measured both ways), so this is not a regression from it, but the old explanation was wrong.
+
+```
+$HOME/.local/bin/codex  -> .codex/packages/standalone/current/bin/codex
+  -> error: ".../releases/0.147.0-aarch64-unknown-linux-musl/bin/codex" has unexpected e_type: 2
+$PREFIX/bin/codex       -> node_modules/@openai/codex/bin/codex.js
+  -> Error: Missing optional dependency @openai/codex-linux-arm64
+```
+
+Two things this sprint established:
+
+- **The `e_type: 2` message is not Termux's exec shim.** `strings` finds it in neither `proot`,
+  `libtermux-exec.so`, nor `libtermux-exec-ld-preload.so`. It is emitted by Codex's *own* standalone
+  launcher rejecting its own release binary. Clearing `LD_PRELOAD` changes nothing, which rules out
+  the preload explanation this document previously gave.
+- The release binary is `aarch64-unknown-linux-musl` but is **static** — the musl loader answers
+  `Not a valid dynamic program` — so it needs neither the loader nor the wrapper's musl branch.
+
+The npm path is the more actionable of the two, since it names its own fix: it wants a platform
+package. Whether `@openai/codex-linux-arm64` has a musl sibling is unverified — read the package
+metadata before acting on that, rather than guessing a name.
 
 ## Not yet verified
 
@@ -110,6 +145,7 @@ capability limit. Verb's wrappers need to win, or the vendor launchers need wrap
 
 ## Next up (agreed)
 
+0. Codex (4b) — the one agent that no longer launches.
 1. UI/UX review for ease of use.
 2. Testing and hardening the agent path with real API keys.
 3. Key handling — see `$HOME/.env`, added this sprint.

@@ -264,6 +264,15 @@ class TerminalEnvironmentResolver(
             "${VerbGuestPaths.FILES}/usr/bin/env",
             "HOME=${VerbGuestPaths.HOME}",
             "PREFIX=${VerbGuestPaths.PREFIX}",
+            // Order matters, and the first entry is load-bearing.
+            //
+            // AgentWrapperBootstrap.GUEST_BIN_DIR holds Verb's own agent launchers and must win,
+            // because the two directories after it are both writable by other people's installers.
+            // That is not hypothetical: npm overwrote $PREFIX/bin/claude with a symlink to a
+            // Windows launcher, and Claude Code's self-installer added $HOME/.local/bin/claude,
+            // which won PATH and failed with `has unexpected e_type: 2`. See AgentWrapperBootstrap
+            // for the whole failure and why owning a separate directory is what makes the fix hold.
+            //
             // $HOME/.local/bin is a generic, tool-agnostic convention (not owned by any single
             // CLI) that many installer scripts use. Keeping it on the base PATH means a tool
             // installed there works immediately without a session restart. Installers that use a
@@ -271,7 +280,8 @@ class TerminalEnvironmentResolver(
             // TermuxBootstrapInstaller.ensureLoginShellSourcesBashrc makes login shells actually
             // read -- see that function for why a fresh session (not this already-running one) is
             // the supported point at which such a change becomes visible.
-            "PATH=${VerbGuestPaths.HOME}/.local/bin:${VerbGuestPaths.PREFIX}/bin:${VerbGuestPaths.PREFIX}/bin/applets",
+            "PATH=${AgentWrapperBootstrap.GUEST_BIN_DIR}:${VerbGuestPaths.HOME}/.local/bin:" +
+                "${VerbGuestPaths.PREFIX}/bin:${VerbGuestPaths.PREFIX}/bin/applets",
             "LD_LIBRARY_PATH=${VerbGuestPaths.PREFIX}/lib",
             "LD_PRELOAD=${VerbGuestPaths.PREFIX}/lib/libtermux-exec-ld-preload.so",
             "TMPDIR=${VerbGuestPaths.PREFIX}/tmp",

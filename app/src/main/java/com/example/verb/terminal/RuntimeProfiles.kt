@@ -34,6 +34,42 @@ data class RuntimeRequirement(
     val versionProbeArgs: List<String>? = null
 )
 
+/**
+ * How a resolved agent binary has to be handed to the kernel.
+ *
+ * The one rule that decides everything on-device: **a binary runs when its ELF interpreter
+ * exists.** Static musl and Bionic builds run as-is; a dynamically linked musl build runs only when
+ * it is launched through the bundled musl loader (see [MuslLoaderBootstrap]).
+ */
+enum class AgentBinaryAbi {
+    /** Launch through the bundled musl loader, with the musl C++ runtime on LD_LIBRARY_PATH. */
+    MUSL,
+
+    /** Exec directly: a Bionic build, a static binary, or an ordinary script. */
+    NATIVE,
+
+    /**
+     * Read the interpreter out of the file at launch time and pick the branch it asks for.
+     *
+     * Used for anything Verb did not install itself -- a vendor self-installer's binary, or a
+     * launcher a package manager wrote -- where the ABI is not knowable from the catalog and
+     * guessing it is exactly the mistake this sprint kept making.
+     */
+    DETECT
+}
+
+/**
+ * One place a launchable agent's real binary might be, and how to exec it once found.
+ *
+ * [path] is a guest-absolute path in which the literal tokens `$PREFIX` and `$HOME` are expanded at
+ * wrapper-generation time, and which may end in a `*` glob -- the newest match wins, so a vendor
+ * self-update lands automatically instead of leaving the wrapper pointing at a deleted version.
+ */
+data class AgentBinaryCandidate(
+    val path: String,
+    val abi: AgentBinaryAbi
+)
+
 data class RuntimeProfile(
     val id: RuntimeProfileId,
     val displayName: String,
@@ -50,7 +86,17 @@ data class RuntimeProfile(
      * rows in one long list: Core CLI and Python are setup, `claude` and `codex` are the product.
      * Null means the profile is plumbing and has nothing to launch.
      */
-    val launchCommand: String? = null
+    val launchCommand: String? = null,
+
+    /**
+     * Where [launchCommand]'s real binary may live, in preference order, and how to exec each.
+     *
+     * Consulted by [AgentWrapperBootstrap], which turns this into a Verb-owned wrapper that wins
+     * PATH. Empty means "wherever a package manager put it", which
+     * [AgentWrapperBootstrap.candidatesFor] covers with a default list -- so an agent still gets a
+     * wrapper that survives a vendor installer even when the catalog knows nothing specific.
+     */
+    val binaryCandidates: List<AgentBinaryCandidate> = emptyList()
 ) {
     /** True when this profile is something to open, not merely something to install. */
     val isAgent: Boolean get() = launchCommand != null
@@ -126,47 +172,25 @@ object RuntimeProfiles {
     /**
      * Install command for an agent CLI published only as a musl build.
      *
-     * Two things have to happen that a plain `npm install -g` does not do here:
+     * npm refuses musl packages on Android. Bionic reports no libc, so npm sees
+     * `Actual libc: undefined` against `Valid libc: musl` and calls a package unsupported that is in
+     * fact the correct architecture. `--force` is the documented override.
      *
-     * 1. npm refuses musl packages on Android -- Bionic reports no libc, so npm sees
-     *    `Actual libc: undefined` against `Valid libc: musl` and calls the package unsupported.
-     *    `--force` is the documented override, and the package genuinely is the right architecture.
-     * 2. The launcher must run without Verb's `termux-exec` preload. That library is Bionic; loading
-     *    it into a musl process fails with `__register_atfork: symbol not found`. A one-line wrapper
-     *    on PATH clears `LD_PRELOAD`/`LD_LIBRARY_PATH` and execs the real binary, so the user still
-     *    just types the command name.
+     * That is now the *whole* install. This function used to also write a launcher into
+     * `$PREFIX/bin`, and that launcher is precisely what kept disappearing: npm overwrote
+     * `$PREFIX/bin/claude` with a symlink to a Windows launcher when the wrapper package installed,
+     * and Claude's own self-installer added `$HOME/.local/bin/claude`, which won PATH and failed
+     * with `has unexpected e_type: 2`. A file written once, into a directory other installers own,
+     * cannot survive them. Launching is therefore no longer an install-time artifact at all --
+     * [AgentWrapperBootstrap] owns it, in a directory nothing else writes to, regenerated every
+     * launch.
      */
-    /**
-     * Install command for an agent CLI published only as a musl build.
-     *
-     * Three things have to happen that a plain `npm install -g` does not, each found by running it:
-     *
-     * 1. npm refuses musl packages on Android. Bionic reports no libc, so npm sees
-     *    `Actual libc: undefined` against `Valid libc: musl` and calls a package unsupported that is
-     *    in fact the correct architecture. `--force` is the documented override.
-     * 2. The binary is `ET_EXEC` (non-PIE). Termux's exec shim rejects it outright with
-     *    `has unexpected e_type: 2` before the kernel ever sees it. Invoking the musl loader
-     *    explicitly sidesteps that check -- the loader is itself static-PIE, and loading a
-     *    non-PIE program is exactly its job.
-     * 3. Verb's `termux-exec` preload is a Bionic library and cannot be injected into a musl
-     *    process; it fails with `__register_atfork: symbol not found`. The wrapper clears it with
-     *    shell builtins rather than `env`, which would reintroduce the shim from point 2.
-     *
-     * The result is a one-line wrapper on PATH, so the user still just types the command name.
-     */
-    private fun muslAgentInstall(platformPackage: String, command: String, binaryRelativePath: String): String {
-        val binary = "\$PREFIX/lib/node_modules/$platformPackage/$binaryRelativePath"
-        val wrapper = "\$PREFIX/bin/$command"
-        return "npm install -g --force $platformPackage && " +
-            "printf '%s\\n' " +
-            "'#!/bin/sh' " +
-            "'unset LD_PRELOAD' " +
-            // musl builds link against the musl C++ runtime, which is not ABI-compatible with
-            // Bionic's. Point them at the musl library directory only -- never Verb's own lib path.
-            "'LD_LIBRARY_PATH=\$PREFIX/lib/musl; export LD_LIBRARY_PATH' " +
-            "'exec ${MuslLoaderBootstrap.GUEST_LOADER_PATH} \"$binary\" \"\$@\"' " +
-            "> $wrapper && chmod +x $wrapper"
-    }
+    private fun muslAgentInstall(platformPackage: String): String =
+        "npm install -g --force $platformPackage"
+
+    /** Where a musl agent's npm platform package unpacks its binary. */
+    private fun nodeModulesBinary(platformPackage: String, binaryRelativePath: String): String =
+        "\$PREFIX/lib/node_modules/$platformPackage/$binaryRelativePath"
 
     /**
      * Install command for a Python agent that pins an interpreter older than the default.
@@ -260,7 +284,12 @@ object RuntimeProfiles {
                         pipSpec = "hermes-agent"
                     ),
             postInstallHint = "Hermes runs on python3.13 in its own venv; `python` stays at 3.14.",
-            launchCommand = "hermes"
+            launchCommand = "hermes",
+            // The venv's own console script is the authoritative one; the $PREFIX/bin copy is a
+            // shell wrapper the install generates, and is only a fallback.
+            binaryCandidates = listOf(
+                AgentBinaryCandidate("\$HOME/.venvs/hermes/bin/hermes", AgentBinaryAbi.NATIVE)
+            )
         ),
         RuntimeProfile(
             RuntimeProfileId.JAVASCRIPT,
@@ -290,13 +319,21 @@ object RuntimeProfiles {
             // No android-arm64 build is published, but the musl build runs here once its
             // interpreter exists (see MuslLoaderBootstrap). Installed directly rather than through
             // the wrapper package, whose postinstall only looks for an android binary.
-            installCommandOverride = muslAgentInstall(
-                platformPackage = "@anthropic-ai/claude-code-linux-arm64-musl",
-                command = "claude",
-                binaryRelativePath = "claude"
-            ),
+            installCommandOverride = muslAgentInstall("@anthropic-ai/claude-code-linux-arm64-musl"),
             postInstallHint = "In Terminal, run claude and complete its sign-in flow.",
-            launchCommand = "claude"
+            launchCommand = "claude",
+            // Ordered by how much Verb knows about each. The npm platform package is the build Verb
+            // installed itself, so its ABI is certain. Claude Code also self-updates into
+            // $HOME/.local/share/claude/versions, which is why that entry is a glob resolved newest
+            // -first at launch: a self-update must not be able to leave this wrapper pointing at a
+            // version that no longer exists.
+            binaryCandidates = listOf(
+                AgentBinaryCandidate(
+                    nodeModulesBinary("@anthropic-ai/claude-code-linux-arm64-musl", "claude"),
+                    AgentBinaryAbi.MUSL
+                ),
+                AgentBinaryCandidate("\$HOME/.local/share/claude/versions/*", AgentBinaryAbi.DETECT)
+            )
         ),
         RuntimeProfile(
             RuntimeProfileId.GEMINI_CLI,
@@ -314,13 +351,15 @@ object RuntimeProfiles {
             emptyList(),
             listOf(RuntimeRequirement("opencode", "", versionProbeArgs = listOf("--version"))),
             prerequisiteProfiles = listOf(RuntimeProfileId.JAVASCRIPT),
-            installCommandOverride = muslAgentInstall(
-                platformPackage = "opencode-linux-arm64-musl",
-                command = "opencode",
-                binaryRelativePath = "bin/opencode"
-            ),
+            installCommandOverride = muslAgentInstall("opencode-linux-arm64-musl"),
             postInstallHint = "In Terminal, run opencode and complete its sign-in flow.",
-            launchCommand = "opencode"
+            launchCommand = "opencode",
+            binaryCandidates = listOf(
+                AgentBinaryCandidate(
+                    nodeModulesBinary("opencode-linux-arm64-musl", "bin/opencode"),
+                    AgentBinaryAbi.MUSL
+                )
+            )
         ),
         RuntimeProfile(
             RuntimeProfileId.DEEPSEEK_HARNESS,

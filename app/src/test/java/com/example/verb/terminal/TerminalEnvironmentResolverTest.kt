@@ -66,7 +66,8 @@ class TerminalEnvironmentResolverTest {
         assertTrue(environment.arguments.contains("${filesDir.absolutePath}/usr/etc/resolv.conf:/etc/resolv.conf"))
         assertTrue(environment.arguments.last().endsWith("usr/bin/login"))
 
-        assertTrue(environment.arguments.contains("PATH=${VerbGuestPaths.HOME}/.local/bin:${VerbGuestPaths.PREFIX}/bin:${VerbGuestPaths.PREFIX}/bin/applets"))
+        assertTrue(environment.arguments.contains("PATH=${AgentWrapperBootstrap.GUEST_BIN_DIR}:${VerbGuestPaths.HOME}/.local/bin:" +
+                "${VerbGuestPaths.PREFIX}/bin:${VerbGuestPaths.PREFIX}/bin/applets"))
         assertTrue(environment.arguments.contains("LD_PRELOAD=${VerbGuestPaths.PREFIX}/lib/libtermux-exec-ld-preload.so"))
         assertTrue(environment.arguments.contains("CURL_CA_BUNDLE=${VerbGuestPaths.PREFIX}/etc/tls/cert.pem"))
         assertTrue(environment.arguments.contains("SSL_CERT_FILE=${VerbGuestPaths.PREFIX}/etc/tls/cert.pem"))
@@ -96,7 +97,10 @@ class TerminalEnvironmentResolverTest {
         assertTrue(environment.arguments.contains("PREFIX=/data/data/com.aistudio.verb.app/files/usr"))
         val pathAssignment = environment.arguments.first { it.startsWith("PATH=") }
         assertEquals(
-            "PATH=/data/data/com.aistudio.verb.app/files/home/.local/bin:" +
+            // Verb's own agent launcher directory comes first, ahead of the two directories other
+            // people's installers write to. See AgentWrapperBootstrap.
+            "PATH=/data/data/com.aistudio.verb.app/files/usr/libexec/verb/bin:" +
+                "/data/data/com.aistudio.verb.app/files/home/.local/bin:" +
                 "/data/data/com.aistudio.verb.app/files/usr/bin:" +
                 "/data/data/com.aistudio.verb.app/files/usr/bin/applets",
             pathAssignment
@@ -199,7 +203,8 @@ class TerminalEnvironmentResolverTest {
             // Same HOME/PREFIX/PATH/LD_LIBRARY_PATH/certs contract as the interactive session.
             assertTrue(environment.arguments.contains("HOME=${VerbGuestPaths.HOME}"))
             assertTrue(environment.arguments.contains("PREFIX=${VerbGuestPaths.PREFIX}"))
-            assertTrue(environment.arguments.contains("PATH=${VerbGuestPaths.HOME}/.local/bin:${VerbGuestPaths.PREFIX}/bin:${VerbGuestPaths.PREFIX}/bin/applets"))
+            assertTrue(environment.arguments.contains("PATH=${AgentWrapperBootstrap.GUEST_BIN_DIR}:${VerbGuestPaths.HOME}/.local/bin:" +
+                "${VerbGuestPaths.PREFIX}/bin:${VerbGuestPaths.PREFIX}/bin/applets"))
             assertTrue(environment.arguments.contains("LD_LIBRARY_PATH=${VerbGuestPaths.PREFIX}/lib"))
             assertTrue(environment.arguments.contains("CURL_CA_BUNDLE=${VerbGuestPaths.PREFIX}/etc/tls/cert.pem"))
             assertTrue(environment.arguments.contains("SSL_CERT_FILE=${VerbGuestPaths.PREFIX}/etc/tls/cert.pem"))
