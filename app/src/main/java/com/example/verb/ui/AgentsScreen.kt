@@ -130,8 +130,11 @@ private fun AgentRow(
                     when {
                         sessionDisplay != null -> sessionDisplay.statusLabel
                         installing -> "Installing"
-                        report.isReady -> "Ready"
+                        // Unavailable outranks Ready deliberately. `dsh` answers `--version`
+                        // perfectly well and still cannot run: its native module never built. A
+                        // probe that passes is not proof the agent works.
                         report.isUnsatisfiable -> "Unavailable"
+                        report.isReady -> "Ready"
                         else -> "Not installed"
                     },
                     style = MaterialTheme.typography.labelMedium,
@@ -188,7 +191,8 @@ private fun AgentRow(
 
             if (report.isUnsatisfiable) {
                 Text(
-                    "Cannot run on this device. No install will resolve this.",
+                    profile.unavailableReason
+                        ?: "Cannot run on this device. No install will resolve this.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 4.dp)
@@ -210,6 +214,11 @@ private fun AgentRow(
                 ) { Text("Start new") }
 
                 sessionDisplay != null -> Unit // LIVE / INTERRUPTED: nothing to tap yet.
+
+                // No action at all when Verb knows the agent cannot run here: neither Open (it
+                // would fail) nor Install (it would fail the same way every time). The reason is
+                // printed above instead.
+                report.isUnsatisfiable -> Unit
 
                 report.isReady -> Button(
                     onClick = { onLaunch(launch) },

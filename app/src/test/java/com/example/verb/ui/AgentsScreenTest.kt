@@ -51,6 +51,22 @@ class AgentsScreenTest {
         }
     }
 
+    @Test
+    fun `an agent that cannot be installed says why, and offers no install button`() {
+        // dsh's native dependency has no Android build and cannot be compiled here either. A card
+        // offering "Install" would be a button that fails the same way every time.
+        // Reported as fully installed on purpose: dsh answers `--version` even though its native
+        // module never built, so a passing probe must not be allowed to say "Ready" and offer Open.
+        show(listOf(report(RuntimeProfileId.DEEPSEEK_HARNESS)))
+
+        composeTestRule.onNodeWithTag("agent_install_deepseek_harness").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("agent_open_deepseek_harness").assertDoesNotExist()
+        composeTestRule.onNodeWithText("Unavailable").assertIsDisplayed()
+        composeTestRule
+            .onNodeWithText(RuntimeProfiles.forId(RuntimeProfileId.DEEPSEEK_HARNESS).unavailableReason!!)
+            .assertIsDisplayed()
+    }
+
     /** Toolchains are setup, agents are the product; this surface shows only the latter. */
     @Test
     fun `only agents appear, never toolchains`() {

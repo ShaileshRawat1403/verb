@@ -125,6 +125,18 @@ data class RuntimeProfile(
     val launchArguments: List<String> = emptyList(),
 
     /**
+     * Why this profile can never be installed on Verb's Android userland, when that is known ahead
+     * of any probe. Null means "no such obstacle known".
+     *
+     * The other route to [RuntimeProfileReport.isUnsatisfiable] is discovered at probe time, from
+     * an already-installed binary whose version or ABI rules it out. This one is for the case a
+     * probe can never reach: an install that fails the same way every time for a reason outside
+     * Verb. Recording it as a sentence the user can read is the difference between "Install" that
+     * always fails and a card that says what is actually wrong.
+     */
+    val unavailableReason: String? = null,
+
+    /**
      * Where [launchCommand]'s real binary may live, in preference order, and how to exec each.
      *
      * Consulted by [AgentWrapperBootstrap], which turns this into a Verb-owned wrapper that wins
@@ -205,7 +217,8 @@ data class RuntimeProfileReport(
      *
      * Deliberately derived rather than stored, so it cannot drift from the report it describes.
      */
-    val isUnsatisfiable: Boolean get() = incompatibleCommands.isNotEmpty()
+    val isUnsatisfiable: Boolean
+        get() = incompatibleCommands.isNotEmpty() || profile.unavailableReason != null
 
     /** True when the profile is not ready but installing could still resolve it. */
     val isInstallable: Boolean get() = !isReady && !isUnsatisfiable
@@ -493,7 +506,15 @@ object RuntimeProfiles {
             // it needs neither a musl build nor a wrapper -- a plain global install is enough.
             installCommandOverride = "npm install -g @deepseek-ai/dsh",
             postInstallHint = "In Terminal, run dsh to boot a DeepSeek Harness profile.",
-            launchCommand = "dsh"
+            launchCommand = "dsh",
+            // Established by installing it on the validation device, not assumed. `dsh` depends on
+            // the `koffi` native module, which ships no prebuilt binary for this platform and then
+            // cannot be compiled here either: with cmake, clang and make installed, its build gets
+            // as far as the C++ and stops at `fatal error: 'spawn.h' file not found`, because
+            // Android's libc headers do not provide it. Fixing that is upstream work in koffi or in
+            // the Termux headers -- no install command Verb can write will resolve it.
+            unavailableReason = "Needs the koffi native module, which has no build for Android: " +
+                "its source build stops at a libc header (spawn.h) this platform does not ship."
         ),
         RuntimeProfile(
             RuntimeProfileId.NATIVE,
