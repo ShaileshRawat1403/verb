@@ -105,42 +105,128 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
 }
 
 /// project · branch · changes · runtime · session state · leader hint.
+///
+/// The line is built to a budget rather than assembled and hoped for. On a narrow terminal the
+/// first things to disappear were the session state and the leader hint -- the two things a person
+/// most needs -- because they were last in the string. Now the path shortens first, then the
+/// optional details drop in reverse order of usefulness, and state and leader survive to the end.
 fn status(frame: &mut Frame, app: &App, area: Rect) {
     let git = crate::git_snapshot(app.project());
     let session = app.hosted().map(|hosted| &hosted.session);
+    let width = area.width as usize;
+
+    let hint = leader_hint(app, width);
+    let state = session.map(|session| status_state_label(&session.state));
+    let runtime = session.map(|session| session.runtime_id.as_deref().unwrap_or("shell").to_owned());
+    let changes = match git.branch.as_deref() {
+        Some(branch) if git.changed_files == 0 => Some(format!("{branch} clean")),
+        Some(branch) => Some(format!("{branch}  {} changed", git.changed_files)),
+        None => None,
+    };
+
+    // Everything except the path, which absorbs whatever is left.
+    let reserved: usize = [
+        hint.chars().count(),
+        state.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR),
+        runtime.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR),
+        changes.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR),
+    ]
+    .iter()
+    .sum::<usize>()
+        + 3;
+
+    let path = crate::display_path(app.project());
+    let (path, changes, runtime) = fit_status(path, changes, runtime, reserved, width);
 
     let mut spans = vec![
-        Span::styled(
-            crate::display_path(app.project()),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-        Span::raw("   "),
-        Span::raw(match git.branch.as_deref() {
-            Some(branch) if git.changed_files == 0 => format!("{branch} clean"),
-            Some(branch) => format!("{branch}  {} changed", git.changed_files),
-            None => "no repository".to_owned(),
-        }),
+        Span::raw(" "),
+        Span::styled(path, Style::default().add_modifier(Modifier::BOLD)),
     ];
-
-    if let Some(session) = session {
+    for detail in [changes, runtime].into_iter().flatten() {
         spans.push(Span::raw("   "));
-        spans.push(Span::raw(
-            session.runtime_id.as_deref().unwrap_or("shell").to_owned(),
-        ));
+        spans.push(Span::raw(detail));
+    }
+    if let Some(state) = session.map(|session| &session.state) {
         spans.push(Span::raw("   "));
-        spans.push(state_span(&session.state));
+        spans.push(state_span(state));
     }
 
-    // The leader hint is the one thing on this line a user cannot afford to have truncated -- it is
-    // how they find Verb at all -- so it is fitted to the space that is left, long form first.
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    let available = (area.width as usize).saturating_sub(used + 2);
-    let hint = leader_hint(app, available);
-    let padding = available.saturating_sub(hint.chars().count()).max(1);
+    let padding = width.saturating_sub(used + hint.chars().count() + 1).max(1);
     spans.push(Span::raw(" ".repeat(padding)));
     spans.push(Span::styled(hint, Style::default().add_modifier(Modifier::DIM)));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+const SEPARATOR: usize = 3;
+
+/// Decides what survives on a narrow status line: shorten the path first, then drop the
+/// changed-files detail, then the runtime, keeping the leader hint and session state intact.
+pub(super) fn fit_status(
+    path: String,
+    changes: Option<String>,
+    runtime: Option<String>,
+    reserved: usize,
+    width: usize,
+) -> (String, Option<String>, Option<String>) {
+    let available = width.saturating_sub(reserved);
+    if path.chars().count() <= available {
+        return (path, changes, runtime);
+    }
+
+    let shortened = shorten_path(&path, available);
+    if shortened.chars().count() <= available {
+        return (shortened, changes, runtime);
+    }
+    // Still too tight: give up the details rather than the path, which says where you are.
+    let available = width.saturating_sub(reserved - changes.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR));
+    let shortened = shorten_path(&path, available);
+    if shortened.chars().count() <= available {
+        return (shortened, None, runtime);
+    }
+    (shorten_path(&path, width.saturating_sub(4)), None, None)
+}
+
+/// Keeps the end of a path, which is the part that identifies the project.
+pub(super) fn shorten_path(path: &str, available: usize) -> String {
+    if path.chars().count() <= available || available < 4 {
+        return path.to_owned();
+    }
+    let mut kept = String::new();
+    for segment in path.rsplit('/') {
+        let candidate = if kept.is_empty() {
+            segment.to_owned()
+        } else {
+            format!("{segment}/{kept}")
+        };
+        // +2 for the leading ellipsis
+        if candidate.chars().count() + 2 > available {
+            break;
+        }
+        kept = candidate;
+    }
+    if kept.is_empty() {
+        let tail: String = path
+            .chars()
+            .rev()
+            .take(available.saturating_sub(1))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return format!("…{tail}");
+    }
+    format!("…/{kept}")
+}
+
+fn status_state_label(state: &SessionState) -> String {
+    match state {
+        SessionState::Live => "● LIVE".to_owned(),
+        SessionState::Recoverable => "◐ RECOVERABLE".to_owned(),
+        SessionState::Interrupted => "◌ INTERRUPTED".to_owned(),
+        SessionState::Ended => "○ ENDED".to_owned(),
+    }
 }
 
 /// A recorded LIVE is shown with a question mark for the same reason `verb sessions` prints one:
@@ -158,11 +244,18 @@ fn state_span(state: &SessionState) -> Span<'static> {
 /// The hosted session's screen, cell for cell.
 fn terminal(frame: &mut Frame, app: &App, area: Rect) {
     let Some(hosted) = app.hosted() else {
+        let leader = app.leader().chord();
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                "  No session running.",
-                Style::default().add_modifier(Modifier::DIM),
-            ))),
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "  No session running.".to_owned(),
+                    Style::default().add_modifier(Modifier::DIM),
+                )),
+                Line::from(Span::styled(
+                    format!("  {leader} p  to start one"),
+                    Style::default().add_modifier(Modifier::DIM),
+                )),
+            ]),
             area,
         );
         return;
@@ -182,7 +275,9 @@ fn terminal(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    if !screen.hide_cursor() {
+    // Not while a Verb surface is in front: a cursor blinking in the terminal underneath an open
+    // palette says the keyboard is going somewhere it is not.
+    if !screen.hide_cursor() && matches!(app.surface(), Surface::None) {
         let (row, column) = screen.cursor_position();
         if row < area.height && column < area.width {
             frame.set_cursor_position((area.x + column, area.y + row));
@@ -231,6 +326,18 @@ pub(super) fn failure_note(label: Option<&str>) -> Option<&'static str> {
     label
         .is_none()
         .then_some("The shell did not report what was running.")
+}
+
+/// Cuts to a width, with an ellipsis so the cut is visible rather than mysterious.
+pub(super) fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_owned();
+    }
+    if width <= 1 {
+        return "…".to_owned();
+    }
+    let kept: String = text.chars().take(width - 1).collect();
+    format!("{kept}…")
 }
 
 /// Human-sized durations: a command that took 3.8 seconds should not read as 3800ms.
@@ -421,7 +528,8 @@ fn palette(frame: &mut Frame, filter: &str, selected: usize) {
     ];
     for (index, entry) in entries.iter().enumerate() {
         lines.push(Line::from(Span::styled(
-            format!("  {}", entry.label),
+            // Truncated, not wrapped: an entry that folds onto a second line reads as two entries.
+            truncate(&format!("  {}", entry.label), inner.width as usize),
             if index == selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -429,8 +537,7 @@ fn palette(frame: &mut Frame, filter: &str, selected: usize) {
             },
         )));
     }
-    // trim: false keeps the entries indented under the filter line.
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Option<&str>) {
@@ -460,7 +567,7 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
             crate::display_path(&session.project_id)
         );
         lines.push(Line::from(Span::styled(
-            line,
+            truncate(&line, inner.width as usize),
             if index == selected {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {
@@ -508,6 +615,37 @@ fn help(frame: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_narrow_status_line_keeps_what_matters_and_shortens_the_path() {
+        // The leader hint and session state are the two things a person needs; they must not be the
+        // first casualties of a small terminal.
+        let (path, changes, runtime) = fit_status(
+            "~/work/some/deeply/nested/project".to_owned(),
+            Some("main  4 changed".to_owned()),
+            Some("claude".to_owned()),
+            40,
+            60,
+        );
+        assert!(path.chars().count() <= 20, "{path}");
+        assert!(path.ends_with("project"), "{path}");
+        assert!(changes.is_some() || runtime.is_some());
+    }
+
+    #[test]
+    fn a_shortened_path_keeps_the_end_because_that_is_the_project() {
+        assert_eq!(shorten_path("/a/b/c", 40), "/a/b/c");
+        let short = shorten_path("/Users/example/work/deeply/nested/project", 20);
+        assert!(short.ends_with("project"), "{short}");
+        assert!(short.starts_with('…'), "{short}");
+        assert!(short.chars().count() <= 20, "{short}");
+    }
+
+    #[test]
+    fn overlay_rows_are_cut_rather_than_folded_onto_a_second_line() {
+        assert_eq!(truncate("New OpenCode session", 12), "New OpenCod…");
+        assert_eq!(truncate("short", 12), "short");
+    }
 
     #[test]
     fn the_band_names_the_command_when_the_shell_reported_one() {
