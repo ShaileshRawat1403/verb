@@ -65,9 +65,24 @@ Two rules the adapters share with Android's, for the same reason:
 - **No transcript ever enters Verb's own storage.** Files are scanned for a marker; content is never
   returned, stored, or logged.
 
+## Shell integration (`desktop/src/shell.rs`)
+
+The host proxies PTY bytes straight through and drops them. `shell.rs` is the one place they are
+*looked at*, and only for the markers a shell-integrated shell emits: **OSC 7** (working directory)
+and **OSC 633/133 A/B/C/D** (prompt and command boundaries). Both spellings are read, because
+Android's integration emits 633 and most desktop shells emit 133.
+
+What the durable log gets from that is `CWD_CHANGED`, `COMMAND_STARTED`, and `COMMAND_FINISHED`,
+carrying an opaque per-session `commandId`, the cwd, and an exit code -- never the command line.
+`OSC 633;E` *is* the command line; it is recognised only so it can be skipped, and the event type
+has no variant that could carry it.
+
+Two properties worth keeping: the scanner holds only the bytes of a marker currently in flight
+(never the stream) and gives that up past a fixed bound, so an unterminated sequence cannot grow
+Verb's memory; and a shell that emits nothing produces no events at all, because silence means
+"unknown", not a fabricated boundary.
+
 ## Next desktop increments
 
-1. Add shell-integration structural events for CWD and command boundaries, without recording raw
-   command text or terminal bytes.
-2. Observe `dsh`'s real resume contract, then give it an adapter on the same terms.
-3. Add a project/session list and then put a polished desktop shell around the proven backend.
+1. Observe `dsh`'s real resume contract, then give it an adapter on the same terms.
+2. Add a project/session list and then put a polished desktop shell around the proven backend.
