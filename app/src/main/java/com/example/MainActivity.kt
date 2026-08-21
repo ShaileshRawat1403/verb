@@ -109,6 +109,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
     val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
     val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
+    val claudeSession by viewModel.claudeSession.collectAsStateWithLifecycle()
     val agentSignInStates by viewModel.agentSignInStates.collectAsStateWithLifecycle()
     val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
     val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
@@ -267,7 +268,10 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onInstall = viewModel::installRuntimeProfile,
                     onEditKeys = viewModel::editAgentKeys,
                     installingProfile = installingRuntimeProfile,
-                    message = runtimeInstallMessage
+                    message = runtimeInstallMessage,
+                    claudeSession = claudeSession,
+                    onResumeClaudeSession = viewModel::resumeClaudeSession,
+                    onStartNewClaudeSession = viewModel::startNewClaudeSession
                 )
 
                 VerbTab.ASK -> AskScreen(
