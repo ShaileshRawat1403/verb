@@ -174,10 +174,19 @@ fn fork_pty(
 /// Only a shell with integration enabled emits these at all; agents like Claude and Codex do not.
 /// Verb records what the shell actually reported and invents nothing when it reports nothing --
 /// silence here means "unknown", never a fabricated boundary.
+/// A structural fact the caller may want to react to, in addition to it being logged.
+///
+/// Only what the shell actually reported: which command boundary closed and with what status. The
+/// command *text* is not here and cannot be -- `OSC 633;E` is skipped by the scanner itself.
+pub(super) enum Structural {
+    CommandFinished { exit_code: i32, millis: u128 },
+}
+
 pub(super) struct ShellIntegration {
     scanner: ShellScanner,
     command_count: u64,
     open_command: Option<String>,
+    started_at: Option<u128>,
 }
 
 impl ShellIntegration {
@@ -186,6 +195,7 @@ impl ShellIntegration {
             scanner: ShellScanner::default(),
             command_count: 0,
             open_command: None,
+            started_at: None,
         }
     }
 
@@ -194,7 +204,8 @@ impl ShellIntegration {
         bytes: &[u8],
         session: &mut Session,
         logger: &mut EventLogger,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<Structural>, String> {
+        let mut structural = Vec::new();
         for event in self.scanner.feed(bytes) {
             match event {
                 ShellEvent::CurrentDirectory(path) => {
@@ -209,6 +220,7 @@ impl ShellIntegration {
                 }
                 ShellEvent::CommandStart => {
                     self.command_count += 1;
+                    self.started_at = Some(super::now_millis());
                     let command_id = format!("{}-c{}", session.id, self.command_count);
                     logger.command_started(
                         &command_id,
@@ -226,12 +238,18 @@ impl ShellIntegration {
                     // put a command in the log that Verb cannot account for.
                     if let Some(command_id) = self.open_command.take() {
                         logger.command_finished(&command_id, exit_code)?;
+                        let millis = self
+                            .started_at
+                            .take()
+                            .map(|started| super::now_millis().saturating_sub(started))
+                            .unwrap_or(0);
+                        structural.push(Structural::CommandFinished { exit_code, millis });
                     }
                 }
                 ShellEvent::PromptStart | ShellEvent::PromptEnd => {}
             }
         }
-        Ok(())
+        Ok(structural)
     }
 }
 
@@ -309,7 +327,9 @@ fn proxy_terminal(
                     // The bytes go to the terminal first and are scanned for structural markers
                     // afterwards, so nothing Verb does here can delay what the user sees. They are
                     // never retained: the scanner keeps only an in-flight marker, if any.
-                    integration.observe(bytes, session, logger)?;
+                    // The CLI proxy has no surface to react on: the events are logged, and the
+                    // structural outcomes are of no further use to it.
+                    let _ = integration.observe(bytes, session, logger)?;
                     io::stdout()
                         .write_all(bytes)
                         .map_err(|error| format!("could not write terminal output: {error}"))?;

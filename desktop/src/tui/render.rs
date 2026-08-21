@@ -57,7 +57,13 @@ const STATUS_ROWS: u16 = 1;
 const ASK_ROWS: u16 = 1;
 const BAND_ROWS: u16 = 2;
 
-pub(super) fn workspace(frame: &mut Frame, app: &App) {
+/// Draws the workspace and returns the rectangle the terminal was actually given.
+///
+/// The caller resizes the PTY to match. Making the *rendered* rectangle the authority is what keeps
+/// a full-screen agent correct when Verb's own chrome changes height -- the contextual band
+/// appearing takes two rows away from the terminal, and an agent that still believes it has them
+/// draws its bottom rows into space that is no longer there.
+pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
     let band = if app.message().is_some() || !matches!(app.context(), Context::None) {
         BAND_ROWS
     } else {
@@ -81,6 +87,8 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) {
     }
     ask(frame, areas[3]);
 
+    let terminal_area = areas[1];
+
     match app.surface() {
         Surface::None => {}
         Surface::Palette { filter, selected } => palette(frame, filter, *selected),
@@ -92,6 +100,8 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) {
         ),
         Surface::Help => help(frame, app),
     }
+
+    terminal_area
 }
 
 /// project · branch · changes · runtime · session state · leader hint.
@@ -210,6 +220,17 @@ fn convert(colour: vt100::Color, default: Color) -> Color {
     }
 }
 
+/// Human-sized durations: a command that took 3.8 seconds should not read as 3800ms.
+pub(super) fn duration(millis: u128) -> String {
+    if millis < 1_000 {
+        format!("{millis}ms")
+    } else if millis < 60_000 {
+        format!("{:.1}s", millis as f64 / 1_000.0)
+    } else {
+        format!("{}m {}s", millis / 60_000, (millis % 60_000) / 1_000)
+    }
+}
+
 /// `NO_COLOR` (no-color.org), honoured for the chrome and for the hosted screen alike.
 pub(super) fn no_colour() -> bool {
     std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty())
@@ -228,6 +249,19 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
 
     match app.context() {
         Context::None => {}
+        Context::CommandFailed { exit_code, millis } => {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "  ✕ Command failed".to_owned(),
+                    Style::default().fg(if no_colour() { Color::Reset } else { Color::Red }),
+                ),
+                Span::raw(format!(" · exit {exit_code} · {}", duration(*millis))),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "  Verb records that a command failed, never what was typed.".to_owned(),
+                Style::default().add_modifier(Modifier::DIM),
+            )));
+        }
         Context::SessionEnded { exit_code } => {
             lines.push(Line::from(Span::raw(format!(
                 "  ✕ Session ended · exit {exit_code}"
