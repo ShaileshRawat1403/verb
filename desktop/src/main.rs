@@ -8,7 +8,9 @@ use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agents;
+mod context;
 mod integration;
+mod json;
 mod pty;
 mod shell;
 #[cfg(unix)]
@@ -284,10 +286,10 @@ impl Session {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GitSnapshot {
-    root: Option<PathBuf>,
-    branch: Option<String>,
-    changed_files: usize,
+pub(crate) struct GitSnapshot {
+    pub root: Option<PathBuf>,
+    pub branch: Option<String>,
+    pub changed_files: usize,
 }
 
 /// Exit codes, kept few and documented (`verb help`) because anything that scripts against Verb
@@ -345,6 +347,7 @@ fn run() -> Result<(), Failure> {
         "version" | "--version" | "-V" => println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")),
         "status" => print_status(&project, json)?,
         "sessions" => print_sessions(json)?,
+        "context" => print_context(&project, json)?,
         #[cfg(unix)]
         "ui" => tui::run(&project)?,
         "resume" => resume_session(&project)?,
@@ -405,6 +408,7 @@ Usage:
   verb shell           Open the work-context shell
   verb status          Show project, Git, and last session
   verb sessions        List every project Verb has a session for
+  verb context         Show everything Verb knows about this project right now
   verb ui              Browse and resume sessions on a full screen
   verb version         Print the version
   verb claude          Launch Claude in the current project
@@ -543,7 +547,7 @@ pub(crate) fn display_path(path: &Path) -> String {
 /// Deliberately absent, here as everywhere: any process handle, PID, or `processPresent`. `state`
 /// is what was recorded; a reader that needs to know whether a process exists must ask the host
 /// that owns it, which is exactly why the field does not exist.
-fn session_json(session: &Session) -> String {
+pub(crate) fn session_json(session: &Session) -> String {
     let agent = match session.agent.as_ref() {
         Some(agent) => format!(
             "{{\"agentType\":\"{}\",\"resumeIdentity\":{}}}",
@@ -584,7 +588,7 @@ fn json_string_or_null(value: Option<&str>) -> String {
 ///
 /// Hand-rolled because the crate takes no dependencies: this is Howard Hinnant's `civil_from_days`,
 /// which is exact for the whole proleptic Gregorian range rather than approximating months.
-fn iso8601(millis: u128) -> String {
+pub(crate) fn iso8601(millis: u128) -> String {
     let total_seconds = (millis / 1_000) as i64;
     let days = total_seconds.div_euclid(86_400);
     let seconds_of_day = total_seconds.rem_euclid(86_400);
@@ -650,6 +654,16 @@ fn relative_time(elapsed_millis: u128) -> String {
     } else {
         format!("{}d ago", seconds / 86_400)
     }
+}
+
+/// Everything Verb knows about this project, assembled but not interpreted.
+///
+/// The groundwork every M2 variant needs -- explanation, comparison and guided action all start by
+/// gathering the same evidence -- available on its own, with no model behind it.
+fn print_context(project: &Path, json: bool) -> Result<(), String> {
+    let context = context::assemble(project)?;
+    println!("{}", if json { context.to_json() } else { context.to_text() });
+    Ok(())
 }
 
 fn print_status(project: &Path, json: bool) -> Result<(), String> {
@@ -970,7 +984,7 @@ fn project_root_or_current() -> Result<PathBuf, String> {
     Ok(git_snapshot(&current).root.unwrap_or(current))
 }
 
-fn git_snapshot(project: &Path) -> GitSnapshot {
+pub(crate) fn git_snapshot(project: &Path) -> GitSnapshot {
     let root = command_output("git", &["rev-parse", "--show-toplevel"], project)
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty());
@@ -998,7 +1012,7 @@ fn command_output(command: &str, args: &[&str], directory: &Path) -> Option<Stri
     Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn load_session(project: &Path) -> Result<Option<Session>, String> {
+pub(crate) fn load_session(project: &Path) -> Result<Option<Session>, String> {
     let path = session_path(project)?;
     match fs::read_to_string(path) {
         Ok(contents) => Session::deserialize(&contents)
@@ -1198,7 +1212,7 @@ impl EventLogger {
     }
 }
 
-fn event_log_path(project: &Path, session_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn event_log_path(project: &Path, session_id: &str) -> Result<PathBuf, String> {
     let session_file = session_path(project)?;
     let state_root = session_file
         .parent()
@@ -1210,7 +1224,7 @@ fn event_log_path(project: &Path, session_id: &str) -> Result<PathBuf, String> {
         .join(format!("{}.jsonl", session_id)))
 }
 
-fn json_escape(value: &str) -> String {
+pub(crate) fn json_escape(value: &str) -> String {
     json_escape_bytes(value.as_bytes())
 }
 

@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::json::{json_number, json_string, json_strings};
 use crate::ResumeVerdict;
 
 /// A conversation an agent could resume: what to hand back to the agent, and how recent it is.
@@ -289,51 +290,6 @@ fn modified_at(path: &Path) -> u128 {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
-}
-
-/// Minimal, allocation-light JSON field readers. Verb takes no dependencies for this: it reads two
-/// or three known scalar fields out of a line it does not otherwise interpret.
-fn json_string(input: &str, key: &str) -> Option<String> {
-    json_strings(input, key).into_iter().next()
-}
-
-fn json_strings(input: &str, key: &str) -> Vec<String> {
-    let needle = format!("\"{key}\":");
-    let mut values = Vec::new();
-    let mut rest = input;
-    while let Some(index) = rest.find(&needle) {
-        let after = &rest[index + needle.len()..];
-        let after = after.trim_start();
-        rest = after;
-        let Some(body) = after.strip_prefix('"') else {
-            continue;
-        };
-        let mut value = String::new();
-        let mut characters = body.chars();
-        let mut escaped = false;
-        for character in characters.by_ref() {
-            if escaped {
-                value.push(character);
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == '"' {
-                values.push(std::mem::take(&mut value));
-                break;
-            } else {
-                value.push(character);
-            }
-        }
-    }
-    values
-}
-
-fn json_number(input: &str, key: &str) -> Option<u128> {
-    let needle = format!("\"{key}\":");
-    let index = input.find(&needle)?;
-    let after = input[index + needle.len()..].trim_start();
-    let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
-    digits.parse().ok()
 }
 
 #[cfg(test)]
