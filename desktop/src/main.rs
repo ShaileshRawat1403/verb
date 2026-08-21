@@ -57,12 +57,31 @@ impl Agent {
         }
     }
 
+    /// Flags Verb adds whenever it starts this agent, new session or resumed.
+    ///
+    /// Codex boots the account's app connectors at startup, which cost tens of seconds before the
+    /// user can type. Verb turns them off; MCP servers the user configures themselves are
+    /// unaffected. Android's `RuntimeProfiles` makes the same choice, so an agent behaves the same
+    /// on both hosts.
+    fn launch_flags(&self) -> Vec<String> {
+        match self {
+            Self::Codex => vec!["--disable".to_owned(), "apps".to_owned()],
+            _ => Vec::new(),
+        }
+    }
+
     /// How this agent is told to continue a specific conversation.
     ///
     /// Every form here was read from the installed CLI's own help output, not assumed. Where no id
     /// is known, each falls back to that agent's "most recent session" flag rather than to an
     /// interactive picker, which would sit waiting for a keystroke Verb cannot supply.
     fn resume_args(&self, resume_identity: Option<&str>) -> Vec<String> {
+        let mut args = self.launch_flags();
+        args.extend(self.resume_subcommand(resume_identity));
+        args
+    }
+
+    fn resume_subcommand(&self, resume_identity: Option<&str>) -> Vec<String> {
         match (self, resume_identity) {
             (Self::Claude, Some(id)) => vec!["--resume".to_owned(), id.to_owned()],
             (Self::Claude, None) => vec!["--continue".to_owned()],
@@ -427,10 +446,11 @@ fn finish_session(session: &mut Session, exit_code: i32) -> Result<(), String> {
 
 fn effective_args(agent: &Agent, extra_args: Vec<String>) -> Vec<String> {
     if *agent == Agent::Shell && extra_args.is_empty() {
-        shell_args().iter().map(|arg| (*arg).to_owned()).collect()
-    } else {
-        extra_args
+        return shell_args().iter().map(|arg| (*arg).to_owned()).collect();
     }
+    let mut args = agent.launch_flags();
+    args.extend(extra_args);
+    args
 }
 
 fn run_managed(
@@ -881,14 +901,30 @@ mod tests {
             vec!["--resume".to_owned(), "claude-1".to_owned()]
         );
         assert_eq!(Agent::Claude.resume_args(None), vec!["--continue".to_owned()]);
+        // Codex resumes with the same flags a fresh launch uses, so a resumed conversation is not
+        // quietly a differently configured Codex.
         assert_eq!(
             Agent::Codex.resume_args(Some("codex-1")),
-            vec!["resume".to_owned(), "codex-1".to_owned()]
+            vec![
+                "--disable".to_owned(),
+                "apps".to_owned(),
+                "resume".to_owned(),
+                "codex-1".to_owned()
+            ]
         );
         // Bare `codex resume` opens an interactive picker Verb cannot answer.
         assert_eq!(
             Agent::Codex.resume_args(None),
-            vec!["resume".to_owned(), "--last".to_owned()]
+            vec![
+                "--disable".to_owned(),
+                "apps".to_owned(),
+                "resume".to_owned(),
+                "--last".to_owned()
+            ]
+        );
+        assert_eq!(
+            effective_args(&Agent::Codex, Vec::new()),
+            vec!["--disable".to_owned(), "apps".to_owned()]
         );
         assert_eq!(
             Agent::OpenCode.resume_args(Some("opencode-1")),

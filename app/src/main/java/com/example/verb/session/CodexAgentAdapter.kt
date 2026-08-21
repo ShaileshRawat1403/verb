@@ -1,5 +1,6 @@
 package com.example.verb.session
 
+import com.example.verb.terminal.RuntimeProfiles
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import java.io.File
 
@@ -65,14 +66,18 @@ class CodexAgentAdapter(
     /**
      * Sends `codex resume <id>` -- or `codex resume --last` when no id is known, never the bare
      * `codex resume`, which opens an interactive picker the user would have to answer by hand --
+     * carrying the same launch flags `RuntimeProfiles` uses for a fresh Codex --
      * and waits up to [resumeSettleMs] to see whether it exits. [AgentResumeLauncher] owns the
      * reasoning about why "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
         val resumeArgument = agent.resumeIdentity ?: "--last"
+        // The same flags a fresh launch uses, so resuming a conversation is not quietly a different
+        // Codex from the one that started it.
+        val flags = "--disable ${RuntimeProfiles.CODEX_APPS_FEATURE}"
         val stillRunning = AgentResumeLauncher.launch(
             terminalRuntimeAdapter = terminalRuntimeAdapter,
-            command = "codex resume $resumeArgument",
+            command = "codex $flags resume $resumeArgument",
             settleMs = resumeSettleMs,
             pollIntervalMs = pollIntervalMs
         )

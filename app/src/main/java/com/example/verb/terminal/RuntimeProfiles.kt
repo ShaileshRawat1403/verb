@@ -115,6 +115,16 @@ data class RuntimeProfile(
     val launchCommand: String? = null,
 
     /**
+     * Arguments Verb adds to [launchCommand] when it opens this agent.
+     *
+     * Kept separate from [launchCommand] because that name is also the filename of the Verb-owned
+     * wrapper [AgentWrapperBootstrap] writes onto PATH; it has to stay a bare command. These are
+     * appended only at the moment the agent is launched, and they are shown on the agent's card
+     * along with the command, so what Verb runs is never more than what the user can read.
+     */
+    val launchArguments: List<String> = emptyList(),
+
+    /**
      * Where [launchCommand]'s real binary may live, in preference order, and how to exec each.
      *
      * Consulted by [AgentWrapperBootstrap], which turns this into a Verb-owned wrapper that wins
@@ -136,6 +146,15 @@ data class RuntimeProfile(
 ) {
     /** True when this profile is something to open, not merely something to install. */
     val isAgent: Boolean get() = launchCommand != null
+
+    /**
+     * Exactly the line Verb types into the terminal to open this agent -- command plus
+     * [launchArguments]. Null for profiles that are plumbing rather than product.
+     */
+    val launchLine: String?
+        get() = launchCommand?.let { command ->
+            (listOf(command) + launchArguments).joinToString(" ")
+        }
 
     /** Safe because package names are catalog-owned, not user-provided shell input. */
     val installCommand: String
@@ -233,6 +252,12 @@ object RuntimeProfiles {
      * (`package/vendor/aarch64-unknown-linux-musl/bin/codex`) rather than assumed.
      */
     private const val CODEX_TARGET_TRIPLE = "aarch64-unknown-linux-musl"
+
+    /**
+     * Codex's feature flag for the account-side app connectors. Shared with `CodexAgentAdapter` so
+     * a resumed session is launched exactly like a new one.
+     */
+    const val CODEX_APPS_FEATURE = "apps"
 
     /**
      * Install command for Codex, which needs its platform build fetched by hand.
@@ -384,6 +409,11 @@ object RuntimeProfiles {
             installCommandOverride = codexInstall(),
             postInstallHint = "In Terminal, run codex and complete its sign-in flow.",
             launchCommand = "codex",
+            // Codex boots the account's app connectors (`codex_apps`, and whatever the account has
+            // linked) at startup. On the validation device that cost 94.7s for a one-turn prompt
+            // against 57.0s with them off -- roughly 38 seconds per launch, spent before the user
+            // can type. MCP servers the user configures themselves are unaffected.
+            launchArguments = listOf("--disable", CODEX_APPS_FEATURE),
             // Observed on the validation device while Codex was authenticated.
             signedInMarkers = listOf(".codex/auth.json"),
             binaryCandidates = listOf(
