@@ -1,15 +1,13 @@
 package com.example.verb.session
 
-import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.TerminalRuntimeAdapter
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /**
- * [AgentAdapter] for Claude Code, the first (and so far only) implementation -- Codex, OpenCode and
- * `dsh` each need their own, since resumability is agent-specific knowledge by design (see
- * `docs/VERB_SESSION_CONTRACT.md`).
+ * [AgentAdapter] for Claude Code. Codex has its own ([CodexAgentAdapter]), and OpenCode and `dsh`
+ * will each need one too, since resumability is agent-specific knowledge by design (see
+ * `docs/VERB_SESSION_CONTRACT.md`). The session lifecycle around all of them is shared and lives in
+ * [AgentSessionCoordinator].
  */
 class ClaudeAgentAdapter(
     private val filesDir: File,
@@ -20,79 +18,133 @@ class ClaudeAgentAdapter(
 ) : AgentAdapter {
 
     /**
-     * Reads presence from Claude's own transcript files under
-     * `~/.claude/projects/<cwd, "/" replaced by "-">/<session-uuid>.jsonl` -- the encoding Claude
-     * Code itself uses, observed on device and recorded in `docs/DURABLE_SESSION.md`. Verb never
-     * opens these files; presence (and, when a specific id is known, an exact filename match) is
-     * the whole of the check, the same boundary [AgentSignInDetector] already holds for credentials.
+     * Checks Claude-owned resume markers without persisting or reading transcript contents.
      *
-     * [ResumeVerdict.UNKNOWN] when there is no project directory to check against (nothing was ever
-     * launched under a project) or the transcript directory cannot be listed -- never guessed as
-     * [ResumeVerdict.NO], which would claim impossibility Verb has no evidence for.
+     * Claude builds use either project transcript files under
+     * `~/.claude/projects/<cwd, "/" replaced by "-">/<transcript>.jsonl` or, as the Android arm64 build does,
+     * small metadata records under `~/.claude/sessions/` (JSON files). The latter contain the Claude
+     * session id, CWD and lifecycle metadata; they are the useful recovery evidence after Verb's
+     * process dies. Verb only matches their CWD (and an explicit session id when known).
+     *
+     * [ResumeVerdict.UNKNOWN] means the host gave us no readable evidence either way. It is never
+     * guessed as [ResumeVerdict.NO], which would claim impossibility Verb has not established.
      */
     override fun canResume(agent: AgentRef): ResumeVerdict {
         val project = projectDirectory ?: return ResumeVerdict.UNKNOWN
-        val transcriptDir = File(filesDir, "home/.claude/projects/${encode(project)}")
-        val transcripts = runCatching {
-            transcriptDir.takeIf { it.isDirectory }?.listFiles { file -> file.isFile && file.extension == "jsonl" }
-        }.getOrNull() ?: return ResumeVerdict.UNKNOWN
-
-        val resumeIdentity = agent.resumeIdentity
-        val hasMatch = if (resumeIdentity != null) {
-            transcripts.any { it.nameWithoutExtension == resumeIdentity }
-        } else {
-            transcripts.isNotEmpty()
+        val transcriptVerdict = runCatching {
+            val transcriptDirs = transcriptDirectories(project).filter { it.isDirectory }
+            if (transcriptDirs.isEmpty()) {
+                null
+            } else {
+                transcriptDirs.flatMap { directory ->
+                    directory.listFiles { file -> file.isFile && file.extension == "jsonl" }?.toList().orEmpty()
+                }
+            }
+        }.getOrNull()?.let { transcripts ->
+            val resumeIdentity = agent.resumeIdentity
+            val hasMatch = if (resumeIdentity != null) {
+                transcripts.any { it.nameWithoutExtension == resumeIdentity }
+            } else {
+                transcripts.isNotEmpty()
+            }
+            if (hasMatch) ResumeVerdict.YES else ResumeVerdict.NO
         }
-        return if (hasMatch) ResumeVerdict.YES else ResumeVerdict.NO
+
+        if (transcriptVerdict == ResumeVerdict.YES) return ResumeVerdict.YES
+
+        return sessionMetadataVerdict(project, agent) ?: transcriptVerdict ?: ResumeVerdict.UNKNOWN
+    }
+
+    /**
+     * Returns Claude's stable conversation id when this host exposes one. The filename in the
+     * Android session directory is a PID and is intentionally never returned or persisted.
+     */
+    override fun resumeIdentity(agent: AgentRef): String? {
+        val project = projectDirectory ?: return null
+        return matchingSessionMetadata(sessionMetadataFiles() ?: return null, project, agent)
+            .firstOrNull()
+    }
+
+    private fun sessionMetadataFiles(): List<File>? {
+        val sessionDirectory = File(filesDir, "home/.claude/sessions")
+        if (!sessionDirectory.isDirectory) return null
+        return runCatching {
+            sessionDirectory.takeIf { it.isDirectory }
+                ?.listFiles { file -> file.isFile && file.extension == "json" }
+                ?.toList()
+        }.getOrNull()
+    }
+
+    /** Returns null when this Claude installation exposes no readable session metadata store. */
+    private fun sessionMetadataVerdict(project: File, agent: AgentRef): ResumeVerdict? {
+        val sessionFiles = sessionMetadataFiles() ?: return null
+        return if (matchingSessionMetadata(sessionFiles, project, agent).isNotEmpty()) {
+            ResumeVerdict.YES
+        } else {
+            ResumeVerdict.NO
+        }
+    }
+
+    /** Newer Claude session metadata wins when several historical sessions share one CWD. */
+    private fun matchingSessionMetadata(
+        sessionFiles: List<File>,
+        project: File,
+        agent: AgentRef
+    ): List<String> {
+        data class Match(val sessionId: String, val updatedAt: Long)
+
+        return sessionFiles.mapNotNull { file ->
+            val metadata = runCatching { file.readText() }.getOrNull() ?: return@mapNotNull null
+            val cwd = JSON_CWD_PATTERN.find(metadata)?.groupValues?.get(1) ?: return@mapNotNull null
+            val sessionId = JSON_SESSION_ID_PATTERN.find(metadata)?.groupValues?.get(1)
+                ?: return@mapNotNull null
+            if (pathsRepresentSameProject(cwd, project) &&
+                (agent.resumeIdentity == null || agent.resumeIdentity == sessionId)
+            ) {
+                Match(
+                    sessionId = sessionId,
+                    updatedAt = JSON_UPDATED_AT_PATTERN.find(metadata)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                )
+            } else null
+        }.sortedByDescending { it.updatedAt }.map { it.sessionId }
+    }
+
+    /** `/data/user/0` and `/data/data` are aliases on Android app-private storage. */
+    private fun pathsRepresentSameProject(metadataCwd: String, project: File): Boolean =
+        GuestPathAliases.sameDirectory(metadataCwd, project)
+
+    private fun transcriptDirectories(project: File): Set<File> = buildSet {
+        val projectAliases = GuestPathAliases.aliasesOf(project.absolutePath)
+        val filesRoots = GuestPathAliases.aliasesOf(filesDir)
+        filesRoots.forEach { root ->
+            projectAliases.forEach { alias ->
+                add(File(root, "home/.claude/projects/${alias.replace('/', '-')}"))
+            }
+        }
     }
 
     /**
      * Sends `claude --resume <id>` (or `--continue` with no known id) and waits up to
-     * [resumeSettleMs] to see whether it exits.
-     *
-     * Deliberately reads [TerminalRuntimeAdapter.commandHistory], not [TerminalRuntimeAdapter.terminalOutput]:
-     * `terminalOutput` mirrors the terminal emulator's own screen, which echoes typed input as soon
-     * as it is written to the PTY -- so a text marker embedded in the very command being sent would
-     * appear to "complete" instantly, before the shell had done anything at all. `commandHistory` is
-     * driven by real OSC 633 command-boundary events the shell's own prompt hooks emit, which fire
-     * only when a command genuinely finishes, so it is immune to that race.
-     *
-     * The check is inverted from the usual "wait for completion" pattern (compare
-     * `VerbViewModel.installOneProfile`), because resuming launches an interactive session rather
-     * than running a script to completion: **a new, settled command-history record appearing at
-     * all -- with any exit code -- means Claude already exited**, so resume did not produce a live
-     * session. No such record appearing within the window is the expected shape of success, since a
-     * genuinely resumed, still-running Claude will not return to the prompt until the user quits,
-     * arbitrarily later.
-     *
-     * A device without shell integration active has no signal either way and this conservatively
-     * reports failure -- see [AgentAdapter.resume]'s contract: a caller only ever advances to LIVE
-     * on a non-null result, so "cannot confirm" and "confirmed failed" are safe to treat the same.
+     * [resumeSettleMs] to see whether it exits. [AgentResumeLauncher] owns the reasoning about why
+     * "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
         val resumeArgument = agent.resumeIdentity?.let { "--resume $it" } ?: "--continue"
-        val idsBefore = terminalRuntimeAdapter.commandHistory.value.mapTo(mutableSetOf()) { it.id }
-
-        terminalRuntimeAdapter.sendCommand("claude $resumeArgument")
-
-        val exitedWithinWindow = withTimeoutOrNull(resumeSettleMs) {
-            while (true) {
-                val settled = terminalRuntimeAdapter.commandHistory.value.firstOrNull {
-                    it.id !in idsBefore && it.state != CommandLifecycleState.RUNNING
-                }
-                if (settled != null) break
-                delay(pollIntervalMs)
-            }
-        }
-
-        return if (exitedWithinWindow == null) ClaudeProcessBinding else null
+        val stillRunning = AgentResumeLauncher.launch(
+            terminalRuntimeAdapter = terminalRuntimeAdapter,
+            command = "claude $resumeArgument",
+            settleMs = resumeSettleMs,
+            pollIntervalMs = pollIntervalMs
+        )
+        return if (stillRunning) ClaudeProcessBinding else null
     }
-
-    private fun encode(project: File): String = project.absolutePath.replace('/', '-')
 
     private object ClaudeProcessBinding : ProcessBinding
 
     private companion object {
+        val JSON_CWD_PATTERN = Regex("\"cwd\"\\s*:\\s*\"([^\"]*)\"")
+        val JSON_SESSION_ID_PATTERN = Regex("\"sessionId\"\\s*:\\s*\"([^\"]*)\"")
+        val JSON_UPDATED_AT_PATTERN = Regex("\"updatedAt\"\\s*:\\s*(\\d+)")
         const val DEFAULT_RESUME_SETTLE_MS = 5_000L
         const val DEFAULT_POLL_INTERVAL_MS = 200L
     }

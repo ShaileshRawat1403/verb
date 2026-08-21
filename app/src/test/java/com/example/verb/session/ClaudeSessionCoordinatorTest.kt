@@ -15,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.time.Instant
 
 class ClaudeSessionCoordinatorTest {
 
@@ -152,5 +153,62 @@ class ClaudeSessionCoordinatorTest {
             afterFailedResume.state
         )
         assertEquals(recoverableId, afterFailedResume.id)
+    }
+
+    @Test
+    fun `fresh process restores the same id and reconciles LIVE to RECOVERABLE`() = runTest {
+        val (filesDir, project, fake) = setUp()
+        transcriptDir(filesDir, project).apply { mkdirs() }
+            .let { File(it, "session-x.jsonl").createNewFile() }
+        val persisted = VerbSession(
+            id = "persisted-id",
+            projectId = project.id,
+            runtime = "claude",
+            createdAt = Instant.EPOCH,
+            lastSeenAt = Instant.EPOCH,
+            state = VerbSessionState.LIVE,
+            lastKnownCwd = project.directory.absolutePath,
+            agent = AgentRef("claude")
+        )
+        val store = InMemoryVerbSessionStore(persisted)
+
+        val coordinator = ClaudeSessionCoordinator(
+            filesDir = filesDir,
+            terminalRuntimeAdapter = fake,
+            coroutineScope = this,
+            sessionStore = store,
+            processBindingConfirmed = false
+        )
+
+        assertEquals("persisted-id", coordinator.session.value!!.id)
+        assertEquals(VerbSessionState.RECOVERABLE, coordinator.session.value!!.state)
+        assertNull(coordinator.session.value!!.process)
+    }
+
+    @Test
+    fun `existing process binding is the only reason persisted LIVE stays LIVE`() = runTest {
+        val (filesDir, project, fake) = setUp()
+        val persisted = VerbSession(
+            id = "persisted-id",
+            projectId = project.id,
+            runtime = "claude",
+            createdAt = Instant.EPOCH,
+            lastSeenAt = Instant.EPOCH,
+            state = VerbSessionState.LIVE,
+            lastKnownCwd = project.directory.absolutePath,
+            agent = AgentRef("claude")
+        )
+        val coordinator = ClaudeSessionCoordinator(
+            filesDir = filesDir,
+            terminalRuntimeAdapter = fake,
+            coroutineScope = this,
+            sessionStore = InMemoryVerbSessionStore(persisted),
+            processBindingConfirmed = true
+        )
+
+        assertEquals("persisted-id", coordinator.session.value!!.id)
+        assertEquals(VerbSessionState.LIVE, coordinator.session.value!!.state)
+        assertNotNull(coordinator.session.value!!.process)
+        coordinator.cancelWatch()
     }
 }

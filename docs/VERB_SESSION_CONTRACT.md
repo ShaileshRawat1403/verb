@@ -1,13 +1,21 @@
 # VerbSession — the platform-agnostic contract
 
-Status: **the data shape and the first `AgentAdapter` are implemented.** `VerbSession`,
-`VerbSessionState`, `ProcessBinding`, and `AgentRef` exist in `com.example.verb.session` (commit
-`432251b`); `VerbTerminalSessionHolder` gives session lifetime an owner above the ViewModel (commit
-`241b739`); `ClaudeAgentAdapter` proves the full `LIVE -> INTERRUPTED -> RECOVERABLE -> LIVE` cycle
-against real Claude transcript detection (see `ClaudeResumeCycleTest`). Codex, OpenCode, and `dsh`
-each need their own adapter, not yet written. Nothing in the running app yet constructs or reads a
-`VerbSession` -- the holder and the contract are proven independently, not wired into the ViewModel
-yet, on purpose (see "One conceptual distinction to preserve", below). Desktop is untouched.
+Status: **the data shape, the shared session lifecycle, and two `AgentAdapter`s are implemented and
+wired into the app.** `VerbSession`, `VerbSessionState`, `ProcessBinding`, and `AgentRef` exist in
+`com.example.verb.session` (commit `432251b`); `VerbTerminalSessionHolder` gives session lifetime an
+owner above the ViewModel (commit `241b739`); `ClaudeAgentAdapter` proves the full
+`LIVE -> INTERRUPTED -> RECOVERABLE -> LIVE` cycle against real Claude transcript detection (see
+`ClaudeResumeCycleTest`), verified end-to-end on a physical Android device across force-stop.
+
+`AgentSessionCoordinator` now owns that lifecycle for *every* agent: there is one state machine, and
+an agent joins it by supplying an adapter (`ClaudeSessionCoordinator`, `CodexSessionCoordinator`) and
+its own durable store (`SharedPreferencesVerbSessionStore`, one preferences file per agent, so one
+agent's launch can never erase another's recovery record). `CodexAgentAdapter` reads Codex's rollout files and
+`OpenCodeAgentAdapter` reads OpenCode's SQLite session database; `dsh` still needs its own adapter.
+
+The desktop host in `desktop/` implements the same contract in Rust against the same three agents
+(`desktop/src/agents.rs`), including the agent resume identity the schema defines -- one contract,
+two hosts, no second state machine.
 
 This is the shape from `docs/HANDOFF.md`'s "Durable Session, step 2", made precise enough to type
 and to test against. It adds nothing conceptually new — it resolves the ambiguities that would
@@ -88,6 +96,12 @@ one in place.
 `ProcessBinding` is the **only** field that differs in shape between hosts, and shared logic never
 looks inside it — only at whether it is present or absent.
 
+It is runtime-only state. It is not part of the durable/session interchange schema and must never be
+reconstructed from a persisted `LIVE` value. On startup, a host must re-establish the binding from
+its own process owner; if no binding is confirmed, it resolves the session through the existing
+`INTERRUPTED` / `RECOVERABLE` / `ENDED` mapping below. Persisted history is evidence of what was true,
+not proof of what is true now.
+
 - Android: today's PTY/proot process handle (whatever `TerminalRuntime` already holds).
 - Desktop: a native PTY handle (whatever the Rust process host holds).
 
@@ -128,10 +142,33 @@ only ever sees the `yes | no | unknown` result, the same way it only ever sees "
 for `ProcessBinding`. `resume` returns `null` on failure -- no separate failure signal, deliberately:
 a caller branching only on null-vs-non-null cannot accidentally treat a failure as success.
 `ClaudeAgentAdapter` (`docs/HANDOFF.md`'s Claude-first slice) reads `canResume` from transcript
-presence under `~/.claude/projects/<cwd, "/" replaced by "-">/`, and detects `resume` failure from
-Claude's own command-history settling before the interactive session would ever return control --
-not from a transcript scan, since a resumed Claude keeps running rather than writing anything new to
+presence under `~/.claude/projects/<cwd, "/" replaced by "-">/` and from Claude's own session
+metadata under `~/.claude/sessions/`, whose filename is a PID and is therefore never used as
+identity. `CodexAgentAdapter` reads Codex's rollout files under
+`~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<session id>.jsonl`, matching the header
+record's `cwd` and taking its `id` as the resume identity; it resumes with `codex resume <id>`
+(`--last` when no id is known, never the bare `codex resume`, which opens an interactive picker).
+`OpenCodeAgentAdapter` has no transcripts to read at all: OpenCode keeps its sessions in the SQLite
+database `~/.local/share/opencode/opencode.db`, so the adapter copies that database (never opening a
+live one in place) and reads `session`/`message` rows, resuming with `opencode --session <id>`
+(`--continue` when no id is known).
+
+Both detect `resume` failure the same way, through the shared `AgentResumeLauncher`: from the
+agent's own command-history settling before an interactive session would ever return control -- not
+from a transcript scan, since a resumed agent keeps running rather than writing anything new to
 check.
+
+### Opened is not used: what counts as recovery evidence
+
+Codex writes a rollout file the moment it starts, and injects its own `<environment_context>` as a
+*user-role* message. Either one, taken as evidence, would make Verb offer "Resume" for a session the
+user only ever opened and then resume an empty conversation. `CodexAgentAdapter` therefore requires a
+user-role record that is not one of Codex's own injected blocks (read from a real rollout written by
+codex-cli 0.149.0 on the validation device, not assumed). This is the general rule for every future
+adapter: **the evidence must prove a conversation happened, not that a process started.**
+
+No adapter ever persists what it reads. Rollouts and transcripts are scanned for a marker; the lines
+themselves are never returned, stored, or logged.
 
 ## Transitions
 

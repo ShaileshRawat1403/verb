@@ -9,11 +9,23 @@ enum class ResumeVerdict { YES, NO, UNKNOWN }
 
 /**
  * Resumability is agent-specific knowledge -- checking Claude's transcripts looks nothing like
- * checking Codex's -- so [VerbSession] never inspects an [AgentRef] itself. It only ever sees the
- * verdict an [AgentAdapter] returns.
+ * checking Codex's rollout files -- so [VerbSession] never inspects an [AgentRef] itself. It only
+ * ever sees the verdict an [AgentAdapter] returns.
+ *
+ * An adapter is the *only* place agent-specific runtime truth belongs: how the agent is resumed,
+ * what on-disk evidence proves a recoverable conversation exists, and what that conversation's
+ * stable identity is. Session lifecycle itself is shared -- see [AgentSessionCoordinator].
  */
 interface AgentAdapter {
     fun canResume(agent: AgentRef): ResumeVerdict
+
+    /**
+     * The agent's own stable conversation id, when this host exposes one and the agent does not
+     * already carry it. Never a PID or a file handle: those do not survive process death, which is
+     * exactly the case this identity exists for. `null` means "no id discoverable", which is not a
+     * claim that recovery is impossible -- [canResume] answers that separately.
+     */
+    fun resumeIdentity(agent: AgentRef): String? = null
 
     /**
      * Attempts to resume [agent]. `null` means the attempt failed -- there is no other failure
