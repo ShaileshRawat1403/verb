@@ -35,8 +35,11 @@ impl Chord {
         self
     }
 
-    /// The bytes a terminal would have received had Verb not intercepted this chord. Forwarding
-    /// these is what makes `Leader Leader` and an unbound follow-up honest rather than approximate.
+    /// The bytes a terminal would have received for *this chord*.
+    ///
+    /// Only ever called for the leader itself, which is a control chord and therefore one ASCII
+    /// byte. Ordinary keys are encoded by [`super::keys::encode`], which handles multi-byte
+    /// characters -- casting a `char` to `u8` here would truncate anything outside ASCII.
     pub fn bytes(&self) -> Vec<u8> {
         if self.ctrl {
             let upper = self.key.to_ascii_uppercase() as u8;
@@ -105,12 +108,20 @@ fn command_for(key: char) -> Option<Command> {
 }
 
 /// What the caller should do with a keystroke.
+///
+/// Verb never re-encodes a key it is not claiming: [`Outcome::Passthrough`] tells the caller to send
+/// the key exactly as the terminal encodes it, rather than the leader trying to reconstruct bytes it
+/// only half understands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
-    /// Send these bytes to the terminal, untouched.
-    Forward(Vec<u8>),
+    /// Not Verb's key. Send it to the terminal as pressed.
+    Passthrough,
     /// Swallow it: the leader was pressed and Verb is waiting for the command key.
     Pending,
+    /// Send exactly these bytes -- the leader itself, given back to the terminal.
+    SendLeader,
+    /// Send the leader's bytes, then the key as pressed: an unbound follow-up eats neither.
+    SendLeaderThen,
     /// Run a Verb command.
     Run(Command),
 }
@@ -181,31 +192,26 @@ impl Leader {
         // Normalisation decides only whether this *is* the leader. What gets forwarded is always
         // the key as it arrived: normalising the forwarded bytes would quietly turn every capital
         // letter into a lowercase one.
-        let pressed = Chord { ctrl, key };
-        let chord = pressed.normalised();
+        let chord = Chord { ctrl, key }.normalised();
         if !self.pending {
             if chord == self.chord {
                 self.pending = true;
                 return Outcome::Pending;
             }
-            return Outcome::Forward(pressed.bytes());
+            return Outcome::Passthrough;
         }
 
         self.pending = false;
         if chord == self.chord {
             // Leader Leader: the terminal gets the leader key itself, so binding a key never costs
             // the user that key.
-            return Outcome::Forward(self.chord.bytes());
+            return Outcome::SendLeader;
         }
         match command_for(chord.key).filter(|_| !ctrl) {
             Some(command) => Outcome::Run(command),
             // Unbound follow-up: both keys go through. Verb never eats a keystroke it has no
             // meaning for.
-            None => {
-                let mut bytes = self.chord.bytes();
-                bytes.extend(pressed.bytes());
-                Outcome::Forward(bytes)
-            }
+            None => Outcome::SendLeaderThen,
         }
     }
 
@@ -231,22 +237,27 @@ mod tests {
     #[test]
     fn an_ordinary_key_is_never_intercepted() {
         let mut leader = leader();
-        assert_eq!(leader.key(false, 'p'), Outcome::Forward(vec![b'p']));
+        assert_eq!(leader.key(false, 'p'), Outcome::Passthrough);
         // Including the control keys readline binds, which is the whole point.
-        assert_eq!(leader.key(true, 'k'), Outcome::Forward(vec![0x0b]));
-        assert_eq!(leader.key(true, 'a'), Outcome::Forward(vec![0x01]));
+        assert_eq!(leader.key(true, 'k'), Outcome::Passthrough);
+        assert_eq!(leader.key(true, 'a'), Outcome::Passthrough);
+        // And characters the leader could not encode itself without damaging them.
+        assert_eq!(leader.key(false, '日'), Outcome::Passthrough);
+        assert_eq!(leader.key(false, '🚀'), Outcome::Passthrough);
     }
 
     #[test]
-    fn a_forwarded_key_arrives_exactly_as_it_was_pressed() {
-        // Regression: matching the leader is case-insensitive, but forwarding must not be, or every
-        // capital letter typed into the terminal arrives lowercase.
+    fn a_key_verb_does_not_claim_is_encoded_by_the_terminal_layer_not_here() {
+        // Two regressions live in this test. Matching the leader is case-insensitive, but the key
+        // sent on must not be -- capitals arrived lowercase. And a `char` cast to `u8` truncates
+        // anything outside ASCII, which silently mangled every accented and non-Latin character
+        // typed into the workspace. The leader now says "not mine" and encodes nothing.
         let mut leader = leader();
-        assert_eq!(leader.key(false, 'P'), Outcome::Forward(vec![b'P']));
-        assert_eq!(leader.key(false, 'Z'), Outcome::Forward(vec![b'Z']));
+        assert_eq!(leader.key(false, 'P'), Outcome::Passthrough);
+        assert_eq!(leader.key(false, 'é'), Outcome::Passthrough);
 
         leader.key(true, 'o');
-        assert_eq!(leader.key(false, 'Z'), Outcome::Forward(vec![0x0f, b'Z']));
+        assert_eq!(leader.key(false, 'Z'), Outcome::SendLeaderThen);
     }
 
     #[test]
@@ -261,14 +272,15 @@ mod tests {
     fn leader_leader_gives_the_key_back_to_the_terminal() {
         let mut leader = leader();
         leader.key(true, 'o');
-        assert_eq!(leader.key(true, 'o'), Outcome::Forward(vec![0x0f]));
+        assert_eq!(leader.key(true, 'o'), Outcome::SendLeader);
+        assert_eq!(leader.chord().bytes(), vec![0x0f]);
     }
 
     #[test]
     fn an_unbound_follow_up_forwards_both_keys_rather_than_eating_them() {
         let mut leader = leader();
         leader.key(true, 'o');
-        assert_eq!(leader.key(false, 'z'), Outcome::Forward(vec![0x0f, b'z']));
+        assert_eq!(leader.key(false, 'z'), Outcome::SendLeaderThen);
     }
 
     #[test]

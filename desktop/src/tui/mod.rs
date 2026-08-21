@@ -236,19 +236,30 @@ impl App {
         };
 
         if let Some(character) = character {
-            match self.leader.key(control, character) {
+            let outcome = self.leader.key(control, character);
+            if outcome != Outcome::Pending {
+                self.leader_pressed_at = None;
+            }
+            match outcome {
                 Outcome::Pending => {
                     self.leader_pressed_at = Some(Instant::now());
                     return Ok(());
                 }
-                Outcome::Forward(bytes) => {
-                    self.leader_pressed_at = None;
+                Outcome::Run(command) => return self.run_command(command),
+                Outcome::SendLeader => {
+                    let bytes = self.leader.chord().bytes();
                     return self.forward(&bytes);
                 }
-                Outcome::Run(command) => {
-                    self.leader_pressed_at = None;
-                    return self.run_command(command);
+                // The key is encoded by the terminal layer, which knows how to write a multi-byte
+                // character; the leader deliberately does not try.
+                Outcome::SendLeaderThen => {
+                    let mut bytes = self.leader.chord().bytes();
+                    if let Some(encoded) = keys::encode(key) {
+                        bytes.extend(encoded);
+                    }
+                    return self.forward(&bytes);
                 }
+                Outcome::Passthrough => {}
             }
         }
 
