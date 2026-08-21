@@ -69,9 +69,9 @@ internal object BoundedProcessRunner {
                 start()
             }
 
-            val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+            val finished = waitForBounded(process, timeoutMs)
             if (!finished) {
-                process.destroyForcibly()
+                destroyBounded(process)
                 drainer.join(500)
                 return Result(Outcome.TIMEOUT, null, output.toString())
             }
@@ -79,6 +79,42 @@ internal object BoundedProcessRunner {
             Result(Outcome.COMPLETED, process.exitValue(), output.toString())
         } catch (e: Exception) {
             Result(Outcome.LAUNCH_FAILED, null, (e.message ?: e.javaClass.simpleName).take(MAX_OUTPUT_CHARS))
+        }
+    }
+
+    /** How often [waitForBounded] re-checks a still-running process. */
+    private const val POLL_INTERVAL_MS = 25L
+
+    /**
+     * `Process.waitFor(timeout, unit)` needs API 26; Verb's floor is 24. Polls [Process.exitValue]
+     * instead, which is API 1, so this bound works down to minSdk.
+     */
+    private fun waitForBounded(process: Process, timeoutMs: Long): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        while (true) {
+            try {
+                process.exitValue()
+                return true
+            } catch (notYetExited: IllegalThreadStateException) {
+                val remainingNanos = deadline - System.nanoTime()
+                if (remainingNanos <= 0) {
+                    return false
+                }
+                Thread.sleep(minOf(POLL_INTERVAL_MS, TimeUnit.NANOSECONDS.toMillis(remainingNanos) + 1))
+            }
+        }
+    }
+
+    /**
+     * `Process.destroyForcibly()` needs API 26; Verb's floor is 24. Below 26, plain `destroy()` is
+     * the only lever available -- on Android's `ProcessBuilder` it still terminates the child, it
+     * just isn't guaranteed to be a hard kill the way `destroyForcibly()` is.
+     */
+    private fun destroyBounded(process: Process) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            process.destroyForcibly()
+        } else {
+            process.destroy()
         }
     }
 
