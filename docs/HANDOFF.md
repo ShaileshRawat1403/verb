@@ -1,5 +1,12 @@
 # Handoff
 
+> **Status of this document (2026-08-21): a dated snapshot, superseded in part.** The product layer
+> now lives in `docs/PRODUCT_VISION.md`, `docs/PRD.md`, `docs/ROADMAP.md` and `docs/TUI_VISION.md`;
+> read those first. Two claims below were later disproved on the same device and are corrected
+> where they appear: `dsh` does not run (its `koffi` native module has no Android build), and Codex
+> needed the vendor tarball step before it would execute at all. The rest is kept as written,
+> because a snapshot that gets edited to look correct stops being evidence.
+
 Written 2026-08-20. Read with `docs/DURABLE_SESSION.md` (the evidence behind the next piece of work)
 and `docs/NEXT_SPRINT.md` (carried-over blockers).
 
@@ -17,7 +24,7 @@ and `docs/NEXT_SPRINT.md` (carried-over blockers).
 | Claude Code | Runs (`2.1.235`). Signed in. Spawns subprocesses during real tasks. |
 | Codex CLI | Runs (`0.147.0`) through `qemu-aarch64`. Signed in. |
 | OpenCode | Runs (`1.18.18`). Sign-in state unknown to Verb. |
-| DeepSeek Harness (`dsh`) | Runs (`0.1.0-rc.7`). Sign-in state unknown to Verb. |
+| DeepSeek Harness (`dsh`) | ~~Runs (`0.1.0-rc.7`)~~ — **disproved 2026-08-21.** `dsh --version` answers while `require("koffi")` throws; the native module has no Android build and cannot compile there. Verb now reports it as unavailable with the reason. |
 | Gemini CLI | Not installed. |
 | Hermes | Blocked on building `cryptography`. |
 | DAX | Blocked on `@opentui/solid/bun-plugin`. |

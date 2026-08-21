@@ -1,14 +1,15 @@
 # VerbSession — the platform-agnostic contract
 
-Status: **the data shape, the shared session lifecycle, and two `AgentAdapter`s are implemented and
-wired into the app.** `VerbSession`, `VerbSessionState`, `ProcessBinding`, and `AgentRef` exist in
+Status: **the data shape, the shared session lifecycle, and three `AgentAdapter`s are implemented
+and wired into the app.** `VerbSession`, `VerbSessionState`, `ProcessBinding`, and `AgentRef` exist in
 `com.example.verb.session` (commit `432251b`); `VerbTerminalSessionHolder` gives session lifetime an
 owner above the ViewModel (commit `241b739`); `ClaudeAgentAdapter` proves the full
 `LIVE -> INTERRUPTED -> RECOVERABLE -> LIVE` cycle against real Claude transcript detection (see
 `ClaudeResumeCycleTest`), verified end-to-end on a physical Android device across force-stop.
 
 `AgentSessionCoordinator` now owns that lifecycle for *every* agent: there is one state machine, and
-an agent joins it by supplying an adapter (`ClaudeSessionCoordinator`, `CodexSessionCoordinator`) and
+an agent joins it by supplying an adapter (`ClaudeSessionCoordinator`, `CodexSessionCoordinator`,
+`OpenCodeSessionCoordinator`) and
 its own durable store (`SharedPreferencesVerbSessionStore`, one preferences file per agent, so one
 agent's launch can never erase another's recovery record). `CodexAgentAdapter` reads Codex's rollout files and
 `OpenCodeAgentAdapter` reads OpenCode's SQLite session database; `dsh` still needs its own adapter.

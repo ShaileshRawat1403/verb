@@ -1,5 +1,9 @@
 # Desktop MVP cut line
 
+> Implementation document. The product layer above it is `docs/PRODUCT_VISION.md`, `docs/PRD.md`,
+> `docs/ROADMAP.md` and `docs/TUI_VISION.md`; the current scope freeze is ROADMAP **M1 — desktop
+> workspace**, and the interface it produces is specified in `docs/TUI_VISION.md`.
+
 Status: **started 2026-08-21**
 
 Android's first product slice is now the stopping point for this phase: the runtime truth work is
