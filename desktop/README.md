@@ -37,6 +37,9 @@ by the agent. `VERB_STATE_DIR` can point tests or a development build at an isol
 
 - `verb status` reports the project root, branch, changed-file count, and last session, including
   the agent conversation a resume would land on.
+- `verb ui` opens the same information as a screen: sessions newest first, arrow keys to move,
+  enter to resume, `n` for a new session in that project, `r` to re-check. It hands the terminal
+  back to the agent when one starts, and takes it back afterwards.
 - `verb sessions` lists every project Verb holds a session for, newest first. It is read-only: it
   reconciles nothing and writes nothing, and a recorded `live` session is shown as unconfirmed,
   because nothing durable holds a process handle and another process cannot see one.

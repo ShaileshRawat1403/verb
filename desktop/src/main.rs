@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod agents;
 mod pty;
 mod shell;
+#[cfg(unix)]
+mod ui;
 
 const APP_NAME: &str = "Verb";
 
@@ -303,6 +305,8 @@ fn run() -> Result<(), String> {
         "help" | "--help" | "-h" => print_help(),
         "status" => print_status(&project)?,
         "sessions" => print_sessions()?,
+        #[cfg(unix)]
+        "ui" => ui::run()?,
         "resume" => resume_session(&project)?,
         "shell" => launch_session(&project, Agent::Shell, args.collect())?,
         "claude" | "codex" | "opencode" | "open-code" | "dsh" | "deepseek" => {
@@ -328,6 +332,7 @@ Usage:
   verb                 Open the work-context shell
   verb status          Show project, Git, and last session
   verb sessions        List every project Verb has a session for
+  verb ui              Browse and resume sessions on a full screen
   verb claude          Launch Claude in the current project
   verb codex           Launch Codex in the current project
   verb opencode        Launch OpenCode in the current project

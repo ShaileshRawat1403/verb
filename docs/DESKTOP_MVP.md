@@ -20,6 +20,10 @@ verb sessions
   every project with a session, newest first; read-only, and a recorded LIVE
   session is reported as unconfirmed rather than as fact
 
+verb ui
+  the same thing as a screen: move, resume, start a new session; the UI computes
+  no state of its own and hands the terminal to the agent when one starts
+
 verb claude / codex / opencode / dsh
   launch the existing agent in the current Git project
   proxy the interactive process through a Unix PTY
@@ -86,10 +90,27 @@ Two properties worth keeping: the scanner holds only the bytes of a marker curre
 Verb's memory; and a shell that emits nothing produces no events at all, because silence means
 "unknown", not a fabricated boundary.
 
+## The shell (`desktop/src/ui.rs`)
+
+Shell-first, as the thesis says: a terminal UI in the same dependency-free crate, not a window.
+Raw mode through `stty` (as the PTY host already does), drawing through ANSI escapes, input read a
+byte at a time. It works over SSH, which a GUI would not.
+
+It is presentation only. It computes no session state and defines no semantics: recoverability comes
+from the same resolver `verb status` uses, and resuming or launching calls the same functions
+`verb resume` and `verb claude` call. Two consequences worth keeping:
+
+- A recorded `LIVE` row reads `live?` with "this process cannot confirm it is running", the same
+  honesty `verb sessions` prints.
+- The footer offers only the action the selected row's state actually justifies -- `enter` on a
+  recoverable session, `n` on an ended one, and neither on one whose status is still unknown.
+
+When a session starts, the UI gives the whole terminal back before the agent runs and reclaims it
+afterwards, rather than drawing underneath an interactive TUI it would fight for the cursor.
+
 ## Next desktop increments
 
-1. Put a desktop shell around the proven backend. The command boundary, the session contract, the
-   agent adapters, and the structural event log are all in place; the UI is the remaining layer.
+1. Decide whether bare `verb` should open the UI rather than a work-context shell.
 2. `dsh` is on hold rather than pending: it cannot be installed on Verb's Android userland at all
    (its `koffi` native module has no Android build), so there is no runtime to observe a resume
    contract from. If it ever runs on either host, it gets an adapter on the same terms as the rest.
