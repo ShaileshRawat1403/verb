@@ -1,5 +1,10 @@
 # Next sprint — carried-over work
 
+> **Status of this document (2026-08-21): a dated snapshot.** Current scope lives in
+> `docs/ROADMAP.md` (M1 — desktop workspace) and the product layer in `docs/PRODUCT_VISION.md`,
+> `docs/PRD.md` and `docs/TUI_VISION.md`. Kept as written: it records what was measured at the time,
+> including agent states that have since changed.
+
 Written at the close of the agent-runtime sprint. Everything here is either measured on a physical
 Vivo I2202 or explicitly marked as unverified.
 
