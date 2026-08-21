@@ -108,9 +108,27 @@ from the same resolver `verb status` uses, and resuming or launching calls the s
 When a session starts, the UI gives the whole terminal back before the agent runs and reclaims it
 afterwards, rather than drawing underneath an interactive TUI it would fight for the cursor.
 
-## Next desktop increments
+## The command surface
 
-1. Decide whether bare `verb` should open the UI rather than a work-context shell.
+```text
+verb            the UI on a terminal; help when piped, redirected, or in CI
+verb shell      the work-context shell (what bare `verb` used to do)
+verb status     one project
+verb sessions   every project, as text
+verb ui         the same, as a screen
+verb resume     resume the tracked session
+verb claude|codex|opencode|dsh|run CMD
+```
+
+Two rules hold this together as more is added:
+
+1. **Everything the UI can do is also a subcommand.** The UI is a client of the same functions, so
+   nothing becomes reachable only by hand -- scripts, CI and remote sessions keep working, and the
+   UI can never drift into being the only place some behaviour exists.
+2. **The bare command adapts to the terminal, never to guesswork.** Interactive when there is a
+   person, help when there is not. Anything with side effects keeps an explicit name.
+
+## Next desktop increments
 2. `dsh` is on hold rather than pending: it cannot be installed on Verb's Android userland at all
    (its `koffi` native module has no Android build), so there is no runtime to observe a resume
    contract from. If it ever runs on either host, it gets an adapter on the same terms as the rest.

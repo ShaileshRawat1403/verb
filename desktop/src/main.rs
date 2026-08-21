@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(not(unix))]
@@ -298,11 +298,12 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
-    let command = args.next().unwrap_or_else(|| "shell".to_owned());
+    let command = args.next().unwrap_or_else(default_command);
     let project = project_root_or_current()?;
 
     match command.as_str() {
         "help" | "--help" | "-h" => print_help(),
+        "version" | "--version" | "-V" => println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")),
         "status" => print_status(&project)?,
         "sessions" => print_sessions()?,
         #[cfg(unix)]
@@ -324,15 +325,32 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+/// What bare `verb` does.
+///
+/// On a terminal it opens the UI, because the work context *is* the product and a tool whose
+/// primary surface is one keystroke away is easier to keep than one whose primary surface has a
+/// name you must remember. `verb shell`, which used to be the bare default, is still there.
+///
+/// Off a terminal -- piped, redirected, in CI -- it prints help instead and touches nothing.
+/// Launching a UI or a shell into a pipe would hang waiting for input nobody is typing, and a bare
+/// command should never have side effects that depend on where its output happens to be going.
+/// Every action the UI offers is also a subcommand, so nothing here is reachable only by hand.
+fn default_command() -> String {
+    let interactive = cfg!(unix) && io::stdin().is_terminal() && io::stdout().is_terminal();
+    if interactive { "ui" } else { "help" }.to_owned()
+}
+
 fn print_help() {
     println!(
         r#"Verb — a work-context shell for projects, Git, and agents
 
 Usage:
-  verb                 Open the work-context shell
+  verb                 Open the session UI (help when not run in a terminal)
+  verb shell           Open the work-context shell
   verb status          Show project, Git, and last session
   verb sessions        List every project Verb has a session for
   verb ui              Browse and resume sessions on a full screen
+  verb version         Print the version
   verb claude          Launch Claude in the current project
   verb codex           Launch Codex in the current project
   verb opencode        Launch OpenCode in the current project
@@ -941,6 +959,14 @@ fn hex_encode(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_verb_never_starts_something_interactive_off_a_terminal() {
+        // Under `cargo test` stdout is captured, so this exercises the non-terminal branch: piped,
+        // redirected or in CI, bare `verb` must print help rather than open a UI that would sit
+        // waiting for keystrokes nobody is typing.
+        assert_eq!(default_command(), "help");
+    }
 
     #[test]
     fn parses_known_and_custom_agents() {

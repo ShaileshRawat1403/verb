@@ -37,6 +37,9 @@ by the agent. `VERB_STATE_DIR` can point tests or a development build at an isol
 
 - `verb status` reports the project root, branch, changed-file count, and last session, including
   the agent conversation a resume would land on.
+- Bare `verb` opens the UI on a terminal, and prints help when it is piped, redirected, or run in
+  CI. A bare command should not do something interactive that depends on where its output is going.
+  `verb shell`, which used to be the bare default, is unchanged.
 - `verb ui` opens the same information as a screen: sessions newest first, arrow keys to move,
   enter to resume, `n` for a new session in that project, `r` to re-check. It hands the terminal
   back to the agent when one starts, and takes it back afterwards.
