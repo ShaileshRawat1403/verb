@@ -46,6 +46,11 @@ fun AgentsScreen(
     onEditKeys: () -> Unit,
     installingProfile: com.example.verb.terminal.RuntimeProfileId? = null,
     message: String? = null,
+    // null until the user has launched Claude at least once, per claudeSessionDisplay()'s own
+    // contract -- the card below falls back to its normal install/ready display until then.
+    claudeSession: com.example.verb.session.VerbSession? = null,
+    onResumeClaudeSession: () -> Unit = {},
+    onStartNewClaudeSession: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val agents = reports.filter { it.profile.isAgent }
@@ -73,7 +78,14 @@ fun AgentsScreen(
                 installing = installingProfile == report.profile.id,
                 anyInstalling = installingProfile != null,
                 onLaunch = onLaunch,
-                onInstall = onInstall
+                onInstall = onInstall,
+                claudeSessionDisplay = if (report.profile.id == com.example.verb.terminal.RuntimeProfileId.CLAUDE_CODE) {
+                    com.example.verb.session.claudeSessionDisplay(claudeSession)
+                } else {
+                    null
+                },
+                onResumeClaudeSession = onResumeClaudeSession,
+                onStartNewClaudeSession = onStartNewClaudeSession
             )
             Spacer(modifier = Modifier.height(10.dp))
         }
@@ -99,7 +111,10 @@ private fun AgentRow(
     installing: Boolean,
     anyInstalling: Boolean,
     onLaunch: (String) -> Unit,
-    onInstall: (com.example.verb.terminal.RuntimeProfileId) -> Unit
+    onInstall: (com.example.verb.terminal.RuntimeProfileId) -> Unit,
+    claudeSessionDisplay: com.example.verb.session.ClaudeSessionDisplay? = null,
+    onResumeClaudeSession: () -> Unit = {},
+    onStartNewClaudeSession: () -> Unit = {}
 ) {
     val profile = report.profile
     val launch = profile.launchCommand ?: return
@@ -115,6 +130,7 @@ private fun AgentRow(
                 Text(profile.displayName, style = MaterialTheme.typography.titleSmall)
                 Text(
                     when {
+                        claudeSessionDisplay != null -> claudeSessionDisplay.statusLabel
                         installing -> "Installing"
                         report.isReady -> "Ready"
                         report.isUnsatisfiable -> "Unavailable"
@@ -122,10 +138,22 @@ private fun AgentRow(
                     },
                     style = MaterialTheme.typography.labelMedium,
                     color = when {
+                        claudeSessionDisplay?.showResume == true -> MaterialTheme.colorScheme.primary
+                        claudeSessionDisplay != null -> MaterialTheme.colorScheme.onSurfaceVariant
                         report.isReady -> MaterialTheme.colorScheme.primary
                         report.isUnsatisfiable -> MaterialTheme.colorScheme.error
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    },
+                    modifier = Modifier.testTag("agent_session_status_${profile.id.name.lowercase()}")
+                )
+            }
+
+            claudeSessionDisplay?.detailLabel?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp)
                 )
             }
 
@@ -171,6 +199,20 @@ private fun AgentRow(
 
             Spacer(modifier = Modifier.height(10.dp))
             when {
+                // A tracked session takes over the action slot entirely: requirement 1 is that this
+                // reads only VerbSession.state (via claudeSessionDisplay), never report.isReady.
+                claudeSessionDisplay?.showResume == true -> Button(
+                    onClick = onResumeClaudeSession,
+                    modifier = Modifier.testTag("agent_resume_${profile.id.name.lowercase()}")
+                ) { Text("Resume") }
+
+                claudeSessionDisplay?.showStartNew == true -> OutlinedButton(
+                    onClick = onStartNewClaudeSession,
+                    modifier = Modifier.testTag("agent_start_new_${profile.id.name.lowercase()}")
+                ) { Text("Start new") }
+
+                claudeSessionDisplay != null -> Unit // LIVE / INTERRUPTED: nothing to tap yet.
+
                 report.isReady -> Button(
                     onClick = { onLaunch(launch) },
                     modifier = Modifier.testTag("agent_open_${profile.id.name.lowercase()}")

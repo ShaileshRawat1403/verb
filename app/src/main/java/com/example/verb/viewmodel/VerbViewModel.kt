@@ -102,6 +102,20 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /**
+     * The one live [com.example.verb.session.VerbSession] the UI can see, and the only one
+     * constructed anywhere in the app so far -- see `docs/VERB_SESSION_CONTRACT.md`. Deliberately
+     * not [com.example.verb.session.VerbTerminalSessionHolder]: that owns the process-scoped
+     * `TerminalRuntime` this ViewModel already reattaches to; this owns product-level identity for
+     * one agent's session running inside it, and the two stay separate on purpose.
+     */
+    private val claudeSessionCoordinator = com.example.verb.session.ClaudeSessionCoordinator(
+        filesDir = application.applicationContext.filesDir,
+        terminalRuntimeAdapter = terminalRuntime,
+        coroutineScope = viewModelScope
+    )
+    val claudeSession: StateFlow<com.example.verb.session.VerbSession?> = claudeSessionCoordinator.session
+
     private val _projects = MutableStateFlow(projectRepository.list())
     val projects: StateFlow<List<VerbProject>> = _projects.asStateFlow()
     private val _selectedProject = MutableStateFlow(projectRepository.selected())
@@ -200,6 +214,14 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
         const val MAX_TAB_BACK_STACK = 8
         const val PROFILE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000L
+
+        /**
+         * [RuntimeProfiles.all]'s own `CLAUDE_CODE.launchCommand`, not a separately hand-typed
+         * literal: the two must never drift apart, since this is what distinguishes "the user
+         * opened Claude" from opening any other agent, for [ClaudeSessionCoordinator] purposes.
+         */
+        val CLAUDE_LAUNCH_COMMAND: String =
+            RuntimeProfiles.all.first { it.id == RuntimeProfileId.CLAUDE_CODE }.launchCommand!!
     }
 
     private val _aiProviderSettings = MutableStateFlow(aiProviderSettingsStore.load())
@@ -595,7 +617,28 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun launchAgent(command: String) {
         selectTab(VerbTab.TERMINAL)
-        sendTerminalCommand(command)
+        if (command == CLAUDE_LAUNCH_COMMAND) {
+            // Captured before sendTerminalCommand so the coordinator's watch can tell which new
+            // commandHistory record is Claude's, not anything already running.
+            val idsBeforeLaunch = terminalRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
+            sendTerminalCommand(command)
+            claudeSessionCoordinator.onLaunched(projectRepository.selected(), idsBeforeLaunch)
+        } else {
+            sendTerminalCommand(command)
+        }
+    }
+
+    /** The Agents screen's Resume action once [claudeSession] is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
+    fun resumeClaudeSession() {
+        selectTab(VerbTab.TERMINAL)
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            claudeSessionCoordinator.resume()
+        }
+    }
+
+    /** The Agents screen's "Start new" action once [claudeSession] is [com.example.verb.session.VerbSessionState.ENDED]. */
+    fun startNewClaudeSession() {
+        launchAgent(CLAUDE_LAUNCH_COMMAND)
     }
 
     /** Opens the key file in the terminal's editor; Verb never displays or edits key values itself. */
