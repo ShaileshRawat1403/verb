@@ -289,37 +289,81 @@ struct GitSnapshot {
     changed_files: usize,
 }
 
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{APP_NAME}: {error}");
-        std::process::exit(1);
+/// Exit codes, kept few and documented (`verb help`) because anything that scripts against Verb
+/// depends on them staying put.
+///
+/// The distinction that earns its place is [`EXIT_NOTHING_TO_DO`]: "there is no recoverable session
+/// here" is not a failure of Verb, and a script that retries on failure should not retry on it.
+mod exit {
+    pub const FAILURE: i32 = 1;
+    pub const USAGE: i32 = 2;
+    pub const NOTHING_TO_DO: i32 = 3;
+}
+
+/// An error on its way to the exit code it should produce.
+#[derive(Debug)]
+struct Failure {
+    message: String,
+    code: i32,
+}
+
+impl Failure {
+    fn new(code: i32, message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            code,
+        }
     }
 }
 
-fn run() -> Result<(), String> {
+/// Ordinary errors are failures; the call sites that mean something more specific say so.
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self::new(exit::FAILURE, message)
+    }
+}
+
+fn main() {
+    if let Err(failure) = run() {
+        eprintln!("{APP_NAME}: {}", failure.message);
+        std::process::exit(failure.code);
+    }
+}
+
+fn run() -> Result<(), Failure> {
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(default_command);
+    let mut rest: Vec<String> = args.collect();
+    // `--json` is a global flag on the read commands rather than a per-command parser: there is one
+    // spelling to learn, and a machine consumer never has to care which command it is asking.
+    let json = take_flag(&mut rest, "--json");
     let project = project_root_or_current()?;
 
     match command.as_str() {
         "help" | "--help" | "-h" => print_help(),
         "version" | "--version" | "-V" => println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")),
-        "status" => print_status(&project)?,
-        "sessions" => print_sessions()?,
+        "status" => print_status(&project, json)?,
+        "sessions" => print_sessions(json)?,
         #[cfg(unix)]
         "ui" => ui::run()?,
         "resume" => resume_session(&project)?,
-        "shell" => launch_session(&project, Agent::Shell, args.collect())?,
+        "shell" => launch_session(&project, Agent::Shell, rest)?,
         "claude" | "codex" | "opencode" | "open-code" | "dsh" | "deepseek" => {
-            launch_session(&project, Agent::parse(&command), args.collect())?
+            launch_session(&project, Agent::parse(&command), rest)?
         }
         "run" => {
-            let command = args
-                .next()
-                .ok_or_else(|| "verb run needs a command".to_owned())?;
-            launch_session(&project, Agent::Custom(command), args.collect())?;
+            if rest.is_empty() {
+                return Err(Failure::new(exit::USAGE, "verb run needs a command"));
+            }
+            let command = rest.remove(0);
+            launch_session(&project, Agent::Custom(command), rest)?;
         }
-        other => return Err(format!("unknown command '{other}'. Run 'verb help'.")),
+        other => {
+            return Err(Failure::new(
+                exit::USAGE,
+                format!("unknown command '{other}'. Run 'verb help'."),
+            ))
+        }
     }
 
     Ok(())
@@ -340,6 +384,17 @@ fn default_command() -> String {
     if interactive { "ui" } else { "help" }.to_owned()
 }
 
+/// Removes `flag` from `args` if present, reporting whether it was there.
+fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    match args.iter().position(|value| value == flag) {
+        Some(index) => {
+            args.remove(index);
+            true
+        }
+        None => false,
+    }
+}
+
 fn print_help() {
     println!(
         r#"Verb — a work-context shell for projects, Git, and agents
@@ -358,6 +413,15 @@ Usage:
   verb run CMD ...     Launch any command in the current project
   verb resume          Resume the last known resumable session
 
+Options:
+  --json               Machine-readable output for status and sessions
+
+Exit codes:
+  0  success
+  1  something failed
+  2  the command line was wrong
+  3  nothing to do (no session, or recovery is not confirmed)
+
 The current directory selects the project. Verb stores only session metadata in ~/.verb;
 agent credentials and transcripts remain owned by the agent."#
     );
@@ -372,12 +436,13 @@ agent credentials and transcripts remain owned by the agent."#
 /// A recorded `LIVE` is reported as unconfirmed rather than as fact. Nothing durable holds a process
 /// handle -- that is the contract -- so a *different* process, which is what this command always is,
 /// has no way to prove the session it is reading about is still running.
-fn print_sessions() -> Result<(), String> {
+fn print_sessions(json: bool) -> Result<(), String> {
     let directory = sessions_directory()?;
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            println!("No sessions yet.");
+            // An empty list, not an error and not a special case: a machine consumer gets `[]`.
+            println!("{}", if json { "[]" } else { "No sessions yet." });
             return Ok(());
         }
         Err(error) => return Err(format!("could not read {}: {error}", directory.display())),
@@ -391,16 +456,103 @@ fn print_sessions() -> Result<(), String> {
         .collect();
 
     if sessions.is_empty() {
-        println!("No sessions yet.");
+        println!("{}", if json { "[]" } else { "No sessions yet." });
         return Ok(());
     }
 
     sessions.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
+
+    if json {
+        let rows: Vec<String> = sessions.iter().map(session_json).collect();
+        println!("[{}]", rows.join(","));
+        return Ok(());
+    }
+
     let now = now_millis();
     for session in &sessions {
         println!("{}", describe_session(session, now));
     }
     Ok(())
+}
+
+/// One session as the durable record `docs/VERB_SESSION_SCHEMA.md` describes -- the same field
+/// names and the same ISO-8601 timestamps Android's records use, so a consumer reading one host's
+/// output does not have to learn the other's.
+///
+/// Deliberately absent, here as everywhere: any process handle, PID, or `processPresent`. `state`
+/// is what was recorded; a reader that needs to know whether a process exists must ask the host
+/// that owns it, which is exactly why the field does not exist.
+fn session_json(session: &Session) -> String {
+    let agent = match session.agent.as_ref() {
+        Some(agent) => format!(
+            "{{\"agentType\":\"{}\",\"resumeIdentity\":{}}}",
+            json_escape(agent.label()),
+            match session.resume_identity.as_deref() {
+                Some(identity) => format!("\"{}\"", json_escape(identity)),
+                None => "null".to_owned(),
+            }
+        ),
+        None => "null".to_owned(),
+    };
+
+    format!(
+        "{{\"schemaVersion\":1,\"sessionId\":\"{}\",\"projectId\":\"{}\",\"runtimeId\":{},\"lastKnownCwd\":{},\"lastObservedAt\":{},\"createdAt\":\"{}\",\"lastSeenAt\":\"{}\",\"state\":\"{}\",\"agent\":{}}}",
+        json_escape(&session.id),
+        json_escape(&session.project_id.to_string_lossy()),
+        json_string_or_null(session.runtime_id.as_deref()),
+        json_string_or_null(session.last_known_cwd.as_ref().map(|path| path.to_string_lossy()).as_deref()),
+        match session.last_observed_at {
+            Some(millis) => format!("\"{}\"", iso8601(millis)),
+            None => "null".to_owned(),
+        },
+        iso8601(session.created_at),
+        iso8601(session.last_seen_at),
+        session.state.as_str().to_uppercase(),
+        agent
+    )
+}
+
+fn json_string_or_null(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!("\"{}\"", json_escape(value)),
+        None => "null".to_owned(),
+    }
+}
+
+/// Milliseconds since the epoch as an ISO-8601 UTC timestamp, which is what the schema specifies.
+///
+/// Hand-rolled because the crate takes no dependencies: this is Howard Hinnant's `civil_from_days`,
+/// which is exact for the whole proleptic Gregorian range rather than approximating months.
+fn iso8601(millis: u128) -> String {
+    let total_seconds = (millis / 1_000) as i64;
+    let days = total_seconds.div_euclid(86_400);
+    let seconds_of_day = total_seconds.rem_euclid(86_400);
+
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = if month <= 2 { year + 1 } else { year };
+
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month,
+        day,
+        seconds_of_day / 3_600,
+        (seconds_of_day % 3_600) / 60,
+        seconds_of_day % 60
+    )
 }
 
 /// One line per session: what state it is in, which agent, how long ago it was seen, and where.
@@ -439,7 +591,19 @@ fn relative_time(elapsed_millis: u128) -> String {
     }
 }
 
-fn print_status(project: &Path) -> Result<(), String> {
+fn print_status(project: &Path, json: bool) -> Result<(), String> {
+    if json {
+        let session = load_session(project)?.map(reconcile_session).transpose()?;
+        println!(
+            "{}",
+            match session {
+                Some(session) => session_json(&session),
+                None => "null".to_owned(),
+            }
+        );
+        return Ok(());
+    }
+
     let git = git_snapshot(project);
     println!("Project: {}", project.display());
     match git.root {
@@ -493,20 +657,25 @@ fn launch_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> Resu
     Ok(())
 }
 
-fn resume_session(project: &Path) -> Result<(), String> {
+fn resume_session(project: &Path) -> Result<(), Failure> {
+    // The three ways there is simply nothing to resume are reported as EXIT_NOTHING_TO_DO rather
+    // than as failure: Verb worked correctly, the session just is not recoverable, and a caller
+    // that retries on failure should not retry on this.
     let mut session = load_session(project)?
         .map(reconcile_session)
         .transpose()?
-        .ok_or_else(|| "no session for this project".to_owned())?;
-    let agent = session
-        .agent
-        .clone()
-        .ok_or_else(|| "this session has no resumable agent".to_owned())?;
+        .ok_or_else(|| Failure::new(exit::NOTHING_TO_DO, "no session for this project"))?;
+    let agent = session.agent.clone().ok_or_else(|| {
+        Failure::new(exit::NOTHING_TO_DO, "this session has no resumable agent")
+    })?;
     if session.state != SessionState::Recoverable {
-        return Err(format!(
-            "session recovery is not confirmed for '{}'; current state is {}",
-            agent.label(),
-            session.state.as_str()
+        return Err(Failure::new(
+            exit::NOTHING_TO_DO,
+            format!(
+                "session recovery is not confirmed for '{}'; current state is {}",
+                agent.label(),
+                session.state.as_str()
+            ),
         ));
     }
 
@@ -959,6 +1128,70 @@ fn hex_encode(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_output_matches_the_shared_schema_and_leaks_no_process_state() {
+        let mut session = Session {
+            id: "session-1".to_owned(),
+            project_id: PathBuf::from("/tmp/project"),
+            runtime_id: Some("claude".to_owned()),
+            last_known_cwd: Some(PathBuf::from("/tmp/project")),
+            last_observed_at: Some(1_787_320_000_000),
+            created_at: 1_787_319_000_000,
+            last_seen_at: 1_787_320_000_000,
+            state: SessionState::Recoverable,
+            agent: Some(Agent::Claude),
+            resume_identity: Some("claude-conversation".to_owned()),
+        };
+
+        let json = session_json(&session);
+
+        assert!(json.contains("\"schemaVersion\":1"), "{json}");
+        assert!(json.contains("\"sessionId\":\"session-1\""), "{json}");
+        assert!(json.contains("\"state\":\"RECOVERABLE\""), "{json}");
+        assert!(
+            json.contains("\"agent\":{\"agentType\":\"claude\",\"resumeIdentity\":\"claude-conversation\"}"),
+            "{json}"
+        );
+        // Timestamps are ISO-8601 as the schema specifies, not raw milliseconds.
+        assert!(json.contains("\"createdAt\":\"2026-08-"), "{json}");
+        // The fields that must never exist anywhere durable must not appear here either.
+        assert!(!json.contains("pid"), "{json}");
+        assert!(!json.contains("processPresent"), "{json}");
+
+        session.agent = None;
+        session.runtime_id = None;
+        let json = session_json(&session);
+        assert!(json.contains("\"agent\":null"), "{json}");
+        assert!(json.contains("\"runtimeId\":null"), "{json}");
+    }
+
+    #[test]
+    fn timestamps_render_as_utc_iso8601() {
+        assert_eq!(iso8601(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso8601(1_787_320_092_493), "2026-08-21T13:48:12Z");
+        // A leap day, which an approximate month calculation would get wrong.
+        assert_eq!(iso8601(1_709_164_800_000), "2024-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn a_global_flag_is_removed_from_the_arguments_it_was_mixed_into() {
+        let mut args = vec!["--json".to_owned(), "extra".to_owned()];
+        assert!(take_flag(&mut args, "--json"));
+        assert_eq!(args, vec!["extra".to_owned()]);
+        assert!(!take_flag(&mut args, "--json"));
+    }
+
+    #[test]
+    fn nothing_to_resume_is_its_own_exit_code_not_a_failure() {
+        // A caller that retries on failure must not retry when the answer is "there is nothing
+        // recoverable here" -- that is a correct result, not an error.
+        let failure = Failure::new(exit::NOTHING_TO_DO, "no session for this project");
+        assert_eq!(failure.code, 3);
+
+        let ordinary: Failure = "disk exploded".to_owned().into();
+        assert_eq!(ordinary.code, exit::FAILURE);
+    }
 
     #[test]
     fn bare_verb_never_starts_something_interactive_off_a_terminal() {

@@ -42,7 +42,7 @@ pub(super) fn run() -> Result<(), String> {
                     // here, and a TUI drawing underneath an interactive agent would fight it for
                     // the cursor.
                     Screen::leave();
-                    let outcome = resume_session(&project);
+                    let outcome = resume_session(&project).map_err(|failure| failure.message);
                     Screen::enter_again()?;
                     app.report(outcome);
                     app.refresh()?;
@@ -138,7 +138,13 @@ impl App {
     fn frame(&self) -> String {
         let mut screen = String::new();
         screen.push_str("\x1b[H\x1b[2J");
-        screen.push_str("  \x1b[1mVerb\x1b[0m — sessions\x1b[2m    ↑↓ move   enter resume   n new   r refresh   q quit\x1b[0m\r\n");
+        screen.push_str(&format!(
+            "  {}Verb{} — sessions{}    ↑↓ move   enter resume   n new   r refresh   q quit{}\r\n",
+            colour("\x1b[1m"),
+            reset(),
+            colour("\x1b[2m"),
+            reset()
+        ));
         screen.push_str(&rule());
 
         if self.sessions.is_empty() {
@@ -159,7 +165,7 @@ impl App {
 
     fn footer(&self) -> String {
         if let Some(message) = self.message.as_deref() {
-            return format!("  \x1b[31m{message}\x1b[0m");
+            return format!("  {}{message}{}", colour("\x1b[31m"), reset());
         }
         let Some(session) = self.selected_session() else {
             return String::new();
@@ -175,23 +181,48 @@ impl App {
         match session.state {
             // What each key would actually do here, rather than a fixed legend that is wrong for
             // three rows out of four.
-            SessionState::Recoverable => footer.push_str("\r\n  \x1b[1menter\x1b[0m resumes this conversation"),
-            SessionState::Live => footer
-                .push_str("\r\n  \x1b[2mrecorded live; this process cannot confirm it is running\x1b[0m"),
-            SessionState::Interrupted => footer
-                .push_str("\r\n  \x1b[2mrecovery status unknown; r re-checks\x1b[0m"),
-            SessionState::Ended => footer.push_str("\r\n  \x1b[1mn\x1b[0m starts a new session here"),
+            SessionState::Recoverable => footer.push_str(&format!(
+                "\r\n  {}enter{} resumes this conversation",
+                colour("\x1b[1m"),
+                reset()
+            )),
+            SessionState::Live => footer.push_str(&format!(
+                "\r\n  {}recorded live; this process cannot confirm it is running{}",
+                colour("\x1b[2m"),
+                reset()
+            )),
+            SessionState::Interrupted => footer.push_str(&format!(
+                "\r\n  {}recovery status unknown; r re-checks{}",
+                colour("\x1b[2m"),
+                reset()
+            )),
+            SessionState::Ended => footer.push_str(&format!(
+                "\r\n  {}n{} starts a new session here",
+                colour("\x1b[1m"),
+                reset()
+            )),
         }
         footer
     }
 }
 
+/// Honours `NO_COLOR` (no-color.org): any non-empty value means draw without colour.
+///
+/// The selection marker is a `▸` glyph rather than reverse video alone, so the UI stays readable
+/// when colour is off -- which is the point of the convention, not a formality.
+fn colour(code: &str) -> &str {
+    match std::env::var_os("NO_COLOR") {
+        Some(value) if !value.is_empty() => "",
+        _ => code,
+    }
+}
+
 fn row(session: &Session, selected: bool) -> String {
-    let (glyph, colour) = match session.state {
-        SessionState::Live => ("●", "\x1b[32m"),
-        SessionState::Recoverable => ("◐", "\x1b[33m"),
-        SessionState::Interrupted => ("◌", "\x1b[2m"),
-        SessionState::Ended => ("○", "\x1b[2m"),
+    let (glyph, state_colour) = match session.state {
+        SessionState::Live => ("●", colour("\x1b[32m")),
+        SessionState::Recoverable => ("◐", colour("\x1b[33m")),
+        SessionState::Interrupted => ("◌", colour("\x1b[2m")),
+        SessionState::Ended => ("○", colour("\x1b[2m")),
     };
     // The same honesty `verb sessions` prints: a persisted LIVE is evidence, not proof.
     let state = match session.state {
@@ -207,24 +238,37 @@ fn row(session: &Session, selected: bool) -> String {
 
     // The marker is always two columns wide, selected or not, so the rows stay in line.
     format!(
-        "{}{}{} {:<14}\x1b[0m {:<9} {:>7}  {}{}\x1b[0m",
-        if selected { "\x1b[7m" } else { "" },
+        "{}{}{} {:<14}{} {:<9} {:>7}  {}{}{}",
+        if selected { colour("\x1b[7m") } else { "" },
         if selected { "▸ " } else { "  " },
-        colour,
+        state_colour,
         format!("{glyph} {state}"),
+        reset(),
         session.runtime_id.as_deref().unwrap_or("shell"),
         super::relative_time(super::now_millis().saturating_sub(session.last_seen_at)),
         display_path(&session.project_id),
         if conversation.is_empty() {
             String::new()
         } else {
-            format!("  \x1b[2m{conversation}\x1b[0m")
-        }
+            format!("  {}{conversation}{}", colour("\x1b[2m"), reset())
+        },
+        reset()
     )
 }
 
+/// The reset only has to be emitted when something was set; with `NO_COLOR` there is nothing to
+/// undo, and emitting escapes anyway would defeat the point for a terminal that shows them raw.
+fn reset() -> &'static str {
+    colour("\x1b[0m")
+}
+
 fn rule() -> String {
-    format!("\x1b[2m {}\x1b[0m\r\n", "─".repeat(rule_width(terminal_width())))
+    format!(
+        "{} {}{}\r\n",
+        colour("\x1b[2m"),
+        "─".repeat(rule_width(terminal_width())),
+        reset()
+    )
 }
 
 /// A terminal that reports no size at all (some pty allocations do) must still get a visible rule,
@@ -492,6 +536,24 @@ mod tests {
         assert_eq!(rule_width(0), 38);
         assert_eq!(rule_width(80), 78);
         assert_eq!(rule_width(400), 118);
+    }
+
+    #[test]
+    fn no_color_leaves_the_screen_free_of_escape_sequences() {
+        // The other frame tests assert on text, so they pass either way; this one asserts the
+        // convention itself. Selection stays legible because the marker is a glyph, not colour.
+        let app = app(vec![
+            session(SessionState::Recoverable, Agent::Claude, "/tmp/a"),
+            session(SessionState::Ended, Agent::Codex, "/tmp/b"),
+        ]);
+
+        std::env::set_var("NO_COLOR", "1");
+        let frame = app.frame();
+        std::env::remove_var("NO_COLOR");
+
+        let body = frame.trim_start_matches("\x1b[H\x1b[2J");
+        assert!(!body.contains('\x1b'), "{body:?}");
+        assert!(body.contains("▸ "), "{body}");
     }
 
     #[test]
