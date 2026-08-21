@@ -153,6 +153,9 @@ all; without it the structural events were a promise that never fired on a norma
   terminal Verb did not start behaves exactly as before.
 - The user's shell history keeps going where the user keeps it. zsh's history follows `ZDOTDIR`, so
   without care it would have been split off into Verb's storage -- taking command text with it.
+- An existing bash `DEBUG` trap is preserved. bash allows exactly one, so Verb's hook chains onto
+  whatever was there; when the existing trap cannot be reconstructed exactly, Verb keeps the user's
+  and gives up its own hook -- reduced observability rather than a rewritten trap.
 - An unrecognised shell is launched unchanged and reports nothing, which stays unknown.
 
 `tests/shell_integration.rs` runs a real zsh and a real bash on a real PTY and asserts all of it,
