@@ -138,7 +138,7 @@ impl Leader {
 
     pub fn configured(chord: Chord) -> Self {
         Self {
-            chord,
+            chord: chord.normalised(),
             provisional: false,
             pending: false,
         }
@@ -149,7 +149,7 @@ impl Leader {
     /// chosen. The collision test decides the real default.
     pub fn provisional() -> Self {
         Self {
-            chord: Chord::ctrl('o'),
+            chord: Chord::ctrl('o').normalised(),
             provisional: true,
             pending: false,
         }
@@ -178,13 +178,17 @@ impl Leader {
     }
 
     pub fn key(&mut self, ctrl: bool, key: char) -> Outcome {
-        let chord = Chord { ctrl, key }.normalised();
+        // Normalisation decides only whether this *is* the leader. What gets forwarded is always
+        // the key as it arrived: normalising the forwarded bytes would quietly turn every capital
+        // letter into a lowercase one.
+        let pressed = Chord { ctrl, key };
+        let chord = pressed.normalised();
         if !self.pending {
             if chord == self.chord {
                 self.pending = true;
                 return Outcome::Pending;
             }
-            return Outcome::Forward(chord.bytes());
+            return Outcome::Forward(pressed.bytes());
         }
 
         self.pending = false;
@@ -199,7 +203,7 @@ impl Leader {
             // meaning for.
             None => {
                 let mut bytes = self.chord.bytes();
-                bytes.extend(chord.bytes());
+                bytes.extend(pressed.bytes());
                 Outcome::Forward(bytes)
             }
         }
@@ -231,6 +235,18 @@ mod tests {
         // Including the control keys readline binds, which is the whole point.
         assert_eq!(leader.key(true, 'k'), Outcome::Forward(vec![0x0b]));
         assert_eq!(leader.key(true, 'a'), Outcome::Forward(vec![0x01]));
+    }
+
+    #[test]
+    fn a_forwarded_key_arrives_exactly_as_it_was_pressed() {
+        // Regression: matching the leader is case-insensitive, but forwarding must not be, or every
+        // capital letter typed into the terminal arrives lowercase.
+        let mut leader = leader();
+        assert_eq!(leader.key(false, 'P'), Outcome::Forward(vec![b'P']));
+        assert_eq!(leader.key(false, 'Z'), Outcome::Forward(vec![b'Z']));
+
+        leader.key(true, 'o');
+        assert_eq!(leader.key(false, 'Z'), Outcome::Forward(vec![0x0f, b'Z']));
     }
 
     #[test]

@@ -58,7 +58,15 @@ pub(crate) enum Surface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Context {
     None,
-    SessionEnded { exit_code: i32 },
+    /// A command the shell itself reported finishing with a non-zero status. Structural: Verb knows
+    /// that it failed and how long it took, and deliberately does not know what was typed.
+    CommandFailed {
+        exit_code: i32,
+        millis: u128,
+    },
+    SessionEnded {
+        exit_code: i32,
+    },
     SessionState(SessionState),
 }
 
@@ -122,21 +130,32 @@ impl App {
         self.start_shell(rows, cols)?;
 
         while !self.quit {
+            // The rendered rectangle is the authority for how big the session thinks it is.
+            let drawn = std::cell::Cell::new((0_u16, 0_u16));
             terminal
-                .draw(|frame| render::workspace(frame, &self))
+                .draw(|frame| {
+                    let area = render::workspace(frame, &self);
+                    drawn.set((area.height, area.width));
+                })
                 .map_err(|error| format!("could not draw: {error}"))?;
+
+            let (rows, cols) = drawn.get();
+            if rows > 0 && cols > 0 {
+                if let Some(hosted) = self.hosted.as_mut() {
+                    if hosted.screen().size() != (rows, cols) {
+                        hosted.resize(rows, cols);
+                    }
+                }
+            }
 
             self.pump()?;
 
             if event::poll(TICK).map_err(|error| format!("could not read input: {error}"))? {
                 match event::read().map_err(|error| format!("could not read input: {error}"))? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key)?,
-                    Event::Resize(cols, rows) => {
-                        if let Some(hosted) = self.hosted.as_mut() {
-                            let (rows, cols) = render::hosting_size(cols, rows);
-                            hosted.resize(rows, cols);
-                        }
-                    }
+                    // A terminal resize needs no special handling: the next draw reports the new
+                    // rectangle, and the session is resized to exactly that. One path, not two.
+                    Event::Resize(_, _) => {}
                     _ => {}
                 }
             }
@@ -160,6 +179,18 @@ impl App {
         };
         let previous_state = hosted.session.state.clone();
         let exit = hosted.poll()?;
+
+        // A failed command outranks a state change in the band: it is the thing the user just
+        // watched happen.
+        for outcome in hosted.take_structural() {
+            match outcome {
+                crate::pty::Structural::CommandFinished { exit_code, millis } if exit_code != 0 => {
+                    self.context = Context::CommandFailed { exit_code, millis };
+                }
+                // A command that succeeded is not news. The band stays as it was.
+                crate::pty::Structural::CommandFinished { .. } => {}
+            }
+        }
 
         if hosted.session.state != previous_state {
             self.context = Context::SessionState(hosted.session.state.clone());

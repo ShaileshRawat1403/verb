@@ -5,7 +5,7 @@
 //! only the hosting: bytes are parsed into a terminal state (`vt100`) that Verb draws, instead of
 //! being proxied to a terminal Verb had given away.
 
-use crate::pty::{self, ShellIntegration};
+use crate::pty::{self, ShellIntegration, Structural};
 use crate::{EventLogger, Session};
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -21,6 +21,9 @@ pub struct Hosted {
     output: Receiver<Vec<u8>>,
     reader_finished: bool,
     exit_code: Option<i32>,
+    /// Structural outcomes the workspace has not yet reacted to. The band reads these; nothing
+    /// stores them.
+    pending: Vec<Structural>,
 }
 
 impl Hosted {
@@ -72,6 +75,7 @@ impl Hosted {
             output,
             reader_finished: false,
             exit_code: None,
+            pending: Vec::new(),
         })
     }
 
@@ -85,8 +89,10 @@ impl Hosted {
             match self.output.try_recv() {
                 Ok(bytes) => {
                     self.parser.process(&bytes);
-                    self.integration
-                        .observe(&bytes, &mut self.session, &mut self.logger)?;
+                    let structural =
+                        self.integration
+                            .observe(&bytes, &mut self.session, &mut self.logger)?;
+                    self.pending.extend(structural);
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -100,6 +106,13 @@ impl Hosted {
             self.exit_code = pty::reap(self.pid)?;
         }
         Ok(self.exit_code)
+    }
+
+    /// Takes whatever the shell reported since the last call. Command boundaries only arrive from a
+    /// shell with integration enabled; a shell that reports nothing produces nothing here, which is
+    /// why the band can stay silent rather than inventing a boundary.
+    pub fn take_structural(&mut self) -> Vec<Structural> {
+        std::mem::take(&mut self.pending)
     }
 
     pub fn screen(&self) -> &vt100::Screen {
