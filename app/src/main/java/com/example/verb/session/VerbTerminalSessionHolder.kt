@@ -21,6 +21,9 @@ object VerbTerminalSessionHolder {
     @Volatile
     private var runtime: TerminalRuntime? = null
 
+    /** Returns the process-scoped runtime if this Android process already owns one. */
+    fun existing(): TerminalRuntime? = runtime
+
     fun getOrCreate(factory: () -> TerminalRuntime): TerminalRuntime =
         runtime ?: synchronized(this) {
             runtime ?: factory().also { runtime = it }

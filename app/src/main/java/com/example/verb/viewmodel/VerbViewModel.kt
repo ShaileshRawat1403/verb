@@ -45,8 +45,12 @@ import com.example.verb.terminal.TermuxBootstrapInstaller
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -75,6 +79,19 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val projectRepository = ProjectRepository(application.applicationContext)
     private val runtimeCapabilityDetector = RuntimeCapabilityDetector(application.filesDir)
     private val agentRuntimeInstaller = AgentRuntimeInstaller(application.filesDir)
+    private val claudeSessionStore =
+        com.example.verb.session.SharedPreferencesVerbSessionStore(application.applicationContext)
+
+    /** A separate store per agent, so launching one agent never overwrites another's recovery record. */
+    private val codexSessionStore = com.example.verb.session.SharedPreferencesVerbSessionStore(
+        application.applicationContext,
+        com.example.verb.session.SharedPreferencesVerbSessionStore.CODEX_PREFERENCES_NAME
+    )
+
+    private val openCodeSessionStore = com.example.verb.session.SharedPreferencesVerbSessionStore(
+        application.applicationContext,
+        com.example.verb.session.SharedPreferencesVerbSessionStore.OPENCODE_PREFERENCES_NAME
+    )
 
     /**
      * Installs bundled CLI tools (busybox/curl/jq + CA bundle) with ELF validation. The terminal
@@ -94,6 +111,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * `docs/VERB_SESSION_CONTRACT.md`). A VerbViewModel created because the Activity was recreated
      * for real reattaches to the same TerminalRuntime instead of spawning a duplicate session.
      */
+    /** True only when this Android process already owned the PTY before this ViewModel was built. */
+    private val hadExistingTerminalRuntime =
+        com.example.verb.session.VerbTerminalSessionHolder.existing() != null
+
     val terminalRuntime = com.example.verb.session.VerbTerminalSessionHolder.getOrCreate {
         TerminalRuntime(
             workingDir = application.applicationContext.filesDir,
@@ -103,18 +124,49 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * The one live [com.example.verb.session.VerbSession] the UI can see, and the only one
-     * constructed anywhere in the app so far -- see `docs/VERB_SESSION_CONTRACT.md`. Deliberately
-     * not [com.example.verb.session.VerbTerminalSessionHolder]: that owns the process-scoped
-     * `TerminalRuntime` this ViewModel already reattaches to; this owns product-level identity for
-     * one agent's session running inside it, and the two stay separate on purpose.
+     * One [com.example.verb.session.AgentSessionCoordinator] per recoverable agent -- see
+     * `docs/VERB_SESSION_CONTRACT.md`. They share the lifecycle code and differ only by adapter and
+     * store. Deliberately not [com.example.verb.session.VerbTerminalSessionHolder]: that owns the
+     * process-scoped `TerminalRuntime` this ViewModel already reattaches to; these own
+     * product-level identity for one agent's session running inside it, and the two stay separate
+     * on purpose.
      */
-    private val claudeSessionCoordinator = com.example.verb.session.ClaudeSessionCoordinator(
-        filesDir = application.applicationContext.filesDir,
-        terminalRuntimeAdapter = terminalRuntime,
-        coroutineScope = viewModelScope
-    )
-    val claudeSession: StateFlow<com.example.verb.session.VerbSession?> = claudeSessionCoordinator.session
+    private val sessionCoordinators: Map<RuntimeProfileId, com.example.verb.session.AgentSessionCoordinator> =
+        mapOf(
+            RuntimeProfileId.CLAUDE_CODE to com.example.verb.session.ClaudeSessionCoordinator(
+                filesDir = application.applicationContext.filesDir,
+                terminalRuntimeAdapter = terminalRuntime,
+                coroutineScope = viewModelScope,
+                sessionStore = claudeSessionStore,
+                processBindingConfirmed = hadExistingTerminalRuntime
+            ),
+            RuntimeProfileId.CODEX to com.example.verb.session.CodexSessionCoordinator(
+                filesDir = application.applicationContext.filesDir,
+                terminalRuntimeAdapter = terminalRuntime,
+                coroutineScope = viewModelScope,
+                sessionStore = codexSessionStore,
+                processBindingConfirmed = hadExistingTerminalRuntime
+            ),
+            RuntimeProfileId.OPENCODE to com.example.verb.session.OpenCodeSessionCoordinator(
+                filesDir = application.applicationContext.filesDir,
+                // OpenCode's evidence is a live SQLite database, which the adapter copies before
+                // reading; the copy belongs in cache, not in the user's files tree.
+                scratchDir = application.applicationContext.cacheDir,
+                terminalRuntimeAdapter = terminalRuntime,
+                coroutineScope = viewModelScope,
+                sessionStore = openCodeSessionStore,
+                processBindingConfirmed = hadExistingTerminalRuntime
+            )
+        )
+
+    /**
+     * What the Agents screen renders per card. Combined rather than exposed one flow per agent, so
+     * adding OpenCode later is a map entry above and nothing else.
+     */
+    val agentSessions: StateFlow<Map<RuntimeProfileId, com.example.verb.session.VerbSession>> =
+        combine(sessionCoordinators.map { (id, coordinator) -> coordinator.session.map { id to it } }) { pairs ->
+            pairs.mapNotNull { (id, session) -> session?.let { id to it } }.toMap()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
     private val _projects = MutableStateFlow(projectRepository.list())
     val projects: StateFlow<List<VerbProject>> = _projects.asStateFlow()
@@ -216,12 +268,18 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         const val PROFILE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000L
 
         /**
-         * [RuntimeProfiles.all]'s own `CLAUDE_CODE.launchCommand`, not a separately hand-typed
-         * literal: the two must never drift apart, since this is what distinguishes "the user
-         * opened Claude" from opening any other agent, for [ClaudeSessionCoordinator] purposes.
+         * [RuntimeProfiles.all]'s own launch commands, not separately hand-typed literals: the two
+         * must never drift apart, since this is what distinguishes "the user opened a session Verb
+         * tracks" from opening any other agent.
          */
-        val CLAUDE_LAUNCH_COMMAND: String =
-            RuntimeProfiles.all.first { it.id == RuntimeProfileId.CLAUDE_CODE }.launchCommand!!
+        val TRACKED_AGENT_LAUNCH_COMMANDS: Map<RuntimeProfileId, String> =
+            listOf(
+                RuntimeProfileId.CLAUDE_CODE,
+                RuntimeProfileId.CODEX,
+                RuntimeProfileId.OPENCODE
+            ).associateWith { id ->
+                RuntimeProfiles.all.first { it.id == id }.launchCommand!!
+            }
     }
 
     private val _aiProviderSettings = MutableStateFlow(aiProviderSettingsStore.load())
@@ -617,28 +675,31 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun launchAgent(command: String) {
         selectTab(VerbTab.TERMINAL)
-        if (command == CLAUDE_LAUNCH_COMMAND) {
-            // Captured before sendTerminalCommand so the coordinator's watch can tell which new
-            // commandHistory record is Claude's, not anything already running.
-            val idsBeforeLaunch = terminalRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
+        val tracked = TRACKED_AGENT_LAUNCH_COMMANDS.entries.firstOrNull { it.value == command }?.key
+        val coordinator = tracked?.let(sessionCoordinators::get)
+        if (coordinator == null) {
             sendTerminalCommand(command)
-            claudeSessionCoordinator.onLaunched(projectRepository.selected(), idsBeforeLaunch)
-        } else {
-            sendTerminalCommand(command)
+            return
         }
+        // Captured before sendTerminalCommand so the coordinator's watch can tell which new
+        // commandHistory record is this agent's, not anything already running.
+        val idsBeforeLaunch = terminalRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
+        sendTerminalCommand(command)
+        coordinator.onLaunched(projectRepository.selected(), idsBeforeLaunch)
     }
 
-    /** The Agents screen's Resume action once [claudeSession] is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
-    fun resumeClaudeSession() {
+    /** The Agents screen's Resume action once that agent's session is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
+    fun resumeAgentSession(profileId: RuntimeProfileId) {
+        val coordinator = sessionCoordinators[profileId] ?: return
         selectTab(VerbTab.TERMINAL)
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            claudeSessionCoordinator.resume()
+            coordinator.resume()
         }
     }
 
-    /** The Agents screen's "Start new" action once [claudeSession] is [com.example.verb.session.VerbSessionState.ENDED]. */
-    fun startNewClaudeSession() {
-        launchAgent(CLAUDE_LAUNCH_COMMAND)
+    /** The Agents screen's "Start new" action once that agent's session is [com.example.verb.session.VerbSessionState.ENDED]. */
+    fun startNewAgentSession(profileId: RuntimeProfileId) {
+        TRACKED_AGENT_LAUNCH_COMMANDS[profileId]?.let(::launchAgent)
     }
 
     /** Opens the key file in the terminal's editor; Verb never displays or edits key values itself. */
@@ -648,6 +709,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectTab(tab: VerbTab) {
+        // Opening the Agents screen re-checks recovery for any session whose process is gone: the
+        // evidence an agent leaves behind can appear after the coordinator's own bounded retries
+        // gave up, and this is the moment the user is about to read that state off a card.
+        if (tab == VerbTab.AGENTS) sessionCoordinators.values.forEach { it.refresh() }
         val current = _activeTab.value
         if (current == tab) return
         // Push the outgoing tab so the system back gesture retraces tab hops in order.

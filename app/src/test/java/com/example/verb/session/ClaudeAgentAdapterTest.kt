@@ -55,6 +55,35 @@ class ClaudeAgentAdapterTest {
     }
 
     @Test
+    fun `canResume is YES from Claude session metadata when project transcripts are absent`() {
+        val (filesDir, project) = setUpFilesystem()
+        File(filesDir, "home/.claude/sessions").apply { mkdirs() }
+            .resolve("123.json")
+            .writeText(
+                """{"pid":123,"sessionId":"session-meta","cwd":"${project.absolutePath}","status":"idle"}"""
+            )
+        val adapter = ClaudeAgentAdapter(filesDir, project, FakeTerminalRuntimeAdapter(filesDir))
+
+        val agent = AgentRef("claude")
+
+        assertEquals(ResumeVerdict.YES, adapter.canResume(agent))
+        assertEquals("session-meta", adapter.resumeIdentity(agent))
+    }
+
+    @Test
+    fun `resumeIdentity returns Claude conversation id, never the PID filename`() {
+        val (filesDir, project) = setUpFilesystem()
+        File(filesDir, "home/.claude/sessions").apply { mkdirs() }
+            .resolve("123.json")
+            .writeText(
+                """{"pid":123,"sessionId":"session-meta","cwd":"${project.absolutePath}"}"""
+            )
+        val adapter = ClaudeAgentAdapter(filesDir, project, FakeTerminalRuntimeAdapter(filesDir))
+
+        assertEquals("session-meta", adapter.resumeIdentity(AgentRef("claude")))
+    }
+
+    @Test
     fun `canResume is NO when the transcript directory exists but the transcript is missing`() {
         val (filesDir, project) = setUpFilesystem()
         transcriptDir(filesDir, project).mkdirs() // exists, empty
