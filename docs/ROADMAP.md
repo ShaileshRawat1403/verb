@@ -100,7 +100,13 @@ is also reachable from the CLI.
 
 ## M2 — Contextual Verb Assistant
 
-**Status: documented, not started.**
+**Status: not started. Its groundwork exists.**
+
+`verb context` (`desktop/src/context.rs`) assembles what Verb knows about a moment -- project and
+Git state read at the time of asking, the session record, the tail of the structural event log --
+into one structure, with no model behind it and no field for a conclusion. Explanation, comparison
+and guided action all begin by gathering exactly that, so it could be built before choosing between
+them, and none of it is wasted whichever way the friction notes point.
 
 Where natural language becomes important. The user asks *Why did this fail? What changed? What did
 Claude do? Can I safely undo this? Why is CI different?* and Verb builds the context itself from

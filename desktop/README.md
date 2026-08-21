@@ -44,6 +44,11 @@ by the agent. `VERB_STATE_DIR` can point tests or a development build at an isol
   enter to resume, `n` for a new session in that project, `r` to re-check. It hands the terminal
   back to the agent when one starts, and takes it back afterwards.
 - `verb sessions` lists every project Verb holds a session for, newest first.
+- `verb context` assembles everything Verb currently knows about a project -- Git state read now,
+  the session record, and the tail of its structural event log -- into one place, in text or with
+  `--json`. It interprets nothing: there is no field for a conclusion, and no model behind it. It is
+  the groundwork every M2 direction needs (explanation, comparison and guided action all start by
+  gathering the same evidence), built before choosing between them.
 - `--json` on `status` and `sessions` emits the durable record exactly as `docs/VERB_SESSION_SCHEMA.md`
   defines it, ISO-8601 timestamps included, so a consumer reading one host's output does not have to
   learn the other's. `sessions --json` on an empty state is `[]`, not a message.
