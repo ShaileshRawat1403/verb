@@ -1,12 +1,13 @@
 #![cfg(unix)]
 
+use super::shell::{ShellEvent, ShellScanner};
 use super::{EventLogger, Session};
 use std::ffi::CString;
 use std::fs::File;
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::raw::{c_char, c_int, c_void};
 use std::os::unix::io::{AsRawFd, FromRawFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::ptr;
 
@@ -101,7 +102,74 @@ pub(super) fn run(
     super::save_session(session)?;
 
     let _terminal_mode = TerminalMode::new()?;
-    proxy_terminal(&mut master, pid)
+    proxy_terminal(&mut master, pid, session, &mut logger)
+}
+
+/// Turns the shell's own markers into the durable structural facts `docs/VERB_SESSION_SCHEMA.md`
+/// allows, and keeps the session's remembered working directory current.
+///
+/// Only a shell with integration enabled emits these at all; agents like Claude and Codex do not.
+/// Verb records what the shell actually reported and invents nothing when it reports nothing --
+/// silence here means "unknown", never a fabricated boundary.
+struct ShellIntegration {
+    scanner: ShellScanner,
+    command_count: u64,
+    open_command: Option<String>,
+}
+
+impl ShellIntegration {
+    fn new() -> Self {
+        Self {
+            scanner: ShellScanner::default(),
+            command_count: 0,
+            open_command: None,
+        }
+    }
+
+    fn observe(
+        &mut self,
+        bytes: &[u8],
+        session: &mut Session,
+        logger: &mut EventLogger,
+    ) -> Result<(), String> {
+        for event in self.scanner.feed(bytes) {
+            match event {
+                ShellEvent::CurrentDirectory(path) => {
+                    let path = PathBuf::from(path);
+                    if session.last_known_cwd.as_deref() == Some(path.as_path()) {
+                        continue;
+                    }
+                    logger.cwd_changed(&path.to_string_lossy())?;
+                    session.last_known_cwd = Some(path);
+                    session.last_observed_at = Some(super::now_millis());
+                    super::save_session(session)?;
+                }
+                ShellEvent::CommandStart => {
+                    self.command_count += 1;
+                    let command_id = format!("{}-c{}", session.id, self.command_count);
+                    logger.command_started(
+                        &command_id,
+                        session
+                            .last_known_cwd
+                            .as_ref()
+                            .map(|path| path.to_string_lossy())
+                            .as_deref(),
+                    )?;
+                    self.open_command = Some(command_id);
+                }
+                ShellEvent::CommandEnd(exit_code) => {
+                    // A finish with no start is a marker Verb never saw the other half of (the
+                    // session attached mid-command, say). Recording it against an invented id would
+                    // put a command in the log that Verb cannot account for.
+                    if let Some(command_id) = self.open_command.take() {
+                        logger.command_finished(&command_id, exit_code)?;
+                    }
+                }
+                ShellEvent::PromptStart | ShellEvent::PromptEnd => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 unsafe fn set_child_environment(session_id: &str, project: &Path) {
@@ -117,8 +185,14 @@ unsafe fn set_child_environment(session_id: &str, project: &Path) {
     setenv(verb_project_root.as_ptr(), project.as_ptr(), 1);
 }
 
-fn proxy_terminal(master: &mut File, pid: PidT) -> Result<i32, String> {
+fn proxy_terminal(
+    master: &mut File,
+    pid: PidT,
+    session: &mut Session,
+    logger: &mut EventLogger,
+) -> Result<i32, String> {
     let master_fd = master.as_raw_fd();
+    let mut integration = ShellIntegration::new();
     let mut input_open = true;
     let mut child_code = None;
     let mut output_buffer = [0_u8; 16 * 1024];
@@ -169,6 +243,10 @@ fn proxy_terminal(master: &mut File, pid: PidT) -> Result<i32, String> {
                 Ok(0) => break,
                 Ok(count) => {
                     let bytes = &output_buffer[..count];
+                    // The bytes go to the terminal first and are scanned for structural markers
+                    // afterwards, so nothing Verb does here can delay what the user sees. They are
+                    // never retained: the scanner keeps only an in-flight marker, if any.
+                    integration.observe(bytes, session, logger)?;
                     io::stdout()
                         .write_all(bytes)
                         .map_err(|error| format!("could not write terminal output: {error}"))?;

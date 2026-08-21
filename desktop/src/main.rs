@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agents;
 mod pty;
+mod shell;
 
 const APP_NAME: &str = "Verb";
 
@@ -677,6 +678,35 @@ impl EventLogger {
 
     fn process_ended(&mut self, code: i32) -> Result<(), String> {
         self.write_event("PROCESS_ENDED", &format!("\"exitCode\":{code}"))
+    }
+
+    /// A command boundary, with no command text: `commandId` is an opaque per-session counter, so
+    /// the log can pair a start with its finish without recording what was run.
+    fn command_started(&mut self, command_id: &str, cwd: Option<&str>) -> Result<(), String> {
+        let cwd_field = cwd.map_or_else(String::new, |value| {
+            format!(",\"cwd\":\"{}\"", json_escape(value))
+        });
+        self.write_event(
+            "COMMAND_STARTED",
+            &format!("\"commandId\":\"{}\"{cwd_field}", json_escape(command_id)),
+        )
+    }
+
+    fn command_finished(&mut self, command_id: &str, exit_code: i32) -> Result<(), String> {
+        self.write_event(
+            "COMMAND_FINISHED",
+            &format!(
+                "\"commandId\":\"{}\",\"exitCode\":{exit_code}",
+                json_escape(command_id)
+            ),
+        )
+    }
+
+    fn cwd_changed(&mut self, cwd: &str) -> Result<(), String> {
+        self.write_event(
+            "CWD_CHANGED",
+            &format!("\"cwd\":\"{}\"", json_escape(cwd)),
+        )
     }
 
     fn session_state_changed(&mut self, state: &str) -> Result<(), String> {
