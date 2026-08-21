@@ -281,14 +281,13 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
                 )));
             }
         }
+        // The session's own exit status, which is a fact about the session and needs no note about
+        // command text -- that caveat belongs to a failed command, and repeating it here was left
+        // over from an earlier version.
         Context::SessionEnded { exit_code } => {
             lines.push(Line::from(Span::raw(format!(
                 "  ✕ Session ended · exit {exit_code}"
             ))));
-            lines.push(Line::from(Span::styled(
-                "  Verb records that it failed, not what was typed.".to_owned(),
-                Style::default().add_modifier(Modifier::DIM),
-            )));
         }
         Context::SessionState(state) => {
             let leader = app.leader().chord();
