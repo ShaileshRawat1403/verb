@@ -120,13 +120,23 @@ verb resume     resume the tracked session
 verb claude|codex|opencode|dsh|run CMD
 ```
 
-Two rules hold this together as more is added:
+```text
+--json          on status and sessions: the durable record, schema-shaped
+NO_COLOR        honoured by the UI
+exit 0/1/2/3    success / failure / bad command line / nothing to do
+```
+
+Three rules hold this together as more is added:
 
 1. **Everything the UI can do is also a subcommand.** The UI is a client of the same functions, so
    nothing becomes reachable only by hand -- scripts, CI and remote sessions keep working, and the
    UI can never drift into being the only place some behaviour exists.
 2. **The bare command adapts to the terminal, never to guesswork.** Interactive when there is a
    person, help when there is not. Anything with side effects keeps an explicit name.
+3. **Read commands are machine-consumable and say nothing they cannot prove.** `--json` emits the
+   schema's field names and ISO timestamps, and never a PID or a `processPresent` -- a reader that
+   needs to know whether a process exists has to ask the host that owns it, which is the whole point
+   of the contract.
 
 ## Next desktop increments
 2. `dsh` is on hold rather than pending: it cannot be installed on Verb's Android userland at all

@@ -43,7 +43,15 @@ by the agent. `VERB_STATE_DIR` can point tests or a development build at an isol
 - `verb ui` opens the same information as a screen: sessions newest first, arrow keys to move,
   enter to resume, `n` for a new session in that project, `r` to re-check. It hands the terminal
   back to the agent when one starts, and takes it back afterwards.
-- `verb sessions` lists every project Verb holds a session for, newest first. It is read-only: it
+- `verb sessions` lists every project Verb holds a session for, newest first.
+- `--json` on `status` and `sessions` emits the durable record exactly as `docs/VERB_SESSION_SCHEMA.md`
+  defines it, ISO-8601 timestamps included, so a consumer reading one host's output does not have to
+  learn the other's. `sessions --json` on an empty state is `[]`, not a message.
+- Exit codes are stable: `0` success, `1` failure, `2` a wrong command line, `3` nothing to do --
+  no session, or recovery not confirmed. `3` exists so a caller that retries on failure does not
+  retry on a correct "there is nothing recoverable here".
+- `NO_COLOR` is honoured in the UI (no-color.org). The selected row is marked with a glyph rather
+  than colour alone, so the screen stays readable without it. It is read-only: it
   reconciles nothing and writes nothing, and a recorded `live` session is shown as unconfirmed,
   because nothing durable holds a process handle and another process cannot see one.
 - `verb claude`, `verb codex`, `verb opencode`, and `verb dsh` launch the installed agent in the
