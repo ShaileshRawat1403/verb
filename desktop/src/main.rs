@@ -11,7 +11,7 @@ mod agents;
 mod pty;
 mod shell;
 #[cfg(unix)]
-mod ui;
+mod tui;
 
 const APP_NAME: &str = "Verb";
 
@@ -345,7 +345,7 @@ fn run() -> Result<(), Failure> {
         "status" => print_status(&project, json)?,
         "sessions" => print_sessions(json)?,
         #[cfg(unix)]
-        "ui" => ui::run()?,
+        "ui" => tui::run(&project)?,
         "resume" => resume_session(&project)?,
         "shell" => launch_session(&project, Agent::Shell, rest)?,
         "claude" | "codex" | "opencode" | "open-code" | "dsh" | "deepseek" => {
@@ -473,6 +473,50 @@ fn print_sessions(json: bool) -> Result<(), String> {
         println!("{}", describe_session(session, now));
     }
     Ok(())
+}
+
+/// Every session record on this host, reconciled against each agent's own evidence, newest first.
+///
+/// Shared by `verb sessions --json`'s interactive sibling and the workspace: one reader, so the two
+/// can never disagree about what exists.
+pub(crate) fn read_sessions() -> Result<Vec<Session>, String> {
+    let directory = sessions_directory()?;
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("could not read {}: {error}", directory.display())),
+    };
+
+    let mut sessions: Vec<Session> = entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|value| value == "session")
+        })
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .filter_map(|contents| Session::deserialize(&contents))
+        .filter_map(|session| reconcile_session(session).ok())
+        .collect();
+
+    sessions.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
+    Ok(sessions)
+}
+
+/// `~` for the home directory, because a column of identical prefixes is not information.
+pub(crate) fn display_path(path: &Path) -> String {
+    let text = path.to_string_lossy().into_owned();
+    match home_dir() {
+        Some(home) => {
+            let home = home.to_string_lossy().into_owned();
+            match text.strip_prefix(&home) {
+                Some(rest) => format!("~{rest}"),
+                None => text,
+            }
+        }
+        None => text,
+    }
 }
 
 /// One session as the durable record `docs/VERB_SESSION_SCHEMA.md` describes -- the same field
@@ -646,22 +690,34 @@ fn print_status(project: &Path, json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn launch_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> Result<(), String> {
-    let mut session = Session::new(project.to_path_buf(), agent.clone());
-    let command = agent.command();
-    let args = effective_args(&agent, extra_args);
-    let exit_code = run_managed(project, &mut session, &command, &args, true)
-        .map_err(|error| format!("could not start {command}: {error}"))?;
-    println!("Verb: {} session {}", agent.label(), session.id);
-    finish_session(&mut session, exit_code)?;
-    Ok(())
+/// Everything needed to host a session, decided before anything is started.
+///
+/// The point of the split is that the two hosts -- the CLI, which proxies a terminal it owns, and
+/// the TUI, which draws the same session inside a pane -- share the decision of *what* to start and
+/// under which record. Only the hosting differs.
+pub(crate) struct SessionStart {
+    pub session: Session,
+    pub command: String,
+    pub args: Vec<String>,
+    pub is_new: bool,
 }
 
-fn resume_session(project: &Path) -> Result<(), Failure> {
-    // The three ways there is simply nothing to resume are reported as EXIT_NOTHING_TO_DO rather
-    // than as failure: Verb worked correctly, the session just is not recoverable, and a caller
-    // that retries on failure should not retry on this.
-    let mut session = load_session(project)?
+pub(crate) fn begin_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> SessionStart {
+    let session = Session::new(project.to_path_buf(), agent.clone());
+    let command = agent.command();
+    let args = effective_args(&agent, extra_args);
+    SessionStart {
+        session,
+        command,
+        args,
+        is_new: true,
+    }
+}
+
+/// The resume decision, with the same refusals `verb resume` makes. A caller that gets a
+/// `SessionStart` back has already been told the session is genuinely recoverable.
+pub(crate) fn begin_resume(project: &Path) -> Result<SessionStart, Failure> {
+    let session = load_session(project)?
         .map(reconcile_session)
         .transpose()?
         .ok_or_else(|| Failure::new(exit::NOTHING_TO_DO, "no session for this project"))?;
@@ -678,17 +734,70 @@ fn resume_session(project: &Path) -> Result<(), Failure> {
             ),
         ));
     }
-
-    let command = agent.command();
     let args = agent.resume_args(session.resume_identity.as_deref());
-    let exit_code = run_managed(project, &mut session, &command, &args, false)
-        .map_err(|error| format!("could not resume {command}: {error}"))?;
-    println!("Verb: resumed {} session {}", agent.label(), session.id);
-    finish_session(&mut session, exit_code)?;
+    Ok(SessionStart {
+        session,
+        command: agent.command(),
+        args,
+        is_new: false,
+    })
+}
+
+fn launch_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> Result<(), String> {
+    let mut start = begin_session(project, agent, extra_args);
+    let exit_code = run_managed(
+        project,
+        &mut start.session,
+        &start.command,
+        &start.args,
+        true,
+    )
+    .map_err(|error| format!("could not start {}: {error}", start.command))?;
+    println!(
+        "Verb: {} session {}",
+        start.session.runtime_id.as_deref().unwrap_or("shell"),
+        start.session.id
+    );
+    finish_session(&mut start.session, exit_code)?;
     Ok(())
 }
 
-fn finish_session(session: &mut Session, exit_code: i32) -> Result<(), String> {
+fn resume_session(project: &Path) -> Result<(), Failure> {
+    let mut start = begin_resume(project)?;
+    let exit_code = run_managed(
+        project,
+        &mut start.session,
+        &start.command,
+        &start.args,
+        false,
+    )
+    .map_err(|error| format!("could not resume {}: {error}", start.command))?;
+    println!(
+        "Verb: resumed {} session {}",
+        start.session.runtime_id.as_deref().unwrap_or("shell"),
+        start.session.id
+    );
+    finish_session(&mut start.session, exit_code)?;
+    Ok(())
+}
+
+pub(crate) fn finish_session(session: &mut Session, exit_code: i32) -> Result<(), String> {
+    finish_session_quietly(session, exit_code)?;
+    println!(
+        "Verb: {} session {} ({})",
+        session.runtime_id.as_deref().unwrap_or("shell"),
+        session.id,
+        session.state.as_str()
+    );
+    Ok(())
+}
+
+/// The same closing-out without printing, for the TUI, which owns the screen and would be corrupted
+/// by a stray line of stdout.
+pub(crate) fn finish_session_quietly(
+    session: &mut Session,
+    exit_code: i32,
+) -> Result<(), String> {
     session.last_seen_at = now_millis();
     if session.resume_identity.is_none() {
         session.resume_identity = session
@@ -705,12 +814,6 @@ fn finish_session(session: &mut Session, exit_code: i32) -> Result<(), String> {
     }
     logger.session_state_changed(session.state.as_str())?;
     logger.session_ended(session.state.as_str(), exit_code)?;
-    println!(
-        "Verb: {} session {} ({})",
-        session.runtime_id.as_deref().unwrap_or("shell"),
-        session.id,
-        session.state.as_str()
-    );
     Ok(())
 }
 
