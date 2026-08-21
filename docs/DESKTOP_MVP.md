@@ -16,6 +16,10 @@ The desktop MVP is the native CLI in `desktop/`.
 verb status
   project root + Git branch + changed files + last session
 
+verb sessions
+  every project with a session, newest first; read-only, and a recorded LIVE
+  session is reported as unconfirmed rather than as fact
+
 verb claude / codex / opencode / dsh
   launch the existing agent in the current Git project
   proxy the interactive process through a Unix PTY
@@ -84,5 +88,8 @@ Verb's memory; and a shell that emits nothing produces no events at all, because
 
 ## Next desktop increments
 
-1. Observe `dsh`'s real resume contract, then give it an adapter on the same terms.
-2. Add a project/session list and then put a polished desktop shell around the proven backend.
+1. Put a desktop shell around the proven backend. The command boundary, the session contract, the
+   agent adapters, and the structural event log are all in place; the UI is the remaining layer.
+2. `dsh` is on hold rather than pending: it cannot be installed on Verb's Android userland at all
+   (its `koffi` native module has no Android build), so there is no runtime to observe a resume
+   contract from. If it ever runs on either host, it gets an adapter on the same terms as the rest.

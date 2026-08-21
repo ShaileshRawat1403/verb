@@ -302,6 +302,7 @@ fn run() -> Result<(), String> {
     match command.as_str() {
         "help" | "--help" | "-h" => print_help(),
         "status" => print_status(&project)?,
+        "sessions" => print_sessions()?,
         "resume" => resume_session(&project)?,
         "shell" => launch_session(&project, Agent::Shell, args.collect())?,
         "claude" | "codex" | "opencode" | "open-code" | "dsh" | "deepseek" => {
@@ -326,6 +327,7 @@ fn print_help() {
 Usage:
   verb                 Open the work-context shell
   verb status          Show project, Git, and last session
+  verb sessions        List every project Verb has a session for
   verb claude          Launch Claude in the current project
   verb codex           Launch Codex in the current project
   verb opencode        Launch OpenCode in the current project
@@ -336,6 +338,82 @@ Usage:
 The current directory selects the project. Verb stores only session metadata in ~/.verb;
 agent credentials and transcripts remain owned by the agent."#
     );
+}
+
+/// Lists every project Verb has a session record for, newest first.
+///
+/// Read-only, deliberately: unlike `verb status`, which reconciles the project you are standing in,
+/// this touches no state. Listing sessions should never rewrite them, and re-resolving a dozen
+/// projects would write a dozen recovery-check events for a command that was only meant to look.
+///
+/// A recorded `LIVE` is reported as unconfirmed rather than as fact. Nothing durable holds a process
+/// handle -- that is the contract -- so a *different* process, which is what this command always is,
+/// has no way to prove the session it is reading about is still running.
+fn print_sessions() -> Result<(), String> {
+    let directory = sessions_directory()?;
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            println!("No sessions yet.");
+            return Ok(());
+        }
+        Err(error) => return Err(format!("could not read {}: {error}", directory.display())),
+    };
+
+    let mut sessions: Vec<Session> = entries
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|value| value == "session"))
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .filter_map(|contents| Session::deserialize(&contents))
+        .collect();
+
+    if sessions.is_empty() {
+        println!("No sessions yet.");
+        return Ok(());
+    }
+
+    sessions.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
+    let now = now_millis();
+    for session in &sessions {
+        println!("{}", describe_session(session, now));
+    }
+    Ok(())
+}
+
+/// One line per session: what state it is in, which agent, how long ago it was seen, and where.
+fn describe_session(session: &Session, now: u128) -> String {
+    let state = match session.state {
+        SessionState::Live => "live?".to_owned(),
+        _ => session.state.as_str().to_owned(),
+    };
+    let mut line = format!(
+        "{:<12} {:<9} {:>9}  {}",
+        state,
+        session.runtime_id.as_deref().unwrap_or("shell"),
+        relative_time(now.saturating_sub(session.last_seen_at)),
+        session.project_id.display()
+    );
+    if session.state == SessionState::Live {
+        line.push_str("  (recorded live; another process cannot confirm it)");
+    } else if session.state == SessionState::Recoverable {
+        if let Some(identity) = session.resume_identity.as_deref() {
+            line.push_str(&format!("  conversation {identity}"));
+        }
+    }
+    line
+}
+
+fn relative_time(elapsed_millis: u128) -> String {
+    let seconds = elapsed_millis / 1_000;
+    if seconds < 60 {
+        format!("{seconds}s ago")
+    } else if seconds < 3_600 {
+        format!("{}m ago", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{}h ago", seconds / 3_600)
+    } else {
+        format!("{}d ago", seconds / 86_400)
+    }
 }
 
 fn print_status(project: &Path) -> Result<(), String> {
@@ -609,13 +687,15 @@ fn save_session(session: &Session) -> Result<(), String> {
 }
 
 fn session_path(project: &Path) -> Result<PathBuf, String> {
+    Ok(sessions_directory()?.join(format!("{}.session", hex_encode(project))))
+}
+
+fn sessions_directory() -> Result<PathBuf, String> {
     let state_root = env::var_os("VERB_STATE_DIR")
         .map(PathBuf::from)
         .or_else(default_state_root)
         .ok_or_else(|| "could not determine a state directory; set VERB_STATE_DIR".to_owned())?;
-    Ok(state_root
-        .join("sessions")
-        .join(format!("{}.session", hex_encode(project))))
+    Ok(state_root.join("sessions"))
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -949,6 +1029,43 @@ mod tests {
         let dsh = Session::new(PathBuf::from("/tmp/project"), Agent::Dsh);
         assert_eq!(dsh.state, SessionState::Live);
         assert_eq!(resolve_without_process(&dsh), SessionState::Interrupted);
+    }
+
+    #[test]
+    fn a_listed_session_never_claims_a_live_process_it_cannot_see() {
+        // Nothing durable holds a process handle, so a *different* process -- which `verb sessions`
+        // always is -- cannot prove a recorded LIVE session is still running. It must say so.
+        let mut session = Session::new(PathBuf::from("/tmp/project"), Agent::Claude);
+        session.last_seen_at = session.created_at;
+
+        let line = describe_session(&session, session.created_at + 5_000);
+
+        assert!(line.contains("live?"), "{line}");
+        assert!(line.contains("cannot confirm"), "{line}");
+        assert!(line.contains("/tmp/project"), "{line}");
+        assert!(line.contains("5s ago"), "{line}");
+    }
+
+    #[test]
+    fn a_recoverable_session_lists_the_conversation_resume_would_land_on() {
+        let mut session = Session::new(PathBuf::from("/tmp/project"), Agent::Codex);
+        session.state = SessionState::Recoverable;
+        session.resume_identity = Some("codex-1".to_owned());
+
+        let line = describe_session(&session, session.last_seen_at);
+
+        assert!(line.contains("recoverable"), "{line}");
+        assert!(line.contains("codex"), "{line}");
+        assert!(line.contains("conversation codex-1"), "{line}");
+        assert!(!line.contains("cannot confirm"), "{line}");
+    }
+
+    #[test]
+    fn elapsed_time_reads_in_the_largest_unit_that_fits() {
+        assert_eq!(relative_time(4_000), "4s ago");
+        assert_eq!(relative_time(120_000), "2m ago");
+        assert_eq!(relative_time(7_200_000), "2h ago");
+        assert_eq!(relative_time(172_800_000), "2d ago");
     }
 
     #[test]
