@@ -103,7 +103,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         MutableStateFlow<TermuxBootstrapInstaller.State>(TermuxBootstrapInstaller.State.NotStarted)
     val terminalBootstrapState: StateFlow<TermuxBootstrapInstaller.State> = _terminalBootstrapState.asStateFlow()
 
-    private val _runtimeProfileReports = MutableStateFlow(runtimeReports())
+    // Empty until the background probe in init{} completes. Populating this eagerly here means
+    // inspecting every runtime profile -- each a real proot-spawned process -- synchronously on the
+    // main thread before the first frame, which measured as a 12s+ cold start with 1400+ skipped
+    // frames on device. The UI already renders an empty list as "nothing known yet".
+    private val _runtimeProfileReports = MutableStateFlow<List<RuntimeProfileReport>>(emptyList())
     val runtimeProfileReports: StateFlow<List<RuntimeProfileReport>> = _runtimeProfileReports.asStateFlow()
 
     /**
@@ -278,7 +282,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             _terminalBootstrapState.value = TermuxBootstrapInstaller.State.Ready
             TermuxBootstrapInstaller.ensureGuestDns(context)
             terminalRuntime.refreshEnvironment()
-            refreshRuntimeProfiles()
+            // Profile refresh happens once, in init{}, off the main thread -- not here, so a normal
+            // (already-installed) launch doesn't spawn a probe process per profile twice.
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -301,6 +306,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // An artifact found on disk at startup is unverified until proven otherwise, so check it
         // once here rather than presenting it as launchable.
         checkAgentRuntimeCompatibility()
+
+        // Populates runtimeProfileReports / agentSignInStates for the first time on this launch.
+        // Off the main thread for the same reason as the call inside installTermuxBootstrap():
+        // each profile probe spawns a real process.
+        viewModelScope.launch(Dispatchers.IO) { refreshRuntimeProfiles() }
     }
 
     /** Imports a verified CI artifact into a versioned, rollback-safe Agent Runtime slot. */
