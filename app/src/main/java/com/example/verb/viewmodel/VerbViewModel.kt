@@ -88,11 +88,19 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
     private val bundledBinDir: File? = bundledTools.binDir?.takeIf { bundledTools.isReady }
 
-    val terminalRuntime = TerminalRuntime(
-        workingDir = application.applicationContext.filesDir,
-        bundledBinDir = bundledBinDir,
-        initialProjectDirectory = projectRepository.selected()?.directory
-    )
+    /**
+     * Held by [VerbTerminalSessionHolder], not constructed fresh here: this ViewModel's lifetime is
+     * the screen's, and the session must outlive that (see [onCleared] and
+     * `docs/VERB_SESSION_CONTRACT.md`). A VerbViewModel created because the Activity was recreated
+     * for real reattaches to the same TerminalRuntime instead of spawning a duplicate session.
+     */
+    val terminalRuntime = com.example.verb.session.VerbTerminalSessionHolder.getOrCreate {
+        TerminalRuntime(
+            workingDir = application.applicationContext.filesDir,
+            bundledBinDir = bundledBinDir,
+            initialProjectDirectory = projectRepository.selected()?.directory
+        )
+    }
 
     private val _projects = MutableStateFlow(projectRepository.list())
     val projects: StateFlow<List<VerbProject>> = _projects.asStateFlow()
@@ -853,8 +861,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         originalIntent = intent
     )
 
-    override fun onCleared() {
-        super.onCleared()
-        terminalRuntime.destroy()
-    }
+    // No onCleared() override: terminalRuntime is owned by VerbTerminalSessionHolder now, not by
+    // this ViewModel, so its screen going away is not a reason to end the session. Destroying it
+    // here was docs/DURABLE_SESSION.md's "Activity finish" row -- diagnosed as self-inflicted, not
+    // something Android required.
 }
