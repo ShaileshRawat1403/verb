@@ -8,6 +8,7 @@ use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agents;
+mod integration;
 mod pty;
 mod shell;
 #[cfg(unix)]
@@ -480,6 +481,16 @@ fn print_sessions(json: bool) -> Result<(), String> {
 /// Shared by `verb sessions --json`'s interactive sibling and the workspace: one reader, so the two
 /// can never disagree about what exists.
 pub(crate) fn read_sessions() -> Result<Vec<Session>, String> {
+    read_sessions_except(None)
+}
+
+/// As above, but leaving `hosting` alone.
+///
+/// Reconciling a session this process is *currently hosting* would resolve it from disk evidence,
+/// which for a shell is correctly "nothing to recover" -- and would then write that over a record
+/// whose process is running right here. The host holding the binding is the authority for that one
+/// record; everything else is reconciled as usual.
+pub(crate) fn read_sessions_except(hosting: Option<&str>) -> Result<Vec<Session>, String> {
     let directory = sessions_directory()?;
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
@@ -497,7 +508,13 @@ pub(crate) fn read_sessions() -> Result<Vec<Session>, String> {
         })
         .filter_map(|entry| fs::read_to_string(entry.path()).ok())
         .filter_map(|contents| Session::deserialize(&contents))
-        .filter_map(|session| reconcile_session(session).ok())
+        .filter_map(|session| {
+            if hosting == Some(session.id.as_str()) {
+                Some(session)
+            } else {
+                reconcile_session(session).ok()
+            }
+        })
         .collect();
 
     sessions.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
@@ -699,17 +716,36 @@ pub(crate) struct SessionStart {
     pub session: Session,
     pub command: String,
     pub args: Vec<String>,
+    /// Environment for the child only. Verb never modifies the user's own environment or shell
+    /// configuration; instrumentation travels with the process it instruments.
+    pub env: Vec<(String, String)>,
     pub is_new: bool,
 }
 
 pub(crate) fn begin_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> SessionStart {
     let session = Session::new(project.to_path_buf(), agent.clone());
     let command = agent.command();
-    let args = effective_args(&agent, extra_args);
+
+    // A shell Verb hosts is instrumented so it reports its own working directory and command
+    // boundaries. A shell Verb does not recognise -- and every agent, which is not a shell at all --
+    // is launched exactly as it would have been, and reports nothing, which stays unknown rather
+    // than becoming a guess.
+    let instrumented = if agent == Agent::Shell && extra_args.is_empty() {
+        state_root().ok().and_then(|root| integration::prepare(&command, &root))
+    } else {
+        None
+    };
+
+    let (args, env) = match instrumented {
+        Some(instrumented) => (instrumented.args, instrumented.env),
+        None => (effective_args(&agent, extra_args), Vec::new()),
+    };
+
     SessionStart {
         session,
         command,
         args,
+        env,
         is_new: true,
     }
 }
@@ -739,6 +775,7 @@ pub(crate) fn begin_resume(project: &Path) -> Result<SessionStart, Failure> {
         session,
         command: agent.command(),
         args,
+        env: Vec::new(),
         is_new: false,
     })
 }
@@ -750,6 +787,7 @@ fn launch_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> Resu
         &mut start.session,
         &start.command,
         &start.args,
+        &start.env,
         true,
     )
     .map_err(|error| format!("could not start {}: {error}", start.command))?;
@@ -769,6 +807,7 @@ fn resume_session(project: &Path) -> Result<(), Failure> {
         &mut start.session,
         &start.command,
         &start.args,
+        &start.env,
         false,
     )
     .map_err(|error| format!("could not resume {}: {error}", start.command))?;
@@ -831,15 +870,17 @@ fn run_managed(
     session: &mut Session,
     command: &str,
     args: &[String],
+    env: &[(String, String)],
     is_new_session: bool,
 ) -> Result<i32, String> {
     #[cfg(unix)]
     {
-        pty::run(project, session, command, args, is_new_session)
+        pty::run(project, session, command, args, env, is_new_session)
     }
 
     #[cfg(not(unix))]
     {
+        let _ = env;
         run_inherited(project, session, command, args, is_new_session)
     }
 }
@@ -986,11 +1027,16 @@ fn session_path(project: &Path) -> Result<PathBuf, String> {
 }
 
 fn sessions_directory() -> Result<PathBuf, String> {
-    let state_root = env::var_os("VERB_STATE_DIR")
+    Ok(state_root()?.join("sessions"))
+}
+
+/// Verb's own directory. Everything Verb writes -- session records, event logs, the shell
+/// integration it hosts shells with -- lives under here and nowhere else.
+pub(crate) fn state_root() -> Result<PathBuf, String> {
+    env::var_os("VERB_STATE_DIR")
         .map(PathBuf::from)
         .or_else(default_state_root)
-        .ok_or_else(|| "could not determine a state directory; set VERB_STATE_DIR".to_owned())?;
-    Ok(state_root.join("sessions"))
+        .ok_or_else(|| "could not determine a state directory; set VERB_STATE_DIR".to_owned())
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -1226,6 +1272,28 @@ fn hex_encode(path: &Path) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// Small helpers shared by the test modules in other files.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use std::path::Path;
+
+    /// Concatenates every file under `directory`, so a test can assert on everything Verb wrote.
+    pub(crate) fn collect_files(directory: &Path, into: &mut String) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_files(&path, into);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                into.push_str(&text);
+                into.push('\n');
+            }
+        }
+    }
 }
 
 #[cfg(test)]

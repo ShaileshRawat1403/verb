@@ -63,6 +63,9 @@ pub(crate) enum Context {
     CommandFailed {
         exit_code: i32,
         millis: u128,
+        /// Volatile: shown, never stored. Absent when the shell reported no command line, and the
+        /// band says so rather than inventing one.
+        label: Option<String>,
     },
     SessionEnded {
         exit_code: i32,
@@ -91,7 +94,8 @@ impl App {
     /// Listing it as ended while it runs in front of the user would be the one kind of lie Verb is
     /// built to avoid.
     fn refresh_sessions(&mut self) -> Result<(), String> {
-        let mut sessions = crate::read_sessions()?;
+        let hosting = self.hosted.as_ref().map(|hosted| hosted.session.id.clone());
+        let mut sessions = crate::read_sessions_except(hosting.as_deref())?;
         if let Some(hosted) = self.hosted.as_ref() {
             let hosted_id = hosted.session.id.clone();
             match sessions
@@ -184,8 +188,16 @@ impl App {
         // watched happen.
         for outcome in hosted.take_structural() {
             match outcome {
-                crate::pty::Structural::CommandFinished { exit_code, millis } if exit_code != 0 => {
-                    self.context = Context::CommandFailed { exit_code, millis };
+                crate::pty::Structural::CommandFinished {
+                    exit_code,
+                    millis,
+                    label,
+                } if exit_code != 0 => {
+                    self.context = Context::CommandFailed {
+                        exit_code,
+                        millis,
+                        label,
+                    };
                 }
                 // A command that succeeded is not news. The band stays as it was.
                 crate::pty::Structural::CommandFinished { .. } => {}
@@ -197,6 +209,8 @@ impl App {
         }
 
         if let Some(exit_code) = exit {
+            // The session is over, so any command label it left on screen goes with it.
+            self.context = Context::None;
             let hosted = self.hosted.take().expect("checked above");
             let session = hosted.finish(exit_code)?;
             self.context = if exit_code == 0 {
@@ -405,6 +419,7 @@ impl App {
             start.session,
             &start.command,
             &start.args,
+            &start.env,
             start.is_new,
             rows,
             cols,

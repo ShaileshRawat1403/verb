@@ -33,11 +33,12 @@ impl Hosted {
         mut session: Session,
         command: &str,
         args: &[String],
+        env: &[(String, String)],
         is_new: bool,
         rows: u16,
         cols: u16,
     ) -> Result<Self, String> {
-        let process = pty::spawn(project, &session.id, command, args, Some((rows, cols)))?;
+        let process = pty::spawn(project, &session.id, command, args, env, Some((rows, cols)))?;
 
         let mut logger = EventLogger::new(&session)?;
         if is_new {

@@ -15,12 +15,16 @@
 //! - **OSC 133;A/B/C/D** — the FinalTerm/iTerm2 spelling of the same four, which most shells on a
 //!   desktop emit when integration is enabled at all.
 //!
-//! `OSC 633;E` carries the command *line* the user typed. It is recognised only so it can be
-//! skipped: nothing here ever returns, stores, or logs command text, and the event vocabulary below
-//! has no variant that could carry it.
+//! `OSC 633;E` carries the command *line* the user typed. It is parsed into
+//! [`ShellEvent::CommandText`], which is **volatile display state**: it exists to label the command
+//! on screen and is never written to a session record, an event log, or any other durable store.
+//! The durable schema in `docs/VERB_SESSION_SCHEMA.md` has no field for it, deliberately, and the
+//! structural events Verb writes still carry only an opaque command id and an exit code.
 
-/// A structural fact read out of the terminal stream. No variant carries command text, terminal
-/// output, or any other payload the user typed -- by construction, not by convention.
+/// A fact read out of the terminal stream.
+///
+/// All but one are structural. [`ShellEvent::CommandText`] is the exception and is marked as such
+/// everywhere it travels: it may be shown, and it may not be stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShellEvent {
     CurrentDirectory(String),
@@ -28,6 +32,8 @@ pub enum ShellEvent {
     PromptEnd,
     CommandStart,
     CommandEnd(i32),
+    /// The command line the shell is about to run. Volatile: for display only, never persisted.
+    CommandText(String),
 }
 
 /// An incremental scanner over the PTY output stream.
@@ -149,17 +155,66 @@ fn parse_lifecycle(payload: &str) -> Option<ShellEvent> {
         "A" => Some(ShellEvent::PromptStart),
         "B" => Some(ShellEvent::PromptEnd),
         "C" => Some(ShellEvent::CommandStart),
+        // The command line. Bounded by the scanner's own OSC limit, and volatile by contract.
+        "E" => {
+            let text = payload.get(2..).unwrap_or_default();
+            let text = unescape_command(text);
+            if text.is_empty() {
+                None
+            } else {
+                Some(ShellEvent::CommandText(text))
+            }
+        }
         // An absent or unparseable exit code is reported as 0 rather than dropped: the command
         // genuinely finished, which is the structural fact, and inventing a failure would be worse
         // than recording an unknown status as success.
         "D" => Some(ShellEvent::CommandEnd(
             parts.next().and_then(|code| code.parse().ok()).unwrap_or(0),
         )),
-        // "E" is the command line the user typed, and "P" is a property bag. Both are recognised
-        // here only so they are explicitly skipped rather than falling through to something that
-        // might later be tempted to keep them.
+        // "P" is a property bag Verb has no use for.
         _ => None,
     }
+}
+
+/// Shell integration escapes the characters that would otherwise end or split the sequence:
+/// `\x3b` for `;`, `\x0a` for a newline, `\\` for a backslash.
+fn unescape_command(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut characters = input.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '\\' {
+            output.push(character);
+            continue;
+        }
+        match characters.next() {
+            Some('x') => {
+                let high = characters.next();
+                let low = characters.next();
+                match (high, low) {
+                    (Some(high), Some(low)) => {
+                        let code = format!("{high}{low}");
+                        match u8::from_str_radix(&code, 16) {
+                            Ok(byte) => output.push(byte as char),
+                            Err(_) => {
+                                output.push('\\');
+                                output.push('x');
+                                output.push(high);
+                                output.push(low);
+                            }
+                        }
+                    }
+                    _ => output.push('\\'),
+                }
+            }
+            Some('\\') => output.push('\\'),
+            Some(other) => {
+                output.push('\\');
+                output.push(other);
+            }
+            None => output.push('\\'),
+        }
+    }
+    output
 }
 
 fn percent_decode(input: &str) -> String {
@@ -235,10 +290,19 @@ mod tests {
     }
 
     #[test]
-    fn command_text_is_never_turned_into_an_event() {
-        // OSC 633;E carries what the user typed. It must produce nothing at all.
-        let events = scan(&["\x1b]633;E;rm -rf /secret\x07\x1b]633;C\x07"]);
-        assert_eq!(events, vec![ShellEvent::CommandStart]);
+    fn command_text_is_read_for_display_and_unescaped() {
+        assert_eq!(
+            scan(&["\x1b]633;E;npm test\x07\x1b]633;C\x07"]),
+            vec![
+                ShellEvent::CommandText("npm test".to_owned()),
+                ShellEvent::CommandStart
+            ]
+        );
+        // Integration escapes the characters that would otherwise split the sequence.
+        assert_eq!(
+            scan(&["\x1b]633;E;echo a\\x3bb\x07"]),
+            vec![ShellEvent::CommandText("echo a;b".to_owned())]
+        );
     }
 
     #[test]
