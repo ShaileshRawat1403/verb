@@ -226,6 +226,33 @@ Ctrl+A       screen's prefix, and readline beginning-of-line
 Ctrl+K       readline kill-to-end-of-line — rejected above
 ```
 
+### Results so far
+
+Run with the method below. "reacted" means the program emitted something in response — a bell, a
+cursor move, a redraw — with text already typed on the line, because a binding that edits text shows
+nothing on an empty one.
+
+```text
+                bash      zsh       Claude    Codex     OpenCode
+Ctrl+Space      clean     clean     clean     pending   pending
+Ctrl+]          clean     reacted   clean     pending   pending
+Ctrl+^          reacted   reacted   clean     pending   pending
+Ctrl+O          clean     reacted   reacted   pending   pending
+Ctrl+G          reacted   reacted   reacted   pending   pending
+Ctrl+B          reacted   reacted   reacted   pending   pending
+Ctrl+A          reacted   reacted   reacted   pending   pending
+```
+
+`Ctrl+Space` leads on the evidence available. Two things are known about it that the table does not
+show: it is the NUL byte, so a terminal reports it as either `Ctrl+Space` or `Ctrl+@` and Verb
+normalises the two; and some terminal emulators do not transmit it at all, which would make it
+useless *on that terminal* rather than wrong in general. That is an argument for remapping being
+first-class, which it is.
+
+Codex and OpenCode are pending because they live on the Android validation device. The default
+settles when their rows are filled in, and the implementation ships a clearly-marked provisional
+binding until then — never a silent one.
+
 The test is the same for each candidate, and it is an observation, not an opinion:
 
 ```text
@@ -317,6 +344,13 @@ capability lands first, in the core, reachable from the CLI.
 
 **Done means:** a person can see the state of their work, act on it, and reach full power without
 remembering command names — and every action in the UI maps to a capability that a script can call.
+
+And once a leader is chosen, one more test, which is the real one:
+
+> Can I spend an hour inside Claude, Codex or OpenCode through Verb and forget Verb is intercepting
+> the keyboard until I deliberately invoke it?
+
+If yes, the boundary is right.
 
 ## Related documents
 

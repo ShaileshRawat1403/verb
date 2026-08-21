@@ -39,7 +39,18 @@ unsafe extern "C" {
     ) -> PidT;
 }
 
+#[repr(C)]
+pub(super) struct WinSize {
+    pub rows: u16,
+    pub cols: u16,
+    pub x_pixels: u16,
+    pub y_pixels: u16,
+}
+
+const TIOCSWINSZ: u64 = 0x8008_7467;
+
 unsafe extern "C" {
+    fn ioctl(fd: c_int, request: u64, ...) -> c_int;
     fn chdir(path: *const c_char) -> c_int;
     fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int;
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
@@ -49,6 +60,48 @@ unsafe extern "C" {
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
 }
 
+/// A process running on its own PTY, with the master side handed back to the caller.
+///
+/// Extracted so the two hosts of a session -- the blocking CLI proxy and the TUI, which draws the
+/// same terminal inside a pane -- start processes exactly the same way. Neither owns a private
+/// notion of how a session is launched.
+pub(super) struct PtyProcess {
+    pub master: File,
+    pub pid: PidT,
+}
+
+pub(super) fn spawn(
+    project: &Path,
+    session_id: &str,
+    command: &str,
+    args: &[String],
+    size: Option<(u16, u16)>,
+) -> Result<PtyProcess, String> {
+    let (master, pid) = fork_pty(project, session_id, command, args)?;
+    if let Some((rows, cols)) = size {
+        set_window_size(&master, rows, cols);
+    }
+    Ok(PtyProcess { master, pid })
+}
+
+/// Tells the kernel how big the PTY is, so full-screen agents lay themselves out to the pane they
+/// are actually drawn in. Failure is not fatal: the session still runs, at the default 80x24.
+pub(super) fn set_window_size(master: &File, rows: u16, cols: u16) {
+    let size = WinSize {
+        rows,
+        cols,
+        x_pixels: 0,
+        y_pixels: 0,
+    };
+    unsafe {
+        ioctl(master.as_raw_fd(), TIOCSWINSZ, &size);
+    }
+}
+
+pub(super) fn reap(pid: PidT) -> Result<Option<i32>, String> {
+    wait_nonblocking(pid)
+}
+
 pub(super) fn run(
     project: &Path,
     session: &mut Session,
@@ -56,6 +109,27 @@ pub(super) fn run(
     args: &[String],
     is_new_session: bool,
 ) -> Result<i32, String> {
+    let (mut master, pid) = fork_pty(project, &session.id, command, args)?;
+
+    let mut logger = EventLogger::new(session)?;
+    if is_new_session {
+        logger.session_started(session)?;
+    } else if let Some(agent) = session.agent.as_ref() {
+        logger.agent_started(agent.label())?;
+    }
+    logger.process_started()?;
+    super::save_session(session)?;
+
+    let _terminal_mode = TerminalMode::new()?;
+    proxy_terminal(&mut master, pid, session, &mut logger)
+}
+
+fn fork_pty(
+    project: &Path,
+    session_id: &str,
+    command: &str,
+    args: &[String],
+) -> Result<(File, PidT), String> {
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
     let command_value =
@@ -85,24 +159,13 @@ pub(super) fn run(
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
             }
-            set_child_environment(&session.id, project);
+            set_child_environment(session_id, project);
             execvp(command_value.as_ptr(), argument_pointers.as_ptr());
             _exit(127);
         }
     }
 
-    let mut master = unsafe { File::from_raw_fd(master_fd) };
-    let mut logger = EventLogger::new(session)?;
-    if is_new_session {
-        logger.session_started(session)?;
-    } else if let Some(agent) = session.agent.as_ref() {
-        logger.agent_started(agent.label())?;
-    }
-    logger.process_started()?;
-    super::save_session(session)?;
-
-    let _terminal_mode = TerminalMode::new()?;
-    proxy_terminal(&mut master, pid, session, &mut logger)
+    Ok((unsafe { File::from_raw_fd(master_fd) }, pid))
 }
 
 /// Turns the shell's own markers into the durable structural facts `docs/VERB_SESSION_SCHEMA.md`
@@ -111,14 +174,14 @@ pub(super) fn run(
 /// Only a shell with integration enabled emits these at all; agents like Claude and Codex do not.
 /// Verb records what the shell actually reported and invents nothing when it reports nothing --
 /// silence here means "unknown", never a fabricated boundary.
-struct ShellIntegration {
+pub(super) struct ShellIntegration {
     scanner: ShellScanner,
     command_count: u64,
     open_command: Option<String>,
 }
 
 impl ShellIntegration {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             scanner: ShellScanner::default(),
             command_count: 0,
@@ -126,7 +189,7 @@ impl ShellIntegration {
         }
     }
 
-    fn observe(
+    pub(super) fn observe(
         &mut self,
         bytes: &[u8],
         session: &mut Session,
