@@ -192,10 +192,22 @@ __verb_escape() {
 
 # DEBUG fires before each command; the guard keeps it to the command the user actually ran rather
 # than every function call inside the prompt.
+#
+# A prior DEBUG trap runs first, unchanged. bash allows exactly one, so installing Verb's without
+# looking would silently disable whatever the user (or a tool they use) had already set up.
+__verb_prior_debug=""
+
 __verb_debug() {
+  if [ -n "$__verb_prior_debug" ]; then
+    eval "$__verb_prior_debug"
+  fi
   if [ -n "$COMP_LINE" ] || [ "$BASH_COMMAND" = "$PROMPT_COMMAND" ]; then
     return
   fi
+  # Verb's own plumbing is not something the user ran.
+  case "$BASH_COMMAND" in
+    __verb_*) return ;;
+  esac
   if [ "$__verb_running" = "1" ]; then
     return
   fi
@@ -216,11 +228,61 @@ __verb_prompt() {
   return $verb_status
 }
 
-trap '__verb_debug' DEBUG
+# The prompt hook is installed either way: even without command boundaries, the working directory
+# is still a fact the shell can report.
 if [ -n "$PROMPT_COMMAND" ]; then
   PROMPT_COMMAND="__verb_prompt; $PROMPT_COMMAND"
 else
   PROMPT_COMMAND="__verb_prompt"
 fi
 __verb_cwd
+
+# Installing the DEBUG hook, at top level, last, and never inside a function.
+#
+# bash treats DEBUG specially in three ways that all bite here. A trap set inside a function is gone
+# again when that function returns. `trap -p` inside a command substitution reports nothing, because
+# the subshell has had its DEBUG trap reset -- so the obvious "is there already a trap?" check
+# answers no every time and Verb would clobber the user's. And a trap installed before the rest of
+# this file has finished traces Verb's own remaining lines. Hence: read the existing trap through a
+# file, which `trap -p` writes from the current shell; decide here rather than in a function; and
+# install after everything else has run.
+__verb_trap_file="${TMPDIR:-/tmp}/verb-debug-trap.$$"
+__verb_existing_debug=""
+trap -p DEBUG > "$__verb_trap_file" 2>/dev/null
+IFS= read -r __verb_existing_debug < "$__verb_trap_file" 2>/dev/null
+rm -f "$__verb_trap_file"
+unset __verb_trap_file
+
+__verb_install=1
+if [ -n "$__verb_existing_debug" ]; then
+  case "$__verb_existing_debug" in
+    "trap -- '"*"' DEBUG")
+      __verb_prior_debug=${__verb_existing_debug#trap -- \'}
+      __verb_prior_debug=${__verb_prior_debug%\' DEBUG}
+      # A quote in the body means `trap -p` handed it back re-escaped, and what came back is no
+      # longer the command the user wrote. Conservative on purpose: keep their trap exactly as it is
+      # and do without command boundaries -- reduced observability, never a rewritten trap, and
+      # never a fabricated boundary.
+      case "$__verb_prior_debug" in
+        *\'*)
+          __verb_prior_debug=""
+          __verb_install=0
+          ;;
+      esac
+      ;;
+    *)
+      # An unfamiliar shape. Same rule: leave it alone.
+      __verb_install=0
+      ;;
+  esac
+fi
+unset __verb_existing_debug
+
+# The trap is the very last thing to run, so nothing of Verb's own is left to trace.
+if [ "$__verb_install" = "1" ]; then
+  unset __verb_install
+  trap '__verb_debug' DEBUG
+else
+  unset __verb_install
+fi
 "#;

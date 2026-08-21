@@ -213,6 +213,76 @@ fn bash_reports_its_directory_and_command_boundaries() {
 }
 
 #[test]
+fn bash_keeps_a_debug_trap_the_user_already_had() {
+    // bash allows exactly one DEBUG trap. Verb's must run alongside whatever was there, not over it.
+    let Some(shell) = shell_path("bash") else {
+        eprintln!("bash not installed; skipping");
+        return;
+    };
+    let sandbox = Sandbox::new("bash-trap");
+    let log = sandbox.home().join("user-debug.log");
+    fs::write(
+        sandbox.home().join(".bashrc"),
+        format!(
+            "__user_debug() {{ echo ran >> {}; }}\ntrap '__user_debug' DEBUG\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+
+    let output = run_shell(
+        &sandbox,
+        &shell,
+        &format!("mkdir -p sub && cd sub\n{SECRET_COMMAND}\nexit\n"),
+    );
+
+    assert!(
+        fs::read_to_string(&log).unwrap_or_default().contains("ran"),
+        "the user's own DEBUG trap must still fire\noutput:\n{output}"
+    );
+    // And Verb still observes, because the two are chained rather than exchanged.
+    assert_reports_structurally(&sandbox, &output);
+    assert_no_command_text(&sandbox);
+}
+
+#[test]
+fn bash_gives_up_its_own_hook_rather_than_mangle_a_trap_it_cannot_preserve() {
+    // A DEBUG trap whose body contains a quote comes back from `trap -p` re-escaped, and cannot be
+    // reconstructed exactly. Verb leaves it alone and does without command boundaries: reduced
+    // observability, never a rewritten trap and never a fabricated boundary.
+    let Some(shell) = shell_path("bash") else {
+        eprintln!("bash not installed; skipping");
+        return;
+    };
+    let sandbox = Sandbox::new("bash-trap-unsafe");
+    let log = sandbox.home().join("user-debug.log");
+    // The body contains single quotes, so `trap -p` returns it re-escaped as '\'' and it cannot be
+    // reconstructed by string surgery.
+    fs::write(
+        sandbox.home().join(".bashrc"),
+        format!("trap \"printf 'ran\\n' >> {}\" DEBUG\n", log.display()),
+    )
+    .unwrap();
+
+    let output = run_shell(
+        &sandbox,
+        &shell,
+        &format!("mkdir -p sub && cd sub\n{SECRET_COMMAND}\nexit\n"),
+    );
+
+    assert!(
+        fs::read_to_string(&log).unwrap_or_default().contains("ran"),
+        "the user's own DEBUG trap must survive untouched\noutput:\n{output}"
+    );
+    let events = sandbox.events();
+    assert!(
+        !events.contains("COMMAND_STARTED"),
+        "without its hook Verb must report no command boundaries at all\nevents:\n{events}"
+    );
+    assert_no_command_text(&sandbox);
+}
+
+#[test]
 fn an_uninstrumented_shell_reports_nothing_rather_than_something_invented() {
     // `sh` is not a shell Verb knows how to instrument. It must be launched exactly as it would
     // have been, and Verb must record no command boundaries at all -- silence stays unknown.

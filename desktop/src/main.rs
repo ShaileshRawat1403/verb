@@ -1265,14 +1265,46 @@ fn now_millis() -> u128 {
         .as_millis()
 }
 
+/// A stable, path-safe key for a project directory.
+///
+/// Hex of the path itself, which is readable and reversible -- until the path is long enough that
+/// twice its length exceeds what a filesystem accepts for one name, at which point Verb could not
+/// create a session file at all and failed to start. Found by a test whose sandbox happened to sit
+/// deep enough to hit it.
+///
+/// Long paths therefore fall back to a bounded key: a digest of the whole path, plus its hex tail so
+/// the file is still recognisable by eye. Short paths keep exactly the key they had, so records
+/// written before this change are still found.
 fn hex_encode(path: &Path) -> String {
-    path.as_os_str()
+    let hex: String = path
+        .as_os_str()
         .to_string_lossy()
         .as_bytes()
         .iter()
         .map(|byte| format!("{byte:02x}"))
-        .collect()
+        .collect();
+
+    if hex.len() <= MAX_PLAIN_KEY_LENGTH {
+        return hex;
+    }
+    let tail = &hex[hex.len() - KEY_TAIL_LENGTH..];
+    format!("{:016x}-{tail}", fingerprint(path))
 }
+
+/// FNV-1a. Not a security hash and not asked to be one: it distinguishes project paths on one
+/// machine, and the readable tail makes an accidental collision visible rather than silent.
+fn fingerprint(path: &Path) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.as_os_str().to_string_lossy().as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Filesystems commonly cap a single name at 255 bytes, and Verb appends an extension to this.
+const MAX_PLAIN_KEY_LENGTH: usize = 200;
+const KEY_TAIL_LENGTH: usize = 64;
 
 /// Small helpers shared by the test modules in other files.
 #[cfg(test)]
@@ -1508,6 +1540,21 @@ mod tests {
         let key = hex_encode(Path::new("/Users/example/my project"));
         assert_eq!(key, "2f55736572732f6578616d706c652f6d792070726f6a656374");
         assert!(!key.contains('/'));
+    }
+
+    #[test]
+    fn a_deep_project_path_still_produces_a_usable_file_name() {
+        // A path long enough that its hex exceeds what a filesystem accepts for one name used to
+        // make Verb fail to start with "File name too long".
+        let deep = PathBuf::from(format!("/Users/example/{}/project", "nested/".repeat(40)));
+        let key = hex_encode(&deep);
+
+        assert!(key.len() <= 96, "{} chars is still too long", key.len());
+        assert!(!key.contains('/'));
+        // Stable, and distinct from a neighbour that shares its tail.
+        assert_eq!(key, hex_encode(&deep));
+        let sibling = PathBuf::from(format!("/Users/other/{}/project", "nested/".repeat(40)));
+        assert_ne!(key, hex_encode(&sibling));
     }
 
     #[test]
