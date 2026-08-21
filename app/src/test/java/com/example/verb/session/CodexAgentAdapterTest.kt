@@ -223,7 +223,7 @@ class CodexAgentAdapterTest {
         assertNotNull("nothing settling within the window must read as still running", binding)
         assertTrue(
             "resume must name the conversation, not open Codex's interactive picker",
-            fake.terminalOutput.value.contains("codex resume codex-session-1")
+            fake.terminalOutput.value.contains("codex --disable apps resume codex-session-1")
         )
     }
 
@@ -235,7 +235,7 @@ class CodexAgentAdapterTest {
 
         adapter.resume(AgentRef("codex", resumeIdentity = null))
 
-        assertTrue(fake.terminalOutput.value.contains("codex resume --last"))
+        assertTrue(fake.terminalOutput.value.contains("codex --disable apps resume --last"))
     }
 
     @Test

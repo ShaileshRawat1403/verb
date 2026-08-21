@@ -65,8 +65,9 @@ class AgentsScreenTest {
         show(listOf(report(RuntimeProfileId.CODEX)))
 
         composeTestRule.onNodeWithTag("agent_open_codex").assertIsEnabled()
-        // The command is visible, so the button is not magic.
-        composeTestRule.onNodeWithText("codex").assertIsDisplayed()
+        // The whole command is visible, flags included, so the button is not magic and Verb is not
+        // quietly running something other than what the card says.
+        composeTestRule.onNodeWithText("codex --disable apps").assertIsDisplayed()
     }
 
     @Test
@@ -76,7 +77,7 @@ class AgentsScreenTest {
 
         composeTestRule.onNodeWithTag("agent_open_codex").performClick()
 
-        assertEquals("codex", launched)
+        assertEquals("codex --disable apps", launched)
     }
 
     @Test

@@ -278,7 +278,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 RuntimeProfileId.CODEX,
                 RuntimeProfileId.OPENCODE
             ).associateWith { id ->
-                RuntimeProfiles.all.first { it.id == id }.launchCommand!!
+                RuntimeProfiles.all.first { it.id == id }.launchLine!!
             }
     }
 

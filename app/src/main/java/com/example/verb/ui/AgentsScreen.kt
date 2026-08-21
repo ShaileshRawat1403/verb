@@ -115,7 +115,7 @@ private fun AgentRow(
     onStartNewSession: () -> Unit = {}
 ) {
     val profile = report.profile
-    val launch = profile.launchCommand ?: return
+    val launch = profile.launchLine ?: return
     Card(
         modifier = Modifier.fillMaxWidth().testTag("agent_${profile.id.name.lowercase()}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
