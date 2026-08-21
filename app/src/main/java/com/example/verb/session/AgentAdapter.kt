@@ -14,5 +14,12 @@ enum class ResumeVerdict { YES, NO, UNKNOWN }
  */
 interface AgentAdapter {
     fun canResume(agent: AgentRef): ResumeVerdict
-    fun resume(agent: AgentRef): ProcessBinding
+
+    /**
+     * Attempts to resume [agent]. `null` means the attempt failed -- there is no other failure
+     * signal, deliberately: a caller that only ever branches on null-vs-non-null cannot
+     * accidentally treat a failure as success, which a thrown exception or a boolean flag alongside
+     * a possibly-stale binding both make easy to get wrong.
+     */
+    suspend fun resume(agent: AgentRef): ProcessBinding?
 }

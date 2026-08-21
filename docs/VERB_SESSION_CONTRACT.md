@@ -1,13 +1,30 @@
 # VerbSession — the platform-agnostic contract
 
-Status: **proposal, not implemented.** For review before any code lands. Once agreed, step 2 is
-implementing this on Android only (the proving ground); desktop implements the same contract from
-day one, not a retrofit.
+Status: **the data shape and the first `AgentAdapter` are implemented.** `VerbSession`,
+`VerbSessionState`, `ProcessBinding`, and `AgentRef` exist in `com.example.verb.session` (commit
+`432251b`); `VerbTerminalSessionHolder` gives session lifetime an owner above the ViewModel (commit
+`241b739`); `ClaudeAgentAdapter` proves the full `LIVE -> INTERRUPTED -> RECOVERABLE -> LIVE` cycle
+against real Claude transcript detection (see `ClaudeResumeCycleTest`). Codex, OpenCode, and `dsh`
+each need their own adapter, not yet written. Nothing in the running app yet constructs or reads a
+`VerbSession` -- the holder and the contract are proven independently, not wired into the ViewModel
+yet, on purpose (see "One conceptual distinction to preserve", below). Desktop is untouched.
 
 This is the shape from `docs/HANDOFF.md`'s "Durable Session, step 2", made precise enough to type
 and to test against. It adds nothing conceptually new — it resolves the ambiguities that would
 otherwise get decided differently by whoever writes the Android code versus whoever writes the
 desktop code.
+
+## One conceptual distinction to preserve
+
+`VerbTerminalSessionHolder` is **process-scoped runtime ownership** -- it answers "does a
+`TerminalRuntime` already exist, so a new `VerbViewModel` can reattach instead of spawning a
+duplicate." `VerbSession.id` is **product-level session identity** -- it answers "is this the same
+piece of work the user was doing, independent of whether any process currently backs it."
+
+They are related -- a live `VerbSession` will typically point at whatever `TerminalRuntime` the
+holder is holding -- but they must not become the same abstraction. The holder has no concept of
+`INTERRUPTED` or `RECOVERABLE`; it only ever knows "a runtime exists" or "it doesn't." `VerbSession`
+is what makes "the process is gone, but the work is not" a meaningful sentence at all.
 
 ## The one rule everything else follows
 
@@ -103,12 +120,18 @@ knowledge this contract is not supposed to hold. That decision lives behind an a
 ```
 AgentAdapter
   canResume(agentRef: AgentRef) -> yes | no | unknown
-  resume(agentRef: AgentRef) -> ProcessBinding
+  suspend resume(agentRef: AgentRef) -> ProcessBinding?
 ```
 
 Claude's adapter knows how to check Claude's transcripts; Codex's adapter knows Codex's. `VerbSession`
 only ever sees the `yes | no | unknown` result, the same way it only ever sees "present or absent"
-for `ProcessBinding`.
+for `ProcessBinding`. `resume` returns `null` on failure -- no separate failure signal, deliberately:
+a caller branching only on null-vs-non-null cannot accidentally treat a failure as success.
+`ClaudeAgentAdapter` (`docs/HANDOFF.md`'s Claude-first slice) reads `canResume` from transcript
+presence under `~/.claude/projects/<cwd, "/" replaced by "-">/`, and detects `resume` failure from
+Claude's own command-history settling before the interactive session would ever return control --
+not from a transcript scan, since a resumed Claude keeps running rather than writing anything new to
+check.
 
 ## Transitions
 

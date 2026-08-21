@@ -93,6 +93,15 @@ class FakeTerminalRuntimeAdapter(
         }
     }
 
+    /**
+     * Test-only: feeds a [ShellIntegrationEvent] straight to [commandHistory]'s tracker, standing
+     * in for a real shell's OSC 633 prompt hooks, which the fake has no shell to actually emit. Used
+     * to script a command finishing (or not) -- see `ClaudeAgentAdapterTest`.
+     */
+    fun simulateShellIntegration(event: ShellIntegrationEvent) {
+        commandTracker.onEvent(event)
+    }
+
     override fun sendCommand(cmd: String) {
         sendText("$cmd\n$ ")
     }
