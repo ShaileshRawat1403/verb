@@ -21,3 +21,4 @@ debug.keystore
 app/build/
 debug.keystore.base64
 app/.cxx
+desktop/target/
