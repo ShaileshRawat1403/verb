@@ -242,6 +242,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // once here rather than presenting it as launchable.
         checkAgentRuntimeCompatibility()
 
+        // Populates runtimeProfileReports / agentSignInStates for the first time on this launch.
+        // Off the main thread for the same reason as the call inside installTermuxBootstrap():
+        // each profile probe spawns a real process.
+        viewModelScope.launch(Dispatchers.IO) { refreshRuntimeProfiles() }
+
         // Mirror persisted command history into UI state as it changes
         viewModelScope.launch(Dispatchers.IO) {
             repository.commandHistory.collect { _persistedCommandHistory.value = it }
