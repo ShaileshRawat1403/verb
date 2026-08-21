@@ -76,6 +76,8 @@ Needed:
 
 * terminal-first layout
 * project / Git / runtime / session awareness
+* the Verb Leader abstraction — configurable, with the collision test against bash, zsh, Claude,
+  Codex and OpenCode run and its result recorded in `docs/TUI_VISION.md` before a default settles
 * command palette
 * contextual overlays
 * session switching and resume
@@ -83,7 +85,9 @@ Needed:
 * keyboard-first interaction
 * SSH-friendly operation
 
-Not in M1: no file-tree IDE clone, no permanent panes, no assistant.
+Not in M1: no file-tree IDE clone, no permanent panes, no assistant. The Ask region is drawn in the
+layout but inactive and non-focusable until M2 — reserved space, never placeholder behaviour that
+accepts a question nothing can answer.
 
 The interaction model, layout rules and mockups are specified in `docs/TUI_VISION.md`, which the
 implementation is built against rather than designed during.

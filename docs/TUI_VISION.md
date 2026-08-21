@@ -29,9 +29,14 @@ Most of the time nothing important is happening, and the screen says so by getti
 │                                                                             │
 │                                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ Ask Verb…                                                        Ctrl+K     │
+│ Ask Verb…                                    available in M2   ⌘ leader ?   │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
+
+The Ask line is drawn dim and is **not focusable in M1**. The region is reserved so the M1 layout is
+the real layout, but nothing accepts a question until M2 can answer one. A user who types into
+something that looks functional and gets nothing back has been misled by the product whose whole
+purpose is removing that kind of ambiguity.
 
 No permanent Git pane. No permanent file explorer. No permanent chat sidebar. Three regions: one
 status line, the terminal, one input line.
@@ -61,7 +66,7 @@ it — and only then:
 │                                                                             │
 │ [e] Explain   [c] Changes   [d] Diagnose   [r] Retry   [x] Raw             │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│ Ask Verb…                                                                  │
+│ Ask Verb…                                                  available in M2  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -83,7 +88,7 @@ version against a declared requirement. **No band appears on inference.**
 
 ## The command palette
 
-`Ctrl+K` is the full-power surface, and the only place capability needs to be memorised is here:
+`Leader p` opens the full-power surface, and it is the only place capability needs to be memorised:
 
 ```text
 ╭─ Command Palette ─────────────────────────────────────────╮
@@ -153,31 +158,99 @@ Four levels, each entered deliberately:
 ```text
 1  quiet        status line + terminal + Ask
 2  contextual   a band appears because an observed fact justifies it
-3  palette      Ctrl+K: everything, searchable
+3  palette      Leader p: everything, searchable
 4  overlay      a full panel — sessions, debug view, advanced controls
 ```
 
-Level 2 is the only one Verb enters on its own, and only from evidence. Levels 3 and 4 are always
-the user's move.
+Level 2 is the only one Verb enters on its own, and only from observed evidence. Levels 3 and 4 are
+always the user's move, without exception.
+
+This is what keeps Verb from becoming an assistant that interrupts. A tool that volunteers a panel
+because it *suspects* something is a tool people learn to fight; one that surfaces exactly when a
+command actually failed is one they learn to trust.
 
 ## Keyboard model
 
 The hard constraint: **the terminal owns the keyboard.** Claude, Codex and OpenCode are full-screen
-TUIs that use nearly every key, so Verb cannot claim single keys globally without breaking the
-agents it exists to host.
+TUIs that use nearly every key, and a shell underneath them uses most of the control keys as
+readline bindings. Verb cannot claim a global key without breaking the thing it exists to host.
 
-So:
+An earlier draft of this document reserved `Ctrl+K` globally. That was wrong on its own terms:
+`Ctrl+K` is readline's *kill to end of line*, a key people use constantly, and reserving it
+contradicts the sentence directly above it.
 
-* **One reserved chord: `Ctrl+K`.** It opens the palette and is the entry to everything.
-* Contextual `[e] Explain` style hints are live only while the contextual band has focus, which
-  `Ctrl+K` (or `Esc` when no agent is running) gives it. They are shortcuts *within* a surface, never
-  global captures.
-* `Esc` closes the topmost Verb surface and returns the keyboard to the terminal. It is never
+### Verb Leader
+
+Verb takes a **leader chord**, in the tmux sense: one key that begins a Verb command, followed by a
+key that names it.
+
+```text
+Leader p    palette
+Leader s    sessions
+Leader v    the Verb contextual surface
+Leader ?    help — what can I do from here?
+```
+
+The rules that make a leader safe to live with:
+
+* **Nothing else is reserved.** Every other keystroke goes to the terminal, untouched, including
+  every readline binding and every key an agent TUI wants.
+* **The leader is configurable, and remapping is a first-class feature, not an escape hatch.** Verb
+  is not constitutionally bound to any particular chord.
+* **`Leader Leader` sends the leader key itself to the terminal**, so a bound key remains reachable
+  even when it is the leader.
+* **A leader followed by an unbound key forwards both** to the terminal rather than swallowing them.
+  Verb never eats a keystroke it has no meaning for.
+* **A leader with no follow-up within a short timeout forwards the leader** and returns to normal.
+  A half-typed Verb command must not leave the terminal in a state the user did not ask for.
+* **`Esc` closes the topmost Verb surface** and returns the keyboard to the terminal. It is never
   swallowed when no Verb surface is open.
-* Everything reachable by a shortcut is also reachable by name in the palette. Shortcuts are speed,
-  never the only route.
-* Any surface that takes the whole terminal (launching an agent) hands the keyboard over completely
-  and takes it back afterwards, as the current UI already does.
+* Contextual `[e] Explain` style hints are shortcuts *within* a focused Verb surface, never global
+  captures. Everything reachable by a shortcut is also reachable by name in the palette.
+* Any surface that hands the whole terminal to an agent gives the keyboard over completely and takes
+  it back afterwards, as the current UI already does.
+
+### Choosing the default
+
+**The default is deliberately not chosen in this document.** It is chosen after collision testing,
+and the result is recorded here.
+
+Candidates worth testing, with what is already known against each:
+
+```text
+Ctrl+Space   often unbound; sends NUL, which readline treats as set-mark
+Ctrl+O       readline operate-and-get-next; rarely used interactively
+Ctrl+G       readline abort; used to cancel an incremental search
+Ctrl+B       tmux's own default prefix — collides for tmux users
+Ctrl+A       screen's prefix, and readline beginning-of-line
+Ctrl+K       readline kill-to-end-of-line — rejected above
+```
+
+The test is the same for each candidate, and it is an observation, not an opinion:
+
+```text
+For each of: bash, zsh, Claude Code, Codex, OpenCode
+  1. start it inside a Verb PTY session
+  2. send the candidate chord
+  3. record whether anything observably happens — text edited, mode changed,
+     screen redrawn, command cancelled, process signalled
+Accept only a candidate with no observable effect in all five.
+```
+
+If no candidate is clean everywhere, the default goes to the one that is clean in the shells and
+collides only with a documented agent binding, and the collision is written down next to it. Guessing
+is not an option here: the whole point is that Verb does not claim facts — or keys — it has not
+checked.
+
+Until that test is run and its result recorded here, the implementation treats the leader as
+configuration with a **provisional** default rather than a settled one: `VERB_LEADER` selects it,
+`Leader ?` shows the current binding, and the status line carries the hint, so a user never has to
+remember which chord this install uses and never discovers the binding by having it fire. Provisional
+means the doc says so and the release notes say so — not that it is hidden. A configuration file
+replaces the environment variable when Verb has one; the abstraction does not change when it does.
+
+The leader is one chord and the follow-up keys are ordinary letters, deliberately. A user who
+remaps the leader keeps every Verb command they already know.
 
 ## Ratatui, and where the dependency line sits
 
@@ -213,6 +286,7 @@ Session list / switch         read session records  = verb sessions
 Re-check recovery             reconcile_session()   = verb status
 Show evidence / raw events    the JSONL event log   = (M2/M3 surface over existing files)
 Explain / Diagnose            M2 assistant over the same evidence
+Ask Verb                      M2 — inactive in M1, so it maps to nothing and does nothing
 ```
 
 An action with no capability behind it does not ship. If a surface needs something new, the
@@ -222,17 +296,21 @@ capability lands first, in the core, reachable from the CLI.
 
 **In:**
 
-* the quiet state: status line, terminal region, Ask line (input captured, no assistant behind it)
+* the quiet state: status line, terminal region, and the Ask region drawn dim, inactive and
+  non-focusable — reserved space, no placeholder behaviour
+* the Verb Leader abstraction, configurable, plus the collision test above run against bash, zsh,
+  Claude, Codex and OpenCode, with the chosen default recorded in this document
 * session list and switching as an overlay
 * resume and start-new from the UI
-* `Ctrl+K` command palette over the capabilities that exist today
+* command palette (`Leader p`) over the capabilities that exist today
 * contextual band for the triggers Verb can already observe: command failed, agent session state
   changed
 * resize handling, `NO_COLOR`, SSH-friendly behaviour
 
 **Out:**
 
-* the assistant (M2), correlation and the debug view's "relevant change" (M3)
+* the assistant (M2) — including any input that accepts a question, correlation and the debug view's
+  "relevant change" (M3)
 * Git panes, file trees, dashboards
 * CI, dependency and remote environment understanding (M4)
 * any plugin surface (M5)
