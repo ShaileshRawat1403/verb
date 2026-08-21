@@ -142,6 +142,22 @@ Three rules hold this together as more is added:
    needs to know whether a process exists has to ask the host that owns it, which is the whole point
    of the contract.
 
+## Shell integration
+
+Verb hosts its own instrumented shell (`desktop/src/integration.rs`) so the markers above exist at
+all; without it the structural events were a promise that never fired on a normal machine.
+
+- **zsh** through a generated `ZDOTDIR` of shims, **bash** through `--init-file`. Each shim sources
+  the user's own configuration *first*, then adds hooks, so prompts, aliases and options survive.
+- Nothing is installed into the user's shell: `~/.zshrc` and `~/.bashrc` are untouched, and a
+  terminal Verb did not start behaves exactly as before.
+- The user's shell history keeps going where the user keeps it. zsh's history follows `ZDOTDIR`, so
+  without care it would have been split off into Verb's storage -- taking command text with it.
+- An unrecognised shell is launched unchanged and reports nothing, which stays unknown.
+
+`tests/shell_integration.rs` runs a real zsh and a real bash on a real PTY and asserts all of it,
+including that the command they ran appears nowhere in anything Verb wrote.
+
 ## Next desktop increments
 2. `dsh` is on hold rather than pending: it cannot be installed on Verb's Android userland at all
    (its `koffi` native module has no Android build), so there is no runtime to observe a resume

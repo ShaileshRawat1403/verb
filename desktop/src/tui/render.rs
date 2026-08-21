@@ -220,6 +220,19 @@ fn convert(colour: vt100::Color, default: Color) -> Color {
     }
 }
 
+/// What the band names: the command the shell reported, or the fact alone.
+pub(super) fn failure_subject(label: Option<&str>) -> &str {
+    label.unwrap_or("Command failed")
+}
+
+/// A shell that reported no command line leaves an absence, and the band says so rather than
+/// letting the user wonder why Verb is being vague.
+pub(super) fn failure_note(label: Option<&str>) -> Option<&'static str> {
+    label
+        .is_none()
+        .then_some("The shell did not report what was running.")
+}
+
 /// Human-sized durations: a command that took 3.8 seconds should not read as 3800ms.
 pub(super) fn duration(millis: u128) -> String {
     if millis < 1_000 {
@@ -249,18 +262,24 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
 
     match app.context() {
         Context::None => {}
-        Context::CommandFailed { exit_code, millis } => {
+        Context::CommandFailed {
+            exit_code,
+            millis,
+            label,
+        } => {
             lines.push(Line::from(vec![
                 Span::styled(
-                    "  ✕ Command failed".to_owned(),
+                    format!("  ✕ {}", failure_subject(label.as_deref())),
                     Style::default().fg(if no_colour() { Color::Reset } else { Color::Red }),
                 ),
                 Span::raw(format!(" · exit {exit_code} · {}", duration(*millis))),
             ]));
-            lines.push(Line::from(Span::styled(
-                "  Verb records that a command failed, never what was typed.".to_owned(),
-                Style::default().add_modifier(Modifier::DIM),
-            )));
+            if let Some(note) = failure_note(label.as_deref()) {
+                lines.push(Line::from(Span::styled(
+                    format!("  {note}"),
+                    Style::default().add_modifier(Modifier::DIM),
+                )));
+            }
         }
         Context::SessionEnded { exit_code } => {
             lines.push(Line::from(Span::raw(format!(
@@ -485,4 +504,28 @@ fn help(frame: &mut Frame, app: &App) {
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_band_names_the_command_when_the_shell_reported_one() {
+        assert_eq!(failure_subject(Some("npm test")), "npm test");
+        assert_eq!(failure_note(Some("npm test")), None);
+    }
+
+    #[test]
+    fn without_a_reported_command_the_band_states_the_fact_and_the_absence() {
+        assert_eq!(failure_subject(None), "Command failed");
+        assert!(failure_note(None).is_some());
+    }
+
+    #[test]
+    fn durations_read_the_way_a_person_would_say_them() {
+        assert_eq!(duration(0), "0ms");
+        assert_eq!(duration(3_800), "3.8s");
+        assert_eq!(duration(125_000), "2m 5s");
+    }
 }

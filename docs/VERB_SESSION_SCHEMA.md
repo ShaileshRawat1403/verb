@@ -105,7 +105,9 @@ Example:
 ```
 
 Structural events must not contain raw command text, terminal input, terminal output, prompts,
-passwords, API keys, or stderr. A command event may carry a stable opaque `commandId`, source,
+passwords, API keys, or stderr. A host may hold the command line in memory as **volatile display
+state** -- to label the command a user is looking at right now -- provided it never reaches this
+schema, never reaches an event log, and does not outlive the session that produced it. A command event may carry a stable opaque `commandId`, source,
 cwd, duration, and exit code. A future diagnostic mode may retain a bounded, explicitly opt-in
 buffer, but that is separate from durable execution memory.
 

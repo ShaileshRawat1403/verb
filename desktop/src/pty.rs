@@ -75,9 +75,10 @@ pub(super) fn spawn(
     session_id: &str,
     command: &str,
     args: &[String],
+    env: &[(String, String)],
     size: Option<(u16, u16)>,
 ) -> Result<PtyProcess, String> {
-    let (master, pid) = fork_pty(project, session_id, command, args)?;
+    let (master, pid) = fork_pty(project, session_id, command, args, env)?;
     if let Some((rows, cols)) = size {
         set_window_size(&master, rows, cols);
     }
@@ -107,9 +108,10 @@ pub(super) fn run(
     session: &mut Session,
     command: &str,
     args: &[String],
+    env: &[(String, String)],
     is_new_session: bool,
 ) -> Result<i32, String> {
-    let (mut master, pid) = fork_pty(project, &session.id, command, args)?;
+    let (mut master, pid) = fork_pty(project, &session.id, command, args, env)?;
 
     let mut logger = EventLogger::new(session)?;
     if is_new_session {
@@ -129,6 +131,7 @@ fn fork_pty(
     session_id: &str,
     command: &str,
     args: &[String],
+    env: &[(String, String)],
 ) -> Result<(File, PidT), String> {
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
@@ -148,6 +151,18 @@ fn fork_pty(
         .collect::<Vec<_>>();
     argument_pointers.push(ptr::null());
 
+    // Converted before the fork: allocating in the child of a fork is not safe.
+    let child_env = env
+        .iter()
+        .map(|(name, value)| {
+            let name = CString::new(name.as_str())
+                .map_err(|_| "environment name contains a NUL byte".to_owned())?;
+            let value = CString::new(value.as_str())
+                .map_err(|_| "environment value contains a NUL byte".to_owned())?;
+            Ok((name, value))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
     let mut master_fd = -1;
     let pid = unsafe { forkpty(&mut master_fd, ptr::null_mut(), ptr::null(), ptr::null()) };
     if pid < 0 {
@@ -159,7 +174,7 @@ fn fork_pty(
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
             }
-            set_child_environment(session_id, project);
+            set_child_environment(session_id, project, &child_env);
             execvp(command_value.as_ptr(), argument_pointers.as_ptr());
             _exit(127);
         }
@@ -179,7 +194,14 @@ fn fork_pty(
 /// Only what the shell actually reported: which command boundary closed and with what status. The
 /// command *text* is not here and cannot be -- `OSC 633;E` is skipped by the scanner itself.
 pub(super) enum Structural {
-    CommandFinished { exit_code: i32, millis: u128 },
+    CommandFinished {
+        exit_code: i32,
+        millis: u128,
+        /// What the shell said it was running, when it said so. **Volatile display state**: it is
+        /// handed to the screen and dropped. It is never written to the session record, the event
+        /// log, or anything else durable -- the schema has no field for it.
+        label: Option<String>,
+    },
 }
 
 pub(super) struct ShellIntegration {
@@ -187,6 +209,8 @@ pub(super) struct ShellIntegration {
     command_count: u64,
     open_command: Option<String>,
     started_at: Option<u128>,
+    /// The command line for the command currently running, held only until it finishes.
+    volatile_text: Option<String>,
 }
 
 impl ShellIntegration {
@@ -196,6 +220,7 @@ impl ShellIntegration {
             command_count: 0,
             open_command: None,
             started_at: None,
+            volatile_text: None,
         }
     }
 
@@ -218,6 +243,8 @@ impl ShellIntegration {
                     session.last_observed_at = Some(super::now_millis());
                     super::save_session(session)?;
                 }
+                // Arrives just before CommandStart. Kept in memory for the length of one command.
+                ShellEvent::CommandText(text) => self.volatile_text = Some(text),
                 ShellEvent::CommandStart => {
                     self.command_count += 1;
                     self.started_at = Some(super::now_millis());
@@ -243,7 +270,13 @@ impl ShellIntegration {
                             .take()
                             .map(|started| super::now_millis().saturating_sub(started))
                             .unwrap_or(0);
-                        structural.push(Structural::CommandFinished { exit_code, millis });
+                        // Taken, not cloned: the text leaves with the outcome and nothing here
+                        // keeps a copy.
+                        structural.push(Structural::CommandFinished {
+                            exit_code,
+                            millis,
+                            label: self.volatile_text.take(),
+                        });
                     }
                 }
                 ShellEvent::PromptStart | ShellEvent::PromptEnd => {}
@@ -253,7 +286,11 @@ impl ShellIntegration {
     }
 }
 
-unsafe fn set_child_environment(session_id: &str, project: &Path) {
+unsafe fn set_child_environment(
+    session_id: &str,
+    project: &Path,
+    extra: &[(CString, CString)],
+) {
     let Ok(session_id) = CString::new(session_id) else {
         _exit(126);
     };
@@ -264,6 +301,9 @@ unsafe fn set_child_environment(session_id: &str, project: &Path) {
     let verb_project_root = CString::new("VERB_PROJECT_ROOT").expect("literal has no NUL");
     setenv(verb_session_id.as_ptr(), session_id.as_ptr(), 1);
     setenv(verb_project_root.as_ptr(), project.as_ptr(), 1);
+    for (name, value) in extra {
+        setenv(name.as_ptr(), value.as_ptr(), 1);
+    }
 }
 
 fn proxy_terminal(
@@ -424,5 +464,71 @@ impl Drop for TerminalMode {
                 .stdin(Stdio::inherit())
                 .status();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Agent, Session};
+    use std::path::PathBuf;
+
+    fn scratch(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "verb-pty-{name}-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// Volatile means volatile: the command line is handed to the caller once, with the command it
+    /// belongs to, and nothing keeps a copy afterwards. A second command with no `E` sequence must
+    /// not inherit the first one's label.
+    #[test]
+    fn command_text_is_handed_over_once_and_never_retained() {
+        let root = scratch("volatile");
+        std::env::set_var("VERB_STATE_DIR", &root);
+
+        let session = Session::new(root.join("project"), Agent::Shell);
+        let mut session = session;
+        let mut logger = EventLogger::new(&session).unwrap();
+        let mut integration = ShellIntegration::new();
+
+        let first = integration
+            .observe(
+                b"\x1b]633;E;npm test\x07\x1b]633;C\x07\x1b]633;D;1\x07",
+                &mut session,
+                &mut logger,
+            )
+            .unwrap();
+        match first.as_slice() {
+            [Structural::CommandFinished { exit_code, label, .. }] => {
+                assert_eq!(*exit_code, 1);
+                assert_eq!(label.as_deref(), Some("npm test"));
+            }
+            other => panic!("expected one finished command, got {}", other.len()),
+        }
+
+        // A second command that reports no text must come back with none, not with the last one.
+        let second = integration
+            .observe(b"\x1b]633;C\x07\x1b]633;D;0\x07", &mut session, &mut logger)
+            .unwrap();
+        match second.as_slice() {
+            [Structural::CommandFinished { label, .. }] => assert_eq!(label.as_deref(), None),
+            other => panic!("expected one finished command, got {}", other.len()),
+        }
+
+        // And none of it reached the event log.
+        let mut written = String::new();
+        crate::tests_support::collect_files(&root, &mut written);
+        assert!(
+            !written.contains("npm test"),
+            "command text must not be written anywhere durable:\n{written}"
+        );
     }
 }
