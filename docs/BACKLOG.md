@@ -99,7 +99,7 @@ distribution, splitting PR #2.
 | A4 | ~~Minimum-size guard~~ | done |
 | A5 | ~~Forget a session record~~ | done |
 | A6 | ~~Mouse support~~ inside surfaces | done |
-| A8 | Mouse capture by default, so bar actions and status segments are clickable — **deferred deliberately**: it takes away native selection and copy, and should be decided from dogfooding evidence rather than assumed | M |
+| A8 | ~~Mouse capture by default, so bar actions are clickable~~ — decided from dogfooding on 22 Aug: the first thing reached for in the workspace was the bar. Captured by default, Option-drag still selects, `leader m` hands the mouse back. Status segments are still not clickable | done |
 | A7 | Windows support for the TUI (CLI already falls back to inherited stdio) | L |
 | A9 | Decide the Agents list's admission rule and apply it — Gemini CLI, Hermes and DeepSeek show as installable cards while never having been verified on a device, which is the catalogue shape the compatibility matrix exists to avoid | S |
 
