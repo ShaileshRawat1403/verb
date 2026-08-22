@@ -258,6 +258,9 @@ impl Event {
         if let Some(state) = self.state.as_deref() {
             line.push_str(&format!(" · {state}"));
         }
+        if let Some(tool) = self.tool.as_deref() {
+            line.push_str(&format!(" · {tool}"));
+        }
         if let Some(cwd) = self.cwd.as_deref() {
             line.push_str(&format!(" · {cwd}"));
         }

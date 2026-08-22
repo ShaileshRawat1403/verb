@@ -121,7 +121,7 @@ costume.
 
 | # | Item | Unlocks |
 | --- | --- | --- |
-| C1 | Agent sessions emit nothing structural — the failure band is silent inside Claude and Codex | the agent half of the product |
+| C1 | ~~Agent sessions emit nothing structural~~ — both hosts now follow the record the agent writes for itself and emit turn/tool/failure events, worded as reported rather than witnessed. OpenCode has no reader yet | done for Claude and Codex |
 | C2 | Git snapshot at command boundaries | "what changed since it last worked" |
 | C3 | Last-known-good tracking | comparison and recovery |
 | C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |

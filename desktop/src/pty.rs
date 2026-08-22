@@ -123,7 +123,14 @@ pub(super) fn run(
     super::save_session(session)?;
 
     let _terminal_mode = TerminalMode::new()?;
-    proxy_terminal(&mut master, pid, session, &mut logger)
+    // The CLI proxy observes an agent exactly as the workspace does: same reader, same events, same
+    // wording. Only the surface differs -- there is no band here to raise, so a failure is recorded
+    // and left for `verb context` to report.
+    let mut watch = crate::observe::AgentWatch::for_agent(
+        session.agent.as_ref().map(|agent| agent.label()),
+        project,
+    );
+    proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)
 }
 
 fn fork_pty(
@@ -318,6 +325,7 @@ fn proxy_terminal(
     pid: PidT,
     session: &mut Session,
     logger: &mut EventLogger,
+    watch: &mut crate::observe::AgentWatch,
 ) -> Result<i32, String> {
     let master_fd = master.as_raw_fd();
     let mut integration = ShellIntegration::new();
@@ -387,6 +395,17 @@ fn proxy_terminal(
                 Err(error) if error.raw_os_error() == Some(EIO) => break,
                 Err(error) => return Err(format!("could not read PTY output: {error}")),
             }
+        }
+
+        // Once per pass of the loop, which polls with a 100ms timeout: often enough that the
+        // record is read as it is written, rarely enough to cost nothing when it is not.
+        for event in watch.poll(crate::now_millis()) {
+            logger.agent_observed(&event)?;
+        }
+        // Taken from the record this session is writing, which is the only place it is a fact
+        // rather than a guess about which conversation in the store is newest.
+        if session.resume_identity.is_none() {
+            session.resume_identity = watch.conversation_id();
         }
 
         if child_code.is_none() {

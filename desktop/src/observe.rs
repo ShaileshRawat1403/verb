@@ -83,6 +83,18 @@ impl Record {
         }
     }
 
+    /// The conversation this record belongs to, when a line names it.
+    ///
+    /// Claude stamps every record with `sessionId`; Codex names its conversation `id` in the
+    /// `session_meta` line it opens with.
+    pub fn conversation_id(&self, line: &str) -> Option<String> {
+        match self {
+            Record::Claude => json_string(line, "sessionId"),
+            Record::Codex if line.contains(r#""type":"session_meta""#) => json_string(line, "id"),
+            Record::Codex => None,
+        }
+    }
+
     /// The structural events one line of the record describes, if it describes any.
     ///
     /// A line Verb does not understand yields nothing rather than a guess. Both agents version
@@ -258,6 +270,8 @@ impl Observed {
 pub struct RecordTail {
     record: Record,
     path: PathBuf,
+    /// Read from the record's own lines the first time one names it.
+    conversation_id: Option<String>,
     offset: u64,
     /// Kept so a partial final line -- the agent was mid-write -- waits for the rest of itself
     /// instead of being parsed as a truncated record.
@@ -295,15 +309,26 @@ impl RecordTail {
                 if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
                     continue;
                 }
-                let Ok(modified) = entry.metadata().and_then(|data| data.modified()) else {
+                let Ok(metadata) = entry.metadata() else {
                     continue;
                 };
-                // Older than this session means it is somebody else's work, not ours.
-                if modified < since {
+                // When the file was *created*, not when it was last written.
+                //
+                // Modification time is the wrong question and dangerously so: a person's other
+                // Claude session, in this same project directory, is being appended to the whole
+                // time Verb is running, and would win "most recently modified" every time. Verb
+                // would then report another conversation's tools as this session's. Creation time
+                // asks the question actually being asked -- which record did this session begin? --
+                // and falls back to modification time only where the platform cannot answer it.
+                let Ok(born) = metadata.created().or_else(|_| metadata.modified()) else {
+                    continue;
+                };
+                // Born before this session started means it is somebody else's work, not ours.
+                if born < since {
                     continue;
                 }
-                if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
-                    newest = Some((modified, path));
+                if newest.as_ref().is_none_or(|(best, _)| born > *best) {
+                    newest = Some((born, path));
                 }
             }
         }
@@ -311,6 +336,7 @@ impl RecordTail {
         newest.map(|(_, path)| Self {
             record,
             path,
+            conversation_id: None,
             offset: 0,
             partial: String::new(),
         })
@@ -347,10 +373,14 @@ impl RecordTail {
             }
         }
 
-        lines
-            .into_iter()
-            .flat_map(|line| self.record.events(line, now))
-            .collect()
+        let mut events = Vec::new();
+        for line in lines {
+            if self.conversation_id.is_none() {
+                self.conversation_id = self.record.conversation_id(line);
+            }
+            events.extend(self.record.events(line, now));
+        }
+        events
     }
 }
 
@@ -389,6 +419,86 @@ fn codex_day_directories(root: &Path) -> Vec<PathBuf> {
     days.sort();
     days.reverse();
     days
+}
+
+/// Follows a hosted agent's record for as long as the session runs.
+///
+/// The two hosts -- the CLI proxy and the embedded workspace terminal -- keep the same session
+/// records and write the same events, and this is the piece that lets them observe an agent the same
+/// way too. Both simply call [`AgentWatch::poll`] on each pass of whatever loop they already have.
+pub struct AgentWatch {
+    record: Option<Record>,
+    project: PathBuf,
+    /// Anything the agent wrote before this instant belongs to some earlier session, not this one.
+    started_at: std::time::SystemTime,
+    tail: Option<RecordTail>,
+    observed: Observed,
+}
+
+impl AgentWatch {
+    /// A watch for `agent`, which observes nothing when Verb has no reader for that agent.
+    pub fn for_agent(agent: Option<&str>, project: &Path) -> Self {
+        Self {
+            record: agent.and_then(Record::for_agent),
+            project: project.to_path_buf(),
+            started_at: std::time::SystemTime::now(),
+            tail: None,
+            observed: Observed::default(),
+        }
+    }
+
+    /// The structural facts the agent has recorded since the last call.
+    ///
+    /// The record is looked for on every call until it is found, because an agent writes its record
+    /// after it starts: at launch there is nothing to find, and for an agent Verb cannot read there
+    /// never will be. A failure to read produces no events rather than an assertion that nothing
+    /// happened.
+    pub fn poll(&mut self, now: u128) -> Vec<AgentEvent> {
+        let Some(record) = self.record else {
+            return Vec::new();
+        };
+        if self.tail.is_none() {
+            let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+                return Vec::new();
+            };
+            self.tail = RecordTail::find(record, &home, &self.project, self.started_at);
+        }
+        let Some(tail) = self.tail.as_mut() else {
+            return Vec::new();
+        };
+
+        let events = tail.poll(now);
+        for event in &events {
+            self.observed.absorb(event);
+        }
+        events
+    }
+
+    /// What has been observed so far, or `None` when Verb is not reading a record at all.
+    ///
+    /// The distinction is the point: an empty observation and an absent one mean different things,
+    /// and only one of them may ever be shown as "nothing has gone wrong".
+    pub fn observed_if_read(&self) -> Option<&Observed> {
+        self.record.map(|_| &self.observed)
+    }
+
+    /// The last tool the record named, for a failure that did not name one itself.
+    pub fn last_tool(&self) -> Option<String> {
+        self.observed.last_tool.clone()
+    }
+
+    /// The conversation id of the record this session is actually writing, when it is known.
+    ///
+    /// This is why it matters: the adapters answer "which conversation should be resumed here?" by
+    /// scanning a shared store and taking the newest, and that is a guess about a directory rather
+    /// than a fact about a session. On a machine with a second Claude already running in the same
+    /// project, the newest is the other one -- so a session Verb hosted would record somebody else's
+    /// conversation as the thing to resume, and `verb resume` would open the wrong conversation.
+    ///
+    /// The record being followed is the one this session created. Its id is evidence, not a guess.
+    pub fn conversation_id(&self) -> Option<String> {
+        self.tail.as_ref()?.conversation_id.clone()
+    }
 }
 
 #[cfg(test)]
@@ -600,6 +710,7 @@ mod tests {
         let mut tail = RecordTail {
             record: Record::Claude,
             path: path.clone(),
+            conversation_id: None,
             offset: 0,
             partial: String::new(),
         };
@@ -640,6 +751,7 @@ mod tests {
         let mut tail = RecordTail {
             record: Record::Claude,
             path: path.clone(),
+            conversation_id: None,
             offset: 0,
             partial: String::new(),
         };
@@ -665,6 +777,48 @@ mod tests {
     }
 
     #[test]
+    fn the_conversation_id_comes_from_the_record_being_followed() {
+        // The bug this exists for: the adapters answer "which conversation should be resumed?" by
+        // taking the newest in a shared store, so a second Claude running in the same project wins
+        // and a session records somebody else's conversation as the thing to resume.
+        let claude = r#"{"type":"user","sessionId":"ours-1234","message":{"content":"hi"}}"#;
+        assert_eq!(
+            Record::Claude.conversation_id(claude).as_deref(),
+            Some("ours-1234")
+        );
+
+        let meta = r#"{"type":"session_meta","payload":{"id":"codex-abcd","cwd":"/tmp"}}"#;
+        let later = r#"{"type":"event_msg","payload":{"type":"task_started"}}"#;
+        assert_eq!(
+            Record::Codex.conversation_id(meta).as_deref(),
+            Some("codex-abcd")
+        );
+        assert_eq!(Record::Codex.conversation_id(later), None);
+    }
+
+    #[test]
+    fn a_watch_for_a_shell_observes_nothing_and_says_so() {
+        // Both hosts construct a watch unconditionally, so a shell session must produce a watch
+        // that reads no file, emits no events, and reports itself as not reading rather than as
+        // having seen nothing happen.
+        let mut watch = AgentWatch::for_agent(Some("shell"), Path::new("/tmp/project"));
+
+        assert!(watch.poll(1).is_empty());
+        assert!(watch.observed_if_read().is_none());
+        assert!(watch.last_tool().is_none());
+    }
+
+    #[test]
+    fn a_watch_reports_an_agent_it_can_read_as_observed_even_before_anything_happens() {
+        // The difference the overlay depends on: "reading, nothing yet" is a state, and it is not
+        // the same state as "not reading".
+        let watch = AgentWatch::for_agent(Some("claude"), Path::new("/tmp/project"));
+
+        let observed = watch.observed_if_read().expect("claude is readable");
+        assert!(observed.is_empty());
+    }
+
+    #[test]
     fn an_agent_with_no_reader_is_unobserved_rather_than_quiet() {
         // OpenCode keeps a record too, in a shape Verb has not been taught. Returning None here is
         // what makes the overlay say "not observed" instead of implying nothing happened.
@@ -672,6 +826,36 @@ mod tests {
         assert_eq!(Record::for_agent("codex"), Some(Record::Codex));
         assert_eq!(Record::for_agent("opencode"), None);
         assert_eq!(Record::for_agent("shell"), None);
+    }
+
+    #[test]
+    fn another_conversation_being_written_right_now_is_not_adopted() {
+        // The decoy is the realistic case: a person's other Claude session, in the same project
+        // directory, appended to constantly while Verb runs. Under "most recently modified" it wins
+        // every time, and Verb reports its tools as this session's.
+        let directory = std::env::temp_dir().join(format!("verb-decoy-{}", std::process::id()));
+        let project_dir = directory.join(".claude").join("projects").join("-tmp-x");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let decoy = project_dir.join("other-conversation.jsonl");
+        std::fs::write(&decoy, "{}\n").unwrap();
+
+        // This session starts now: after the decoy was created, before it is next written to.
+        let since = std::time::SystemTime::now();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&decoy, "{}\n{}\n").unwrap();
+
+        let found = RecordTail::find(
+            Record::Claude,
+            &directory,
+            std::path::Path::new("/tmp/x"),
+            since,
+        );
+
+        assert!(
+            found.is_none(),
+            "adopted another conversation because it was written to recently"
+        );
+        std::fs::remove_dir_all(&directory).ok();
     }
 
     #[test]
