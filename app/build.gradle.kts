@@ -56,11 +56,18 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
+    // A checked-out clone has no debug.keystore -- it is deliberately gitignored -- so this is
+    // configured only where the file actually exists. Where it does not, AGP's own generated debug
+    // key signs the build, which is all CI needs: signing continuity matters on the device that
+    // gets upgraded in place, not on a runner that builds once and throws the APK away.
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val local = file("${rootDir}/debug.keystore")
+      if (local.exists()) {
+        storeFile = local
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
@@ -71,7 +78,11 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      if (file("${rootDir}/debug.keystore").exists()) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
+    }
 
     // The build that goes on a real phone for real use.
     //
@@ -88,7 +99,9 @@ android {
       isDebuggable = false
       isMinifyEnabled = false
       isJniDebuggable = false
-      signingConfig = signingConfigs.getByName("debugConfig")
+      if (file("${rootDir}/debug.keystore").exists()) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
       matchingFallbacks += listOf("debug")
     }
   }
