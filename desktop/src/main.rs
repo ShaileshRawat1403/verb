@@ -1164,6 +1164,24 @@ impl EventLogger {
         Ok(())
     }
 
+    /// One structural fact an agent's own record reported. The kind names come from
+    /// [`crate::observe::AgentEvent`]; the only field that ever travels with them is a tool's name.
+    pub(crate) fn agent_observed(
+        &mut self,
+        event: &crate::observe::AgentEvent,
+    ) -> Result<(), String> {
+        let fields = match event {
+            crate::observe::AgentEvent::ToolCalled { tool, .. } => {
+                format!(
+                    "\"tool\":\"{}\",\"source\":\"agentRecord\"",
+                    json_escape(tool)
+                )
+            }
+            _ => "\"source\":\"agentRecord\"".to_owned(),
+        };
+        self.write_event(event.kind(), &fields)
+    }
+
     fn agent_started(&mut self, agent: &str) -> Result<(), String> {
         self.write_event(
             "AGENT_STARTED",

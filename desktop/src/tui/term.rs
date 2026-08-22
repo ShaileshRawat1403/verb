@@ -5,6 +5,7 @@
 //! only the hosting: bytes are parsed into a terminal state (`vt100`) that Verb draws, instead of
 //! being proxied to a terminal Verb had given away.
 
+use crate::observe::{AgentEvent, Observed, Record, RecordTail};
 use crate::pty::{self, ShellIntegration, Structural};
 use crate::{EventLogger, Session};
 use std::io::{Read, Write};
@@ -24,6 +25,16 @@ pub struct Hosted {
     /// Structural outcomes the workspace has not yet reacted to. The band reads these; nothing
     /// stores them.
     pending: Vec<Structural>,
+    /// The agent's own record, once it has begun one.
+    ///
+    /// Held as an option that is retried rather than resolved once: an agent writes its record
+    /// after it starts, so at launch there is nothing to find, and never finding one is a legitimate
+    /// permanent answer for an agent Verb cannot read.
+    tail: Option<RecordTail>,
+    record: Option<Record>,
+    project: std::path::PathBuf,
+    started_at: std::time::SystemTime,
+    observed: Observed,
 }
 
 impl Hosted {
@@ -68,6 +79,10 @@ impl Hosted {
         });
 
         session.state = crate::SessionState::Live;
+        let record = session
+            .agent
+            .as_ref()
+            .and_then(|agent| Record::for_agent(agent.label()));
         Ok(Self {
             session,
             logger,
@@ -79,6 +94,11 @@ impl Hosted {
             reader_finished: false,
             exit_code: None,
             pending: Vec::new(),
+            tail: None,
+            project: project.to_path_buf(),
+            record,
+            started_at: std::time::SystemTime::now(),
+            observed: Observed::default(),
         })
     }
 
@@ -105,10 +125,55 @@ impl Hosted {
             }
         }
 
+        self.poll_agent_record()?;
+
         if self.exit_code.is_none() {
             self.exit_code = pty::reap(self.pid)?;
         }
         Ok(self.exit_code)
+    }
+
+    /// Reads whatever the agent has appended to its own record since the last tick.
+    ///
+    /// A failure to read is not reported as "nothing happened": the tail simply produces no events,
+    /// and [`Hosted::observed`] stays empty, which the overlay renders as unobserved.
+    fn poll_agent_record(&mut self) -> Result<(), String> {
+        let Some(record) = self.record else {
+            return Ok(());
+        };
+        if self.tail.is_none() {
+            let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+                return Ok(());
+            };
+            self.tail = RecordTail::find(record, &home, &self.project, self.started_at);
+        }
+        let Some(tail) = self.tail.as_mut() else {
+            return Ok(());
+        };
+
+        let now = crate::now_millis();
+        for event in tail.poll(now) {
+            self.observed.absorb(&event);
+            self.logger.agent_observed(&event)?;
+            if let AgentEvent::ToolOutcome { failed: true, .. } = event {
+                // The band's whole purpose is the moment something went wrong, and until now it
+                // could not speak about anything that happened inside an agent.
+                self.pending.push(Structural::AgentToolFailed {
+                    millis: now,
+                    tool: self.observed.last_tool.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// What the agent's record says it has done so far, when Verb is reading one at all.
+    ///
+    /// `None` for a shell, or for an agent whose record Verb has no reader for. The distinction is
+    /// the point: an empty observation and an absent one mean different things, and only one of
+    /// them may be shown as "nothing has gone wrong".
+    pub fn observed_if_read(&self) -> Option<&Observed> {
+        self.record.map(|_| &self.observed)
     }
 
     /// Takes whatever the shell reported since the last call. Command boundaries only arrive from a

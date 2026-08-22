@@ -194,6 +194,17 @@ fn fork_pty(
 /// Only what the shell actually reported: which command boundary closed and with what status. The
 /// command *text* is not here and cannot be -- `OSC 633;E` is skipped by the scanner itself.
 pub(super) enum Structural {
+    /// A tool the agent ran, which the agent's own record says failed.
+    ///
+    /// Distinct from `CommandFinished` on purpose: that one Verb watched happen through shell
+    /// integration, this one Verb read afterwards in a file the agent wrote. The contract calls
+    /// that difference out -- an agent's claim is not verified execution -- so the two must not
+    /// arrive as the same kind of fact.
+    AgentToolFailed {
+        millis: u128,
+        /// The tool's name, when the record named one. Never its arguments or its output.
+        tool: Option<String>,
+    },
     CommandFinished {
         exit_code: i32,
         millis: u128,

@@ -30,6 +30,8 @@
 //! these are reported as what they are: observed from the agent's record.
 
 use crate::json::{json_number, json_string};
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 /// One structural thing an agent did, as its own record describes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,15 +51,6 @@ pub enum AgentEvent {
 }
 
 impl AgentEvent {
-    pub fn at(&self) -> u128 {
-        match self {
-            AgentEvent::TurnStarted { at }
-            | AgentEvent::ToolCalled { at, .. }
-            | AgentEvent::ToolOutcome { at, .. }
-            | AgentEvent::TurnFinished { at } => *at,
-        }
-    }
-
     /// The name Verb writes into its own event log.
     pub fn kind(&self) -> &'static str {
         match self {
@@ -78,6 +71,18 @@ pub enum Record {
 }
 
 impl Record {
+    /// Which agent's record to follow for a session, if Verb knows how to read one.
+    ///
+    /// An agent Verb has no reader for returns `None`, and the session is then reported as
+    /// unobserved rather than as uneventful.
+    pub fn for_agent(agent: &str) -> Option<Self> {
+        match agent {
+            "claude" => Some(Record::Claude),
+            "codex" => Some(Record::Codex),
+            _ => None,
+        }
+    }
+
     /// The structural events one line of the record describes, if it describes any.
     ///
     /// A line Verb does not understand yields nothing rather than a guess. Both agents version
@@ -242,6 +247,148 @@ impl Observed {
     pub fn is_empty(&self) -> bool {
         self.turns == 0 && self.tools_called == 0
     }
+}
+
+/// Follows one agent's record while the session runs.
+///
+/// The file belongs to the agent and is opened read-only; Verb appends nothing to it and holds no
+/// lock on it. Only bytes that arrived since the last look are read, so a long transcript is not
+/// re-read on every tick, and a record that is rewritten from the start is noticed and followed
+/// from there rather than producing events out of the middle of a line.
+pub struct RecordTail {
+    record: Record,
+    path: PathBuf,
+    offset: u64,
+    /// Kept so a partial final line -- the agent was mid-write -- waits for the rest of itself
+    /// instead of being parsed as a truncated record.
+    partial: String,
+}
+
+impl RecordTail {
+    /// Finds the record an agent has begun writing for work started at `since`, if it has begun one.
+    ///
+    /// Returns `None` while nothing matches, which is the normal state for the first seconds of a
+    /// session and the permanent state for an agent Verb cannot observe. Nothing is inferred from
+    /// that absence: a session with no readable record is reported as unobserved, never as quiet.
+    pub fn find(
+        record: Record,
+        home: &Path,
+        project: &Path,
+        since: std::time::SystemTime,
+    ) -> Option<Self> {
+        let candidates = match record {
+            Record::Claude => vec![home
+                .join(".claude")
+                .join("projects")
+                .join(claude_project_dir(project))],
+            // Codex files itself by date rather than by project, so the whole tree is the haystack.
+            Record::Codex => codex_day_directories(&home.join(".codex").join("sessions")),
+        };
+
+        let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+        for directory in candidates {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Ok(modified) = entry.metadata().and_then(|data| data.modified()) else {
+                    continue;
+                };
+                // Older than this session means it is somebody else's work, not ours.
+                if modified < since {
+                    continue;
+                }
+                if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+                    newest = Some((modified, path));
+                }
+            }
+        }
+
+        newest.map(|(_, path)| Self {
+            record,
+            path,
+            offset: 0,
+            partial: String::new(),
+        })
+    }
+
+    /// The events appended since the last call.
+    pub fn poll(&mut self, now: u128) -> Vec<AgentEvent> {
+        let Ok(mut file) = std::fs::File::open(&self.path) else {
+            return Vec::new();
+        };
+        let length = file.metadata().map(|data| data.len()).unwrap_or(0);
+        if length < self.offset {
+            // The file shrank, so it is not the file we were reading any more.
+            self.offset = 0;
+            self.partial.clear();
+        }
+        if file.seek(SeekFrom::Start(self.offset)).is_err() {
+            return Vec::new();
+        }
+
+        let mut appended = String::new();
+        if file.read_to_string(&mut appended).is_err() {
+            return Vec::new();
+        }
+        self.offset = length;
+
+        let mut buffered = std::mem::take(&mut self.partial);
+        buffered.push_str(&appended);
+        let ends_complete = buffered.ends_with('\n');
+        let mut lines: Vec<&str> = buffered.lines().collect();
+        if !ends_complete {
+            if let Some(last) = lines.pop() {
+                self.partial = last.to_owned();
+            }
+        }
+
+        lines
+            .into_iter()
+            .flat_map(|line| self.record.events(line, now))
+            .collect()
+    }
+}
+
+/// Claude names a project's directory after its path with the separators replaced.
+fn claude_project_dir(project: &Path) -> String {
+    project
+        .to_string_lossy()
+        .chars()
+        .map(|character| {
+            if character == '/' || character == '.' {
+                '-'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
+/// `sessions/YYYY/MM/DD`, deepest first, so the newest day is looked at before older ones.
+fn codex_day_directories(root: &Path) -> Vec<PathBuf> {
+    let mut days = Vec::new();
+    let Ok(years) = std::fs::read_dir(root) else {
+        return days;
+    };
+    for year in years.flatten().map(|entry| entry.path()) {
+        let Ok(months) = std::fs::read_dir(&year) else {
+            continue;
+        };
+        for month in months.flatten().map(|entry| entry.path()) {
+            let Ok(dates) = std::fs::read_dir(&month) else {
+                continue;
+            };
+            days.extend(dates.flatten().map(|entry| entry.path()));
+        }
+    }
+    days.sort();
+    days.reverse();
+    days
 }
 
 #[cfg(test)]
@@ -439,6 +586,116 @@ mod tests {
         assert_eq!(observed.last_tool.as_deref(), Some("Read"));
     }
 
+    #[test]
+    fn a_tail_reads_only_what_was_appended_since_it_last_looked() {
+        let directory = std::env::temp_dir().join(format!("verb-tail-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("record.jsonl");
+        std::fs::write(
+            &path,
+            "{\"type\":\"user\",\"message\":{\"content\":\"hi\"}}\n",
+        )
+        .unwrap();
+
+        let mut tail = RecordTail {
+            record: Record::Claude,
+            path: path.clone(),
+            offset: 0,
+            partial: String::new(),
+        };
+        assert_eq!(tail.poll(1).len(), 1);
+        // Nothing new: silence, not a repeat of what was already reported.
+        assert!(tail.poll(2).is_empty());
+
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write;
+        writeln!(
+            file,
+            "{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\"}}]}}}}"
+        )
+        .unwrap();
+
+        assert_eq!(
+            tail.poll(3),
+            vec![AgentEvent::ToolCalled {
+                at: 3,
+                tool: "Bash".to_owned()
+            }]
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn a_half_written_line_waits_for_the_rest_of_itself() {
+        // The agent is writing while Verb is reading. A record cut in half must not be parsed as a
+        // short record -- it is not one, it is the first half of a longer one.
+        let directory = std::env::temp_dir().join(format!("verb-partial-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("record.jsonl");
+        std::fs::write(&path, "{\"type\":\"assist").unwrap();
+
+        let mut tail = RecordTail {
+            record: Record::Claude,
+            path: path.clone(),
+            offset: 0,
+            partial: String::new(),
+        };
+        assert!(tail.poll(1).is_empty(), "a partial line produced an event");
+
+        std::fs::write(
+            &path,
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\"}]}}\n",
+        )
+        .unwrap();
+        // The file was rewritten shorter-then-longer; the tail notices and re-reads from the start.
+        tail.offset = 0;
+        tail.partial.clear();
+
+        assert_eq!(
+            tail.poll(2),
+            vec![AgentEvent::ToolCalled {
+                at: 2,
+                tool: "Read".to_owned()
+            }]
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn an_agent_with_no_reader_is_unobserved_rather_than_quiet() {
+        // OpenCode keeps a record too, in a shape Verb has not been taught. Returning None here is
+        // what makes the overlay say "not observed" instead of implying nothing happened.
+        assert_eq!(Record::for_agent("claude"), Some(Record::Claude));
+        assert_eq!(Record::for_agent("codex"), Some(Record::Codex));
+        assert_eq!(Record::for_agent("opencode"), None);
+        assert_eq!(Record::for_agent("shell"), None);
+    }
+
+    #[test]
+    fn a_record_written_before_this_session_is_somebody_elses_work() {
+        let directory = std::env::temp_dir().join(format!("verb-since-{}", std::process::id()));
+        let project_dir = directory.join(".claude").join("projects").join("-tmp-x");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("old.jsonl"), "{}\n").unwrap();
+
+        let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+        let found = RecordTail::find(
+            Record::Claude,
+            &directory,
+            std::path::Path::new("/tmp/x"),
+            future,
+        );
+
+        assert!(
+            found.is_none(),
+            "an older record was adopted as this session's"
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
     /// Run against a real record on this machine, to check the parsers against the shape the agents
     /// actually write rather than against the shape this file assumes:
     ///
@@ -449,6 +706,30 @@ mod tests {
     ///
     /// Ignored by default: it reads a person's own agent transcript, which belongs to them and is
     /// not something CI should ever open.
+    /// Checks that `find` locates the real directory an agent writes into on this machine, which is
+    /// the half of the wiring that unit tests with a fabricated home cannot prove:
+    ///
+    /// ```text
+    /// cargo test finds_a_real_record -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn finds_a_real_record_on_this_machine() {
+        let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
+        let project = std::env::current_dir()
+            .expect("cwd")
+            .parent()
+            .expect("parent")
+            .to_path_buf();
+
+        for record in [Record::Claude, Record::Codex] {
+            match RecordTail::find(record, &home, &project, std::time::UNIX_EPOCH) {
+                Some(tail) => println!("{record:?} -> {}", tail.path.display()),
+                None => println!("{record:?} -> no record found"),
+            }
+        }
+    }
+
     #[test]
     #[ignore]
     fn observed_counts_against_a_real_record() {
