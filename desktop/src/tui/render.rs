@@ -5,6 +5,7 @@
 //! and inactive until M2 can answer.
 
 use super::context_view::{EvidenceLines, Kind};
+use super::leader::Command;
 use super::theme::{self, glyph, no_colour, space};
 use super::{Action, App, Context, Surface};
 use crate::{Agent, Session, SessionState};
@@ -528,12 +529,27 @@ fn action_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans = vec![Span::raw(space::MARGIN)];
 
     if app.accelerators_active() {
-        for (index, action) in actions.iter().enumerate() {
+        // Rendered from the same slots the mouse is tested against, so a click can never land on a
+        // label that has moved. Deriving the two separately is how a hit target drifts one space
+        // left and nobody notices until a user reports that Help opens Sessions.
+        for (index, slot) in bar_slots(app).into_iter().enumerate() {
             if index > 0 {
-                spans.push(Span::raw("   "));
+                spans.push(Span::raw(BAR_GAP));
             }
-            spans.push(Span::styled(format!("[{}]", action.key), theme::emphasis()));
-            spans.push(Span::raw(format!(" {}", action.label)));
+            spans.push(Span::styled(format!("[{}]", slot.key), theme::emphasis()));
+            spans.push(Span::raw(format!(" {}", slot.label)));
+        }
+        if !app.mouse_enabled() {
+            // Only when it is off: a mode the user chose should say so, and the default should not
+            // spend a word on itself.
+            spans.push(Span::styled(
+                format!(
+                    "   mouse off {} {} m",
+                    glyph::SEPARATOR,
+                    app.leader().chord()
+                ),
+                theme::secondary(),
+            ));
         }
     } else {
         // A full-screen program owns the screen, so its F-keys are its own. Showing a key that
@@ -562,9 +578,68 @@ fn action_bar(frame: &mut Frame, app: &App, area: Rect) {
 /// At most four, and four is already the ceiling. Anything else belongs behind Commands.
 const MAX_ACTIONS: usize = 4;
 
+/// The gap between two actions on the bar. Shared, because it is part of where a click lands.
+const BAR_GAP: &str = "   ";
+
+/// One action on the bar, and the columns it occupies.
+///
+/// The whole `[F1] Help` reads as one thing, so the whole of it is clickable -- a target that
+/// covered only the bracketed key would be four columns wide and would punish aiming at the word.
+pub(super) struct BarSlot {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub command: Command,
+    /// First column, counted from the left edge of the screen.
+    pub start: u16,
+    pub width: u16,
+}
+
+impl BarSlot {
+    fn contains(&self, column: u16) -> bool {
+        column >= self.start && column < self.start + self.width
+    }
+}
+
+/// Where each action sits on the bar, at the current width.
+///
+/// Pure: it takes no frame and draws nothing, so the hit-testing it feeds can be tested at every
+/// width without a terminal.
+pub(super) fn bar_slots(app: &App) -> Vec<BarSlot> {
+    let mut column = space::MARGIN.len() as u16;
+    let mut slots = Vec::new();
+    for (index, action) in bar_actions(app).into_iter().enumerate() {
+        if index > 0 {
+            column += BAR_GAP.len() as u16;
+        }
+        // "[F1] Help" -- brackets, key, space, label.
+        let width = (action.key.len() + action.label.len() + 3) as u16;
+        slots.push(BarSlot {
+            key: action.key,
+            label: action.label,
+            command: action.command,
+            start: column,
+            width,
+        });
+        column += width;
+    }
+    slots
+}
+
+/// The command a click at `column` on the action bar means, if it means one.
+pub(super) fn bar_command_at(app: &App, column: u16) -> Option<Command> {
+    if !app.accelerators_active() {
+        return None;
+    }
+    bar_slots(app)
+        .into_iter()
+        .find(|slot| slot.contains(column))
+        .map(|slot| slot.command)
+}
+
 pub(super) struct BarAction {
     pub key: &'static str,
     pub label: &'static str,
+    pub command: Command,
 }
 
 /// The actions worth offering in the current moment, most relevant first.
@@ -572,6 +647,7 @@ pub(super) fn bar_actions(app: &App) -> Vec<BarAction> {
     let mut actions = vec![BarAction {
         key: "F1",
         label: "Help",
+        command: Command::Help,
     }];
 
     // What just happened outranks everything else: it is what the person is looking at.
@@ -579,22 +655,26 @@ pub(super) fn bar_actions(app: &App) -> Vec<BarAction> {
         actions.push(BarAction {
             key: "F3",
             label: "What Verb knows",
+            command: Command::Contextual,
         });
     }
 
     actions.push(BarAction {
         key: "F2",
         label: "Sessions",
+        command: Command::Sessions,
     });
     if matches!(app.context(), Context::None) {
         actions.push(BarAction {
             key: "F3",
             label: "What Verb knows",
+            command: Command::Contextual,
         });
     }
     actions.push(BarAction {
         key: "F4",
         label: "Commands",
+        command: Command::Palette,
     });
 
     actions.truncate(MAX_ACTIONS);
@@ -831,6 +911,12 @@ pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
             label: "Help — Verb keys",
             action: Action::Help,
         },
+        // Findable by searching rather than by knowing: someone whose terminal cannot select text
+        // any more will look for the word "select", not for a key they have never been told.
+        Entry {
+            label: "Give the mouse back to the terminal (text selection)",
+            action: Action::ToggleMouse,
+        },
         Entry {
             label: "Quit Verb",
             action: Action::Quit,
@@ -980,7 +1066,7 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
 }
 
 fn help(frame: &mut Frame, app: &App) {
-    let inner = overlay(frame, "Verb keys", 12);
+    let inner = overlay(frame, "Verb keys", 14);
     let leader = app.leader().chord();
     let mut lines = vec![
         Line::from(Span::raw(app.leader().hint())),
@@ -991,11 +1077,21 @@ fn help(frame: &mut Frame, app: &App) {
         Line::from(Span::raw(format!("{leader} [    look back through output"))),
         Line::from(Span::raw(format!("{leader} ?    this help"))),
         Line::from(Span::raw(format!(
+            "{leader} m    give the mouse back to the terminal"
+        ))),
+        Line::from(Span::raw(format!(
             "{leader} {leader}    send {leader} to the terminal"
         ))),
         Line::from(""),
         Line::from(Span::styled(
             "Every other key belongs to the terminal.".to_owned(),
+            theme::secondary(),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Verb holds the mouse, so the bar below can be clicked. Option-drag still selects \
+             text; leader m hands the mouse back entirely."
+                .to_owned(),
             theme::secondary(),
         )),
         Line::from(""),
@@ -1024,6 +1120,107 @@ fn help(frame: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_slot_on_the_bar_is_hittable_across_its_whole_width() {
+        let app = App::for_tests();
+
+        for slot in bar_slots(&app) {
+            for column in slot.start..slot.start + slot.width {
+                assert_eq!(
+                    bar_command_at(&app, column),
+                    Some(slot.command),
+                    "column {column} of {} did not resolve to its own action",
+                    slot.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn slots_never_overlap_so_a_click_is_never_ambiguous() {
+        let app = App::for_tests();
+        let slots = bar_slots(&app);
+
+        for pair in slots.windows(2) {
+            assert!(
+                pair[0].start + pair[0].width <= pair[1].start,
+                "{} runs into {}",
+                pair[0].label,
+                pair[1].label
+            );
+        }
+    }
+
+    #[test]
+    fn the_slots_are_where_the_labels_are_drawn() {
+        // The rendered row is the authority: this reads the drawn line back and checks each slot's
+        // columns actually contain that slot's text. It is the test that catches the layout and
+        // the hit zones drifting apart, which is the whole reason they share one function.
+        let app = App::for_tests();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 120, 1);
+                action_bar(frame, &app, area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer().clone();
+        let row: String = (0..120)
+            .map(|column| buffer[(column, 0)].symbol().to_owned())
+            .collect::<Vec<_>>()
+            .join("");
+
+        for slot in bar_slots(&app) {
+            let drawn: String = row
+                .chars()
+                .skip(slot.start as usize)
+                .take(slot.width as usize)
+                .collect();
+            assert_eq!(
+                drawn,
+                format!("[{}] {}", slot.key, slot.label),
+                "slot for {} does not sit where it is drawn",
+                slot.label
+            );
+        }
+    }
+
+    #[test]
+    fn the_bar_says_nothing_about_the_mouse_until_the_mouse_is_off() {
+        // The default state should not spend a word describing itself; a state the user chose
+        // should say so, because otherwise the bar looks broken rather than handed over.
+        let app = App::for_tests();
+        assert!(app.mouse_enabled());
+
+        let quiet = rendered_bar(&app);
+        assert!(!quiet.contains("mouse"), "default bar mentioned the mouse");
+    }
+
+    fn rendered_bar(app: &App) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 24)).unwrap();
+        terminal
+            .draw(|frame| action_bar(frame, app, Rect::new(0, 0, 120, 1)))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..120)
+            .map(|column| buffer[(column, 0)].symbol().to_owned())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn a_full_screen_application_owns_its_own_clicks_as_well_as_its_keys() {
+        // The bar already stops advertising F-keys while a full-screen program is running, because
+        // they would not work. The same is true of clicking them.
+        let app = App::for_tests();
+        if !app.accelerators_active() {
+            assert_eq!(bar_command_at(&app, 3), None);
+        }
+    }
 
     #[test]
     fn the_action_bar_stays_a_bar_and_never_becomes_a_toolbar() {

@@ -98,6 +98,12 @@ pub enum Command {
     /// Looking back through output that has scrolled away. `[` follows tmux's copy-mode key, which
     /// is the closest thing to a convention terminal users already have.
     Scrollback,
+    /// Hands the mouse back to the terminal, or takes it again.
+    ///
+    /// Verb holding the mouse is what makes the bar clickable, and it is also what stops a plain
+    /// drag from selecting text. Most terminals leave an escape hatch open -- Option-drag on macOS
+    /// -- but not all of them do, and a terminal where that fails must not be a dead end.
+    ToggleMouse,
 }
 
 fn command_for(key: char) -> Option<Command> {
@@ -107,6 +113,7 @@ fn command_for(key: char) -> Option<Command> {
         '?' | 'h' => Some(Command::Help),
         'v' => Some(Command::Contextual),
         '[' => Some(Command::Scrollback),
+        'm' => Some(Command::ToggleMouse),
         _ => None,
     }
 }

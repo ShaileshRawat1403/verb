@@ -105,6 +105,14 @@ pub(crate) struct App {
     /// everything else belongs to the terminal.
     first_run: bool,
     mouse_captured: bool,
+    /// Whether Verb should hold the mouse at all. On by default: the action bar is the primary
+    /// visible affordance, and an affordance you can see but not click is a worse lie than no
+    /// affordance at all.
+    mouse_enabled: bool,
+    /// The height of the last frame drawn, so a click can be told which row it landed on. Recorded
+    /// from the draw itself rather than queried separately: the rendered frame is the authority for
+    /// where things are, exactly as it already is for how large the session believes it is.
+    frame_height: u16,
 }
 
 impl App {
@@ -141,6 +149,8 @@ impl App {
             quit: false,
             first_run: crate::mark_first_run_seen().unwrap_or(false),
             mouse_captured: false,
+            mouse_enabled: true,
+            frame_height: 0,
         })
     }
 
@@ -159,16 +169,16 @@ impl App {
         while !self.quit {
             // The rendered rectangle is the authority for how big the session thinks it is.
             let drawn = std::cell::Cell::new((0_u16, 0_u16));
+            let frame_height = std::cell::Cell::new(0_u16);
             terminal
                 .draw(|frame| {
                     let area = render::workspace(frame, &self);
                     drawn.set((area.height, area.width));
+                    frame_height.set(frame.area().height);
                 })
                 .map_err(|error| format!("could not draw: {error}"))?;
+            self.frame_height = frame_height.get();
 
-            // The mouse is claimed only while Verb is in front. Capturing it permanently would take
-            // away the terminal's own selection and copy, which is not Verb's to take -- the same
-            // rule the leader follows for the keyboard.
             self.sync_mouse_capture()?;
 
             let (rows, cols) = drawn.get();
@@ -441,7 +451,7 @@ impl App {
     }
 
     fn sync_mouse_capture(&mut self) -> Result<(), String> {
-        let wanted = !matches!(self.surface, Surface::None);
+        let wanted = self.mouse_enabled;
         if wanted == self.mouse_captured {
             return Ok(());
         }
@@ -456,10 +466,23 @@ impl App {
         Ok(())
     }
 
-    /// Mouse events only arrive while a Verb surface is open -- see `Screen::capture_mouse`. The
-    /// terminal keeps the mouse, and therefore native selection and copy, whenever Verb is not in
-    /// front of it.
+    /// Verb holds the mouse whenever [`App::mouse_enabled`] is set, which is what lets the action
+    /// bar be clicked rather than only read. The cost is that a plain drag no longer selects text;
+    /// Option-drag still does in the terminals that support it, and `leader m` hands the mouse back
+    /// in the ones that do not.
     fn on_mouse(&mut self, mouse: MouseEvent) -> Result<(), String> {
+        // With no surface open, the only thing on screen that answers a click is the bar.
+        if matches!(self.surface, Surface::None) {
+            if let MouseEventKind::Down(_) = mouse.kind {
+                if mouse.row == self.bar_row() {
+                    if let Some(command) = render::bar_command_at(self, mouse.column) {
+                        self.run_command(command)?;
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         match (&mut self.surface, mouse.kind) {
             (Surface::Scrollback { .. }, MouseEventKind::ScrollUp) => self.scroll_by(3)?,
             (Surface::Scrollback { .. }, MouseEventKind::ScrollDown) => self.scroll_by(-3)?,
@@ -579,6 +602,18 @@ impl App {
                 self.surface = Surface::Sessions { selected: 0 };
             }
             Command::Help => self.surface = Surface::Help,
+            Command::ToggleMouse => {
+                self.mouse_enabled = !self.mouse_enabled;
+                self.message = Some(if self.mouse_enabled {
+                    "Mouse is Verb's: the bar is clickable. Option-drag still selects text."
+                        .to_owned()
+                } else {
+                    format!(
+                        "Mouse belongs to the terminal: selection works, the bar does not. {} m to take it back.",
+                        self.leader.chord()
+                    )
+                });
+            }
             // Everything Verb has observed, assembled the same way `verb context` assembles it.
             Command::Contextual => self.surface = Surface::Evidence,
             Command::Scrollback => {
@@ -606,6 +641,7 @@ impl App {
             Action::Help => self.run_command(Command::Help),
             Action::Evidence => self.run_command(Command::Contextual),
             Action::Scrollback => self.run_command(Command::Scrollback),
+            Action::ToggleMouse => self.run_command(Command::ToggleMouse),
             Action::Resume => self.resume_here(),
             Action::NewShell => {
                 let (rows, cols) = self.last_size();
@@ -746,6 +782,35 @@ impl App {
         Ok(())
     }
 
+    /// A plain workspace, for tests in this module and in `render`.
+    #[cfg(test)]
+    pub(super) fn for_tests() -> App {
+        App {
+            project: PathBuf::from("/tmp/project"),
+            leader: Leader::provisional(),
+            surface: Surface::None,
+            context: Context::None,
+            hosted: None,
+            sessions: Vec::new(),
+            message: None,
+            quit: false,
+            first_run: false,
+            mouse_captured: false,
+            mouse_enabled: true,
+            frame_height: 24,
+        }
+    }
+
+    /// The row the action bar occupies: the last one, always.
+    fn bar_row(&self) -> u16 {
+        self.frame_height.saturating_sub(1)
+    }
+
+    /// Whether Verb is holding the mouse. Read by the bar, which says so only when it is not.
+    pub(crate) fn mouse_enabled(&self) -> bool {
+        self.mouse_enabled
+    }
+
     fn last_size(&self) -> (u16, u16) {
         self.hosted
             .as_ref()
@@ -800,6 +865,7 @@ pub(crate) enum Action {
     Evidence,
     Scrollback,
     Help,
+    ToggleMouse,
     Quit,
 }
 
@@ -841,18 +907,113 @@ mod tests {
     use super::*;
 
     fn app() -> App {
-        App {
-            project: PathBuf::from("/tmp/project"),
-            leader: Leader::provisional(),
-            surface: Surface::None,
-            context: Context::None,
-            hosted: None,
-            sessions: Vec::new(),
-            message: None,
-            quit: false,
-            first_run: false,
-            mouse_captured: false,
+        App::for_tests()
+    }
+
+    fn click(column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind: MouseEventKind::Down(event::MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
         }
+    }
+
+    #[test]
+    fn clicking_an_action_on_the_bar_runs_it() {
+        // The bar is the primary visible affordance. Something a person can see and point at, and
+        // which then does nothing, is worse than not showing it at all.
+        let mut app = app();
+        let help = render::bar_slots(&app)
+            .into_iter()
+            .find(|slot| slot.label == "Help")
+            .expect("Help is always on the bar");
+
+        app.on_mouse(click(help.start + 2, app.bar_row())).unwrap();
+
+        assert!(matches!(app.surface, Surface::Help));
+    }
+
+    #[test]
+    fn the_whole_label_is_the_target_not_just_the_bracketed_key() {
+        let mut app = app();
+        let sessions = render::bar_slots(&app)
+            .into_iter()
+            .find(|slot| slot.label == "Sessions")
+            .expect("Sessions is on the bar");
+
+        // The last column of "[F2] Sessions" -- the "s" of Sessions, furthest from the key.
+        app.on_mouse(click(sessions.start + sessions.width - 1, app.bar_row()))
+            .unwrap();
+
+        assert!(matches!(app.surface, Surface::Sessions { .. }));
+    }
+
+    #[test]
+    fn a_click_on_empty_bar_space_does_nothing_at_all() {
+        // Between two actions, and past the end of the last one: a miss must stay a miss rather
+        // than resolving to whichever action happens to be nearest.
+        let mut app = app();
+        let slots = render::bar_slots(&app);
+        let gap = slots[0].start + slots[0].width;
+        let past_the_end = slots
+            .last()
+            .map(|slot| slot.start + slot.width + 5)
+            .unwrap();
+
+        app.on_mouse(click(gap, app.bar_row())).unwrap();
+        assert!(matches!(app.surface, Surface::None));
+
+        app.on_mouse(click(past_the_end, app.bar_row())).unwrap();
+        assert!(matches!(app.surface, Surface::None));
+    }
+
+    #[test]
+    fn a_click_in_the_terminal_region_belongs_to_the_terminal() {
+        // Rows above the bar are the work. Verb takes the click event but must not act on it.
+        let mut app = app();
+
+        app.on_mouse(click(4, 0)).unwrap();
+        app.on_mouse(click(4, app.bar_row().saturating_sub(1)))
+            .unwrap();
+
+        assert!(matches!(app.surface, Surface::None));
+    }
+
+    #[test]
+    fn the_mouse_is_verbs_by_default_and_can_be_handed_back() {
+        // Default on, because that is what makes the bar real. Reversible, because Option-drag is
+        // not universal and a terminal where it fails must not be a dead end.
+        let mut app = app();
+        assert!(app.mouse_enabled());
+
+        app.run_command(Command::ToggleMouse).unwrap();
+        assert!(!app.mouse_enabled());
+        assert!(app.message.as_deref().unwrap().contains("selection works"));
+
+        app.run_command(Command::ToggleMouse).unwrap();
+        assert!(app.mouse_enabled());
+    }
+
+    #[test]
+    fn handing_the_mouse_back_leaves_the_bar_unclickable_but_still_keyed() {
+        let mut app = app();
+        let help = render::bar_slots(&app)
+            .into_iter()
+            .find(|slot| slot.label == "Help")
+            .unwrap();
+        app.run_command(Command::ToggleMouse).unwrap();
+        app.message = None;
+
+        // No capture means no events arrive at all; the accelerator is the way in.
+        app.run_command(
+            app.accelerator(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE))
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(matches!(app.surface, Surface::Help));
+        assert_eq!(help.command, Command::Help);
     }
 
     #[test]
