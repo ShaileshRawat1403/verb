@@ -781,6 +781,39 @@ pub(crate) enum Action {
     Quit,
 }
 
+/// Owns the alternate screen and raw mode for as long as the workspace is up.
+struct Screen {
+    terminal: Terminal<CrosstermBackend<io::Stdout>>,
+}
+
+impl Screen {
+    fn enter() -> Result<Self, String> {
+        ratatui::crossterm::terminal::enable_raw_mode()
+            .map_err(|error| format!("could not take the terminal: {error}"))?;
+        let mut stdout = io::stdout();
+        ratatui::crossterm::execute!(stdout, ratatui::crossterm::terminal::EnterAlternateScreen)
+            .map_err(|error| format!("could not take the screen: {error}"))?;
+        let terminal = Terminal::new(CrosstermBackend::new(stdout))
+            .map_err(|error| format!("could not start the renderer: {error}"))?;
+        Ok(Self { terminal })
+    }
+
+    fn leave(&mut self) {
+        let _ = ratatui::crossterm::execute!(
+            io::stdout(),
+            event::DisableMouseCapture,
+            ratatui::crossterm::terminal::LeaveAlternateScreen
+        );
+        let _ = ratatui::crossterm::terminal::disable_raw_mode();
+    }
+}
+
+impl Drop for Screen {
+    fn drop(&mut self) {
+        self.leave();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -824,38 +857,5 @@ mod tests {
 
         assert!(matches!(app.surface, Surface::None));
         assert!(app.message.is_some());
-    }
-}
-
-/// Owns the alternate screen and raw mode for as long as the workspace is up.
-struct Screen {
-    terminal: Terminal<CrosstermBackend<io::Stdout>>,
-}
-
-impl Screen {
-    fn enter() -> Result<Self, String> {
-        ratatui::crossterm::terminal::enable_raw_mode()
-            .map_err(|error| format!("could not take the terminal: {error}"))?;
-        let mut stdout = io::stdout();
-        ratatui::crossterm::execute!(stdout, ratatui::crossterm::terminal::EnterAlternateScreen)
-            .map_err(|error| format!("could not take the screen: {error}"))?;
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))
-            .map_err(|error| format!("could not start the renderer: {error}"))?;
-        Ok(Self { terminal })
-    }
-
-    fn leave(&mut self) {
-        let _ = ratatui::crossterm::execute!(
-            io::stdout(),
-            event::DisableMouseCapture,
-            ratatui::crossterm::terminal::LeaveAlternateScreen
-        );
-        let _ = ratatui::crossterm::terminal::disable_raw_mode();
-    }
-}
-
-impl Drop for Screen {
-    fn drop(&mut self) {
-        self.leave();
     }
 }
