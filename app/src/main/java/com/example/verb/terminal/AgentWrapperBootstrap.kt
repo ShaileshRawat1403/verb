@@ -80,7 +80,10 @@ object AgentWrapperBootstrap {
         }
 
         val agents = RuntimeProfiles.all.filter { it.isAgent }
-        val expected = agents.mapNotNull { it.launchCommand }.toSet()
+        val wrapped = agents.mapNotNull { it.launchCommand }.toSet()
+        // Verb's own command shares this directory, so the prune below must not treat it as a
+        // leftover -- but it is not a wrapper, and does not belong in what this function reports.
+        val expected = wrapped + VerbCliBootstrap.COMMAND
 
         // The directory is entirely Verb's, so anything unrecognised is a wrapper for an agent the
         // catalog no longer has. Leaving it behind would keep a dead command winning PATH.
@@ -97,9 +100,9 @@ object AgentWrapperBootstrap {
         }
         TerminalSessionLogger.info(
             LogCategory.IO,
-            "Agent launch wrappers written for: ${expected.sorted().joinToString(", ")}"
+            "Agent launch wrappers written for: ${wrapped.sorted().joinToString(", ")}"
         )
-        expected.sorted()
+        wrapped.sorted()
     }.onFailure {
         TerminalSessionLogger.warn(LogCategory.IO, "Agent wrapper install failed: ${it.message}")
     }.getOrDefault(emptyList())

@@ -110,6 +110,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
     val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
     val agentSessions by viewModel.agentSessions.collectAsStateWithLifecycle()
+    val worldArchiveName by viewModel.worldArchiveName.collectAsStateWithLifecycle()
+    val worldArchiveMessage by viewModel.worldArchiveMessage.collectAsStateWithLifecycle()
     val agentSignInStates by viewModel.agentSignInStates.collectAsStateWithLifecycle()
     val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
     val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
@@ -124,6 +126,10 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     }
     val agentChecksumPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         agentChecksumUri = it
+    }
+    // Bringing a world archive back in is a file the user chooses, not a path Verb guesses at.
+    val worldArchivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::stageWorldArchive)
     }
     val agentManifestPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         agentManifestUri = it
@@ -321,6 +327,10 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onPickAgentArchive = { agentArchivePicker.launch(arrayOf("application/gzip", "application/octet-stream", "*/*")) },
                     onPickAgentChecksum = { agentChecksumPicker.launch(arrayOf("text/plain", "*/*")) },
                     onPickAgentManifest = { agentManifestPicker.launch(arrayOf("text/plain", "*/*")) },
+                    worldArchiveName = worldArchiveName,
+                    worldArchiveMessage = worldArchiveMessage,
+                    onSaveWorldToDownloads = viewModel::saveWorldToDownloads,
+                    onPickWorldArchive = { worldArchivePicker.launch(arrayOf("application/octet-stream", "*/*")) },
                     onImportAgentRuntime = {
                         val archive = agentArchiveUri
                         val checksum = agentChecksumUri

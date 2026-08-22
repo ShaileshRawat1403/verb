@@ -511,7 +511,7 @@ object TermuxBootstrapInstaller {
      * did (it was only reachable through [install], so it silently never ran once a device already
      * had a bootstrap installed).
      */
-    fun ensureGuestShellStartupCurrent(filesDir: File) {
+    fun ensureGuestShellStartupCurrent(filesDir: File, context: Context? = null) {
         ensureLoginShellSourcesBashrc(filesDir)
         migrateLegacyGuestPaths(filesDir)
         writeShellIntegrationScript(filesDir)
@@ -526,6 +526,9 @@ object TermuxBootstrapInstaller {
         // them every launch is what repairs one a vendor installer damaged. See
         // AgentWrapperBootstrap for why an install-time launcher could not survive.
         AgentWrapperBootstrap.install(filesDir)
+        // Optional so the shell-startup tests, which have no Android context, keep working: they
+        // are about startup files, and Verb's own command is a separate concern with its own test.
+        context?.let { VerbCliBootstrap.install(it, filesDir) }
     }
 
     /**
