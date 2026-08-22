@@ -87,7 +87,8 @@ jobs:
           path: |
             ~/.android/avd/*
             ~/.android/adb*
-          key: avd-30-x86_64
+          # Bumped when the cached snapshot stopped being loadable; see the run step below.
+          key: avd-30-x86_64-v2
 
       - name: Create AVD snapshot for caching
         if: steps.avd-cache.outputs.cache-hit != 'true'
@@ -101,6 +102,12 @@ jobs:
           disable-animations: false
           script: echo "AVD created"
 
+      # `-no-snapshot-load`: two consecutive runs died with `adb: device offline` immediately after
+      # "Successfully loaded snapshot 'default_boot'" -- the emulator reports itself restored while
+      # adb still cannot reach it, and a re-run failed identically rather than passing, so it was
+      # not a coin flip. Booting cold costs about a minute and removes that step from the path
+      # entirely. The cache still earns its keep: it holds the system image and the AVD, which is
+      # the slow part to create.
       - name: Run device-truth tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -108,7 +115,8 @@ jobs:
           target: google_apis
           arch: x86_64
           force-avd-creation: false
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-load
+          emulator-boot-timeout: 900
           disable-animations: true
           script: ./gradlew :app:connectedFullCliDebugAndroidTest
 
