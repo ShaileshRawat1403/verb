@@ -11,6 +11,7 @@ mod agents;
 mod context;
 mod integration;
 mod json;
+mod observe;
 mod pty;
 mod shell;
 #[cfg(unix)]
