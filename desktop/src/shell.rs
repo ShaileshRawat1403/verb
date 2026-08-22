@@ -137,10 +137,7 @@ fn parse_osc(payload: &str) -> Option<ShellEvent> {
 /// Anything else is another terminal's private use of the same code and is ignored.
 fn parse_cwd(payload: &str) -> Option<String> {
     let without_scheme = payload.strip_prefix("file://")?;
-    let path = match without_scheme.find('/') {
-        Some(index) => &without_scheme[index..],
-        None => return None,
-    };
+    let path = &without_scheme[without_scheme.find('/')?..];
     let decoded = percent_decode(path);
     if decoded.is_empty() {
         None
