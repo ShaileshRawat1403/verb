@@ -72,9 +72,9 @@ const MAX_CHROME_ROWS: u16 = STATUS_ROWS + BAND_ROWS + ASK_ROWS;
 /// a full-screen agent correct when Verb's own chrome changes height -- the contextual band
 /// appearing takes two rows away from the terminal, and an agent that still believes it has them
 /// draws its bottom rows into space that is no longer there.
-/// Below this the layout stops being a layout: the terminal region would be one or two rows and
-/// every overlay would be wider than the screen.
-const MINIMUM: (u16, u16) = (30, 12);
+/// Below this the layout stops being a layout: the terminal region would be smaller than the chrome
+/// around it, which inverts the budget the whole design rests on.
+const MINIMUM: (u16, u16) = (30, MAX_CHROME_ROWS * 3);
 
 pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
     let area = frame.area();
