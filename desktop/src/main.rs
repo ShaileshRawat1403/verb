@@ -470,7 +470,8 @@ fn print_sessions(json: bool) -> Result<(), String> {
         return Ok(());
     }
 
-    sessions.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
+    // Newest first, so the key is negated rather than the comparison reversed.
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_seen_at));
 
     if json {
         let rows: Vec<String> = sessions.iter().map(session_json).collect();
@@ -526,7 +527,8 @@ pub(crate) fn read_sessions_except(hosting: Option<&str>) -> Result<Vec<Session>
         })
         .collect();
 
-    sessions.sort_by(|left, right| right.last_seen_at.cmp(&left.last_seen_at));
+    // Newest first, so the key is negated rather than the comparison reversed.
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.last_seen_at));
     Ok(sessions)
 }
 
