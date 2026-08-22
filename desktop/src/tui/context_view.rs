@@ -21,7 +21,14 @@ pub(super) struct EvidenceLines {
 }
 
 impl EvidenceLines {
-    pub(super) fn build(context: &Context, now: u128) -> Self {
+    /// `observed` is what the hosted agent's own record has reported so far, when Verb is hosting an
+    /// agent it knows how to read. `None` means it is not reading one -- a shell, or an agent with
+    /// no reader -- and that is rendered as unobserved rather than as nothing having happened.
+    pub(super) fn build_with(
+        context: &Context,
+        now: u128,
+        observed: Option<&crate::observe::Observed>,
+    ) -> Self {
         let mut lines = Vec::new();
 
         lines.push((
@@ -64,6 +71,31 @@ impl EvidenceLines {
             None => lines.push((Kind::Fact, "  no session recorded here".to_owned())),
         }
 
+        if let Some(observed) = observed {
+            lines.push((Kind::Empty, String::new()));
+            lines.push((
+                Kind::Heading,
+                "Agent activity · from its own record".to_owned(),
+            ));
+            if observed.is_empty() {
+                lines.push((
+                    Kind::Fact,
+                    "  nothing recorded yet — not the same as nothing happening".to_owned(),
+                ));
+            } else {
+                lines.push((
+                    Kind::Fact,
+                    format!(
+                        "  {} turns · {} tool calls · {} failed",
+                        observed.turns, observed.tools_called, observed.tools_failed
+                    ),
+                ));
+                if let Some(at) = observed.last_failure_at {
+                    lines.push((Kind::Fact, format!("  last failure {}", clock(at))));
+                }
+            }
+        }
+
         lines.push((Kind::Empty, String::new()));
         if context.events.is_empty() {
             lines.push((Kind::Heading, "Recorded events · none yet".to_owned()));
@@ -83,6 +115,16 @@ impl EvidenceLines {
             Kind::Caveat,
             "Structural facts only — no command text, output, prompts or credentials.".to_owned(),
         ));
+        if context
+            .events
+            .iter()
+            .any(|event| event.kind.starts_with("AGENT_TO") || event.kind.starts_with("AGENT_TURN"))
+        {
+            lines.push((
+                Kind::Caveat,
+                "Agent lines are what the agent recorded, not what Verb watched run.".to_owned(),
+            ));
+        }
         lines.push((
             Kind::Caveat,
             "What was observed now was not observed then.".to_owned(),
@@ -106,6 +148,13 @@ fn describe(event: &crate::context::Event) -> String {
         "RECOVERY_CHECKED" => "recovery checked".to_owned(),
         "AGENT_STARTED" => "agent started".to_owned(),
         "AGENT_ENDED" => "agent ended".to_owned(),
+        // Read from the agent's own record, so the words say who reported it. "the agent ran" would
+        // claim Verb watched it happen, which is the one thing these events must never imply.
+        "AGENT_TURN_STARTED" => "agent turn started".to_owned(),
+        "AGENT_TURN_FINISHED" => "agent turn finished".to_owned(),
+        "AGENT_TOOL_CALLED" => "agent called a tool".to_owned(),
+        "AGENT_TOOL_SUCCEEDED" => "agent reported a tool succeeded".to_owned(),
+        "AGENT_TOOL_FAILED" => "agent reported a tool failed".to_owned(),
         other => other.to_lowercase().replace('_', " "),
     };
 
@@ -115,6 +164,9 @@ fn describe(event: &crate::context::Event) -> String {
     }
     if let Some(state) = event.state.as_deref() {
         line.push_str(&format!(" · {state}"));
+    }
+    if let Some(tool) = event.tool.as_deref() {
+        line.push_str(&format!(" · {tool}"));
     }
     if let Some(cwd) = event.cwd.as_deref() {
         line.push_str(&format!(
@@ -155,6 +207,7 @@ mod tests {
                 command_id: Some("c1".to_owned()),
                 cwd: None,
                 state: None,
+                tool: None,
             }],
             assembled_at: 1_787_334_976_000,
         }
@@ -162,7 +215,7 @@ mod tests {
 
     #[test]
     fn the_overlay_keeps_the_time_boundary_the_schema_requires() {
-        let built = EvidenceLines::build(&context(), 1_787_334_976_000);
+        let built = EvidenceLines::build_with(&context(), 1_787_334_976_000, None);
         let text: Vec<&str> = built.lines.iter().map(|(_, line)| line.as_str()).collect();
 
         let observed = text
@@ -180,7 +233,7 @@ mod tests {
 
     #[test]
     fn events_read_as_words_and_newest_first() {
-        let built = EvidenceLines::build(&context(), 1_787_334_976_000);
+        let built = EvidenceLines::build_with(&context(), 1_787_334_976_000, None);
         let text: Vec<&str> = built.lines.iter().map(|(_, line)| line.as_str()).collect();
 
         assert!(

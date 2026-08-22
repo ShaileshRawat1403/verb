@@ -474,6 +474,23 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
                 )));
             }
         }
+        // Worded as reporting, not as witnessing. Verb did not watch this happen: it read the
+        // agent's own record afterwards, and the difference between those two is the difference
+        // the contract is built on.
+        Context::AgentToolFailed { millis, tool } => {
+            let subject = match tool {
+                Some(tool) => format!("{tool} failed"),
+                None => "A tool failed".to_owned(),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {} {subject}", glyph::FAILED), theme::danger()),
+                Span::raw(format!(" {} {}", glyph::SEPARATOR, duration(*millis))),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "  reported by the agent's own record; Verb did not run it".to_owned(),
+                theme::secondary(),
+            )));
+        }
         // The session's own exit status, which is a fact about the session and needs no note about
         // command text -- that caveat belongs to a failed command, and repeating it here was left
         // over from an earlier version.
@@ -816,7 +833,11 @@ fn evidence(frame: &mut Frame, app: &App) {
         app.project(),
         app.hosted().map(|hosted| &hosted.session),
     ) {
-        Ok(context) => EvidenceLines::build(&context, crate::now_millis()),
+        Ok(context) => EvidenceLines::build_with(
+            &context,
+            crate::now_millis(),
+            app.hosted().and_then(|hosted| hosted.observed_if_read()),
+        ),
         Err(error) => {
             let inner = overlay(frame, "What Verb has observed", 5);
             frame.render_widget(

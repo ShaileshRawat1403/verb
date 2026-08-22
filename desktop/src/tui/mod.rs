@@ -86,6 +86,15 @@ pub(crate) enum Context {
         /// band says so rather than inventing one.
         label: Option<String>,
     },
+    /// A tool the agent ran and its own record marked as failed.
+    ///
+    /// Read from the agent's transcript after the fact, not watched happening -- which is why it is
+    /// worded as what the agent reported rather than as what Verb saw.
+    AgentToolFailed {
+        millis: u128,
+        /// The last tool the record named, when it named one.
+        tool: Option<String>,
+    },
     SessionEnded {
         exit_code: i32,
     },
@@ -231,6 +240,11 @@ impl App {
                 }
                 // A command that succeeded is not news. The band stays as it was.
                 crate::pty::Structural::CommandFinished { .. } => {}
+                // Inside an agent, this is the only kind of failure Verb can see at all, and until
+                // now it could not see even this.
+                crate::pty::Structural::AgentToolFailed { millis, tool } => {
+                    self.context = Context::AgentToolFailed { millis, tool };
+                }
             }
         }
 

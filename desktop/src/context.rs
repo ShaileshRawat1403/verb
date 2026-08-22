@@ -36,6 +36,8 @@ pub(crate) struct Event {
     pub command_id: Option<String>,
     pub cwd: Option<String>,
     pub state: Option<String>,
+    /// The tool an agent's record named. A name only -- never its arguments or its output.
+    pub tool: Option<String>,
 }
 
 /// Everything Verb can currently say about a project, without being asked to interpret it.
@@ -107,6 +109,7 @@ fn read_events(project: &Path, session_id: &str) -> Result<Vec<Event>, String> {
                 command_id: json_string(line, "commandId"),
                 cwd: json_string(line, "cwd"),
                 state: json_string(line, "state").or_else(|| json_string(line, "resolvedState")),
+                tool: json_string(line, "tool"),
             })
         })
         .collect())
@@ -282,6 +285,7 @@ mod tests {
                 command_id: Some("c1".to_owned()),
                 cwd: None,
                 state: None,
+                tool: None,
             }],
             assembled_at: 1_787_334_976_000,
         }
@@ -332,6 +336,7 @@ mod tests {
             command_id: json_string(line, "commandId"),
             cwd: json_string(line, "cwd"),
             state: json_string(line, "state"),
+            tool: json_string(line, "tool"),
         };
 
         let json = event.to_json();
