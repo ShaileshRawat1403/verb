@@ -4,11 +4,17 @@
 //! action all begin by assembling the evidence, and only then differ in what they do with it. So the
 //! assembly exists first, on its own, with no model behind it and nothing interpreting anything.
 //!
-//! Two properties make it useful rather than merely tidy:
+//! Three properties make it useful rather than merely tidy:
 //!
 //! * **Everything here was observed.** The project and Git state are read at the moment of asking;
 //!   the session record and the structural events are what Verb wrote down when they happened.
 //!   Nothing is inferred, and there is no field for a conclusion.
+//! * **It is an evidence bundle, not a snapshot of one moment.** Three different times are mixed in
+//!   here on purpose, and each is labelled: Git state observed *now*, a session record reconciled
+//!   *now* from evidence written earlier, and events recorded *when they happened*. Presented
+//!   flat, "Git: main · 0 changed" sitting above "COMMAND_FINISHED · exit 1" reads as *the tree was
+//!   clean when the command failed* -- which Verb does not know and never claimed. A later reader,
+//!   human or model, must not be able to make that mistake from the output alone.
 //! * **It carries no command text, terminal output, prompts or credentials** -- not by filtering
 //!   them out, but because the durable sources it reads never contained them. See
 //!   `docs/VERB_SESSION_SCHEMA.md`.
@@ -38,6 +44,9 @@ pub(crate) struct Context {
     pub git: GitSnapshot,
     pub session: Option<Session>,
     pub events: Vec<Event>,
+    /// When the live half of this bundle was read. Everything under "observed now" is true as of
+    /// this instant and of no other; everything else carries its own recorded time.
+    pub assembled_at: u128,
 }
 
 /// How many recent events are worth carrying. Enough to cover the last few commands and the state
@@ -57,6 +66,7 @@ pub(crate) fn assemble(project: &Path) -> Result<Context, String> {
         git: crate::git_snapshot(project),
         session,
         events,
+        assembled_at: crate::now_millis(),
     })
 }
 
@@ -112,8 +122,12 @@ impl Context {
             None => "null".to_owned(),
         };
         let events: Vec<String> = self.events.iter().map(Event::to_json).collect();
+        // `observedNow` names what it is: a reading taken at `assembledAt` and true of no other
+        // moment. The session record and the events keep their own times, so nothing here can be
+        // mistaken for state-at-event.
         format!(
-            "{{\"schemaVersion\":1,\"project\":{{\"path\":\"{}\",\"gitRoot\":{},\"branch\":{},\"changedFiles\":{}}},\"session\":{},\"recentEvents\":[{}]}}",
+            "{{\"schemaVersion\":1,\"assembledAt\":\"{}\",\"observedNow\":{{\"path\":\"{}\",\"gitRoot\":{},\"branch\":{},\"changedFiles\":{}}},\"session\":{},\"recentEvents\":[{}]}}",
+            crate::iso8601(self.assembled_at),
             crate::json_escape(&self.project.to_string_lossy()),
             self.git
                 .root
@@ -133,45 +147,62 @@ impl Context {
 
     /// The same facts for a person rather than a program.
     pub(crate) fn to_text(&self) -> String {
-        let mut lines = vec![format!("Project: {}", self.project.display())];
+        // Grouped by *when each fact was true*, not by subject. Flat output invites a reader to
+        // treat a reading taken now as the state at the time of an event recorded earlier.
+        let mut lines = vec![format!(
+            "Observed now ({})",
+            crate::iso8601(self.assembled_at)
+        )];
+        lines.push(format!("  Project: {}", self.project.display()));
         match self.git.root {
             Some(_) => lines.push(format!(
-                "Git: {} · {} changed",
+                "  Git: {} · {} changed",
                 self.git.branch.as_deref().unwrap_or("detached/unknown"),
                 self.git.changed_files
             )),
-            None => lines.push("Git: not a repository".to_owned()),
+            None => lines.push("  Git: not a repository".to_owned()),
         }
 
+        lines.push(String::new());
+        lines.push("Recorded state".to_owned());
         match self.session.as_ref() {
             Some(session) => {
                 lines.push(format!(
-                    "Session: {} ({}) · {}",
+                    "  Session: {} ({}) · {}",
                     session.runtime_id.as_deref().unwrap_or("shell"),
                     session.state.as_str(),
                     session.id
                 ));
+                lines.push(format!(
+                    "  Last seen: {}",
+                    crate::iso8601(session.last_seen_at)
+                ));
                 if let Some(identity) = session.resume_identity.as_deref() {
-                    lines.push(format!("Agent conversation: {identity}"));
+                    lines.push(format!("  Agent conversation: {identity}"));
                 }
             }
-            None => lines.push("Session: none".to_owned()),
+            None => lines.push("  Session: none".to_owned()),
         }
 
+        lines.push(String::new());
         if self.events.is_empty() {
-            lines.push("Recent events: none recorded".to_owned());
+            lines.push("Recorded events: none".to_owned());
         } else {
-            lines.push("Recent events:".to_owned());
+            lines.push("Recorded events (each true when it was written)".to_owned());
             for event in &self.events {
                 lines.push(format!("  {}", event.to_text()));
             }
         }
 
-        // Said plainly rather than left to be discovered: this is the boundary of what Verb can
-        // answer from, and anything beyond it would be a guess.
+        // Said plainly rather than left to be discovered: these are the boundaries of what Verb can
+        // answer from, and anything beyond them would be a guess.
         lines.push(String::new());
         lines.push(
             "Verb records structural facts only: no command text, terminal output, prompts or credentials."
+                .to_owned(),
+        );
+        lines.push(
+            "This is an evidence bundle, not a snapshot: what was observed now was not observed then."
                 .to_owned(),
         );
         lines.join("\n")
@@ -220,6 +251,50 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bundle() -> Context {
+        Context {
+            project: PathBuf::from("/tmp/project"),
+            git: GitSnapshot {
+                root: Some(PathBuf::from("/tmp/project")),
+                branch: Some("main".to_owned()),
+                changed_files: 0,
+            },
+            session: None,
+            events: vec![Event {
+                kind: "COMMAND_FINISHED".to_owned(),
+                timestamp: 1_787_320_092_493,
+                exit_code: Some(1),
+                command_id: Some("c1".to_owned()),
+                cwd: None,
+                state: None,
+            }],
+            assembled_at: 1_787_334_976_000,
+        }
+    }
+
+    #[test]
+    fn a_reading_taken_now_is_never_presented_as_the_state_at_an_event() {
+        // The hazard this guards: "Git: main · 0 changed" printed above "COMMAND_FINISHED · exit 1"
+        // reads as *the tree was clean when it failed*, which Verb does not know. Each fact carries
+        // the time it was true.
+        let bundle = bundle();
+
+        let text = bundle.to_text();
+        assert!(text.contains("Observed now (2026-08-21T17:56"), "{text}");
+        assert!(text.contains("Recorded events"), "{text}");
+        assert!(text.contains("evidence bundle, not a snapshot"), "{text}");
+        // The Git reading appears under the live heading, above anything recorded earlier.
+        let observed = text.find("Observed now").unwrap();
+        let recorded = text.find("Recorded events").unwrap();
+        assert!(text[observed..recorded].contains("Git: main"), "{text}");
+
+        let json = bundle.to_json();
+        assert!(json.contains("\"assembledAt\":\"2026-08-21T17:56"), "{json}");
+        assert!(json.contains("\"observedNow\":{"), "{json}");
+        // The event keeps its own, earlier time rather than borrowing the bundle's.
+        assert!(json.contains("\"timestamp\":\"2026-08-21T13:48"), "{json}");
+    }
 
     #[test]
     fn exit_codes_survive_being_negative() {
