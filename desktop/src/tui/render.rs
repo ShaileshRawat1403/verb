@@ -55,9 +55,16 @@ pub(super) fn leader_hint(app: &App, available: usize) -> String {
     String::new()
 }
 
+/// The complexity budget from `docs/UX_FOUNDATION.md`, in rows.
+///
+/// One status line, at most two lines of context band, one Ask line: four rows of chrome at the
+/// absolute maximum, and two of those only when something actually happened. Everything else on the
+/// screen belongs to the work. A change that raises this total is a change to the product's shape,
+/// not a layout tweak.
 const STATUS_ROWS: u16 = 1;
 const ASK_ROWS: u16 = 1;
 const BAND_ROWS: u16 = 2;
+const MAX_CHROME_ROWS: u16 = STATUS_ROWS + BAND_ROWS + ASK_ROWS;
 
 /// Draws the workspace and returns the rectangle the terminal was actually given.
 ///
@@ -903,6 +910,23 @@ fn help(frame: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_chrome_never_costs_more_than_the_budget_allows() {
+        // 90% terminal, 10% Verb. Quiet costs two rows; a moment costs four; nothing costs more.
+        assert_eq!(MAX_CHROME_ROWS, 4);
+        assert_eq!(STATUS_ROWS + ASK_ROWS, 2, "quiet chrome");
+
+        // Whatever the terminal's height, the session gets everything the chrome does not take.
+        for height in [12_u16, 24, 30, 120] {
+            let quiet = terminal_rows(height);
+            assert_eq!(quiet, height - STATUS_ROWS - ASK_ROWS, "at {height} rows");
+            assert!(
+                quiet * 10 >= height * 8,
+                "the terminal should keep the overwhelming majority of {height} rows, got {quiet}"
+            );
+        }
+    }
 
     #[test]
     fn a_narrow_status_line_keeps_what_matters_and_shortens_the_path() {

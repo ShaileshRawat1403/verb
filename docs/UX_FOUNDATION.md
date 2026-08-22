@@ -181,7 +181,118 @@ Below the minimum, Verb says so plainly rather than drawing badly.
 
 ---
 
-## 5. Progressive power
+## 5. The complexity budget
+
+Verb has **three visual states**, and no fourth.
+
+### 1. Quiet — what a person sees most of the time
+
+```text
+ ~/work/api   main clean   claude   ● running                        leader ^Space
+
+ $ npm test
+
+ PASS  session.test.ts
+ PASS  git.test.ts
+
+
+ Ask Verb…                                                       available in M2
+```
+
+### 2. Something happened — Verb takes two lines, because a fact justified them
+
+```text
+ ~/work/api   main   claude   ● running                              leader ^Space
+
+ $ npm test
+ …
+ FAIL runtime.test.ts
+
+ ✕ npm test · exit 1 · 2.0s
+ ^Space v  what Verb knows
+```
+
+When the moment passes, Verb goes quiet again. Nothing lingers to be dismissed.
+
+### 3. The user asked for more — one overlay, entered deliberately
+
+```text
+             ┌ What Verb knows ───────────────────────┐
+             │ Observed now                           │
+             │   ~/work/api · main · 3 changed        │
+             │                                        │
+             │ Recorded                               │
+             │   command failed · exit 1              │
+             │   process running                      │
+             │                                        │
+             │ Esc close                              │
+             └────────────────────────────────────────┘
+```
+
+Everything powerful lives behind intentional invocation.
+
+### The rule
+
+> **Verb may become extremely capable internally while remaining extremely small externally.**
+
+That is probably the differentiator. Claude, Codex and OpenCode can each carry hundreds of
+capabilities; Verb does not need to *show* hundreds of things.
+
+```text
+many capabilities
+       ↓
+few human moments
+       ↓
+few surfaces
+       ↓
+one obvious next action
+```
+
+### The target
+
+**90% terminal, 10% Verb.** Verb expands only when the user or the situation asks for it. In rows:
+one status line, at most two lines of context band, one Ask line — four rows of chrome at the
+absolute maximum, and two of those only when something happened.
+
+### Explicitly prohibited
+
+* No permanent sidebar.
+* No home dashboard full of cards.
+* No top-level "Tools / Skills / Agents / Integrations" catalogue.
+* No settings maze.
+* No feature getting screen space merely because it exists.
+* **No more than one Verb overlay at a time.**
+
+### Configuration is searched, not browsed
+
+When Verb has settings, they are found by name in the palette:
+
+```text
+^Space p
+
+> leader
+
+  Change Verb leader
+```
+
+Not:
+
+```text
+Settings
+ ├ Terminal
+ ├ Agents
+ ├ Git
+ ├ Runtime
+ ├ AI
+ ├ Appearance
+ ├ Integrations
+ └ Advanced
+```
+
+The second shape is how a tool becomes the thing this document exists to avoid, and it arrives one
+reasonable-looking submenu at a time.
+
+## 6. Progressive power
 
 The same capability at different depths, rather than a beginner mode and an expert mode:
 
@@ -210,7 +321,7 @@ Two rules keep the chain honest:
 
 ---
 
-## 6. Language rules
+## 7. Language rules
 
 * **Say the fact, then the action.** `✕ npm test · exit 1` then `enter resumes this conversation`.
 * **Name absence explicitly.** "No session running" beats an empty pane. "The shell did not report
@@ -225,7 +336,7 @@ Two rules keep the chain honest:
 
 ---
 
-## 7. Input rules
+## 8. Input rules
 
 * **The terminal owns the keyboard.** Verb reserves exactly one chord — the leader — which is
   configurable, forwardable (`leader leader`), and forwards anything it does not claim.
@@ -239,7 +350,7 @@ Two rules keep the chain honest:
 
 ---
 
-## 8. Accessibility and constrained terminals
+## 9. Accessibility and constrained terminals
 
 * `NO_COLOR` produces a screen with no escape sequences at all, and it stays readable because
   meaning was never carried by colour alone.
@@ -251,7 +362,7 @@ Two rules keep the chain honest:
 
 ---
 
-## 9. Admitting a new surface
+## 10. Admitting a new surface
 
 Before anything new is built, all of these must have an answer:
 
@@ -263,6 +374,8 @@ Before anything new is built, all of these must have an answer:
 5. **What does it replace or fold into?** Additive-only design is how catalogues happen.
 6. **What does it look like when empty, and when Verb does not know?**
 7. **Is it reachable by name as well as by key?**
+8. **Does it fit the complexity budget?** Which of the three states does it live in, and what does it
+   cost in rows when quiet? The answer "a new permanent region" is a no.
 
 And the admission test that outranks the list:
 
