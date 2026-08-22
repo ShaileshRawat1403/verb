@@ -139,6 +139,13 @@ impl Hosted {
         rows
     }
 
+    /// True when the hosted program has taken the alternate screen -- vim, less, htop, Claude,
+    /// Codex, OpenCode. It is the one reliable signal that a full-screen application owns the
+    /// terminal, and Verb uses it to decide whether an accelerator key is Verb's or theirs.
+    pub fn full_screen_app(&self) -> bool {
+        self.parser.screen().alternate_screen()
+    }
+
     pub fn scrollback_limit(&self) -> usize {
         SCROLLBACK_LINES
     }
