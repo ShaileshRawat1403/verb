@@ -4,6 +4,7 @@
 //! contextual band only when there is an observed fact to report, and the Ask region -- drawn, dim
 //! and inactive until M2 can answer.
 
+use super::context_view::{EvidenceLines, Kind};
 use super::{Action, App, Context, Surface};
 use crate::{Agent, Session, SessionState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -63,7 +64,34 @@ const BAND_ROWS: u16 = 2;
 /// a full-screen agent correct when Verb's own chrome changes height -- the contextual band
 /// appearing takes two rows away from the terminal, and an agent that still believes it has them
 /// draws its bottom rows into space that is no longer there.
+/// Below this the layout stops being a layout: the terminal region would be one or two rows and
+/// every overlay would be wider than the screen.
+const MINIMUM: (u16, u16) = (30, 12);
+
 pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
+    let area = frame.area();
+    if area.width < MINIMUM.0 || area.height < MINIMUM.1 {
+        // Said plainly rather than drawn badly. The session underneath is untouched and comes back
+        // as soon as there is room.
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from("Terminal too small"),
+                Line::from(Span::styled(
+                    format!("Verb needs {}×{}", MINIMUM.0, MINIMUM.1),
+                    Style::default().add_modifier(Modifier::DIM),
+                )),
+            ])
+            .wrap(Wrap { trim: true }),
+            area,
+        );
+        return Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width.max(1),
+            height: area.height.max(1),
+        };
+    }
+
     let band = if app.message().is_some() || !matches!(app.context(), Context::None) {
         BAND_ROWS
     } else {
@@ -85,7 +113,13 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
     if band > 0 {
         context_band(frame, app, areas[2]);
     }
-    ask(frame, areas[3]);
+    if app.leader_pending() {
+        // Pressing the leader shows what it can do. Nothing to memorise: the menu is one key away
+        // and announces itself.
+        leader_menu(frame, app, areas[3]);
+    } else {
+        ask(frame, areas[3]);
+    }
 
     let terminal_area = areas[1];
 
@@ -99,6 +133,21 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
             app.hosted().map(|hosted| hosted.session.id.as_str()),
         ),
         Surface::Help => help(frame, app),
+        Surface::Evidence => evidence(frame, app),
+        Surface::Welcome => welcome(frame, app),
+        // The scrollback view is drawn as a bar over the terminal rather than a panel in front of
+        // it: what is being looked at is the terminal itself.
+        Surface::Scrollback {
+            offset,
+            search,
+            last_search,
+        } => scrollback_bar(
+            frame,
+            areas[1],
+            *offset,
+            search.as_deref(),
+            last_search.as_deref(),
+        ),
     }
 
     terminal_area
@@ -236,24 +285,41 @@ pub(super) fn shorten_path(path: &str, available: usize) -> String {
 }
 
 fn status_state_label(state: &SessionState) -> String {
+    format!("{} {}", state_glyph(state), plain_state(state))
+}
+
+/// The word a person would use. The contract's own term (`LIVE`, `RECOVERABLE`, …) is still what
+/// `verb status`, `--json` and the durable record say -- this is the reading, not the vocabulary.
+pub(crate) fn plain_state(state: &SessionState) -> &'static str {
     match state {
-        SessionState::Live => "● LIVE".to_owned(),
-        SessionState::Recoverable => "◐ RECOVERABLE".to_owned(),
-        SessionState::Interrupted => "◌ INTERRUPTED".to_owned(),
-        SessionState::Ended => "○ ENDED".to_owned(),
+        SessionState::Live => "running",
+        SessionState::Recoverable => "recoverable",
+        SessionState::Interrupted => "checking",
+        SessionState::Ended => "ended",
+    }
+}
+
+fn state_glyph(state: &SessionState) -> &'static str {
+    match state {
+        SessionState::Live => "●",
+        SessionState::Recoverable => "◐",
+        SessionState::Interrupted => "◌",
+        SessionState::Ended => "○",
     }
 }
 
 /// A recorded LIVE is shown with a question mark for the same reason `verb sessions` prints one:
 /// while Verb hosts the process it can see it, but the record alone never proves it.
 fn state_span(state: &SessionState) -> Span<'static> {
-    let (glyph, label, colour) = match state {
-        SessionState::Live => ("●", "LIVE", Color::Green),
-        SessionState::Recoverable => ("◐", "RECOVERABLE", Color::Yellow),
-        SessionState::Interrupted => ("◌", "INTERRUPTED", Color::Gray),
-        SessionState::Ended => ("○", "ENDED", Color::Gray),
+    let colour = match state {
+        SessionState::Live => Color::Green,
+        SessionState::Recoverable => Color::Yellow,
+        SessionState::Interrupted | SessionState::Ended => Color::Gray,
     };
-    Span::styled(format!("{glyph} {label}"), Style::default().fg(colour))
+    Span::styled(
+        format!("{} {}", state_glyph(state), plain_state(state)),
+        Style::default().fg(if no_colour() { Color::Reset } else { colour }),
+    )
 }
 
 /// The hosted session's screen, cell for cell.
@@ -461,6 +527,163 @@ fn ask(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
+/// What the leader can do, shown the moment it is pressed.
+fn leader_menu(frame: &mut Frame, app: &App, area: Rect) {
+    let leader = app.leader().chord();
+    let line = Line::from(vec![
+        Span::styled(
+            format!(" {leader} "),
+            Style::default().add_modifier(Modifier::REVERSED),
+        ),
+        Span::raw("  p palette   s sessions   v what Verb knows   [ scroll back   ? help"),
+        Span::styled(
+            "   esc cancel".to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+/// The scrollback bar, drawn along the bottom of the terminal region.
+fn scrollback_bar(
+    frame: &mut Frame,
+    terminal: Rect,
+    offset: usize,
+    search: Option<&str>,
+    last_search: Option<&str>,
+) {
+    let area = Rect {
+        x: terminal.x,
+        y: terminal.y + terminal.height.saturating_sub(1),
+        width: terminal.width,
+        height: 1,
+    };
+    let line = match search {
+        Some(term) => Line::from(vec![
+            Span::styled(
+                " search ".to_owned(),
+                Style::default().add_modifier(Modifier::REVERSED),
+            ),
+            Span::raw(format!(" /{term}▌")),
+            Span::styled(
+                "   enter to find · esc to cancel".to_owned(),
+                Style::default().add_modifier(Modifier::DIM),
+            ),
+        ]),
+        None => {
+            let position = if offset == 0 {
+                "at the latest output".to_owned()
+            } else {
+                format!("{offset} lines back")
+            };
+            let repeat = if last_search.is_some() {
+                " · n next match"
+            } else {
+                ""
+            };
+            Line::from(vec![
+                Span::styled(
+                    " scrolling ".to_owned(),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ),
+                Span::raw(format!(" {position}")),
+                Span::styled(
+                    format!("   ↑↓ or wheel · / search{repeat} · g latest · esc back to live"),
+                    Style::default().add_modifier(Modifier::DIM),
+                ),
+            ])
+        }
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+/// Shown once, on a first run. Everything here is a fact about how Verb behaves, not a tour.
+fn welcome(frame: &mut Frame, app: &App) {
+    let leader = app.leader().chord();
+    let inner = overlay(frame, "Welcome to Verb", 14);
+    let lines = vec![
+        Line::from("This is your terminal. Verb watches the session around it —"),
+        Line::from("what ran, what failed, what can be resumed."),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("One key opens everything:  "),
+            Span::styled(
+                format!("{leader}"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(format!("  {leader} p   commands, by name")),
+        Line::from(format!("  {leader} v   what Verb has observed")),
+        Line::from(format!("  {leader} s   sessions across projects")),
+        Line::from(format!("  {leader} [   look back through output")),
+        Line::from(format!("  {leader} ?   help")),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Every other key goes to the terminal, including {leader} {leader}."),
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Line::from(Span::styled(
+            "Press any key to start.".to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+/// What Verb has observed, rendered from the same assembly `verb context` prints.
+fn evidence(frame: &mut Frame, app: &App) {
+    let built = match crate::context::assemble_for(
+        app.project(),
+        app.hosted().map(|hosted| &hosted.session),
+    ) {
+        Ok(context) => EvidenceLines::build(&context, crate::now_millis()),
+        Err(error) => {
+            let inner = overlay(frame, "What Verb has observed", 5);
+            frame.render_widget(
+                Paragraph::new(format!("Could not assemble: {error}")).wrap(Wrap { trim: true }),
+                inner,
+            );
+            return;
+        }
+    };
+
+    let inner = overlay(
+        frame,
+        "What Verb has observed",
+        built.lines.len() as u16 + 4,
+    );
+    let lines: Vec<Line> = built
+        .lines
+        .iter()
+        .map(|(kind, text)| {
+            let style = match kind {
+                Kind::Heading => Style::default().add_modifier(Modifier::BOLD),
+                Kind::Caveat => Style::default().add_modifier(Modifier::DIM),
+                Kind::Fact | Kind::Empty => Style::default(),
+            };
+            Line::from(Span::styled(truncate(text, inner.width as usize), style))
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// Which overlay row the pointer is over, if any -- so a click selects what it is pointing at and a
+/// click elsewhere closes the overlay.
+pub(super) fn overlay_row_at(surface: &Surface, sessions: usize, row: u16) -> Option<usize> {
+    let (count, first_row) = match surface {
+        // Rows start after the border and the filter line.
+        Surface::Palette { filter, .. } => (palette_entries(filter).len(), 3_u16),
+        Surface::Sessions { .. } => (sessions, 2_u16),
+        _ => return None,
+    };
+    if count == 0 || row < first_row {
+        return None;
+    }
+    let index = (row - first_row) as usize;
+    (index < count).then_some(index)
+}
+
 pub(crate) struct Entry {
     pub label: &'static str,
     pub action: Action,
@@ -490,6 +713,14 @@ pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
             action: Action::NewAgent(Agent::OpenCode),
         },
         Entry {
+            label: "What Verb has observed here",
+            action: Action::Evidence,
+        },
+        Entry {
+            label: "Look back through earlier output",
+            action: Action::Scrollback,
+        },
+        Entry {
             label: "Sessions across projects",
             action: Action::Sessions,
         },
@@ -509,10 +740,44 @@ pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
     if filter.is_empty() {
         return all;
     }
-    let needle = filter.to_lowercase();
-    all.into_iter()
-        .filter(|entry| entry.label.to_lowercase().contains(&needle))
-        .collect()
+    // Subsequence matching, so "nc" finds "New Claude session" -- typing the initials of what you
+    // want is how people actually use a palette.
+    let mut scored: Vec<(usize, Entry)> = all
+        .into_iter()
+        .filter_map(|entry| fuzzy_score(entry.label, filter).map(|score| (score, entry)))
+        .collect();
+    scored.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    scored.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// `None` when the filter is not a subsequence of the label. Higher is better: consecutive matches
+/// and matches at word starts score above scattered ones, so an exact prefix wins.
+pub(super) fn fuzzy_score(label: &str, filter: &str) -> Option<usize> {
+    let label_lower = label.to_lowercase();
+    let mut characters = label_lower.char_indices().peekable();
+    let mut score = 0;
+    let mut last_index: Option<usize> = None;
+
+    for wanted in filter.to_lowercase().chars() {
+        if wanted == ' ' {
+            continue;
+        }
+        loop {
+            let (index, character) = characters.next()?;
+            if character == wanted {
+                score += 1;
+                if last_index == Some(index.saturating_sub(1)) {
+                    score += 3; // consecutive
+                }
+                if index == 0 || label_lower.as_bytes().get(index - 1) == Some(&b' ') {
+                    score += 2; // start of a word
+                }
+                last_index = Some(index);
+                break;
+            }
+        }
+    }
+    Some(score)
 }
 
 fn overlay(frame: &mut Frame, title: &str, height: u16) -> Rect {
@@ -578,13 +843,12 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
     for (index, session) in sessions.iter().enumerate() {
         let line = format!(
             "{:<13} {:<9} {:>8}  {}",
-            // "live?" everywhere else, because a record alone never proves a process. Here Verb
-            // is holding that process, so for this one row the question mark would be false
-            // modesty.
+            // "unconfirmed" everywhere else, because a record alone never proves a process. Here
+            // Verb is holding that process, so for this one row the doubt would be false modesty.
             match session.state {
-                SessionState::Live if hosted == Some(session.id.as_str()) => "live".to_owned(),
-                SessionState::Live => "live?".to_owned(),
-                ref other => other.as_str().to_owned(),
+                SessionState::Live if hosted == Some(session.id.as_str()) => "running".to_owned(),
+                SessionState::Live => "running?".to_owned(),
+                ref other => plain_state(other).to_owned(),
             },
             session.runtime_id.as_deref().unwrap_or("shell"),
             crate::relative_time(now.saturating_sub(session.last_seen_at)),
@@ -601,7 +865,7 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
     }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "enter resume · n new session · esc close",
+        "enter resume · n new session · x forget record · esc close",
         Style::default().add_modifier(Modifier::DIM),
     )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
@@ -616,6 +880,7 @@ fn help(frame: &mut Frame, app: &App) {
         Line::from(Span::raw(format!("{leader} p    command palette"))),
         Line::from(Span::raw(format!("{leader} s    sessions"))),
         Line::from(Span::raw(format!("{leader} v    what Verb has observed"))),
+        Line::from(Span::raw(format!("{leader} [    look back through output"))),
         Line::from(Span::raw(format!("{leader} ?    this help"))),
         Line::from(Span::raw(format!(
             "{leader} {leader}    send {leader} to the terminal"
@@ -623,6 +888,16 @@ fn help(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             "Every other key belongs to the terminal.".to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "running · recoverable · checking · ended  are Verb's session states;".to_owned(),
+            Style::default().add_modifier(Modifier::DIM),
+        )),
+        Line::from(Span::styled(
+            "`verb status` prints the same four as LIVE, RECOVERABLE, INTERRUPTED, ENDED."
+                .to_owned(),
             Style::default().add_modifier(Modifier::DIM),
         )),
     ];
@@ -665,6 +940,22 @@ mod tests {
         assert!(short.ends_with("project"), "{short}");
         assert!(short.starts_with('…'), "{short}");
         assert!(short.chars().count() <= 20, "{short}");
+    }
+
+    #[test]
+    fn the_palette_matches_the_way_people_type_at_one() {
+        // Initials, not substrings: "ncs" should find "New Claude session".
+        let entries = palette_entries("ncs");
+        assert_eq!(
+            entries.first().map(|entry| entry.label),
+            Some("New Claude session"),
+            "{:?}",
+            entries.iter().map(|entry| entry.label).collect::<Vec<_>>()
+        );
+        // A filter that is not a subsequence of anything matches nothing.
+        assert!(palette_entries("zzz").is_empty());
+        // An exact prefix outranks a scattered match.
+        assert!(fuzzy_score("New shell session", "new") > fuzzy_score("Quit Verb", "n"));
     }
 
     #[test]
