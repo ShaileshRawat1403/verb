@@ -132,7 +132,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
-        run: rustup toolchain install stable --profile minimal --component clippy rustfmt
+        # Each component needs its own flag: rustup reads a bare second word as a toolchain name
+        # and fails with "invalid toolchain name: 'rustfmt'".
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
 
       - name: Cache cargo
         uses: actions/cache@v4
