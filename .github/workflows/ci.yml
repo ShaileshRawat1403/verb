@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [FullCli, Play]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Unit test (${{ matrix.flavor }})
+        run: ./gradlew :app:test${{ matrix.flavor }}DebugUnitTest
+
+      - name: Lint (${{ matrix.flavor }})
+        run: ./gradlew :app:lint${{ matrix.flavor }}Debug
+
+      - name: Assemble debug APK (${{ matrix.flavor }})
+        run: ./gradlew :app:assemble${{ matrix.flavor }}Debug
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports-${{ matrix.flavor }}
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-*.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Unit tests construct VerbViewModel and Compose screens in isolation, so they can't see two
+  # classes of bug that only show up when the real Activity/ViewModel/Compose pipeline runs
+  # together: the constructor blocking the first frame, and a background refresh that silently
+  # never fires (an edit landing in the wrong function because two functions shared anchor text --
+  # this shipped once). See app/src/androidTest/java/com/example/verb/StartupTruthTest.kt.
+  #
+  # fullCli only: the assertions don't depend on flavor-specific behavior, and this job's cost is
+  # paid per emulator boot, not per flavor.
+  device-truth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: AVD cache
+        uses: actions/cache@v6
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-30-x86_64
+
+      - name: Create AVD snapshot for caching
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD created"
+
+      - name: Run device-truth tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: ./gradlew :app:connectedFullCliDebugAndroidTest
+
+      - name: Upload instrumented test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: reports-device-truth
+          path: app/build/reports/androidTests/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  desktop:
+    # The desktop host has 57 unit tests and 6 integration tests that run a real shell on a real
+    # PTY. Until now the only thing running them was whoever happened to be working on the crate.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust
+        # Each component needs its own flag: rustup reads a bare second word as a toolchain name
+        # and fails with "invalid toolchain name: 'rustfmt'".
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # Includes tests/shell_integration.rs, which instruments a real bash and zsh. Both exist on
+        # the runner; the tests skip themselves rather than fail if a shell is missing.
+        run: cargo test --all-targets
+
+      - name: Build release
+        run: cargo build --release

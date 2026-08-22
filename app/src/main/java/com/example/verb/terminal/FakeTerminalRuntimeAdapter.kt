@@ -27,6 +27,21 @@ class FakeTerminalRuntimeAdapter(
     private val _terminalContextState = MutableStateFlow(TerminalContextState())
     override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
 
+    private val commandTracker = CommandExecutionTracker()
+    override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+    override val shellIntegrationActive: StateFlow<Boolean> = commandTracker.shellIntegrationActive
+
+    override val launchWorkingDirectory: File get() = workingDir
+
+    /**
+     * Always null: the fake never runs a shell, so it never receives an OSC 7 marker. It reports
+     * the live directory as unknown rather than echoing [launchWorkingDirectory], so headless and
+     * unit-test surfaces exercise the same "unknown" path a real Agent Runtime session takes.
+     */
+    private val _currentWorkingDirectory = MutableStateFlow<TerminalWorkingDirectory?>(null)
+    override val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?> =
+        _currentWorkingDirectory.asStateFlow()
+
     private val _urlToOpen = MutableStateFlow<String?>(null)
     override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
     override fun consumeUrlToOpen() {
@@ -78,6 +93,15 @@ class FakeTerminalRuntimeAdapter(
         }
     }
 
+    /**
+     * Test-only: feeds a [ShellIntegrationEvent] straight to [commandHistory]'s tracker, standing
+     * in for a real shell's OSC 633 prompt hooks, which the fake has no shell to actually emit. Used
+     * to script a command finishing (or not) -- see `ClaudeAgentAdapterTest`.
+     */
+    fun simulateShellIntegration(event: ShellIntegrationEvent) {
+        commandTracker.onEvent(event)
+    }
+
     override fun sendCommand(cmd: String) {
         sendText("$cmd\n$ ")
     }
@@ -108,8 +132,6 @@ class FakeTerminalRuntimeAdapter(
     override fun removeSelectionChangeListener(listener: SelectionChangeListener) {
         selectionListeners.remove(listener)
     }
-
-    override fun currentWorkingDirectory(): String = workingDir.absolutePath
 
     override fun clearBuffer() {
         _terminalOutput.value = "$ "

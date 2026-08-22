@@ -40,3 +40,26 @@ The corresponding source for the GPL-covered portions is available from:
 You may request the corresponding source as shipped in any Verb release by opening an issue
 at <https://github.com/ShaileshRawat1403/verb/issues>; we will provide it in machine-readable
 form within a reasonable time and without charge except for the cost of conveyance.
+
+## musl libc dynamic loader (`ld-musl-aarch64.so.1`)
+
+Bundled as an app asset and installed into Verb's prefix by `MuslLoaderBootstrap`.
+
+Several agent CLIs (Claude Code, OpenCode, and other Bun-compiled tools) publish `linux-arm64-musl`
+builds but no Android build. Those binaries are valid aarch64 ELFs whose only unmet dependency on
+Android is their interpreter, `/lib/ld-musl-aarch64.so.1`. Bundling that one file is what lets them
+run; nothing is patched or rebuilt.
+
+- Upstream: musl libc, <https://musl.libc.org/>
+- Source package: Alpine Linux `musl` 1.2.6-r2 (aarch64)
+- License: MIT
+
+## musl C++ runtime (`libstdc++.so.6`, `libgcc_s.so.1`)
+
+Bundled alongside the musl loader and installed into `usr/lib/musl` by `MuslLoaderBootstrap`.
+Some musl agent builds (OpenCode) link against the musl C++ runtime, which is not ABI-compatible
+with Bionic's. They are reached only through the generated agent wrapper's `LD_LIBRARY_PATH`, never
+Verb's own library path.
+
+- Source packages: Alpine Linux `libstdc++` and `libgcc` 15.2.0-r5 (aarch64)
+- License: GPL-3.0-or-later WITH GCC-exception-3.1

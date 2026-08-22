@@ -2104,6 +2104,15 @@ public final class TerminalEmulator {
                     }
                 }
                 break;
+            case 7: // Verb: shell-integration CWD marker (OSC 7). Advisory only -- see onShellIntegrationOsc.
+            case 633: // Verb: shell-integration lifecycle marker (OSC 633). Advisory only -- see onShellIntegrationOsc.
+                try {
+                    mSession.onShellIntegrationOsc(value, textParameter);
+                } catch (RuntimeException e) {
+                    // The advisory callback must never destabilize emulator state; unknown-OSC
+                    // behavior for every other code is unaffected by this addition.
+                }
+                break;
             case 52: // Manipulate Selection Data. Skip the optional first selection parameter(s).
                 int startIndex = textParameter.indexOf(";") + 1;
                 try {

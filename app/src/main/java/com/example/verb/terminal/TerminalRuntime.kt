@@ -1,7 +1,9 @@
 package com.example.verb.terminal
 
 import androidx.compose.ui.text.TextRange
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 
 /**
@@ -15,20 +17,90 @@ class TerminalRuntime(
     initialProjectDirectory: File? = null
 ) : TerminalRuntimeAdapter {
 
-    private var projectDirectory: File? = initialProjectDirectory
+    /**
+     * Everything that decides how a session is launched. Kept as one value so "what the live
+     * session is running" and "what the next session would run" can be compared as a whole, rather
+     * than as four fields that can drift apart.
+     */
+    private data class LaunchSpec(
+        val environment: TerminalEnvironment,
+        val projectDirectory: File?,
+        val agentRuntime: AgentRuntimeInstaller.InstalledRuntime?
+    )
 
-    var environment: TerminalEnvironment =
-        TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
+    private var projectDirectory: File? = initialProjectDirectory
+    private var activeAgentRuntime: AgentRuntimeInstaller.InstalledRuntime? = null
+
+    /** What the **live** session was actually launched with. Never speculative. */
+    private var applied: LaunchSpec = resolveSpec()
+
+    /**
+     * A resolved launch configuration that differs from [applied] and has not been applied, because
+     * applying it would destroy a healthy session.
+     */
+    private var pending: LaunchSpec? = null
+
+    private val _pendingEnvironmentChange = MutableStateFlow(false)
+
+    /**
+     * True when the environment has changed underneath a running session -- a different project was
+     * selected, a bootstrap finished, an Agent Runtime was switched -- and the change cannot take
+     * effect without a new shell.
+     *
+     * Surfaced rather than acted on. Verb used to destroy and restart the PTY for any of these,
+     * which meant selecting a project silently killed whatever was running in the terminal, agent
+     * sessions included. Changing metadata is not a reason to end someone's work; the user is told
+     * the next session will differ and decides when that happens.
+     */
+    val pendingEnvironmentChange: StateFlow<Boolean> = _pendingEnvironmentChange.asStateFlow()
+
+    /**
+     * The environment the live session is running under.
+     *
+     * Deliberately the applied one, not the most recently resolved one: callers use this to describe
+     * and map the session that exists, and answering with a configuration that is merely queued
+     * would make diagnostics and guest-path translation describe a session that is not running.
+     */
+    val environment: TerminalEnvironment get() = applied.environment
+
+    private fun resolveSpec(): LaunchSpec {
+        val runtime = activeAgentRuntime
+        val resolved = if (runtime != null) {
+            QemuAgentRuntimeEnvironment(workingDir, requireProjectDirectory(), runtime.manifest).resolve(runtime.rootfs)
+        } else {
+            TerminalEnvironmentResolver(
+                workingDir,
+                bundledBinDir = bundledBinDir,
+                projectDirectory = projectDirectory
+            ).resolve()
+        }
+        return LaunchSpec(resolved, projectDirectory, runtime)
+    }
 
     private val delegate: TerminalRuntimeAdapter = if (useFakeForTesting) {
         FakeTerminalRuntimeAdapter(workingDir)
     } else {
         TermuxTerminalRuntimeAdapter(
-            workingDir = environment.workingDirectory,
-            shellExecutable = environment.shellExecutable,
-            arguments = environment.arguments,
-            sessionEnvironment = environment.variables
+            workingDir = applied.environment.workingDirectory,
+            shellExecutable = applied.environment.shellExecutable,
+            arguments = applied.environment.arguments,
+            sessionEnvironment = applied.environment.variables,
+            guestPathMapper = guestPathMapper(applied)
         )
+    }
+
+    /**
+     * The guest->host binds valid for [spec]. Built from a spec rather than from current mutable
+     * state so it always describes the same launch the session was started with: the Agent Runtime
+     * binds the selected project at `/workspace`, the Verb CLI userland binds this app's files
+     * directory at [VerbGuestPaths.FILES], and Android's system shell establishes no guest
+     * filesystem at all.
+     */
+    private fun guestPathMapper(spec: LaunchSpec): GuestPathMapper = when (spec.environment.kind) {
+        TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND ->
+            spec.projectDirectory?.let(GuestPathMapper::agentRuntime) ?: GuestPathMapper.NONE
+        TerminalEnvironment.Kind.VERB_LOCAL_USERLAND -> GuestPathMapper.verbUserland(workingDir)
+        TerminalEnvironment.Kind.ANDROID_SYSTEM_SHELL -> GuestPathMapper.NONE
     }
 
     /**
@@ -39,26 +111,75 @@ class TerminalRuntime(
         get() = delegate as? TermuxTerminalRuntimeAdapter
 
     /**
-     * Re-resolves the environment and reconfigures the live PTY session. Called once the Termux
-     * bootstrap finishes installing so the terminal switches from the Android system shell to the
-     * proot-backed Termux userland without recreating this runtime (and losing the bound view).
+     * Re-resolves the launch configuration **without touching a healthy session**.
+     *
+     * This used to be a destroy-and-restart, and it was the only thing this function did, which made
+     * "change the launch directory" and "kill the terminal" the same operation. It is called from
+     * project selection, from Agent Runtime switching, and from the ViewModel's own constructor via
+     * the bootstrap check -- so every launch tore down the PTY during startup, and every project
+     * switch ended whatever was running.
+     *
+     * Now it resolves, compares, and decides:
+     *
+     * - identical to what is running: nothing happens at all, which is the common startup case;
+     * - different, with no live session: applied immediately, since there is nothing to preserve;
+     * - different, with a live session: recorded as [pendingEnvironmentChange] and left alone.
      */
     fun refreshEnvironment() {
-        environment = TerminalEnvironmentResolver(workingDir, bundledBinDir = bundledBinDir, projectDirectory = projectDirectory).resolve()
+        val resolved = resolveSpec()
+        if (resolved.environment == applied.environment && resolved.projectDirectory == applied.projectDirectory) {
+            pending = null
+            _pendingEnvironmentChange.value = false
+            return
+        }
+        if (!isSessionActive.value) {
+            apply(resolved)
+            return
+        }
+        pending = resolved
+        _pendingEnvironmentChange.value = true
+    }
+
+    /** Starts a session under [spec], replacing any current one. The only teardown path left here. */
+    private fun apply(spec: LaunchSpec) {
+        applied = spec
+        pending = null
+        _pendingEnvironmentChange.value = false
         if (useFakeForTesting) return
         (delegate as? TermuxTerminalRuntimeAdapter)?.reconfigure(
-            shellExecutable = environment.shellExecutable,
-            arguments = environment.arguments,
-            workingDirectory = environment.workingDirectory,
-            sessionEnvironment = environment.variables
+            shellExecutable = spec.environment.shellExecutable,
+            arguments = spec.environment.arguments,
+            workingDirectory = spec.environment.workingDirectory,
+            sessionEnvironment = spec.environment.variables,
+            guestPathMapper = guestPathMapper(spec)
         )
     }
 
-    /** Selection changes define the next launch directory; later shell `cd` commands are not tracked. */
+    /**
+     * Selection changes define the **next** launch directory. A running shell is already somewhere,
+     * and Verb neither moves it nor pretends it moved: the live working directory keeps reporting
+     * whatever the shell's actual cwd is.
+     */
     fun selectProject(directory: File?) {
         projectDirectory = directory
         refreshEnvironment()
     }
+
+    /** Switches the **next** session to the separately installed Linux agent rootfs. */
+    fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime) {
+        activeAgentRuntime = runtime
+        refreshEnvironment()
+    }
+
+    /** Returns the next session to the normal Verb CLI userland. */
+    fun deactivateAgentRuntime() {
+        activeAgentRuntime = null
+        refreshEnvironment()
+    }
+
+    private fun requireProjectDirectory(): File =
+        projectDirectory?.takeIf { it.isDirectory }
+            ?: error("Select a Verb project before opening the Agent Runtime.")
 
     override val sessionState: StateFlow<TerminalSessionState> get() = delegate.sessionState
     override val terminalOutput: StateFlow<String> get() = delegate.terminalOutput
@@ -66,6 +187,8 @@ class TerminalRuntime(
     override val activeSelectionRange: StateFlow<TextRange> get() = delegate.activeSelectionRange
     override val isSessionActive: StateFlow<Boolean> get() = delegate.isSessionActive
     override val terminalContextState: StateFlow<TerminalContextState> get() = delegate.terminalContextState
+    override val commandHistory: StateFlow<List<CommandExecutionRecord>> get() = delegate.commandHistory
+    override val shellIntegrationActive: StateFlow<Boolean> get() = delegate.shellIntegrationActive
     override val urlToOpen: StateFlow<String?> get() = delegate.urlToOpen
     override fun consumeUrlToOpen() = delegate.consumeUrlToOpen()
     override val clipboardCopyEvent: StateFlow<String?> get() = delegate.clipboardCopyEvent
@@ -87,8 +210,19 @@ class TerminalRuntime(
     override fun removeSelectionChangeListener(listener: SelectionChangeListener) =
         delegate.removeSelectionChangeListener(listener)
 
-    override fun currentWorkingDirectory(): String = delegate.currentWorkingDirectory()
+    override val launchWorkingDirectory: File get() = delegate.launchWorkingDirectory
+    override val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?>
+        get() = delegate.currentWorkingDirectory
+
     override fun clearBuffer() = delegate.clearBuffer()
-    override fun restartSession() = delegate.restartSession()
+    /**
+     * The user's explicit "start a new shell". This is also the one moment a
+     * [pendingEnvironmentChange] takes effect: the restart they asked for is exactly the new shell
+     * the change needed, so it is applied here rather than forced on them earlier.
+     */
+    override fun restartSession() {
+        val target = pending
+        if (target != null) apply(target) else delegate.restartSession()
+    }
     override fun destroy() = delegate.destroy()
 }

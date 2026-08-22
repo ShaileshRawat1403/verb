@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.termux.view.TerminalView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -77,6 +78,117 @@ class TermuxTerminalRuntimeAdapterTest {
 
         assertTrue(view.isFocusable)
         assertTrue(view.isFocusableInTouchMode)
+    }
+
+    /**
+     * The adapter is the only place a guest path from OSC 7 becomes a [TerminalWorkingDirectory].
+     * These tests drive it through the real callback the emulator uses, so the parser, the tracker
+     * and the mapper are all exercised together rather than in isolation.
+     *
+     * A [com.termux.terminal.TerminalSession] can be constructed without touching JNI (nothing is
+     * forked until `initializeEmulator`), so it is safe to pass one in here purely as the callback's
+     * required argument.
+     */
+    private fun sessionStub(): com.termux.terminal.TerminalSession =
+        com.termux.terminal.TerminalSession("/system/bin/sh", workingDir.absolutePath, arrayOf("-l"), emptyArray(), 100, adapter)
+
+    private fun emitCurrentDirectory(path: String) {
+        adapter.onShellIntegrationOsc(sessionStub(), 7, "file://$path")
+    }
+
+    @Test
+    fun `current working directory is unknown before any OSC 7 marker`() {
+        assertNull(adapter.currentWorkingDirectory.value)
+    }
+
+    @Test
+    fun `an OSC 7 marker under an allowlisted bind resolves both guest and host paths`() {
+        val mapped = TermuxTerminalRuntimeAdapter(
+            workingDir = workingDir,
+            guestPathMapper = GuestPathMapper.verbUserland(workingDir)
+        )
+
+        mapped.onShellIntegrationOsc(
+            com.termux.terminal.TerminalSession("/system/bin/sh", workingDir.absolutePath, arrayOf("-l"), emptyArray(), 100, mapped),
+            7,
+            "file://${VerbGuestPaths.FILES}/projects/demo"
+        )
+
+        val current = mapped.currentWorkingDirectory.value
+        assertEquals("${VerbGuestPaths.FILES}/projects/demo", current?.guestPath)
+        assertEquals(File(workingDir, "projects/demo").canonicalFile, current?.hostPath)
+    }
+
+    /**
+     * An unmappable guest path is still reported -- the shell really is there -- but with a null
+     * host path, so no consumer can turn it into a `File` that points somewhere unrelated.
+     */
+    @Test
+    fun `an unmappable OSC 7 path keeps the guest path and reports no host path`() {
+        val mapped = TermuxTerminalRuntimeAdapter(
+            workingDir = workingDir,
+            guestPathMapper = GuestPathMapper.verbUserland(workingDir)
+        )
+
+        mapped.onShellIntegrationOsc(
+            com.termux.terminal.TerminalSession("/system/bin/sh", workingDir.absolutePath, arrayOf("-l"), emptyArray(), 100, mapped),
+            7,
+            "file:///etc"
+        )
+
+        val current = mapped.currentWorkingDirectory.value
+        assertEquals("/etc", current?.guestPath)
+        assertNull(current?.hostPath)
+    }
+
+    @Test
+    fun `destroying the session returns the current working directory to unknown`() {
+        emitCurrentDirectory("/some/guest/dir")
+        assertEquals("/some/guest/dir", adapter.currentWorkingDirectory.value?.guestPath)
+
+        adapter.destroy()
+
+        assertNull(adapter.currentWorkingDirectory.value)
+    }
+
+    @Test
+    fun `a natural session finish clears current directory and shell integration`() {
+        val finishedSession = sessionStub()
+        val sessionField = TermuxTerminalRuntimeAdapter::class.java.getDeclaredField("session")
+        sessionField.isAccessible = true
+        sessionField.set(adapter, finishedSession)
+        adapter.onShellIntegrationOsc(finishedSession, 633, "P;Verb=1")
+        adapter.onShellIntegrationOsc(finishedSession, 7, "file:///some/guest/dir")
+        assertTrue(adapter.shellIntegrationActive.value)
+        assertEquals("/some/guest/dir", adapter.currentWorkingDirectory.value?.guestPath)
+
+        adapter.onSessionFinished(finishedSession)
+
+        assertNull(adapter.currentWorkingDirectory.value)
+        assertFalse(adapter.shellIntegrationActive.value)
+    }
+
+    /**
+     * The Agent Runtime rootfs ships no shell-integration script, so no marker ever arrives. Both
+     * signals must stay at their honest "unknown" values rather than being backfilled from the
+     * launch directory.
+     */
+    @Test
+    fun `an agent runtime style session reports unknown cwd and inactive shell integration`() {
+        val projectDir = File(workingDir, "projects/agent-demo").apply { mkdirs() }
+        val agent = TermuxTerminalRuntimeAdapter(
+            workingDir = projectDir,
+            guestPathMapper = GuestPathMapper.agentRuntime(projectDir)
+        )
+
+        assertNull(agent.currentWorkingDirectory.value)
+        assertFalse(agent.shellIntegrationActive.value)
+        assertEquals(projectDir, agent.launchWorkingDirectory)
+    }
+
+    @Test
+    fun `launch working directory is the host directory the session was started in`() {
+        assertEquals(workingDir, adapter.launchWorkingDirectory)
     }
 
     @Test
