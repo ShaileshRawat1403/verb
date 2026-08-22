@@ -84,6 +84,7 @@ class AgentSessionCoordinator(
             process = LiveAgentBinding
         )
         sessionStore.save(_session.value!!)
+        VerbTerminalSessionHolder.claimForeground(agentType)
         watchForExit(idsBeforeLaunch)
     }
 
@@ -102,6 +103,7 @@ class AgentSessionCoordinator(
         _session.value = resumed
         sessionStore.save(resumed)
         if (resumed.state == VerbSessionState.LIVE) {
+            VerbTerminalSessionHolder.claimForeground(agentType)
             watchForExit(idsBefore)
         }
     }
@@ -143,6 +145,7 @@ class AgentSessionCoordinator(
                 delay(EXIT_POLL_INTERVAL_MS)
             }
 
+            VerbTerminalSessionHolder.releaseForeground(agentType)
             _session.value = _session.value?.copy(process = null, lastSeenAt = Instant.now())
             _session.value?.let(sessionStore::save)
             resolveAfterExit()
@@ -190,9 +193,14 @@ class AgentSessionCoordinator(
         if (persisted.agent?.agentType?.let { it != agentType } == true) return
         sessionProjectDirectory = persisted.lastKnownCwd?.let(::File)
 
+        // A surviving terminal is not evidence that *this* agent survived with it. Two agents with
+        // persisted records would otherwise both restore as LIVE from the same PTY, which is how the
+        // Agents tab came to show Claude and Codex both "Running" while neither process existed.
+        // The marker beside the runtime says which agent actually holds it.
         val bindingStillAttached = processBindingConfirmed &&
             terminalRuntimeAdapter.isSessionActive.value &&
-            terminalRuntimeAdapter.sessionState.value == com.example.verb.terminal.TerminalSessionState.RUNNING
+            terminalRuntimeAdapter.sessionState.value == com.example.verb.terminal.TerminalSessionState.RUNNING &&
+            VerbTerminalSessionHolder.foregroundAgent() == agentType
         val restored = if (bindingStillAttached) {
             persisted.copy(
                 state = VerbSessionState.LIVE,
