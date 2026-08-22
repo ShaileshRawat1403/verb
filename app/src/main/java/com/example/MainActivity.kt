@@ -306,7 +306,14 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onOpenProviderSettings = { viewModel.selectTab(VerbTab.SYSTEM) }
                 )
 
-                VerbTab.SYSTEM -> SystemScreen(
+                VerbTab.SYSTEM -> {
+                    // The archive list is read from disk, and `verb export` writes to that disk
+                    // from the terminal, behind Verb's back. Reading it once when the ViewModel was
+                    // built meant the card named whichever archive happened to exist at app start
+                    // -- so a person who had just made a fresh export was offered an older one to
+                    // save, under the name of a file they had already moved on from.
+                    LaunchedEffect(Unit) { viewModel.refreshWorldArchive() }
+                    SystemScreen(
                     isTerminalSessionActive = isSessionActive,
                     terminalEnvironment = viewModel.terminalRuntime.environment,
                     aiProviderSettings = aiProviderSettings,
@@ -342,7 +349,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onOpenAgentRuntime = viewModel::openAgentRuntime,
                     onCheckAgentRuntime = viewModel::checkAgentRuntimeCompatibility,
                     onReturnToVerbRuntime = viewModel::returnToVerbRuntime
-                )
+                    )
+                }
 
                 VerbTab.TERMINAL -> TerminalScreen(
                     terminalOutput = terminalOutput,
