@@ -111,6 +111,29 @@ schema, never reaches an event log, and does not outlive the session that produc
 cwd, duration, and exit code. A future diagnostic mode may retain a bounded, explicitly opt-in
 buffer, but that is separate from durable execution memory.
 
+## Evidence bundles are not snapshots
+
+An assembled context (`verb context`) mixes facts that were true at different times, and each must
+carry the time it was true:
+
+```text
+observed now      read at assembly time      Git state, changed files, branch
+recorded state    reconciled now from        the session record and its state
+                  evidence written earlier
+recorded events   true when written          command boundaries, cwd changes, transitions
+```
+
+The invariant:
+
+> **A current observation must never be presented as state-at-event unless Verb recorded it then.**
+
+Flattening the three -- `Git: main · 0 changed` printed directly above `COMMAND_FINISHED · exit 1` --
+reads as *the tree was clean when the command failed*, which Verb does not know and never claimed.
+This matters most for a reader that is not a person: an assistant given a flat bundle would make
+that causal claim confidently and be wrong. The JSON carries `assembledAt` and groups the live
+reading under `observedNow`; the text output groups by time rather than by subject and says so at
+the bottom.
+
 ## Host mapping
 
 ```text
