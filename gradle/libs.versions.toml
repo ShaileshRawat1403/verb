@@ -40,6 +40,7 @@ roborazzi = "1.59.0"
 secretsGradlePlugin = "2.0.1"
 credentials = "1.5.0"
 googleid = "1.1.1"
+desugarJdkLibs = "2.1.5"
 
 
 [libraries]
@@ -92,6 +93,7 @@ roborazzi-junit-rule = { group = "io.github.takahirom.roborazzi", name = "robora
 androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
 androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
 googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 
 
 [plugins]

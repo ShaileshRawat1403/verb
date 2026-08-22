@@ -29,4 +29,11 @@ public abstract class TerminalOutput {
 
     public abstract void onColorsChanged();
 
+    /**
+     * Notify the terminal client of a shell-integration OSC sequence (7 = CWD, 633 = lifecycle).
+     * Advisory metadata only: must never be trusted as an execution or security signal, since any
+     * process writing to the PTY -- not just the shell Verb launched -- can emit these bytes.
+     */
+    public abstract void onShellIntegrationOsc(int oscCode, String rawArgs);
+
 }

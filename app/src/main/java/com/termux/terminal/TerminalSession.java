@@ -289,6 +289,11 @@ public final class TerminalSession extends TerminalOutput {
         mClient.onColorsChanged(this);
     }
 
+    @Override
+    public void onShellIntegrationOsc(int oscCode, String rawArgs) {
+        mClient.onShellIntegrationOsc(this, oscCode, rawArgs);
+    }
+
     public int getPid() {
         return mShellPid;
     }

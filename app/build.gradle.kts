@@ -56,11 +56,18 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
+    // A checked-out clone has no debug.keystore -- it is deliberately gitignored -- so this is
+    // configured only where the file actually exists. Where it does not, AGP's own generated debug
+    // key signs the build, which is all CI needs: signing continuity matters on the device that
+    // gets upgraded in place, not on a runner that builds once and throws the APK away.
     create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
+      val local = file("${rootDir}/debug.keystore")
+      if (local.exists()) {
+        storeFile = local
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
     }
   }
 
@@ -71,11 +78,39 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { signingConfig = signingConfigs.getByName("debugConfig") }
+    debug {
+      if (file("${rootDir}/debug.keystore").exists()) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
+    }
+
+    // The build that goes on a real phone for real use.
+    //
+    // Not debuggable, so `run-as` cannot read the userland -- which is where Claude's and Codex's
+    // credentials live, and the one realistic way they leak off a device whose owner has USB
+    // debugging on. Signed with the same key as `debug` on purpose: an install over an existing
+    // Verb keeps the working world, and a signature change is exactly what forces the uninstall
+    // that destroys it. One key, one application id, always `install -r`.
+    //
+    // Minification stays off: this is a build for using and reporting bugs against, and a
+    // stack trace that names real classes is worth more here than a smaller APK.
+    create("device") {
+      initWith(getByName("debug"))
+      isDebuggable = false
+      isMinifyEnabled = false
+      isJniDebuggable = false
+      if (file("${rootDir}/debug.keystore").exists()) {
+        signingConfig = signingConfigs.getByName("debugConfig")
+      }
+      matchingFallbacks += listOf("debug")
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
+    // minSdk is 24; java.time (used by VerbSession, see docs/VERB_SESSION_CONTRACT.md) needs API
+    // 26 without this.
+    isCoreLibraryDesugaringEnabled = true
   }
   buildFeatures {
     compose = true
@@ -97,6 +132,7 @@ secrets {
 }
 
 dependencies {
+  coreLibraryDesugaring(libs.desugar.jdk.libs)
   implementation(platform(libs.androidx.compose.bom))
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)

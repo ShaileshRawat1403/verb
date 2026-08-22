@@ -2,6 +2,7 @@ package com.example.verb.terminal
 
 import androidx.compose.ui.text.TextRange
 import kotlinx.coroutines.flow.StateFlow
+import java.io.File
 
 /**
  * Runtime abstraction interface decoupling Verb UI and product logic from Termux PTY / TTY components.
@@ -27,6 +28,22 @@ interface TerminalRuntimeAdapter {
      * Command boundaries, exit codes, and command output are intentionally unavailable.
      */
     val terminalContextState: StateFlow<TerminalContextState>
+
+    /**
+     * Bounded, session-local, non-persistent command lifecycle history built from advisory
+     * OSC 7/633 shell-integration markers (see [CommandExecutionTracker]). Empty when shell
+     * integration hasn't loaded or produced no events yet -- this is a best-effort supplement to
+     * [terminalContextState], never a replacement for it, and never forwarded to any AI provider.
+     */
+    val commandHistory: StateFlow<List<CommandExecutionRecord>>
+
+    /**
+     * True once the one-shot Verb shell-integration handshake (OSC 633;P;Verb=1) has been seen
+     * this session -- i.e. whether [commandHistory] can be expected to populate at all. False both
+     * before the guest shell has started and if shell integration never loaded; an empty
+     * [commandHistory] alone can't distinguish those from "nothing has run yet".
+     */
+    val shellIntegrationActive: StateFlow<Boolean>
 
     /**
      * Single-use URL detected from a tap on the terminal canvas. Set when the user taps a line
@@ -78,8 +95,30 @@ interface TerminalRuntimeAdapter {
     /** Unregisters a SelectionChangeListener */
     fun removeSelectionChangeListener(listener: SelectionChangeListener)
 
-    /** Returns current working directory path */
-    fun currentWorkingDirectory(): String
+    /**
+     * The HOST directory the current session's process was launched in. A static fact about how
+     * the PTY was started -- it does not track the shell and never changes while a session runs.
+     *
+     * Deliberately named for what it is. It was previously exposed as `currentWorkingDirectory()`,
+     * which made every consumer present the launch directory as though it were the shell's live
+     * directory; a `cd` was never reflected anywhere. Use [currentWorkingDirectory] for the live
+     * value, and never substitute this one for it.
+     */
+    val launchWorkingDirectory: File
+
+    /**
+     * The shell's live working directory, or null when unknown.
+     *
+     * Sourced only from advisory OSC 7 markers (see [CommandExecutionTracker]), so it is null
+     * before the first marker of a session, null again once the session ends, and permanently null
+     * wherever Verb's shell integration does not run at all -- notably the Agent Runtime, whose
+     * rootfs ships no integration script. Null means unknown and must be shown as unknown; it is
+     * never a cue to fall back to [launchWorkingDirectory].
+     *
+     * Updates once per shell prompt, so during a long-running command it holds the directory the
+     * command started in.
+     */
+    val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?>
 
     /** Clears terminal buffer output */
     fun clearBuffer()

@@ -25,7 +25,8 @@ class TermuxTerminalRuntimeAdapter(
     var workingDir: File,
     var shellExecutable: String = "/system/bin/sh",
     private var arguments: Array<String> = arrayOf("-l"),
-    private var sessionEnvironment: Array<String>? = null
+    private var sessionEnvironment: Array<String>? = null,
+    private var guestPathMapper: GuestPathMapper = GuestPathMapper.NONE
 ) : TerminalRuntimeAdapter, TerminalSessionClient, TerminalViewClient {
     private var session: TerminalSession? = null
     var terminalView: TerminalView? = null
@@ -60,6 +61,29 @@ class TermuxTerminalRuntimeAdapter(
 
     private val _terminalContextState = MutableStateFlow(TerminalContextState())
     override val terminalContextState: StateFlow<TerminalContextState> = _terminalContextState.asStateFlow()
+
+    private val commandTracker = CommandExecutionTracker()
+    override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+    override val shellIntegrationActive: StateFlow<Boolean> = commandTracker.shellIntegrationActive
+
+    override val launchWorkingDirectory: File get() = workingDir
+
+    /**
+     * Republished from [CommandExecutionTracker.currentWorkingDirectory] with the guest path mapped
+     * to a host path where the active runtime's binds allow it. Kept as its own StateFlow (rather
+     * than a mapped Flow) so it stays a synchronously readable snapshot, matching every other state
+     * this adapter exposes, and so the mapping runs once per prompt instead of once per collector.
+     */
+    private val _currentWorkingDirectory = MutableStateFlow<TerminalWorkingDirectory?>(null)
+    override val currentWorkingDirectory: StateFlow<TerminalWorkingDirectory?> =
+        _currentWorkingDirectory.asStateFlow()
+
+    private fun refreshCurrentWorkingDirectory() {
+        val guestPath = commandTracker.currentWorkingDirectory.value
+        _currentWorkingDirectory.value = guestPath?.let {
+            TerminalWorkingDirectory(guestPath = it, hostPath = guestPathMapper.toHostPath(it))
+        }
+    }
 
     private val _urlToOpen = MutableStateFlow<String?>(null)
     override val urlToOpen: StateFlow<String?> = _urlToOpen.asStateFlow()
@@ -302,10 +326,6 @@ class TermuxTerminalRuntimeAdapter(
         selectionListeners.remove(listener)
     }
 
-    override fun currentWorkingDirectory(): String {
-        return workingDir.absolutePath
-    }
-
     override fun clearBuffer() {
         _terminalOutput.value = "$ "
         session?.reset()
@@ -326,14 +346,20 @@ class TermuxTerminalRuntimeAdapter(
         shellExecutable: String,
         arguments: Array<String>,
         workingDirectory: File,
-        sessionEnvironment: Array<String>
+        sessionEnvironment: Array<String>,
+        guestPathMapper: GuestPathMapper
     ) {
         android.util.Log.i(TAG, "reconfigure shell=$shellExecutable args=${arguments.joinToString(" ")} cwd=${workingDirectory.absolutePath}")
+        // destroy() already cleared the live working directory; the mapper is swapped here because
+        // the new session may run against an entirely different set of binds (Verb userland vs the
+        // Agent Runtime's /workspace), and a stale mapper would translate the next session's guest
+        // paths against the previous session's host roots.
         destroy()
         this.shellExecutable = shellExecutable
         this.arguments = arguments
         this.workingDir = workingDirectory
         this.sessionEnvironment = sessionEnvironment
+        this.guestPathMapper = guestPathMapper
         startSession()
     }
 
@@ -342,6 +368,10 @@ class TermuxTerminalRuntimeAdapter(
         pendingSnapshotSession = null
         _sessionState.value = TerminalSessionState.STOPPING
         _isSessionActive.value = false
+        commandTracker.onSessionEnded()
+        // The shell that owned this directory is gone, so the live cwd goes back to unknown rather
+        // than lingering as a stale value across the restart.
+        refreshCurrentWorkingDirectory()
         session?.finishIfRunning()
         session = null
         refreshTerminalContext()
@@ -448,6 +478,10 @@ class TermuxTerminalRuntimeAdapter(
             android.util.Log.w(TAG, "Ignoring stale onSessionFinished for a replaced session (pid ${finishedSession.pid})")
             return
         }
+        // A natural shell exit does not pass through destroy(). Clear all session-owned advisory
+        // state here too, or the finished shell's cwd/handshake would remain visible as live.
+        commandTracker.onSessionEnded()
+        refreshCurrentWorkingDirectory()
         _isSessionActive.value = false
         _sessionState.value = if (finishedSession.exitStatus == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
         refreshTerminalContext()
@@ -477,8 +511,40 @@ class TermuxTerminalRuntimeAdapter(
     }
     
     override fun onBell(session: TerminalSession) {}
-    
+
     override fun onColorsChanged(session: TerminalSession) {}
+
+    /**
+     * Advisory OSC 7/633 shell-integration marker from the vendored emulator (see
+     * [com.termux.terminal.TerminalOutput.onShellIntegrationOsc]). [ShellIntegrationParser] never
+     * throws, so a malformed or forged marker just fails to parse into an event and is dropped
+     * here -- it can never crash this callback or the emulator that invoked it.
+     *
+     * Diagnostics logged here are metadata only. OSC 633 `E` carries a user's typed command
+     * *before* [com.example.verb.semantic.SecretGuard] redaction reaches it (redaction happens
+     * inside [CommandExecutionTracker], not here), so `rawArgs`, command text, working directory,
+     * and full record contents (its `toString()` included -- it embeds both) must never be
+     * logged. Android logcat is a persistent, device-local, often-readable-by-other-apps sink;
+     * logging any of that would be a real secret leak, not a hypothetical one.
+     */
+    override fun onShellIntegrationOsc(session: TerminalSession, oscCode: Int, rawArgs: String) {
+        val event = ShellIntegrationParser.parse(oscCode, rawArgs)
+        // Shell Awareness P0 has no UI yet; this is the developer-only diagnostics surface for
+        // physical-device verification (matches the existing Log.i lifecycle logging in this
+        // class). Payload length and the event's type name are safe: neither reveals content.
+        android.util.Log.i(
+            TAG,
+            "shellIntegrationOsc osc=$oscCode payloadLength=${rawArgs.length} eventType=${event?.let { it::class.simpleName } ?: "null"}"
+        )
+        if (event == null) return
+        commandTracker.onEvent(event)
+        refreshCurrentWorkingDirectory()
+        val last = commandTracker.history.value.lastOrNull()
+        android.util.Log.i(
+            TAG,
+            "commandHistory size=${commandTracker.history.value.size} lastState=${last?.state} lastExitCode=${last?.exitCode}"
+        )
+    }
     
     override fun onTerminalCursorStateChange(state: Boolean) {}
     

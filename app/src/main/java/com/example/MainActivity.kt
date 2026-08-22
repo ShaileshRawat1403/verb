@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -36,7 +38,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -46,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.verb.ui.AgentsScreen
 import com.example.verb.ui.AskScreen
 import com.example.verb.ui.AssistantScreen
 import com.example.verb.ui.SemanticLensSheet
@@ -102,8 +107,33 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
+    val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
+    val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
+    val agentSessions by viewModel.agentSessions.collectAsStateWithLifecycle()
+    val worldArchiveName by viewModel.worldArchiveName.collectAsStateWithLifecycle()
+    val worldArchiveMessage by viewModel.worldArchiveMessage.collectAsStateWithLifecycle()
+    val agentSignInStates by viewModel.agentSignInStates.collectAsStateWithLifecycle()
+    val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
+    val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
     val projects by viewModel.projects.collectAsStateWithLifecycle()
     val selectedProject by viewModel.selectedProject.collectAsStateWithLifecycle()
+
+    var agentArchiveUri by remember { mutableStateOf<Uri?>(null) }
+    var agentChecksumUri by remember { mutableStateOf<Uri?>(null) }
+    var agentManifestUri by remember { mutableStateOf<Uri?>(null) }
+    val agentArchivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        agentArchiveUri = it
+    }
+    val agentChecksumPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        agentChecksumUri = it
+    }
+    // Bringing a world archive back in is a file the user chooses, not a path Verb guesses at.
+    val worldArchivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::stageWorldArchive)
+    }
+    val agentManifestPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
+        agentManifestUri = it
+    }
 
     // System back at the root tab exits; otherwise it retraces visited tabs. Screen-level
     // BackHandlers (sheets, dialogs, IME) register deeper in the tree and win first.
@@ -170,6 +200,20 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     .testTag("verb_bottom_navigation")
             ) {
                 NavigationBarItem(
+                    selected = activeTab == VerbTab.AGENTS,
+                    onClick = { viewModel.selectTab(VerbTab.AGENTS) },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Agents",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    },
+                    label = { Text("Agents") },
+                    modifier = Modifier.testTag("tab_agents")
+                )
+
+                NavigationBarItem(
                     selected = activeTab == VerbTab.ASK,
                     onClick = { viewModel.selectTab(VerbTab.ASK) },
                     icon = {
@@ -222,6 +266,20 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 .imePadding()
         ) {
             when (activeTab) {
+                VerbTab.AGENTS -> AgentsScreen(
+                    reports = runtimeProfileReports,
+                    keyStatus = agentKeyStatus,
+                    signInStates = agentSignInStates,
+                    onLaunch = viewModel::launchAgent,
+                    onInstall = viewModel::installRuntimeProfile,
+                    onEditKeys = viewModel::editAgentKeys,
+                    installingProfile = installingRuntimeProfile,
+                    message = runtimeInstallMessage,
+                    agentSessions = agentSessions,
+                    onResumeSession = viewModel::resumeAgentSession,
+                    onStartNewSession = viewModel::startNewAgentSession
+                )
+
                 VerbTab.ASK -> AskScreen(
                     queryInput = queryInput,
                     isExecuting = isExecuting,
@@ -248,7 +306,14 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onOpenProviderSettings = { viewModel.selectTab(VerbTab.SYSTEM) }
                 )
 
-                VerbTab.SYSTEM -> SystemScreen(
+                VerbTab.SYSTEM -> {
+                    // The archive list is read from disk, and `verb export` writes to that disk
+                    // from the terminal, behind Verb's back. Reading it once when the ViewModel was
+                    // built meant the card named whichever archive happened to exist at app start
+                    // -- so a person who had just made a fresh export was offered an older one to
+                    // save, under the name of a file they had already moved on from.
+                    LaunchedEffect(Unit) { viewModel.refreshWorldArchive() }
+                    SystemScreen(
                     isTerminalSessionActive = isSessionActive,
                     terminalEnvironment = viewModel.terminalRuntime.environment,
                     aiProviderSettings = aiProviderSettings,
@@ -259,12 +324,38 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     runtimeProfileReports = runtimeProfileReports,
                     installingRuntimeProfile = installingRuntimeProfile,
                     runtimeInstallMessage = runtimeInstallMessage,
-                    onInstallRuntimeProfile = viewModel::installRuntimeProfile
-                )
+                    onInstallRuntimeProfile = viewModel::installRuntimeProfile,
+                    agentRuntimeStatus = agentRuntimeStatus,
+                    agentRuntimeImporting = agentRuntimeImporting,
+                    agentRuntimeMessage = agentRuntimeMessage,
+                    agentArchiveName = agentArchiveUri?.lastPathSegment,
+                    agentChecksumName = agentChecksumUri?.lastPathSegment,
+                    agentManifestName = agentManifestUri?.lastPathSegment,
+                    onPickAgentArchive = { agentArchivePicker.launch(arrayOf("application/gzip", "application/octet-stream", "*/*")) },
+                    onPickAgentChecksum = { agentChecksumPicker.launch(arrayOf("text/plain", "*/*")) },
+                    onPickAgentManifest = { agentManifestPicker.launch(arrayOf("text/plain", "*/*")) },
+                    worldArchiveName = worldArchiveName,
+                    worldArchiveMessage = worldArchiveMessage,
+                    onSaveWorldToDownloads = viewModel::saveWorldToDownloads,
+                    onPickWorldArchive = { worldArchivePicker.launch(arrayOf("application/octet-stream", "*/*")) },
+                    onImportAgentRuntime = {
+                        val archive = agentArchiveUri
+                        val checksum = agentChecksumUri
+                        val manifest = agentManifestUri
+                        if (archive != null && checksum != null && manifest != null) {
+                            viewModel.importAgentRuntime(archive, checksum, manifest)
+                        }
+                    },
+                    onOpenAgentRuntime = viewModel::openAgentRuntime,
+                    onCheckAgentRuntime = viewModel::checkAgentRuntimeCompatibility,
+                    onReturnToVerbRuntime = viewModel::returnToVerbRuntime
+                    )
+                }
 
                 VerbTab.TERMINAL -> TerminalScreen(
                     terminalOutput = terminalOutput,
                     terminalRuntime = viewModel.terminalRuntime,
+                    sessionState = terminalSessionState,
                     bootstrapState = terminalBootstrapState,
                     isKeyboardVisible = isKeyboardVisible,
                     onRetryBootstrap = viewModel::retryTermuxBootstrap,

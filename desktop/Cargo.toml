@@ -1,0 +1,14 @@
+[package]
+name = "verb"
+version = "0.1.0"
+edition = "2021"
+description = "Verb desktop work-context shell"
+license = "Apache-2.0"
+
+[dependencies]
+# Rendering layer only. See docs/TUI_VISION.md: session records, adapters, the PTY host, the event
+# log and the CLI stay dependency-free, so removing these would cost a renderer, not the product.
+# default-features = false keeps the alternative backends (termion, termwiz and their trees) out.
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
+# A terminal-state parser, so the embedded terminal region is a real screen rather than a log view.
+vt100 = "0.16.2"

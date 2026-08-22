@@ -114,6 +114,424 @@ object TermuxBootstrapInstaller {
     }
 
     /**
+     * Bash login shells (which the guest's `login` starts) only read `.bash_profile`,
+     * `.bash_login`, or `.profile` -- the first one found, and never `.bashrc` -- while the
+     * overwhelming majority of third-party CLI installers append their PATH change to `.bashrc`
+     * because that is what *interactive non-login* shells read. Verb's guest HOME starts out
+     * empty, so without this bridge nothing an installer writes to `.bashrc` is ever read by any
+     * session, current or future. This is a generic shell-startup fix, not specific to any CLI.
+     *
+     * Written only when `.bash_profile` is absent, so a user's own login-shell setup (or a prior
+     * run of this same function) is never overwritten. Called from [ensureGuestShellStartupCurrent]
+     * on every launch -- fresh install or already-provisioned -- so it also repairs installs that
+     * predate this fix. Physical-device testing (Runtime Truth sprint) found the guest's bash
+     * already sources `.bashrc` for interactive shells without this bridge; it is kept anyway as an
+     * explicit, tested guarantee rather than relying on that upstream behavior implicitly. The
+     * already-running terminal session still needs a restart to pick up any resulting PATH change,
+     * matching normal bash behavior on any other Linux system.
+     */
+    fun ensureLoginShellSourcesBashrc(filesDir: File) {
+        runCatching {
+            val home = File(filesDir, "home").apply { mkdirs() }
+            val bashProfile = File(home, ".bash_profile")
+            if (bashProfile.exists()) return
+            bashProfile.writeText(
+                "# Written once by Verb so login shells read the same startup file\n" +
+                    "# (\$HOME/.bashrc) that most CLI installers write to. Safe to edit or remove.\n" +
+                    "[ -f \"\$HOME/.bashrc\" ] && . \"\$HOME/.bashrc\"\n" +
+                    SHELL_INTEGRATION_SOURCE_BLOCK
+            )
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Login shell bashrc bridge failed: ${it.message}")
+        }
+    }
+
+    private const val AGENT_ENV_MARKER = "# >>> Verb agent environment >>>"
+    /** One file, in the obvious place: `$HOME/.env`. */
+    private const val AGENT_ENV_RELATIVE_PATH = ".env"
+
+    /**
+     * One place for the API keys the agent CLIs read from their environment.
+     *
+     * This is deliberately separate from the Assistant's provider key, which lives in the Android
+     * Keystore: `claude`, `codex` and `dsh` are ordinary processes that read ordinary environment
+     * variables, so a Keystore-backed secret cannot reach them without Verb handing it over, which
+     * it never does (see the Assistant's own boundary note).
+     *
+     * The trade-off is stated rather than hidden: this file is plaintext. It is protected by being
+     * inside app-private storage, created 0600 so other users on the device cannot read it, and
+     * never written to logs, never included in the diagnostics report, and never sent to any AI
+     * provider. It is created with placeholders only -- Verb never writes a real key into it.
+     */
+    private val AGENT_ENV_SOURCE_BLOCK =
+        "$AGENT_ENV_MARKER\n" +
+            "# Keys for agent CLIs. Edit \$HOME/$AGENT_ENV_RELATIVE_PATH, then restart the session.\n" +
+            "[ -f \"\$HOME/$AGENT_ENV_RELATIVE_PATH\" ] && . \"\$HOME/$AGENT_ENV_RELATIVE_PATH\"\n" +
+            "# <<< Verb agent environment <<<\n"
+
+    /**
+     * Creates the agent key file with placeholders if it does not exist, and never touches it again
+     * -- a user's real keys are never overwritten, and a key is never generated or guessed.
+     */
+    fun ensureAgentEnvFile(filesDir: File) {
+        runCatching {
+            val target = File(File(filesDir, "home"), AGENT_ENV_RELATIVE_PATH)
+            if (target.isFile) return
+            target.parentFile?.mkdirs()
+            target.writeText(
+                """
+                |# Verb agent environment -- API keys for the agent CLIs.
+                |#
+                |# Read by claude, codex, opencode and dsh from the shell environment. Fill in the
+                |# ones you use and leave the rest commented out. Restart the terminal session
+                |# afterwards so a running shell picks them up.
+                |#
+                |# This file is plaintext inside Verb's private storage, readable only by you. It is
+                |# never logged, never included in the diagnostics report, and never sent to any AI
+                |# provider. Do not commit it anywhere.
+                |
+                |# export ANTHROPIC_API_KEY=
+                |# export OPENAI_API_KEY=
+                |# export DEEPSEEK_API_KEY=
+                |# export GEMINI_API_KEY=
+                |""".trimMargin()
+            )
+            // Owner-only: other apps cannot reach app-private storage, but other users on a shared
+            // device should not read it either.
+            target.setReadable(false, false)
+            target.setWritable(false, false)
+            target.setReadable(true, true)
+            target.setWritable(true, true)
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Agent environment file could not be created")
+        }
+    }
+
+    /** Appends the one idempotent source line, preserving anything the user already wrote. */
+    fun ensureAgentEnvSourced(filesDir: File): Boolean {
+        val bashProfile = File(File(filesDir, "home"), ".bash_profile")
+        if (!bashProfile.isFile) return false
+        val original = runCatching { bashProfile.readText() }.getOrNull() ?: return false
+        if (original.contains(AGENT_ENV_MARKER)) return false
+        return runCatching {
+            val separator = if (original.isEmpty() || original.endsWith("\n")) "" else "\n"
+            bashProfile.appendText(separator + AGENT_ENV_SOURCE_BLOCK)
+            true
+        }.getOrDefault(false)
+    }
+
+    private const val AGENT_PATH_MARKER = "# >>> Verb agent PATH >>>"
+    private const val AGENT_PATH_END_MARKER = "# <<< Verb agent PATH <<<"
+
+    /**
+     * Puts Verb's agent launcher directory back at the front of PATH.
+     *
+     * Verb sets a base PATH with this directory first (see [TerminalEnvironmentResolver]), but a
+     * base PATH is only a starting point: shell startup files run afterwards and can reorder it.
+     * One of them does. The Codex installer writes
+     * `export PATH="$HOME/.local/bin:$PATH"` into `$HOME/.bashrc`, which puts the vendor
+     * self-installer launchers back in front of Verb's -- and `$HOME/.local/bin/claude` is exactly
+     * the launcher that fails with `has unexpected e_type: 2`.
+     *
+     * That is why an installed, authenticated Claude Code was still unreachable from the terminal
+     * while Verb's own readiness probe reported it Ready: [GuestCommandRunner] deliberately never
+     * sources user startup files, so the two disagreed about what `claude` even resolves to. This
+     * closes that gap from the shell side, where the reordering happens.
+     *
+     * Written as a `case` on PATH rather than a plain prepend so re-sourcing a startup file cannot
+     * grow PATH without bound.
+     */
+    private fun agentPathGuard(): String =
+        """
+        |case "${'$'}{PATH}" in
+        |  "${AgentWrapperBootstrap.GUEST_BIN_DIR}:"*) ;;
+        |  *) PATH="${AgentWrapperBootstrap.GUEST_BIN_DIR}:${'$'}{PATH}"; export PATH ;;
+        |esac
+        |""".trimMargin()
+
+    private fun agentPathGuardBlock(): String =
+        "$AGENT_PATH_MARKER\n" +
+            "# Verb's agent launchers must win PATH. Installers prepend their own directory from\n" +
+            "# this file -- Codex's does -- which is how an installed, authenticated agent became\n" +
+            "# unreachable. Verb keeps this block last and rewrites it every launch, so a later\n" +
+            "# installer cannot outrank it. Safe to delete; it comes back.\n" +
+            agentPathGuard() +
+            "$AGENT_PATH_END_MARKER\n"
+
+    /**
+     * Keeps the PATH guard as the **last** thing `.bashrc` does.
+     *
+     * Position is the whole point, so this is not a write-once-and-leave-alone helper like
+     * [ensureAgentEnvFile]: an installer that appends to `.bashrc` after Verb did would otherwise
+     * outrank the guard, and the bug would come back exactly as it did the first time. Verb's own
+     * marked block is removed and re-appended on every launch; nothing outside the markers is ever
+     * touched, and the file is only rewritten when the result actually differs, so a `.bashrc` that
+     * is already correct is left alone entirely.
+     *
+     * Returns true when the file was changed.
+     */
+    fun ensureAgentPathGuardLast(filesDir: File): Boolean = runCatching {
+        val home = File(filesDir, "home").apply { mkdirs() }
+        val bashrc = File(home, ".bashrc")
+        val original = if (bashrc.isFile) bashrc.readText() else ""
+
+        val withoutGuard = removeMarkedBlock(original)
+        val separator = if (withoutGuard.isEmpty() || withoutGuard.endsWith("\n")) "" else "\n"
+        val updated = withoutGuard + separator + agentPathGuardBlock()
+        if (updated == original) return false
+
+        // One-time backup the first time Verb modifies a file the user may have written in.
+        if (original.isNotEmpty()) {
+            val backup = File(home, ".bashrc.pre-verb-agent-path")
+            if (!backup.exists()) backup.writeText(original)
+        }
+        bashrc.writeText(updated)
+        TerminalSessionLogger.info(LogCategory.IO, "Agent PATH guard placed last in .bashrc")
+        true
+    }.onFailure {
+        TerminalSessionLogger.warn(LogCategory.IO, "Agent PATH guard failed: ${'$'}{it.message}")
+    }.getOrDefault(false)
+
+    /** Drops a previous guard block, markers included, leaving every other line untouched. */
+    private fun removeMarkedBlock(contents: String): String {
+        val start = contents.indexOf(AGENT_PATH_MARKER)
+        if (start < 0) return contents
+        val endMarker = contents.indexOf(AGENT_PATH_END_MARKER, start)
+        if (endMarker < 0) return contents
+        val end = (contents.indexOf('\n', endMarker) + 1).takeIf { it > 0 } ?: contents.length
+        return contents.removeRange(start, end)
+    }
+
+    private const val SHELL_INTEGRATION_MARKER = "# >>> Verb shell integration >>>"
+    private const val SHELL_INTEGRATION_RELATIVE_PATH = "etc/verb/shell-integration.bash"
+    private val SHELL_INTEGRATION_SOURCE_BLOCK =
+        "$SHELL_INTEGRATION_MARKER\n" +
+            "[ -f \"\$PREFIX/$SHELL_INTEGRATION_RELATIVE_PATH\" ] && . \"\$PREFIX/$SHELL_INTEGRATION_RELATIVE_PATH\"\n" +
+            "# <<< Verb shell integration <<<\n"
+
+    /**
+     * Writes Verb's OSC 7 / OSC 633 shell-integration script, unconditionally, every launch. The
+     * file is 100% Verb-authored (see [shellIntegrationScript]) and never hand-edited, so
+     * overwriting it on every launch is always safe -- unlike `.bashrc`/`.bash_profile`, there is
+     * no user content here to preserve, and no drift is possible between installs.
+     */
+    fun writeShellIntegrationScript(filesDir: File) {
+        runCatching {
+            val target = File(filesDir, "usr/$SHELL_INTEGRATION_RELATIVE_PATH")
+            target.parentFile?.mkdirs()
+            target.writeText(shellIntegrationScript())
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Shell integration script write failed: ${it.message}")
+        }
+    }
+
+    /**
+     * Repairs a `.bash_profile` that predates shell integration: appends exactly one clearly
+     * marked, idempotent source line (never touching anything else in the file), preserving a
+     * one-time backup first -- the same pattern as [migrateLegacyGuestPaths]. A `.bash_profile`
+     * [ensureLoginShellSourcesBashrc] creates fresh already includes this block, so this is a
+     * true no-op for both a brand-new file and a file already carrying the marker.
+     */
+    fun ensureShellIntegrationSourced(filesDir: File): Boolean {
+        val home = File(filesDir, "home")
+        val bashProfile = File(home, ".bash_profile")
+        if (!bashProfile.isFile) return false
+        val original = runCatching { bashProfile.readText() }.getOrNull() ?: return false
+        if (original.contains(SHELL_INTEGRATION_MARKER)) return false
+
+        return runCatching {
+            val backup = File(home, ".bash_profile.pre-verb-shell-integration")
+            if (!backup.exists()) backup.writeText(original)
+            val separator = if (original.isEmpty() || original.endsWith("\n")) "" else "\n"
+            bashProfile.appendText(separator + SHELL_INTEGRATION_SOURCE_BLOCK)
+            true
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Shell integration source line append failed: ${it.message}")
+        }.getOrDefault(false)
+    }
+
+    /**
+     * OSC 7 (CWD) + OSC 633 (lifecycle) shell-integration markers, targeting the vendored
+     * emulator patch in `com.termux.terminal.TerminalEmulator`/`TerminalSession` (see
+     * [ShellIntegrationParser] for the Kotlin side). Advisory only: never alters shell behavior,
+     * never prints visible sentinel text (every emission is a properly framed OSC escape, which
+     * the emulator consumes structurally and never renders), and grants no execution capability.
+     *
+     * Deliberately avoids a DEBUG trap (a shared, single-owner bash extension point a user's own
+     * dotfiles could silently overwrite); `PS0` and `PROMPT_COMMAND` are plain string variables
+     * that support safe idempotent chaining instead. Command text for the `E` marker comes from
+     * `history 1` (the just-entered line is already recorded by the time `PS0` is expanded), not
+     * `$BASH_COMMAND`, which is a DEBUG-trap-only mechanism.
+     */
+    private fun shellIntegrationScript(): String {
+        val d = "$" // shorthand so the bash template below reads like real bash, not escape soup
+        return """
+            |# Verb shell integration -- agent PATH guard + OSC 7 (CWD) / OSC 633 (lifecycle) markers.
+            |# Fully Verb-owned: rewritten on every launch, never hand-edited. Advisory only --
+            |# consumed solely by Verb's own terminal adapter to build local, non-persistent
+            |# command history. Never alters shell behavior, PTY input/output, or grants any
+            |# execution capability; any process on this PTY could emit the same bytes.
+            |
+            |__verb_fix_agent_path() {
+            |    case "$d{PATH}" in
+            |      "${AgentWrapperBootstrap.GUEST_BIN_DIR}:"*) ;;
+            |      *) PATH="${AgentWrapperBootstrap.GUEST_BIN_DIR}:$d{PATH}"; export PATH ;;
+            |    esac
+            |}
+            |
+            |# Deliberately ahead of both early returns below. The base PATH Verb sets already has
+            |# this directory first, but ${'$'}HOME/.bashrc runs afterwards and the Codex installer
+            |# prepends ${'$'}HOME/.local/bin there -- which put a launcher that fails with
+            |# "has unexpected e_type: 2" back in front of Verb's working one. PATH has to be right
+            |# for non-interactive shells and re-sourced files too, so it is fixed before anything
+            |# else can return.
+            |__verb_fix_agent_path
+            |
+            |if [ -n "$d{VERB_SHELL_INTEGRATION_LOADED:-}" ]; then
+            |    return 0 2>/dev/null || exit 0
+            |fi
+            |VERB_SHELL_INTEGRATION_LOADED=1
+            |
+            |case "$d-" in
+            |  *i*) ;;
+            |  *) return 0 2>/dev/null || exit 0 ;;
+            |esac
+            |
+            |__verb_osc7() {
+            |    printf '\033]7;file://%s\007' "$d{PWD}"
+            |}
+            |
+            |__verb_osc633_cmd_meta() {
+            |    local raw
+            |    raw=$d(HISTTIMEFORMAT= history 1 2>/dev/null | sed -E 's/^[[:space:]]*[0-9]+[[:space:]]*//')
+            |    raw=$d(printf '%s' "$d{raw}" | tr -d '\000-\037' | cut -c1-200)
+            |    [ -n "$d{raw}" ] && printf '\033]633;E;%s\007' "$d{raw}"
+            |}
+            |
+            |__verb_ps0_hook() {
+            |    __verb_osc633_cmd_meta
+            |    printf '\033]633;C\007'
+            |}
+            |
+            |__verb_prompt_command_hook() {
+            |    local verb_status=$d?
+            |    printf '\033]633;D;%s\007' "$d{verb_status}"
+            |    __verb_osc7
+            |    printf '\033]633;A\007'
+            |    printf '\033]633;B\007'
+            |    return $d{verb_status}
+            |}
+            |
+            |case "$d{PS0:-}" in
+            |  *__verb_ps0_hook*) ;;
+            |  *) PS0="$d{PS0:-}\$d(__verb_ps0_hook)" ;;
+            |esac
+            |
+            |case "$d{PROMPT_COMMAND:-}" in
+            |  *__verb_prompt_command_hook*) ;;
+            |  *) PROMPT_COMMAND="__verb_prompt_command_hook$d{PROMPT_COMMAND:+; }$d{PROMPT_COMMAND:-}" ;;
+            |esac
+            |
+            |printf '\033]633;P;Verb=1\007'
+            |""".trimMargin()
+    }
+
+    /** One guest shell startup file that had a legacy `com.termux` path replaced. */
+    data class MigratedStartupFile(val fileName: String, val replacementCount: Int)
+
+    /** Result of [migrateLegacyGuestPaths]: empty when there was nothing to migrate. */
+    data class LegacyPathMigrationResult(val migratedFiles: List<MigratedStartupFile>) {
+        val migrated: Boolean get() = migratedFiles.isNotEmpty()
+    }
+
+    private const val LEGACY_HOME = "/data/data/com.termux/files/home"
+    private const val LEGACY_PREFIX = "/data/data/com.termux/files/usr"
+
+    /**
+     * Conservative, idempotent migration for the two specific legacy `com.termux` absolute paths
+     * that third-party installers (Codex, OpenCode, and others predating Verb's own identity on a
+     * given device) hard-code into guest shell startup files. Only those two exact substrings are
+     * ever replaced -- `/data/data/com.termux/files/home` with [VerbGuestPaths.HOME] and
+     * `/data/data/com.termux/files/usr` with [VerbGuestPaths.PREFIX] -- so HOME/PREFIX/PATH stay
+     * Verb-branded wherever a user can see them, without touching any other line, any other path
+     * (the bare `/data/data/com.termux` compatibility mount itself is deliberately left alone; see
+     * [VerbGuestPaths]), or any of the user's own shell code.
+     *
+     * A file with neither legacy substring is left completely untouched -- not re-read for a
+     * pointless backup, not rewritten -- so re-running this on every launch is a true no-op once a
+     * file is migrated (or never needed it). The first time a file *is* modified, its pre-migration
+     * contents are preserved once at `<name>.pre-verb-identity-migration` (never overwritten by a
+     * later run), before the file itself is rewritten.
+     */
+    fun migrateLegacyGuestPaths(filesDir: File): LegacyPathMigrationResult {
+        val home = File(filesDir, "home")
+        val migrated = STARTUP_FILE_NAMES.mapNotNull { name -> migrateStartupFile(home, name) }
+        if (migrated.isNotEmpty()) {
+            TerminalSessionLogger.info(
+                LogCategory.IO,
+                "Migrated legacy com.termux paths to Verb identity in: " +
+                    migrated.joinToString { "${it.fileName} (${it.replacementCount})" }
+            )
+        }
+        return LegacyPathMigrationResult(migrated)
+    }
+
+    private fun migrateStartupFile(home: File, name: String): MigratedStartupFile? {
+        val file = File(home, name)
+        if (!file.isFile) return null
+        val original = runCatching { file.readText() }.getOrNull() ?: return null
+
+        var updated = original
+        var replacements = 0
+        for ((legacy, current) in listOf(LEGACY_HOME to VerbGuestPaths.HOME, LEGACY_PREFIX to VerbGuestPaths.PREFIX)) {
+            val occurrences = updated.split(legacy).size - 1
+            if (occurrences == 0) continue
+            replacements += occurrences
+            updated = updated.replace(legacy, current)
+        }
+        if (replacements == 0) return null
+
+        return runCatching {
+            val backup = File(home, "$name.pre-verb-identity-migration")
+            if (!backup.exists()) backup.writeText(original)
+            file.writeText(updated)
+            MigratedStartupFile(name, replacements)
+        }.onFailure {
+            TerminalSessionLogger.warn(LogCategory.IO, "Legacy path migration failed for $name: ${it.message}")
+        }.getOrNull()
+    }
+
+    private val STARTUP_FILE_NAMES = listOf(".bashrc", ".bash_profile", ".profile")
+
+    /**
+     * Single entry point for keeping the guest shell startup files current, called unconditionally
+     * on every launch -- fresh install ([install]) and already-provisioned
+     * (`VerbViewModel.installTermuxBootstrap`'s early-return path) alike -- so the two paths can
+     * never drift out of sync with each other the way [ensureLoginShellSourcesBashrc] alone once
+     * did (it was only reachable through [install], so it silently never ran once a device already
+     * had a bootstrap installed).
+     */
+    fun ensureGuestShellStartupCurrent(filesDir: File, context: Context? = null) {
+        ensureLoginShellSourcesBashrc(filesDir)
+        migrateLegacyGuestPaths(filesDir)
+        writeShellIntegrationScript(filesDir)
+        ensureShellIntegrationSourced(filesDir)
+        ensureAgentEnvFile(filesDir)
+        ensureAgentEnvSourced(filesDir)
+        // Last, and after the wrappers exist: a shell startup file can reorder the base PATH Verb
+        // set, and one on this device does. See ensureAgentPathGuardLast.
+        ensureAgentPathGuardLast(filesDir)
+        // Unconditional, like writeShellIntegrationScript above and for the same reason: these
+        // files are entirely Verb-authored, so there is no user content to preserve and rewriting
+        // them every launch is what repairs one a vendor installer damaged. See
+        // AgentWrapperBootstrap for why an install-time launcher could not survive.
+        AgentWrapperBootstrap.install(filesDir)
+        // Optional so the shell-startup tests, which have no Android context, keep working: they
+        // are about startup files, and Verb's own command is a separate concern with its own test.
+        context?.let { VerbCliBootstrap.install(it, filesDir) }
+    }
+
+    /**
      * Runs the install. Intended to be called from a background dispatcher; state transitions are
      * reported through [onState] from the calling thread.
      */
@@ -122,6 +540,7 @@ object TermuxBootstrapInstaller {
         val filesDir = context.filesDir
         ensureGuestLinkerConfig(filesDir)
         ensureSecureAptSources(filesDir)
+        ensureGuestShellStartupCurrent(filesDir)
         if (isInstalled(context)) {
             onState(State.Ready)
             return

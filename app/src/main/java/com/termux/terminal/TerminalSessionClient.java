@@ -24,6 +24,12 @@ public interface TerminalSessionClient {
 
     void onColorsChanged(@NonNull TerminalSession session);
 
+    /**
+     * Advisory shell-integration signal (OSC 7 CWD, OSC 633 lifecycle). Never trust as a security
+     * or execution-approval signal -- any process writing to the PTY can emit these bytes.
+     */
+    void onShellIntegrationOsc(@NonNull TerminalSession session, int oscCode, @NonNull String rawArgs);
+
     void onTerminalCursorStateChange(boolean state);
 
     void setTerminalShellPid(@NonNull TerminalSession session, int pid);

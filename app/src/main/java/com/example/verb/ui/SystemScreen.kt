@@ -54,6 +54,7 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.terminal.TerminalEnvironment
+import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.ui.theme.SecondaryCyan
@@ -72,6 +73,23 @@ fun SystemScreen(
     installingRuntimeProfile: RuntimeProfileId? = null,
     runtimeInstallMessage: String? = null,
     onInstallRuntimeProfile: (RuntimeProfileId) -> Unit = {},
+    agentRuntimeStatus: AgentRuntimeStatus = AgentRuntimeStatus(),
+    agentRuntimeImporting: Boolean = false,
+    agentRuntimeMessage: String? = null,
+    agentArchiveName: String? = null,
+    agentChecksumName: String? = null,
+    agentManifestName: String? = null,
+    onPickAgentArchive: () -> Unit = {},
+    onPickAgentChecksum: () -> Unit = {},
+    onPickAgentManifest: () -> Unit = {},
+    worldArchiveName: String? = null,
+    worldArchiveMessage: String? = null,
+    onSaveWorldToDownloads: () -> Unit = {},
+    onPickWorldArchive: () -> Unit = {},
+    onImportAgentRuntime: () -> Unit = {},
+    onOpenAgentRuntime: () -> Unit = {},
+    onCheckAgentRuntime: () -> Unit = {},
+    onReturnToVerbRuntime: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
@@ -179,6 +197,15 @@ fun SystemScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        WorldArchiveCard(
+            archiveName = worldArchiveName,
+            message = worldArchiveMessage,
+            onSaveToDownloads = onSaveWorldToDownloads,
+            onPickArchive = onPickWorldArchive
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Runtime Status Card
         SystemMetricCard(
             title = "Verb Runtime Status",
@@ -216,6 +243,24 @@ fun SystemScreen(
             installingProfile = installingRuntimeProfile,
             message = runtimeInstallMessage,
             onInstall = onInstallRuntimeProfile
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        AgentRuntimeCard(
+            status = agentRuntimeStatus,
+            importing = agentRuntimeImporting,
+            message = agentRuntimeMessage,
+            archiveName = agentArchiveName,
+            checksumName = agentChecksumName,
+            manifestName = agentManifestName,
+            onPickArchive = onPickAgentArchive,
+            onPickChecksum = onPickAgentChecksum,
+            onPickManifest = onPickAgentManifest,
+            onImport = onImportAgentRuntime,
+            onOpen = onOpenAgentRuntime,
+            onCheckCompatibility = onCheckAgentRuntime,
+            onReturnToVerb = onReturnToVerbRuntime
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -389,6 +434,79 @@ private fun AiProviderSettingsCard(
                         Text("Remove key")
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Getting a world archive on and off the device.
+ *
+ * The archive itself is made in the terminal, by a command the user runs, because it contains their
+ * agents' logins and it should be obvious that it was created. This card only moves the result:
+ * out to Downloads, where an uninstall cannot reach it, and back in for `verb import` to inspect.
+ */
+@Composable
+internal fun WorldArchiveCard(
+    archiveName: String?,
+    message: String?,
+    onSaveToDownloads: () -> Unit,
+    onPickArchive: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("card_world_archive"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Working world", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Your agent logins, keys and session records. An uninstall deletes them; a saved " +
+                    "archive survives it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Text(
+                "In the terminal:  verb export ~/world.vbak",
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp)
+            )
+
+            Text(
+                archiveName?.let { "Ready to save: $it" }
+                    ?: "No archive yet — run the command above first.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .testTag("world_archive_state")
+            )
+
+            message?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(top = 6.dp)
+                        .testTag("world_archive_message")
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onSaveToDownloads,
+                    enabled = archiveName != null,
+                    modifier = Modifier.testTag("btn_world_save")
+                ) { Text("Save to Downloads") }
+
+                OutlinedButton(
+                    onClick = onPickArchive,
+                    modifier = Modifier.testTag("btn_world_restore")
+                ) { Text("Bring an archive in") }
             }
         }
     }
