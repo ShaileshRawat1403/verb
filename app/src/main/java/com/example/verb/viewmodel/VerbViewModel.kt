@@ -370,7 +370,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // Same "every launch, not just install" requirement as the two calls above: this used to
         // only run inside TermuxBootstrapInstaller.install(), so it silently never executed once a
         // device already had a bootstrap (the common case after the first launch).
-        TermuxBootstrapInstaller.ensureGuestShellStartupCurrent(context.filesDir)
+        TermuxBootstrapInstaller.ensureGuestShellStartupCurrent(context.filesDir, context)
         if (TermuxBootstrapInstaller.isInstalled(context)) {
             _terminalBootstrapState.value = TermuxBootstrapInstaller.State.Ready
             TermuxBootstrapInstaller.ensureGuestDns(context)
@@ -700,6 +700,57 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     /** The Agents screen's "Start new" action once that agent's session is [com.example.verb.session.VerbSessionState.ENDED]. */
     fun startNewAgentSession(profileId: RuntimeProfileId) {
         TRACKED_AGENT_LAUNCH_COMMANDS[profileId]?.let(::launchAgent)
+    }
+
+    /**
+     * The newest world archive `verb export` has written, and what happened to it last.
+     *
+     * Verb never creates one of these on its own: an archive holds the agents' logins, so it exists
+     * only because a person ran the command. What the app does is move it somewhere an uninstall
+     * cannot reach.
+     */
+    private val _worldArchiveName = MutableStateFlow(
+        com.example.verb.session.WorldArchive.newestArchive(application.filesDir)?.name
+    )
+    val worldArchiveName: StateFlow<String?> = _worldArchiveName.asStateFlow()
+
+    private val _worldArchiveMessage = MutableStateFlow<String?>(null)
+    val worldArchiveMessage: StateFlow<String?> = _worldArchiveMessage.asStateFlow()
+
+    fun refreshWorldArchive() {
+        _worldArchiveName.value =
+            com.example.verb.session.WorldArchive.newestArchive(getApplication<Application>().filesDir)?.name
+    }
+
+    fun saveWorldToDownloads() {
+        val context = getApplication<Application>()
+        val archive = com.example.verb.session.WorldArchive.newestArchive(context.filesDir)
+        if (archive == null) {
+            _worldArchiveMessage.value = "No archive yet. Run verb export in the terminal first."
+            return
+        }
+        _worldArchiveMessage.value = when (
+            val outcome = com.example.verb.session.WorldArchive.saveToDownloads(context, archive)
+        ) {
+            is com.example.verb.session.WorldArchive.Outcome.Saved ->
+                "Saved to ${outcome.displayName}. It will survive an uninstall; keep it somewhere safe."
+            is com.example.verb.session.WorldArchive.Outcome.Failed -> outcome.reason
+            com.example.verb.session.WorldArchive.Outcome.NothingToSave ->
+                "No archive yet. Run verb export in the terminal first."
+        }
+    }
+
+    fun stageWorldArchive(uri: android.net.Uri) {
+        val context = getApplication<Application>()
+        _worldArchiveMessage.value = when (
+            val outcome = com.example.verb.session.WorldArchive.stageForImport(context, uri, context.filesDir)
+        ) {
+            is com.example.verb.session.WorldArchive.Outcome.Saved ->
+                "Copied in as ~/${outcome.displayName}. In the terminal, run: verb import ~/${outcome.displayName}"
+            is com.example.verb.session.WorldArchive.Outcome.Failed -> outcome.reason
+            com.example.verb.session.WorldArchive.Outcome.NothingToSave -> "Nothing was copied."
+        }
+        refreshWorldArchive()
     }
 
     /** Opens the key file in the terminal's editor; Verb never displays or edits key values itself. */
