@@ -58,6 +58,15 @@ Access deeper technical controls when I want them.
 **Access**
 Bring existing shells, projects, tools and agents into one working environment.
 
+> **Verb brings the agents and subscriptions you already use to wherever you work, while keeping the
+> environment, session state and recovery under your control.**
+
+Subscription or API key, whichever the user already pays for: Verb hosts what they have rather than
+reselling access to something else. It is deliberately *not* "a platform for similar tools" — that
+phrasing is where the catalogue starts, and every agent Verb supports appears inside the moments
+where it matters rather than as a tile on a screen. See `docs/UX_FOUNDATION.md` and the compatibility
+matrix in `docs/BACKLOG.md`.
+
 **Understanding**
 Translate development state into something a human can understand.
 
