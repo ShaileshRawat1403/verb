@@ -74,6 +74,17 @@ costume.
 | C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |
 | C5 | Richer contextual triggers: risky Git operation, runtime mismatch | two of the four bands in `TUI_VISION.md` |
 
+## D0. Shape constraints for work that has not started
+
+Not tasks — the form these must take if they are ever built, recorded so a future sprint does not
+quietly invent a different shape.
+
+| Item | Required shape |
+| --- | --- |
+| Configuration (leader, colours, defaults) | Found by name in the palette, never a settings tree. `docs/UX_FOUNDATION.md`, "Configuration is searched, not browsed" |
+| Anything agent-related | A source underneath a human moment, never a "Agents" top-level surface |
+| Any new region | There is no budget for one: quiet chrome is two rows, a moment is four |
+
 ## D. Repository and release
 
 | # | Item | Size |

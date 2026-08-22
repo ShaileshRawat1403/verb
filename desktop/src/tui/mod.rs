@@ -781,6 +781,52 @@ pub(crate) enum Action {
     Quit,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        App {
+            project: PathBuf::from("/tmp/project"),
+            leader: Leader::provisional(),
+            surface: Surface::None,
+            context: Context::None,
+            hosted: None,
+            sessions: Vec::new(),
+            message: None,
+            leader_pressed_at: None,
+            quit: false,
+            first_run: false,
+            mouse_captured: false,
+        }
+    }
+
+    #[test]
+    fn only_one_verb_surface_can_be_open_at_a_time() {
+        // The budget in docs/UX_FOUNDATION.md forbids stacking overlays, and the state makes it
+        // impossible rather than merely discouraged: asking for a second replaces the first.
+        let mut app = app();
+        app.run_command(Command::Palette).unwrap();
+        assert!(matches!(app.surface, Surface::Palette { .. }));
+
+        app.run_command(Command::Help).unwrap();
+        assert!(matches!(app.surface, Surface::Help));
+
+        app.run_command(Command::Contextual).unwrap();
+        assert!(matches!(app.surface, Surface::Evidence));
+    }
+
+    #[test]
+    fn scrollback_is_refused_when_there_is_no_session_to_scroll() {
+        // Rather than opening an empty surface, which would be a panel that answers no question.
+        let mut app = app();
+        app.run_command(Command::Scrollback).unwrap();
+
+        assert!(matches!(app.surface, Surface::None));
+        assert!(app.message.is_some());
+    }
+}
+
 /// Owns the alternate screen and raw mode for as long as the workspace is up.
 struct Screen {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
