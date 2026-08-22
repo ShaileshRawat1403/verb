@@ -72,6 +72,25 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug { signingConfig = signingConfigs.getByName("debugConfig") }
+
+    // The build that goes on a real phone for real use.
+    //
+    // Not debuggable, so `run-as` cannot read the userland -- which is where Claude's and Codex's
+    // credentials live, and the one realistic way they leak off a device whose owner has USB
+    // debugging on. Signed with the same key as `debug` on purpose: an install over an existing
+    // Verb keeps the working world, and a signature change is exactly what forces the uninstall
+    // that destroys it. One key, one application id, always `install -r`.
+    //
+    // Minification stays off: this is a build for using and reporting bugs against, and a
+    // stack trace that names real classes is worth more here than a smaller APK.
+    create("device") {
+      initWith(getByName("debug"))
+      isDebuggable = false
+      isMinifyEnabled = false
+      isJniDebuggable = false
+      signingConfig = signingConfigs.getByName("debugConfig")
+      matchingFallbacks += listOf("debug")
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
