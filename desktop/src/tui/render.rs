@@ -5,6 +5,7 @@
 //! and inactive until M2 can answer.
 
 use super::context_view::{EvidenceLines, Kind};
+use super::theme::{self, glyph, no_colour, space};
 use super::{Action, App, Context, Surface};
 use crate::{Agent, Session, SessionState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -78,7 +79,7 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
                 Line::from("Terminal too small"),
                 Line::from(Span::styled(
                     format!("Verb needs {}×{}", MINIMUM.0, MINIMUM.1),
-                    Style::default().add_modifier(Modifier::DIM),
+                    theme::secondary(),
                 )),
             ])
             .wrap(Wrap { trim: true }),
@@ -179,13 +180,13 @@ fn status(frame: &mut Frame, app: &App, area: Rect) {
         hint.chars().count(),
         state
             .as_ref()
-            .map_or(0, |value| value.chars().count() + SEPARATOR),
+            .map_or(0, |value| value.chars().count() + space::FIELD_GAP),
         runtime
             .as_ref()
-            .map_or(0, |value| value.chars().count() + SEPARATOR),
+            .map_or(0, |value| value.chars().count() + space::FIELD_GAP),
         changes
             .as_ref()
-            .map_or(0, |value| value.chars().count() + SEPARATOR),
+            .map_or(0, |value| value.chars().count() + space::FIELD_GAP),
     ]
     .iter()
     .sum::<usize>()
@@ -195,30 +196,26 @@ fn status(frame: &mut Frame, app: &App, area: Rect) {
     let (path, changes, runtime) = fit_status(path, changes, runtime, reserved, width);
 
     let mut spans = vec![
-        Span::raw(" "),
-        Span::styled(path, Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(space::MARGIN),
+        Span::styled(path, theme::emphasis()),
     ];
+    let gap = " ".repeat(space::FIELD_GAP);
     for detail in [changes, runtime].into_iter().flatten() {
-        spans.push(Span::raw("   "));
+        spans.push(Span::raw(gap.clone()));
         spans.push(Span::raw(detail));
     }
     if let Some(state) = session.map(|session| &session.state) {
-        spans.push(Span::raw("   "));
+        spans.push(Span::raw(gap.clone()));
         spans.push(state_span(state));
     }
 
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let padding = width.saturating_sub(used + hint.chars().count() + 1).max(1);
     spans.push(Span::raw(" ".repeat(padding)));
-    spans.push(Span::styled(
-        hint,
-        Style::default().add_modifier(Modifier::DIM),
-    ));
+    spans.push(Span::styled(hint, theme::secondary()));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
-
-const SEPARATOR: usize = 3;
 
 /// Decides what survives on a narrow status line: shorten the path first, then drop the
 /// changed-files detail, then the runtime, keeping the leader hint and session state intact.
@@ -243,7 +240,7 @@ pub(super) fn fit_status(
         reserved
             - changes
                 .as_ref()
-                .map_or(0, |value| value.chars().count() + SEPARATOR),
+                .map_or(0, |value| value.chars().count() + space::FIELD_GAP),
     );
     let shortened = shorten_path(&path, available);
     if shortened.chars().count() <= available {
@@ -279,9 +276,9 @@ pub(super) fn shorten_path(path: &str, available: usize) -> String {
             .into_iter()
             .rev()
             .collect();
-        return format!("…{tail}");
+        return format!("{}{tail}", glyph::ELLIPSIS);
     }
-    format!("…/{kept}")
+    format!("{}/{kept}", glyph::ELLIPSIS)
 }
 
 fn status_state_label(state: &SessionState) -> String {
@@ -301,24 +298,26 @@ pub(crate) fn plain_state(state: &SessionState) -> &'static str {
 
 fn state_glyph(state: &SessionState) -> &'static str {
     match state {
-        SessionState::Live => "●",
-        SessionState::Recoverable => "◐",
-        SessionState::Interrupted => "◌",
-        SessionState::Ended => "○",
+        SessionState::Live => glyph::RUNNING,
+        SessionState::Recoverable => glyph::RECOVERABLE,
+        SessionState::Interrupted => glyph::CHECKING,
+        SessionState::Ended => glyph::ENDED,
     }
 }
 
 /// A recorded LIVE is shown with a question mark for the same reason `verb sessions` prints one:
 /// while Verb hosts the process it can see it, but the record alone never proves it.
 fn state_span(state: &SessionState) -> Span<'static> {
-    let colour = match state {
-        SessionState::Live => Color::Green,
-        SessionState::Recoverable => Color::Yellow,
-        SessionState::Interrupted | SessionState::Ended => Color::Gray,
+    // Colour repeats what the glyph and the word already say, so the row survives NO_COLOR and a
+    // reader who cannot tell the hues apart.
+    let style = match state {
+        SessionState::Live => theme::success(),
+        SessionState::Recoverable => theme::attention(),
+        SessionState::Interrupted | SessionState::Ended => theme::unconfirmed(),
     };
     Span::styled(
         format!("{} {}", state_glyph(state), plain_state(state)),
-        Style::default().fg(if no_colour() { Color::Reset } else { colour }),
+        style,
     )
 }
 
@@ -330,11 +329,11 @@ fn terminal(frame: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(vec![
                 Line::from(Span::styled(
                     "  No session running.".to_owned(),
-                    Style::default().add_modifier(Modifier::DIM),
+                    theme::secondary(),
                 )),
                 Line::from(Span::styled(
                     format!("  {leader} p  to start one"),
-                    Style::default().add_modifier(Modifier::DIM),
+                    theme::secondary(),
                 )),
             ]),
             area,
@@ -419,10 +418,10 @@ pub(super) fn truncate(text: &str, width: usize) -> String {
         return text.to_owned();
     }
     if width <= 1 {
-        return "…".to_owned();
+        return glyph::ELLIPSIS.to_owned();
     }
     let kept: String = text.chars().take(width - 1).collect();
-    format!("{kept}…")
+    format!("{kept}{}", glyph::ELLIPSIS)
 }
 
 /// Human-sized durations: a command that took 3.8 seconds should not read as 3800ms.
@@ -436,11 +435,6 @@ pub(super) fn duration(millis: u128) -> String {
     }
 }
 
-/// `NO_COLOR` (no-color.org), honoured for the chrome and for the hosted screen alike.
-pub(super) fn no_colour() -> bool {
-    std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty())
-}
-
 /// Only from an observed fact. There is no variant here for a suspicion, by construction.
 fn context_band(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = Vec::new();
@@ -448,11 +442,7 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(message) = app.message() {
         lines.push(Line::from(Span::styled(
             format!("  {message}"),
-            Style::default().fg(if no_colour() {
-                Color::Reset
-            } else {
-                Color::Red
-            }),
+            theme::danger(),
         )));
     }
 
@@ -465,19 +455,20 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
         } => {
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  ✕ {}", failure_subject(label.as_deref())),
-                    Style::default().fg(if no_colour() {
-                        Color::Reset
-                    } else {
-                        Color::Red
-                    }),
+                    format!("  {} {}", glyph::FAILED, failure_subject(label.as_deref())),
+                    theme::danger(),
                 ),
-                Span::raw(format!(" · exit {exit_code} · {}", duration(*millis))),
+                Span::raw(format!(
+                    " {} exit {exit_code} {} {}",
+                    glyph::SEPARATOR,
+                    glyph::SEPARATOR,
+                    duration(*millis)
+                )),
             ]));
             if let Some(note) = failure_note(label.as_deref()) {
                 lines.push(Line::from(Span::styled(
                     format!("  {note}"),
-                    Style::default().add_modifier(Modifier::DIM),
+                    theme::secondary(),
                 )));
             }
         }
@@ -486,12 +477,17 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
         // over from an earlier version.
         Context::SessionEnded { exit_code } => {
             lines.push(Line::from(Span::raw(format!(
-                "  ✕ Session ended · exit {exit_code}"
+                "  {} Session ended {} exit {exit_code}",
+                glyph::FAILED,
+                glyph::SEPARATOR
             ))));
         }
         Context::SessionState(state) => {
             let leader = app.leader().chord();
-            lines.push(Line::from(vec![Span::raw("  "), state_span(state)]));
+            lines.push(Line::from(vec![
+                Span::raw(space::INDENT),
+                state_span(state),
+            ]));
             // Only the action this state actually justifies, which is the same rule the CLI follows
             // when it refuses to resume something that is not recoverable.
             let hint = match state {
@@ -505,7 +501,7 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
             if let Some(hint) = hint {
                 lines.push(Line::from(Span::styled(
                     format!("  {hint}"),
-                    Style::default().add_modifier(Modifier::DIM),
+                    theme::secondary(),
                 )));
             }
         }
@@ -518,11 +514,8 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
 /// questions nothing answers is exactly the ambiguity Verb exists to remove.
 fn ask(frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
-        Span::styled(" Ask Verb…", Style::default().add_modifier(Modifier::DIM)),
-        Span::styled(
-            "   available in M2",
-            Style::default().add_modifier(Modifier::DIM),
-        ),
+        Span::styled(" Ask Verb…", theme::secondary()),
+        Span::styled("   available in M2", theme::secondary()),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -531,15 +524,9 @@ fn ask(frame: &mut Frame, area: Rect) {
 fn leader_menu(frame: &mut Frame, app: &App, area: Rect) {
     let leader = app.leader().chord();
     let line = Line::from(vec![
-        Span::styled(
-            format!(" {leader} "),
-            Style::default().add_modifier(Modifier::REVERSED),
-        ),
+        Span::styled(format!(" {leader} "), theme::selected()),
         Span::raw("  p palette   s sessions   v what Verb knows   [ scroll back   ? help"),
-        Span::styled(
-            "   esc cancel".to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
-        ),
+        Span::styled("   esc cancel".to_owned(), theme::secondary()),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -560,14 +547,11 @@ fn scrollback_bar(
     };
     let line = match search {
         Some(term) => Line::from(vec![
-            Span::styled(
-                " search ".to_owned(),
-                Style::default().add_modifier(Modifier::REVERSED),
-            ),
+            Span::styled(" search ".to_owned(), theme::selected()),
             Span::raw(format!(" /{term}▌")),
             Span::styled(
                 "   enter to find · esc to cancel".to_owned(),
-                Style::default().add_modifier(Modifier::DIM),
+                theme::secondary(),
             ),
         ]),
         None => {
@@ -582,14 +566,11 @@ fn scrollback_bar(
                 ""
             };
             Line::from(vec![
-                Span::styled(
-                    " scrolling ".to_owned(),
-                    Style::default().add_modifier(Modifier::REVERSED),
-                ),
+                Span::styled(" scrolling ".to_owned(), theme::selected()),
                 Span::raw(format!(" {position}")),
                 Span::styled(
                     format!("   ↑↓ or wheel · / search{repeat} · g latest · esc back to live"),
-                    Style::default().add_modifier(Modifier::DIM),
+                    theme::secondary(),
                 ),
             ])
         }
@@ -608,10 +589,7 @@ fn welcome(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(vec![
             Span::raw("One key opens everything:  "),
-            Span::styled(
-                format!("{leader}"),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(format!("{leader}"), theme::emphasis()),
         ]),
         Line::from(format!("  {leader} p   commands, by name")),
         Line::from(format!("  {leader} v   what Verb has observed")),
@@ -621,11 +599,11 @@ fn welcome(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             format!("Every other key goes to the terminal, including {leader} {leader}."),
-            Style::default().add_modifier(Modifier::DIM),
+            theme::secondary(),
         )),
         Line::from(Span::styled(
             "Press any key to start.".to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
+            theme::secondary(),
         )),
     ];
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
@@ -658,8 +636,8 @@ fn evidence(frame: &mut Frame, app: &App) {
         .iter()
         .map(|(kind, text)| {
             let style = match kind {
-                Kind::Heading => Style::default().add_modifier(Modifier::BOLD),
-                Kind::Caveat => Style::default().add_modifier(Modifier::DIM),
+                Kind::Heading => theme::emphasis(),
+                Kind::Caveat => theme::secondary(),
                 Kind::Fact | Kind::Empty => Style::default(),
             };
             Line::from(Span::styled(truncate(text, inner.width as usize), style))
@@ -809,18 +787,22 @@ fn palette(frame: &mut Frame, filter: &str, selected: usize) {
     let entries = palette_entries(filter);
     let inner = overlay(frame, "Command Palette", entries.len() as u16 + 4);
     let mut lines = vec![
-        Line::from(Span::styled(
-            format!("> {filter}"),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
+        Line::from(Span::styled(format!("> {filter}"), theme::emphasis())),
         Line::from(""),
     ];
     for (index, entry) in entries.iter().enumerate() {
+        // Truncated, not wrapped: an entry that folds onto a second line reads as two entries. The
+        // selection is marked by a glyph as well as by reverse video, so it survives NO_COLOR and a
+        // terminal that renders reverse poorly.
+        let marker = if index == selected {
+            format!("{} ", glyph::CURSOR)
+        } else {
+            space::INDENT.to_owned()
+        };
         lines.push(Line::from(Span::styled(
-            // Truncated, not wrapped: an entry that folds onto a second line reads as two entries.
-            truncate(&format!("  {}", entry.label), inner.width as usize),
+            truncate(&format!("{marker}{}", entry.label), inner.width as usize),
             if index == selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                theme::selected()
             } else {
                 Style::default()
             },
@@ -841,8 +823,13 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
     let now = crate::now_millis();
     let mut lines = Vec::new();
     for (index, session) in sessions.iter().enumerate() {
+        let marker = if index == selected {
+            format!("{} ", glyph::CURSOR)
+        } else {
+            space::INDENT.to_owned()
+        };
         let line = format!(
-            "{:<13} {:<9} {:>8}  {}",
+            "{marker}{:<13} {:<9} {:>8}  {}",
             // "unconfirmed" everywhere else, because a record alone never proves a process. Here
             // Verb is holding that process, so for this one row the doubt would be false modesty.
             match session.state {
@@ -857,7 +844,7 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
         lines.push(Line::from(Span::styled(
             truncate(&line, inner.width as usize),
             if index == selected {
-                Style::default().add_modifier(Modifier::REVERSED)
+                theme::selected()
             } else {
                 Style::default()
             },
@@ -866,7 +853,7 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "enter resume · n new session · x forget record · esc close",
-        Style::default().add_modifier(Modifier::DIM),
+        theme::secondary(),
     )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
@@ -888,17 +875,17 @@ fn help(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             "Every other key belongs to the terminal.".to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
+            theme::secondary(),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "running · recoverable · checking · ended  are Verb's session states;".to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
+            theme::secondary(),
         )),
         Line::from(Span::styled(
             "`verb status` prints the same four as LIVE, RECOVERABLE, INTERRUPTED, ENDED."
                 .to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
+            theme::secondary(),
         )),
     ];
     if app.leader().is_provisional() {
@@ -907,7 +894,7 @@ fn help(frame: &mut Frame, app: &App) {
             "Provisional (shown as *): collision testing has not settled a default yet. \
              Set VERB_LEADER to change it."
                 .to_owned(),
-            Style::default().add_modifier(Modifier::DIM),
+            theme::secondary(),
         )));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
