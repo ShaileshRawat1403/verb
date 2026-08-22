@@ -118,6 +118,31 @@ impl Hosted {
         std::mem::take(&mut self.pending)
     }
 
+    /// Moves the view back through the scrollback the parser already keeps.
+    ///
+    /// The session itself is untouched: this changes what Verb draws, not what the program below
+    /// believes about its screen. Returns the offset actually applied, which is clamped to what
+    /// exists -- scrolling past the top is a no-op rather than an empty screen.
+    pub fn scroll_to(&mut self, offset: usize) -> usize {
+        let offset = offset.min(SCROLLBACK_LINES);
+        self.parser.screen_mut().set_scrollback(offset);
+        self.parser.screen().scrollback()
+    }
+
+    /// The visible rows at a given scrollback offset, for searching without disturbing the view.
+    pub fn rows_at(&mut self, offset: usize) -> Vec<String> {
+        let restore = self.parser.screen().scrollback();
+        self.parser.screen_mut().set_scrollback(offset);
+        let (_, cols) = self.parser.screen().size();
+        let rows: Vec<String> = self.parser.screen().rows(0, cols).collect();
+        self.parser.screen_mut().set_scrollback(restore);
+        rows
+    }
+
+    pub fn scrollback_limit(&self) -> usize {
+        SCROLLBACK_LINES
+    }
+
     pub fn screen(&self) -> &vt100::Screen {
         self.parser.screen()
     }

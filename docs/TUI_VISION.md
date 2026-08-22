@@ -158,9 +158,15 @@ Four levels, each entered deliberately:
 ```text
 1  quiet        status line + terminal + Ask
 2  contextual   a band appears because an observed fact justifies it
-3  palette      Leader p: everything, searchable
-4  overlay      a full panel — sessions, debug view, advanced controls
+3  palette      Leader p: everything, searchable (subsequence, so "ncs" finds New Claude session)
+4  overlay      a full panel — sessions, evidence, help, welcome
 ```
+
+A fifth thing sits beside rather than above this list: **scrollback** (`Leader [`) is a bar along the
+bottom of the terminal rather than a panel in front of it, because what is being looked at *is* the
+terminal. `↑↓`, the wheel, `/` to search, `n` to repeat, `g` for the latest output, `Esc` to return
+to live — and returning to live is automatic on exit, or new output would arrive somewhere the user
+cannot see.
 
 Level 2 is the only one Verb enters on its own, and only from observed evidence. Levels 3 and 4 are
 always the user's move, without exception.
@@ -179,6 +185,13 @@ An earlier draft of this document reserved `Ctrl+K` globally. That was wrong on 
 `Ctrl+K` is readline's *kill to end of line*, a key people use constantly, and reserving it
 contradicts the sentence directly above it.
 
+### The mouse
+
+The same rule as the keyboard, for the same reason. Verb captures the mouse **only while one of its
+surfaces is open**; the rest of the time the terminal keeps it, and with it native selection and
+copy, which are not Verb's to take. Inside a surface: the wheel scrolls, a click selects the row
+under the pointer, and a click outside the panel closes it.
+
 ### Verb Leader
 
 Verb takes a **leader chord**, in the tmux sense: one key that begins a Verb command, followed by a
@@ -187,9 +200,13 @@ key that names it.
 ```text
 Leader p    palette
 Leader s    sessions
-Leader v    the Verb contextual surface
+Leader v    what Verb has observed
+Leader [    look back through earlier output
 Leader ?    help — what can I do from here?
 ```
+
+Pressing the leader alone replaces the Ask line with that list until the timeout. Nothing has to be
+memorised: the menu is one key away and announces itself.
 
 The rules that make a leader safe to live with:
 
@@ -325,6 +342,13 @@ capability lands first, in the core, reachable from the CLI.
 
 * the quiet state: status line, terminal region, and the Ask region drawn dim, inactive and
   non-focusable — reserved space, no placeholder behaviour
+* a welcome shown once, on a first run: the keys, and the promise that everything else belongs to
+  the terminal
+* plain words for session state on screen — running, recoverable, checking, ended — with the
+  contract's own terms (`LIVE`, `RECOVERABLE`, `INTERRUPTED`, `ENDED`) still what `verb status`,
+  `--json` and the durable record say, and both spellings shown together in help
+* scrollback with search, and the mouse policy above
+* the evidence overlay (`Leader v`), rendering the same assembly `verb context` prints
 * the Verb Leader abstraction, configurable, plus the collision test above run against bash, zsh,
   Claude, Codex and OpenCode, with the chosen default recorded in this document
 * session list and switching as an overlay

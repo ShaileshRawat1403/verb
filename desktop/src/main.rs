@@ -1056,8 +1056,37 @@ fn sessions_directory() -> Result<PathBuf, String> {
     Ok(state_root()?.join("sessions"))
 }
 
+/// True the first time Verb's workspace is opened on this machine, and false ever after.
+///
+/// A marker file rather than a setting: it answers one question once, and a user who wants the
+/// welcome again can delete it.
+pub(crate) fn mark_first_run_seen() -> Result<bool, String> {
+    let marker = state_root()?.join("first-run-seen");
+    if marker.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = marker.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(&marker, "").map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 /// Verb's own directory. Everything Verb writes -- session records, event logs, the shell
 /// integration it hosts shells with -- lives under here and nowhere else.
+/// Removes Verb's record of a project's session.
+///
+/// Only Verb's own bookkeeping: the agent's transcripts and credentials were never Verb's to delete,
+/// and the structural event log is left in place as the history of what happened.
+pub(crate) fn forget_session(project: &Path) -> Result<(), String> {
+    let path = session_path(project)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not forget session metadata: {error}")),
+    }
+}
+
 pub(crate) fn state_root() -> Result<PathBuf, String> {
     env::var_os("VERB_STATE_DIR")
         .map(PathBuf::from)

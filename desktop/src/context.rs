@@ -54,9 +54,23 @@ pub(crate) struct Context {
 const RECENT_EVENTS: usize = 20;
 
 pub(crate) fn assemble(project: &Path) -> Result<Context, String> {
-    let session = crate::load_session(project)?
-        .map(crate::reconcile_session)
-        .transpose()?;
+    assemble_for(project, None)
+}
+
+/// As above, but told which session the caller is currently hosting.
+///
+/// Reconciling a record whose process this very program is running would resolve it from disk
+/// evidence -- correctly "nothing to recover" for a shell -- and report a session as ended while it
+/// is running in front of the user. The host holding the binding is the authority for that one
+/// record.
+pub(crate) fn assemble_for(project: &Path, hosting: Option<&Session>) -> Result<Context, String> {
+    let session = match crate::load_session(project)? {
+        Some(record) if Some(record.id.as_str()) == hosting.map(|live| live.id.as_str()) => {
+            hosting.cloned()
+        }
+        Some(record) => Some(crate::reconcile_session(record)?),
+        None => hosting.cloned(),
+    };
     let events = match session.as_ref() {
         Some(session) => read_events(project, &session.id)?,
         None => Vec::new(),

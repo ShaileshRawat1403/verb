@@ -12,6 +12,7 @@
 //!   `verb resume`, `verb claude`, `verb status` and `verb sessions` call. The UI decides nothing
 //!   about sessions on its own.
 
+mod context_view;
 mod keys;
 mod leader;
 mod render;
@@ -20,7 +21,9 @@ mod term;
 use crate::{Agent, Session, SessionState};
 use leader::{Command, Leader, Outcome};
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+};
 use ratatui::Terminal;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -48,9 +51,26 @@ pub(super) fn run(project: &Path) -> Result<(), String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Surface {
     None,
-    Palette { filter: String, selected: usize },
-    Sessions { selected: usize },
+    Palette {
+        filter: String,
+        selected: usize,
+    },
+    Sessions {
+        selected: usize,
+    },
     Help,
+    /// Shown once, on a first run: what this is and the one key that opens everything.
+    Welcome,
+    /// What Verb has observed, as `verb context` assembles it.
+    Evidence,
+    /// Looking back through output that has scrolled away. A Verb surface rather than a terminal
+    /// mode: while it is open the keyboard and the mouse belong to Verb, and `Esc` gives them back.
+    Scrollback {
+        offset: usize,
+        search: Option<String>,
+        /// The last term searched for, kept so `n` can repeat it after the prompt closes.
+        last_search: Option<String>,
+    },
 }
 
 /// A fact Verb observed, worth a line under the terminal. Only these two exist in M1, because only
@@ -83,6 +103,10 @@ pub(crate) struct App {
     message: Option<String>,
     leader_pressed_at: Option<Instant>,
     quit: bool,
+    /// Shown once, the first time Verb is opened on this machine: the keys, and the promise that
+    /// everything else belongs to the terminal.
+    first_run: bool,
+    mouse_captured: bool,
 }
 
 impl App {
@@ -118,6 +142,8 @@ impl App {
             message: None,
             leader_pressed_at: None,
             quit: false,
+            first_run: crate::mark_first_run_seen().unwrap_or(false),
+            mouse_captured: false,
         })
     }
 
@@ -129,6 +155,9 @@ impl App {
             .map_err(|error| format!("could not read the terminal size: {error}"))?;
         let (rows, cols) = render::hosting_size(size.width, size.height);
         self.start_shell(rows, cols)?;
+        if self.first_run {
+            self.surface = Surface::Welcome;
+        }
 
         while !self.quit {
             // The rendered rectangle is the authority for how big the session thinks it is.
@@ -139,6 +168,11 @@ impl App {
                     drawn.set((area.height, area.width));
                 })
                 .map_err(|error| format!("could not draw: {error}"))?;
+
+            // The mouse is claimed only while Verb is in front. Capturing it permanently would take
+            // away the terminal's own selection and copy, which is not Verb's to take -- the same
+            // rule the leader follows for the keyboard.
+            self.sync_mouse_capture()?;
 
             let (rows, cols) = drawn.get();
             if rows > 0 && cols > 0 {
@@ -154,6 +188,7 @@ impl App {
             if event::poll(TICK).map_err(|error| format!("could not read input: {error}"))? {
                 match event::read().map_err(|error| format!("could not read input: {error}"))? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key)?,
+                    Event::Mouse(mouse) => self.on_mouse(mouse)?,
                     // A terminal resize needs no special handling: the next draw reports the new
                     // rectangle, and the session is resized to exactly that. One path, not two.
                     Event::Resize(_, _) => {}
@@ -269,9 +304,70 @@ impl App {
     }
 
     fn on_surface_key(&mut self, key: KeyEvent) -> Result<(), String> {
+        // A search prompt owns every key until it closes, or typing "n" would jump instead of
+        // typing an n.
+        if let Surface::Scrollback {
+            search: Some(term),
+            last_search,
+            ..
+        } = &mut self.surface
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    if let Surface::Scrollback { search, .. } = &mut self.surface {
+                        *search = None;
+                    }
+                }
+                KeyCode::Enter => {
+                    let term = term.clone();
+                    *last_search = Some(term.clone());
+                    if let Surface::Scrollback { search, .. } = &mut self.surface {
+                        *search = None;
+                    }
+                    self.search(&term, 1)?;
+                }
+                KeyCode::Backspace => {
+                    term.pop();
+                }
+                KeyCode::Char(character) => term.push(character),
+                _ => {}
+            }
+            return Ok(());
+        }
+
         match (&mut self.surface, key.code) {
+            (Surface::Scrollback { .. }, KeyCode::Esc) => {
+                // Back to the live end of the session, or the next output would arrive somewhere
+                // the user cannot see.
+                self.scroll_to_end()?;
+                self.surface = Surface::None;
+            }
             (_, KeyCode::Esc) => self.surface = Surface::None,
-            (Surface::Help, _) => self.surface = Surface::None,
+            (Surface::Help, _) | (Surface::Evidence, _) | (Surface::Welcome, _) => {
+                self.surface = Surface::None;
+                self.first_run = false;
+            }
+
+            (Surface::Scrollback { .. }, KeyCode::Up | KeyCode::Char('k')) => self.scroll_by(1)?,
+            (Surface::Scrollback { .. }, KeyCode::Down | KeyCode::Char('j')) => {
+                self.scroll_by(-1)?
+            }
+            (Surface::Scrollback { .. }, KeyCode::PageUp) => self.scroll_by(10)?,
+            (Surface::Scrollback { .. }, KeyCode::PageDown) => self.scroll_by(-10)?,
+            (Surface::Scrollback { .. }, KeyCode::Char('g')) => self.scroll_to_end()?,
+            (Surface::Scrollback { search, .. }, KeyCode::Char('/')) => {
+                *search = Some(String::new());
+            }
+            (Surface::Scrollback { last_search, .. }, KeyCode::Char('n')) => {
+                if let Some(term) = last_search.clone() {
+                    self.search(&term, 1)?;
+                }
+            }
+            (Surface::Scrollback { last_search, .. }, KeyCode::Char('N')) => {
+                if let Some(term) = last_search.clone() {
+                    self.search(&term, -1)?;
+                }
+            }
             (Surface::Sessions { selected }, KeyCode::Up | KeyCode::Char('k')) => {
                 *selected = selected.saturating_sub(1);
             }
@@ -287,6 +383,10 @@ impl App {
                 let index = *selected;
                 self.surface = Surface::None;
                 self.start_selected(index)?;
+            }
+            (Surface::Sessions { selected }, KeyCode::Char('x')) => {
+                let index = *selected;
+                self.forget_selected(index)?;
             }
             (Surface::Palette { filter, selected }, KeyCode::Char(character)) => {
                 filter.push(character);
@@ -317,6 +417,132 @@ impl App {
         Ok(())
     }
 
+    fn sync_mouse_capture(&mut self) -> Result<(), String> {
+        let wanted = !matches!(self.surface, Surface::None);
+        if wanted == self.mouse_captured {
+            return Ok(());
+        }
+        let mut stdout = io::stdout();
+        let result = if wanted {
+            ratatui::crossterm::execute!(stdout, event::EnableMouseCapture)
+        } else {
+            ratatui::crossterm::execute!(stdout, event::DisableMouseCapture)
+        };
+        result.map_err(|error| format!("could not change mouse handling: {error}"))?;
+        self.mouse_captured = wanted;
+        Ok(())
+    }
+
+    /// Mouse events only arrive while a Verb surface is open -- see `Screen::capture_mouse`. The
+    /// terminal keeps the mouse, and therefore native selection and copy, whenever Verb is not in
+    /// front of it.
+    fn on_mouse(&mut self, mouse: MouseEvent) -> Result<(), String> {
+        match (&mut self.surface, mouse.kind) {
+            (Surface::Scrollback { .. }, MouseEventKind::ScrollUp) => self.scroll_by(3)?,
+            (Surface::Scrollback { .. }, MouseEventKind::ScrollDown) => self.scroll_by(-3)?,
+            (Surface::Sessions { selected }, MouseEventKind::ScrollUp) => {
+                *selected = selected.saturating_sub(1);
+            }
+            (Surface::Sessions { selected }, MouseEventKind::ScrollDown) => {
+                *selected = (*selected + 1).min(self.sessions.len().saturating_sub(1));
+            }
+            (Surface::Palette { selected, filter }, MouseEventKind::ScrollUp) => {
+                let _ = filter;
+                *selected = selected.saturating_sub(1);
+            }
+            (Surface::Palette { selected, filter }, MouseEventKind::ScrollDown) => {
+                let count = render::palette_entries(filter).len();
+                *selected = (*selected + 1).min(count.saturating_sub(1));
+            }
+            // A click inside an overlay picks the row under the pointer; a click outside it closes
+            // the overlay, which is what clicking away from a thing means everywhere else.
+            (_, MouseEventKind::Down(_)) => {
+                let row = mouse.row;
+                match render::overlay_row_at(&self.surface, self.sessions.len(), row) {
+                    Some(index) => match &mut self.surface {
+                        Surface::Sessions { selected } => *selected = index,
+                        Surface::Palette { selected, .. } => *selected = index,
+                        _ => {}
+                    },
+                    None => self.surface = Surface::None,
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Moves the scrollback view; positive is further back.
+    fn scroll_by(&mut self, lines: isize) -> Result<(), String> {
+        let Surface::Scrollback { offset, .. } = &self.surface else {
+            return Ok(());
+        };
+        let target = if lines >= 0 {
+            offset.saturating_add(lines as usize)
+        } else {
+            offset.saturating_sub(lines.unsigned_abs())
+        };
+        let applied = match self.hosted.as_mut() {
+            Some(hosted) => hosted.scroll_to(target),
+            None => 0,
+        };
+        if let Surface::Scrollback { offset, .. } = &mut self.surface {
+            *offset = applied;
+        }
+        Ok(())
+    }
+
+    fn scroll_to_end(&mut self) -> Result<(), String> {
+        if let Some(hosted) = self.hosted.as_mut() {
+            hosted.scroll_to(0);
+        }
+        if let Surface::Scrollback { offset, .. } = &mut self.surface {
+            *offset = 0;
+        }
+        Ok(())
+    }
+
+    /// Finds `term` in the scrollback and moves the view to it.
+    ///
+    /// Searches the rendered rows rather than a copy of the stream, so what is searched is exactly
+    /// what was on screen -- and nothing of the session has to be retained to make search work.
+    fn search(&mut self, term: &str, direction: isize) -> Result<(), String> {
+        if term.is_empty() {
+            return Ok(());
+        }
+        let Surface::Scrollback { offset, .. } = &self.surface else {
+            return Ok(());
+        };
+        let start = *offset;
+        let Some(hosted) = self.hosted.as_mut() else {
+            return Ok(());
+        };
+        let limit = hosted.scrollback_limit();
+        let needle = term.to_lowercase();
+
+        let mut candidate = start as isize;
+        for _ in 0..limit {
+            candidate += direction;
+            if candidate < 0 || candidate as usize > limit {
+                break;
+            }
+            let found = hosted
+                .rows_at(candidate as usize)
+                .iter()
+                .any(|row| row.to_lowercase().contains(&needle));
+            if found {
+                let applied = hosted.scroll_to(candidate as usize);
+                if let Surface::Scrollback { offset, .. } = &mut self.surface {
+                    *offset = applied;
+                }
+                self.message = None;
+                return Ok(());
+            }
+        }
+        self.message = Some(format!("No further match for \"{term}\"."));
+        Ok(())
+    }
+
     fn run_command(&mut self, command: Command) -> Result<(), String> {
         match command {
             Command::Palette => {
@@ -330,13 +556,20 @@ impl App {
                 self.surface = Surface::Sessions { selected: 0 };
             }
             Command::Help => self.surface = Surface::Help,
-            Command::Contextual => {
-                // The contextual surface is the band, which is already on screen when there is
-                // something to say. Asking for it when there is nothing says so rather than opening
-                // an empty panel.
-                if self.context == Context::None {
+            // Everything Verb has observed, assembled the same way `verb context` assembles it.
+            Command::Contextual => self.surface = Surface::Evidence,
+            Command::Scrollback => {
+                if self.hosted.is_some() {
+                    self.surface = Surface::Scrollback {
+                        offset: 0,
+                        search: None,
+                        last_search: None,
+                    };
+                    self.scroll_by(1)?;
+                } else {
                     self.message = Some(
-                        "Nothing to report: no failure or state change observed yet.".to_owned(),
+                        "No session running, so there is nothing to scroll back through."
+                            .to_owned(),
                     );
                 }
             }
@@ -348,6 +581,8 @@ impl App {
         match action {
             Action::Sessions => self.run_command(Command::Sessions),
             Action::Help => self.run_command(Command::Help),
+            Action::Evidence => self.run_command(Command::Contextual),
+            Action::Scrollback => self.run_command(Command::Scrollback),
             Action::Resume => self.resume_here(),
             Action::NewShell => {
                 let (rows, cols) = self.last_size();
@@ -409,6 +644,34 @@ impl App {
                 Ok(())
             }
         }
+    }
+
+    /// Forgets Verb's record of a session. The agent's own conversation is untouched -- Verb never
+    /// owned it -- and the session Verb is currently hosting cannot be forgotten while it runs.
+    fn forget_selected(&mut self, index: usize) -> Result<(), String> {
+        let Some(session) = self.sessions.get(index) else {
+            return Ok(());
+        };
+        if self
+            .hosted
+            .as_ref()
+            .map(|hosted| hosted.session.id.as_str())
+            == Some(&session.id)
+        {
+            self.message = Some("That session is running here; end it first.".to_owned());
+            return Ok(());
+        }
+        let project = session.project_id.clone();
+        crate::forget_session(&project)?;
+        self.message = Some(format!(
+            "Forgot Verb's record of {}. The agent's own conversation is untouched.",
+            crate::display_path(&project)
+        ));
+        self.refresh_sessions()?;
+        if let Surface::Sessions { selected } = &mut self.surface {
+            *selected = (*selected).min(self.sessions.len().saturating_sub(1));
+        }
+        Ok(())
     }
 
     fn resume_project(&mut self, project: &Path) -> Result<(), String> {
@@ -474,6 +737,10 @@ impl App {
         &self.project
     }
 
+    pub(crate) fn leader_pending(&self) -> bool {
+        self.leader.is_pending()
+    }
+
     pub(crate) fn leader(&self) -> &Leader {
         &self.leader
     }
@@ -507,6 +774,8 @@ pub(crate) enum Action {
     NewAgent(Agent),
     Sessions,
     Reconcile,
+    Evidence,
+    Scrollback,
     Help,
     Quit,
 }
@@ -531,6 +800,7 @@ impl Screen {
     fn leave(&mut self) {
         let _ = ratatui::crossterm::execute!(
             io::stdout(),
+            event::DisableMouseCapture,
             ratatui::crossterm::terminal::LeaveAlternateScreen
         );
         let _ = ratatui::crossterm::terminal::disable_raw_mode();

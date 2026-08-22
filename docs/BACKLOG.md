@@ -19,11 +19,12 @@ terminal; it becomes a tool that does not punish people who are not fluent in on
 | # | Item | Status |
 | --- | --- | --- |
 | 1 | Desktop CI — fmt, clippy, tests, release build on every PR | done |
-| 2 | Mouse support — scroll, click to select, click the status bar | |
-| 3 | Scrollback and search in the terminal pane | |
-| 4 | Discoverability — persistent hints, first-run overlay, better help, empty states that name the next action | |
-| 5 | Plain-language state, with the technical term still visible | |
-| 6 | `Leader v` evidence overlay — `verb context` rendered in the workspace | |
+| 2 | Mouse support — wheel, click to select, click away to close; captured only while a Verb surface is open | done |
+| 3 | Scrollback and search in the terminal pane (`Leader [`) | done |
+| 4 | Discoverability — leader menu, first-run welcome, fuller help, empty states that name the next action | done |
+| 5 | Plain-language state, with the technical term still visible | done |
+| 6 | `Leader v` evidence overlay — `verb context` rendered in the workspace | done |
+| 7 | Palette subsequence matching, minimum-size guard, forget a session record | done |
 
 Then a short dogfood, which decides M2's direction.
 
@@ -40,11 +41,11 @@ distribution, splitting PR #2.
 | # | Item | Size |
 | --- | --- | --- |
 | A1 | ~~Desktop CI~~ | done |
-| A2 | Scrollback + search in the terminal pane | M |
-| A3 | Palette fuzzy matching and recency ordering | S |
-| A4 | Minimum-size guard for very small terminals | S |
-| A5 | Stale-session cleanup in the sessions overlay | S |
-| A6 | Mouse support | M |
+| A2 | ~~Scrollback + search~~ | done |
+| A3 | ~~Palette subsequence matching~~ (recency ordering still open) | partly |
+| A4 | ~~Minimum-size guard~~ | done |
+| A5 | ~~Forget a session record~~ | done |
+| A6 | ~~Mouse support~~ | done |
 | A7 | Windows support for the TUI (CLI already falls back to inherited stdio) | L |
 
 ## B. Blocked on the Android device

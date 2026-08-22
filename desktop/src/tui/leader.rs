@@ -95,6 +95,9 @@ pub enum Command {
     Sessions,
     Help,
     Contextual,
+    /// Looking back through output that has scrolled away. `[` follows tmux's copy-mode key, which
+    /// is the closest thing to a convention terminal users already have.
+    Scrollback,
 }
 
 fn command_for(key: char) -> Option<Command> {
@@ -103,6 +106,7 @@ fn command_for(key: char) -> Option<Command> {
         's' => Some(Command::Sessions),
         '?' | 'h' => Some(Command::Help),
         'v' => Some(Command::Contextual),
+        '[' => Some(Command::Scrollback),
         _ => None,
     }
 }
