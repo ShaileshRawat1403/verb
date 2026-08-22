@@ -913,19 +913,30 @@ mod tests {
 
     #[test]
     fn the_chrome_never_costs_more_than_the_budget_allows() {
-        // 90% terminal, 10% Verb. Quiet costs two rows; a moment costs four; nothing costs more.
+        // Quiet costs two rows; a moment costs four; nothing costs more.
         assert_eq!(MAX_CHROME_ROWS, 4);
         assert_eq!(STATUS_ROWS + ASK_ROWS, 2, "quiet chrome");
 
-        // Whatever the terminal's height, the session gets everything the chrome does not take.
-        for height in [12_u16, 24, 30, 120] {
+        // 90/10 is the target the usual sizes converge to, not a promise at every size. The
+        // guarantee is weaker and always true: the work keeps the majority of the screen, even at
+        // the minimum with a contextual moment open.
+        for height in [12_u16, 24, 30, 40, 120] {
             let quiet = terminal_rows(height);
             assert_eq!(quiet, height - STATUS_ROWS - ASK_ROWS, "at {height} rows");
             assert!(
                 quiet * 10 >= height * 8,
-                "the terminal should keep the overwhelming majority of {height} rows, got {quiet}"
+                "quiet should leave at least 80% of {height} rows to the work, got {quiet}"
+            );
+
+            let moment = height - MAX_CHROME_ROWS;
+            assert!(
+                moment * 2 > height,
+                "even a contextual moment should leave the majority of {height} rows, got {moment}"
             );
         }
+
+        // And at the sizes people actually work in, it is the target rather than merely a majority.
+        assert!(terminal_rows(40) * 10 >= 40 * 9);
     }
 
     #[test]
