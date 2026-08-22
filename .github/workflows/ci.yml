@@ -120,3 +120,39 @@ jobs:
           path: app/build/reports/androidTests/
           if-no-files-found: ignore
           retention-days: 14
+
+  desktop:
+    # The desktop host has 57 unit tests and 6 integration tests that run a real shell on a real
+    # PTY. Until now the only thing running them was whoever happened to be working on the crate.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        run: rustup toolchain install stable --profile minimal --component clippy rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # Includes tests/shell_integration.rs, which instruments a real bash and zsh. Both exist on
+        # the runner; the tests skip themselves rather than fail if a shell is missing.
+        run: cargo test --all-targets
+
+      - name: Build release
+        run: cargo build --release

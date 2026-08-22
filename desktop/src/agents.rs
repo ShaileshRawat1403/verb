@@ -167,9 +167,9 @@ fn records_user_turn(line: &str) -> bool {
     if !line.contains("\"role\":\"user\"") {
         return false;
     }
-    json_strings(line, "text")
-        .iter()
-        .any(|text| !text.starts_with("<environment_context>") && !text.starts_with("<user_instructions>"))
+    json_strings(line, "text").iter().any(|text| {
+        !text.starts_with("<environment_context>") && !text.starts_with("<user_instructions>")
+    })
 }
 
 // ---------------------------------------------------------------------------

@@ -274,10 +274,7 @@ mod tests {
 
     #[test]
     fn accepts_the_string_terminator_as_well_as_bel() {
-        assert_eq!(
-            scan(&["\x1b]633;A\x1b\\"]),
-            vec![ShellEvent::PromptStart]
-        );
+        assert_eq!(scan(&["\x1b]633;A\x1b\\"]), vec![ShellEvent::PromptStart]);
     }
 
     #[test]

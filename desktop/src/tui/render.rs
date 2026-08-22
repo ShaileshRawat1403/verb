@@ -117,7 +117,8 @@ fn status(frame: &mut Frame, app: &App, area: Rect) {
 
     let hint = leader_hint(app, width);
     let state = session.map(|session| status_state_label(&session.state));
-    let runtime = session.map(|session| session.runtime_id.as_deref().unwrap_or("shell").to_owned());
+    let runtime =
+        session.map(|session| session.runtime_id.as_deref().unwrap_or("shell").to_owned());
     let changes = match git.branch.as_deref() {
         Some(branch) if git.changed_files == 0 => Some(format!("{branch} clean")),
         Some(branch) => Some(format!("{branch}  {} changed", git.changed_files)),
@@ -127,9 +128,15 @@ fn status(frame: &mut Frame, app: &App, area: Rect) {
     // Everything except the path, which absorbs whatever is left.
     let reserved: usize = [
         hint.chars().count(),
-        state.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR),
-        runtime.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR),
-        changes.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR),
+        state
+            .as_ref()
+            .map_or(0, |value| value.chars().count() + SEPARATOR),
+        runtime
+            .as_ref()
+            .map_or(0, |value| value.chars().count() + SEPARATOR),
+        changes
+            .as_ref()
+            .map_or(0, |value| value.chars().count() + SEPARATOR),
     ]
     .iter()
     .sum::<usize>()
@@ -154,7 +161,10 @@ fn status(frame: &mut Frame, app: &App, area: Rect) {
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let padding = width.saturating_sub(used + hint.chars().count() + 1).max(1);
     spans.push(Span::raw(" ".repeat(padding)));
-    spans.push(Span::styled(hint, Style::default().add_modifier(Modifier::DIM)));
+    spans.push(Span::styled(
+        hint,
+        Style::default().add_modifier(Modifier::DIM),
+    ));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -180,7 +190,12 @@ pub(super) fn fit_status(
         return (shortened, changes, runtime);
     }
     // Still too tight: give up the details rather than the path, which says where you are.
-    let available = width.saturating_sub(reserved - changes.as_ref().map_or(0, |value| value.chars().count() + SEPARATOR));
+    let available = width.saturating_sub(
+        reserved
+            - changes
+                .as_ref()
+                .map_or(0, |value| value.chars().count() + SEPARATOR),
+    );
     let shortened = shorten_path(&path, available);
     if shortened.chars().count() <= available {
         return (shortened, None, runtime);
@@ -270,7 +285,11 @@ fn terminal(frame: &mut Frame, app: &App, area: Rect) {
             };
             let target = &mut buffer[(area.x + column, area.y + row)];
             let contents = cell.contents();
-            target.set_symbol(if contents.is_empty() { " " } else { &contents });
+            // An empty cell is a space rather than nothing: vt100 reports "" for a cell that has
+            // never been written, and a zero-width symbol would leave whatever was drawn there
+            // before.
+            let symbol: &str = if contents.is_empty() { " " } else { contents };
+            target.set_symbol(symbol);
             target.set_style(cell_style(cell));
         }
     }
@@ -363,7 +382,11 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
     if let Some(message) = app.message() {
         lines.push(Line::from(Span::styled(
             format!("  {message}"),
-            Style::default().fg(if no_colour() { Color::Reset } else { Color::Red }),
+            Style::default().fg(if no_colour() {
+                Color::Reset
+            } else {
+                Color::Red
+            }),
         )));
     }
 
@@ -377,7 +400,11 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("  ✕ {}", failure_subject(label.as_deref())),
-                    Style::default().fg(if no_colour() { Color::Reset } else { Color::Red }),
+                    Style::default().fg(if no_colour() {
+                        Color::Reset
+                    } else {
+                        Color::Red
+                    }),
                 ),
                 Span::raw(format!(" · exit {exit_code} · {}", duration(*millis))),
             ]));
@@ -425,10 +452,7 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
 /// questions nothing answers is exactly the ambiguity Verb exists to remove.
 fn ask(frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
-        Span::styled(
-            " Ask Verb…",
-            Style::default().add_modifier(Modifier::DIM),
-        ),
+        Span::styled(" Ask Verb…", Style::default().add_modifier(Modifier::DIM)),
         Span::styled(
             "   available in M2",
             Style::default().add_modifier(Modifier::DIM),
@@ -493,7 +517,7 @@ pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
 
 fn overlay(frame: &mut Frame, title: &str, height: u16) -> Rect {
     let area = frame.area();
-    let width = area.width.saturating_sub(8).min(72).max(24);
+    let width = area.width.saturating_sub(8).clamp(24, 72);
     let height = height.min(area.height.saturating_sub(4)).max(3);
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
@@ -587,13 +611,15 @@ fn help(frame: &mut Frame, app: &App) {
     let inner = overlay(frame, "Verb keys", 12);
     let leader = app.leader().chord();
     let mut lines = vec![
-        Line::from(Span::raw(format!("{}", app.leader().hint()))),
+        Line::from(Span::raw(app.leader().hint())),
         Line::from(""),
         Line::from(Span::raw(format!("{leader} p    command palette"))),
         Line::from(Span::raw(format!("{leader} s    sessions"))),
         Line::from(Span::raw(format!("{leader} v    what Verb has observed"))),
         Line::from(Span::raw(format!("{leader} ?    this help"))),
-        Line::from(Span::raw(format!("{leader} {leader}    send {leader} to the terminal"))),
+        Line::from(Span::raw(format!(
+            "{leader} {leader}    send {leader} to the terminal"
+        ))),
         Line::from(""),
         Line::from(Span::styled(
             "Every other key belongs to the terminal.".to_owned(),

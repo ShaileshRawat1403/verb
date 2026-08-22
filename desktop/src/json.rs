@@ -47,4 +47,3 @@ pub(crate) fn json_number(input: &str, key: &str) -> Option<u128> {
     let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
-

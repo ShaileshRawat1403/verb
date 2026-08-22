@@ -290,7 +290,10 @@ mod tests {
         assert!(text[observed..recorded].contains("Git: main"), "{text}");
 
         let json = bundle.to_json();
-        assert!(json.contains("\"assembledAt\":\"2026-08-21T17:56"), "{json}");
+        assert!(
+            json.contains("\"assembledAt\":\"2026-08-21T17:56"),
+            "{json}"
+        );
         assert!(json.contains("\"observedNow\":{"), "{json}");
         // The event keeps its own, earlier time rather than borrowing the bundle's.
         assert!(json.contains("\"timestamp\":\"2026-08-21T13:48"), "{json}");
