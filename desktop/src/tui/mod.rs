@@ -17,6 +17,7 @@ mod keys;
 mod leader;
 mod render;
 mod term;
+mod theme;
 
 use crate::{Agent, Session, SessionState};
 use leader::{Command, Leader, Outcome};

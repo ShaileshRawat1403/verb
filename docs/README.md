@@ -12,7 +12,9 @@ answer to implementation documents.
 | [`PRODUCT_VISION.md`](PRODUCT_VISION.md) | Why Verb exists, and what it refuses to compete on. |
 | [`PRD.md`](PRD.md) | What problem is being solved, for whom, and what is deliberately not built. |
 | [`ROADMAP.md`](ROADMAP.md) | Which capability arrives when, and what "finished" means for each. |
-| [`TUI_VISION.md`](TUI_VISION.md) | How the desktop experience works, down to the mockups. |
+| [`UX_FOUNDATION.md`](UX_FOUNDATION.md) | How Verb should feel, and the rules that keep it feeling that way. Host-agnostic. |
+| [`TUI_VISION.md`](TUI_VISION.md) | How the desktop experience works, down to the mockups — the current implementation of the foundation. |
+| [`BACKLOG.md`](BACKLOG.md) | What is undone, what it costs, and the current sprint. |
 
 **Current scope freeze: ROADMAP M1 — the desktop workspace.** Later milestones are documented so the
 architecture can accommodate them, and then deliberately not built.

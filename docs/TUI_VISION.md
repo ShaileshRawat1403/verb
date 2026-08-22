@@ -1,7 +1,12 @@
 # Verb TUI Vision
 
-How the desktop experience works. The Ratatui implementation is built against this document rather
-than designed while coding.
+How the desktop experience works, as one implementation of `docs/UX_FOUNDATION.md`. The foundation
+holds the philosophy — product feel, the one-surface-one-question rule, the utility moments, the
+visual language, progressive disclosure, language and input rules, and the test a new surface must
+pass. This document is how that lands in Ratatui, and would be replaced wholesale if the host
+changed.
+
+The Ratatui implementation is built against this document rather than designed while coding.
 
 ## Four rules
 

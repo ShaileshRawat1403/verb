@@ -3,7 +3,9 @@
 Everything known to be undone, and what it costs to say yes. The current sprint is at the top; the
 rest is a menu, not a plan.
 
-Milestone definitions live in `docs/ROADMAP.md`. M2 remains deliberately undecided.
+Milestone definitions live in `docs/ROADMAP.md`. M2 remains deliberately undecided. Anything
+proposed here must first pass the admission test in `docs/UX_FOUNDATION.md`: does it make an existing
+development moment easier, clearer or safer, or does it merely add another capability?
 
 ---
 
