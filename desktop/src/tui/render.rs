@@ -121,13 +121,7 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
     if band > 0 {
         context_band(frame, app, areas[2]);
     }
-    if app.leader_pending() {
-        // Pressing the leader shows what it can do. Nothing to memorise: the menu is one key away
-        // and announces itself.
-        leader_menu(frame, app, areas[3]);
-    } else {
-        ask(frame, areas[3]);
-    }
+    action_bar(frame, app, areas[3]);
 
     let terminal_area = areas[1];
 
@@ -517,25 +511,145 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Reserved space, deliberately inactive: M1 has nothing behind it, and an input that swallows
-/// questions nothing answers is exactly the ambiguity Verb exists to remove.
-fn ask(frame: &mut Frame, area: Rect) {
-    let line = Line::from(vec![
-        Span::styled(" Ask Verb…", theme::secondary()),
-        Span::styled("   available in M2", theme::secondary()),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+/// The bottom row: what you can do, right now.
+///
+/// This is the primary visible affordance, and the reason quiet does not mean blank. It carries at
+/// most [`MAX_ACTIONS`] entries and is not a toolbar: as Verb gains capability, the new things go
+/// behind Commands, and the bar keeps showing only what is useful in the current moment.
+///
+/// The Ask placeholder that used to live here is gone until M2 exists. A row advertising something
+/// unusable is worse than a row carrying something real.
+fn action_bar(frame: &mut Frame, app: &App, area: Rect) {
+    if app.leader_pending() {
+        return leader_menu(frame, app, area);
+    }
+
+    let actions = bar_actions(app);
+    let mut spans = vec![Span::raw(space::MARGIN)];
+
+    if app.accelerators_active() {
+        for (index, action) in actions.iter().enumerate() {
+            if index > 0 {
+                spans.push(Span::raw("   "));
+            }
+            spans.push(Span::styled(format!("[{}]", action.key), theme::emphasis()));
+            spans.push(Span::raw(format!(" {}", action.label)));
+        }
+    } else {
+        // A full-screen program owns the screen, so its F-keys are its own. Showing a key that
+        // would not work is a lie the user discovers by pressing it; the leader still works, and
+        // the same actions are named behind it.
+        spans.push(Span::styled(
+            format!("{} menu", app.leader().chord()),
+            theme::emphasis(),
+        ));
+        spans.push(Span::styled(
+            format!(
+                "   {}",
+                actions
+                    .iter()
+                    .map(|action| action.label)
+                    .collect::<Vec<_>>()
+                    .join(&format!(" {} ", glyph::SEPARATOR))
+            ),
+            theme::secondary(),
+        ));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// What the leader can do, shown the moment it is pressed.
+/// At most four, and four is already the ceiling. Anything else belongs behind Commands.
+const MAX_ACTIONS: usize = 4;
+
+pub(super) struct BarAction {
+    pub key: &'static str,
+    pub label: &'static str,
+}
+
+/// The actions worth offering in the current moment, most relevant first.
+pub(super) fn bar_actions(app: &App) -> Vec<BarAction> {
+    let mut actions = vec![BarAction {
+        key: "F1",
+        label: "Help",
+    }];
+
+    // What just happened outranks everything else: it is what the person is looking at.
+    if !matches!(app.context(), Context::None) {
+        actions.push(BarAction {
+            key: "F3",
+            label: "What Verb knows",
+        });
+    }
+
+    actions.push(BarAction {
+        key: "F2",
+        label: "Sessions",
+    });
+    if matches!(app.context(), Context::None) {
+        actions.push(BarAction {
+            key: "F3",
+            label: "What Verb knows",
+        });
+    }
+    actions.push(BarAction {
+        key: "F4",
+        label: "Commands",
+    });
+
+    actions.truncate(MAX_ACTIONS);
+    actions
+}
+
+/// What the leader can do, shown the moment it is pressed and staying until it is answered.
 fn leader_menu(frame: &mut Frame, app: &App, area: Rect) {
     let leader = app.leader().chord();
-    let line = Line::from(vec![
-        Span::styled(format!(" {leader} "), theme::selected()),
-        Span::raw("  p palette   s sessions   v what Verb knows   [ scroll back   ? help"),
-        Span::styled("   esc cancel".to_owned(), theme::secondary()),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
+    let entries = [
+        ("p", "Commands"),
+        ("s", "Sessions"),
+        ("v", "What Verb knows"),
+        ("[", "Scroll back"),
+        ("?", "Help"),
+    ];
+
+    // Anchored to the bottom-left, above the row the leader was pressed from, so the eye does not
+    // have to travel to find what it just asked for.
+    let height = entries.len() as u16 + 3;
+    let width = 30_u16.min(area.width);
+    let panel = Rect {
+        x: area.x,
+        y: area.y.saturating_sub(height),
+        width,
+        height,
+    };
+    frame.render_widget(Clear, panel);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {leader} ")),
+        panel,
+    );
+
+    let inner = Rect {
+        x: panel.x + 2,
+        y: panel.y + 1,
+        width: panel.width.saturating_sub(3),
+        height: panel.height.saturating_sub(2),
+    };
+    let mut lines: Vec<Line> = entries
+        .iter()
+        .map(|(key, label)| {
+            Line::from(vec![
+                Span::styled((*key).to_string(), theme::emphasis()),
+                Span::raw(format!("  {label}")),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(Span::styled(
+        "esc  Cancel".to_owned(),
+        theme::secondary(),
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The scrollback bar, drawn along the bottom of the terminal region.
@@ -910,6 +1024,13 @@ fn help(frame: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_action_bar_stays_a_bar_and_never_becomes_a_toolbar() {
+        // Four is the ceiling, and it is already close to too many. New capability goes behind
+        // Commands rather than onto this row.
+        assert_eq!(MAX_ACTIONS, 4);
+    }
 
     #[test]
     fn the_chrome_never_costs_more_than_the_budget_allows() {

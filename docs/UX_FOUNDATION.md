@@ -32,14 +32,29 @@ the right moment.
 
 ```text
 Status line        → Where am I?
+Action bar         → What can I do right now?
 Context band       → What just happened?
-Leader menu        → What can I do?
+Leader menu        → What else can I do?
 Evidence view      → What does Verb actually know?
 Scrollback         → What did I miss?
 Sessions           → Where was I working?
 Palette            → Give me everything, by name.
 Ask Verb (later)   → Help me understand / decide / act.
 ```
+
+### Quiet does not mean blank
+
+Quiet means **obvious without demanding attention**. A screen with nothing actionable on it is not
+restraint; it is a puzzle. The action bar is the primary visible affordance, and it is why the
+bottom row exists at all — it carries what is useful *now*, and nothing else.
+
+**The action bar must never become a toolbar.** Four actions is the ceiling and already close to too
+many. When capability grows, the new things go behind Commands; the bar keeps showing only the
+handful that matter in the current moment.
+
+Nothing may sit in the chrome advertising something that does not work yet. The Ask row was reserved
+for M2 and spent a month telling people about a feature they could not use; it is gone until M2
+exists and can earn it back.
 
 If a proposed element cannot be written as a clear user question, it does not exist yet. This is the
 whole defence against the catalogue problem: a catalogue is what you get when surfaces are organised

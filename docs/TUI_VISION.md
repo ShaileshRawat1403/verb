@@ -203,15 +203,35 @@ Verb takes a **leader chord**, in the tmux sense: one key that begins a Verb com
 key that names it.
 
 ```text
-Leader p    palette
-Leader s    sessions
-Leader v    what Verb has observed
-Leader [    look back through earlier output
-Leader ?    help — what can I do from here?
+F1          help                     Leader p    commands
+F2          sessions                 Leader s    sessions
+F3          what Verb has observed   Leader v    what Verb has observed
+F4          commands                 Leader [    look back through earlier output
+                                     Leader ?    help
 ```
 
-Pressing the leader alone replaces the Ask line with that list until the timeout. Nothing has to be
-memorised: the menu is one key away and announces itself.
+Two ways in, on purpose. The **action bar** along the bottom names the four most useful actions and
+their keys, so nothing has to be memorised or discovered. The **leader** reaches everything and stays
+the interface for anyone who prefers a chord; pressing it opens a menu that **stays open until it is
+answered** — no timer, because a menu that vanishes while being read has to be learned rather than
+used.
+
+The function keys are **accelerators, not reservations**. They are Verb's only at a shell prompt: the
+moment a full-screen application takes the alternate screen — vim, less, Claude, Codex, OpenCode —
+they belong to that application, and the bar stops showing them rather than advertising a key that
+would not work. `VERB_FKEYS=off` disables them entirely.
+
+Tested the same way the leader was, before being bound (see the collision method below):
+
+```text
+             bash        zsh         vim          less        Claude
+F1–F4        unbound     unbound     unmapped     unbound     no reaction
+F5–F6        leaks "5~"  leaks "7~"  unmapped     unbound     no reaction
+```
+
+Nothing loses a function to F1–F4, which is why they are the four. F5 and F6 leak characters into a
+readline buffer, so they are not used. Codex and OpenCode still need the same test on the Android
+device; the alternate-screen rule means they keep their own keys regardless.
 
 The rules that make a leader safe to live with:
 

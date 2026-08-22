@@ -223,14 +223,10 @@ impl Leader {
         }
     }
 
-    /// The leader was pressed and nothing followed within the timeout: forward it and forget it.
-    pub fn timeout(&mut self) -> Option<Vec<u8>> {
-        if self.pending {
-            self.pending = false;
-            Some(self.chord.bytes())
-        } else {
-            None
-        }
+    /// The menu was open and the user changed their mind. Nothing is sent to the terminal: they
+    /// pressed Escape to close a menu, not to send an escape.
+    pub fn cancel(&mut self) {
+        self.pending = false;
     }
 }
 
@@ -292,13 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn a_hanging_leader_is_forwarded_and_forgotten() {
+    fn the_menu_stays_open_until_it_is_answered() {
+        // Sticky rather than timed: a menu that vanishes while being read is a menu that has to be
+        // learned instead of used.
         let mut leader = leader();
         leader.key(true, 'o');
-        assert_eq!(leader.timeout(), Some(vec![0x0f]));
+        assert!(leader.is_pending());
+
+        leader.cancel();
         assert!(!leader.is_pending());
-        // And nothing is forwarded when no leader was pending.
-        assert_eq!(leader.timeout(), None);
     }
 
     #[test]

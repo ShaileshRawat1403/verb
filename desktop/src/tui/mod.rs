@@ -28,11 +28,9 @@ use ratatui::crossterm::event::{
 use ratatui::Terminal;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use term::Hosted;
 
-/// How long a pressed leader waits for its command key before being forwarded to the terminal.
-const LEADER_TIMEOUT: Duration = Duration::from_millis(900);
 const TICK: Duration = Duration::from_millis(30);
 
 pub(super) fn run(project: &Path) -> Result<(), String> {
@@ -102,7 +100,6 @@ pub(crate) struct App {
     hosted: Option<Hosted>,
     sessions: Vec<Session>,
     message: Option<String>,
-    leader_pressed_at: Option<Instant>,
     quit: bool,
     /// Shown once, the first time Verb is opened on this machine: the keys, and the promise that
     /// everything else belongs to the terminal.
@@ -141,7 +138,6 @@ impl App {
             hosted: None,
             sessions: crate::read_sessions()?,
             message: None,
-            leader_pressed_at: None,
             quit: false,
             first_run: crate::mark_first_run_seen().unwrap_or(false),
             mouse_captured: false,
@@ -194,15 +190,6 @@ impl App {
                     // rectangle, and the session is resized to exactly that. One path, not two.
                     Event::Resize(_, _) => {}
                     _ => {}
-                }
-            }
-
-            if let Some(pressed) = self.leader_pressed_at.filter(|_| self.leader.is_pending()) {
-                if pressed.elapsed() >= LEADER_TIMEOUT {
-                    self.leader_pressed_at = None;
-                    if let Some(bytes) = self.leader.timeout() {
-                        self.forward(&bytes)?;
-                    }
                 }
             }
         }
@@ -261,6 +248,13 @@ impl App {
             return self.on_surface_key(key);
         }
 
+        // Accelerators, but only at a shell prompt. A full-screen application -- vim, less, an
+        // agent -- has the alternate screen, and people map F-keys inside those constantly, so
+        // there they belong to the application and the leader remains the way into Verb.
+        if let Some(command) = self.accelerator(key) {
+            return self.run_command(command);
+        }
+
         // No surface is open, so the terminal has the keyboard and Verb sees only its own chord.
         let control = key.modifiers.contains(KeyModifiers::CONTROL);
         let character = match key.code {
@@ -268,16 +262,18 @@ impl App {
             _ => None,
         };
 
+        // Escape while the menu is open cancels it, rather than reaching the terminal.
+        if key.code == KeyCode::Esc && self.leader.is_pending() {
+            self.leader.cancel();
+            return Ok(());
+        }
+
         if let Some(character) = character {
             let outcome = self.leader.key(control, character);
-            if outcome != Outcome::Pending {
-                self.leader_pressed_at = None;
-            }
             match outcome {
-                Outcome::Pending => {
-                    self.leader_pressed_at = Some(Instant::now());
-                    return Ok(());
-                }
+                // Sticky: the menu stays until a command key or Esc. No timer, so nothing is lost
+                // by pausing to read it.
+                Outcome::Pending => return Ok(()),
                 Outcome::Run(command) => return self.run_command(command),
                 Outcome::SendLeader => {
                     let bytes = self.leader.chord().bytes();
@@ -302,6 +298,32 @@ impl App {
             self.forward(&bytes)?;
         }
         Ok(())
+    }
+
+    /// Which Verb command a function key means right now, if any.
+    fn accelerator(&self, key: KeyEvent) -> Option<Command> {
+        if !self.accelerators_active() {
+            return None;
+        }
+        match key.code {
+            KeyCode::F(1) => Some(Command::Help),
+            KeyCode::F(2) => Some(Command::Sessions),
+            KeyCode::F(3) => Some(Command::Contextual),
+            KeyCode::F(4) => Some(Command::Palette),
+            _ => None,
+        }
+    }
+
+    /// Accelerators are live at a shell prompt, and off while a full-screen application owns the
+    /// screen or the user has turned them off entirely.
+    pub(crate) fn accelerators_active(&self) -> bool {
+        if std::env::var("VERB_FKEYS").is_ok_and(|value| value == "off") {
+            return false;
+        }
+        !self
+            .hosted
+            .as_ref()
+            .is_some_and(|hosted| hosted.full_screen_app())
     }
 
     fn on_surface_key(&mut self, key: KeyEvent) -> Result<(), String> {
@@ -827,7 +849,6 @@ mod tests {
             hosted: None,
             sessions: Vec::new(),
             message: None,
-            leader_pressed_at: None,
             quit: false,
             first_run: false,
             mouse_captured: false,
@@ -847,6 +868,38 @@ mod tests {
 
         app.run_command(Command::Contextual).unwrap();
         assert!(matches!(app.surface, Surface::Evidence));
+    }
+
+    #[test]
+    fn accelerators_belong_to_a_full_screen_application_when_one_is_running() {
+        // Nothing is hosted in this test, so there is no alternate screen and the keys are Verb's.
+        // The inverse -- an agent or an editor owning them -- is the case that matters, and is
+        // decided by the same flag rather than by guessing at what is running.
+        let app = app();
+        assert!(app.accelerators_active());
+        assert!(matches!(
+            app.accelerator(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE)),
+            Some(Command::Help)
+        ));
+        assert!(app
+            .accelerator(KeyEvent::new(KeyCode::F(9), KeyModifiers::NONE))
+            .is_none());
+    }
+
+    #[test]
+    fn the_leader_menu_does_not_close_itself() {
+        let mut app = app();
+        app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL))
+            .unwrap();
+        // Ctrl+Space is not this test's leader, so nothing is pending; the provisional leader is
+        // Ctrl+O, and it stays pending with no timer to close it.
+        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(app.leader_pending());
+
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(!app.leader_pending());
     }
 
     #[test]

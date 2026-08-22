@@ -47,7 +47,8 @@ distribution, splitting PR #2.
 | A3 | ~~Palette subsequence matching~~ (recency ordering still open) | partly |
 | A4 | ~~Minimum-size guard~~ | done |
 | A5 | ~~Forget a session record~~ | done |
-| A6 | ~~Mouse support~~ | done |
+| A6 | ~~Mouse support~~ inside surfaces | done |
+| A8 | Mouse capture by default, so bar actions and status segments are clickable — **deferred deliberately**: it takes away native selection and copy, and should be decided from dogfooding evidence rather than assumed | M |
 | A7 | Windows support for the TUI (CLI already falls back to inherited stdio) | L |
 
 ## B. Blocked on the Android device
