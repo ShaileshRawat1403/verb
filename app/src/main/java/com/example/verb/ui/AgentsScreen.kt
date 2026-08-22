@@ -81,7 +81,7 @@ fun AgentsScreen(
                 anyInstalling = installingProfile != null,
                 onLaunch = onLaunch,
                 onInstall = onInstall,
-                sessionDisplay = com.example.verb.session.agentSessionDisplay(agentSessions[report.profile.id]),
+                session = agentSessions[report.profile.id],
                 onResumeSession = { onResumeSession(report.profile.id) },
                 onStartNewSession = { onStartNewSession(report.profile.id) }
             )
@@ -110,12 +110,29 @@ private fun AgentRow(
     anyInstalling: Boolean,
     onLaunch: (String) -> Unit,
     onInstall: (com.example.verb.terminal.RuntimeProfileId) -> Unit,
-    sessionDisplay: com.example.verb.session.AgentSessionDisplay? = null,
+    session: com.example.verb.session.VerbSession? = null,
     onResumeSession: () -> Unit = {},
     onStartNewSession: () -> Unit = {}
 ) {
     val profile = report.profile
     val launch = profile.launchLine ?: return
+
+    // One resolver decides what this card says. The screen renders a status; it does not assemble
+    // one from four different sources, which is how the same wrong label kept reappearing in
+    // different places. See AgentStatusResolver.
+    val status = com.example.verb.session.AgentStatusResolver.resolve(
+        com.example.verb.session.AgentStatusResolver.Evidence(
+            report = report,
+            session = session,
+            signedIn = when (signInState) {
+                com.example.verb.terminal.AgentSignInState.SIGNED_IN -> true
+                com.example.verb.terminal.AgentSignInState.SIGNED_OUT -> false
+                com.example.verb.terminal.AgentSignInState.UNKNOWN -> null
+            },
+            installing = installing,
+            otherInstallRunning = anyInstalling
+        )
+    )
     Card(
         modifier = Modifier.fillMaxWidth().testTag("agent_${profile.id.name.lowercase()}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -127,34 +144,36 @@ private fun AgentRow(
             ) {
                 Text(profile.displayName, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    when {
-                        sessionDisplay != null -> sessionDisplay.statusLabel
-                        installing -> "Installing"
-                        // Unavailable outranks Ready deliberately. `dsh` answers `--version`
-                        // perfectly well and still cannot run: its native module never built. A
-                        // probe that passes is not proof the agent works.
-                        report.isUnsatisfiable -> "Unavailable"
-                        report.isReady -> "Ready"
-                        else -> "Not installed"
-                    },
+                    status.label,
                     style = MaterialTheme.typography.labelMedium,
-                    color = when {
-                        sessionDisplay?.showResume == true -> MaterialTheme.colorScheme.primary
-                        sessionDisplay != null -> MaterialTheme.colorScheme.onSurfaceVariant
-                        report.isReady -> MaterialTheme.colorScheme.primary
-                        report.isUnsatisfiable -> MaterialTheme.colorScheme.error
+                    color = when (status.action) {
+                        com.example.verb.session.AgentStatusResolver.Action.RESUME,
+                        com.example.verb.session.AgentStatusResolver.Action.OPEN ->
+                            MaterialTheme.colorScheme.primary
+                        com.example.verb.session.AgentStatusResolver.Action.NONE ->
+                            if (status.label == "Unavailable") {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                     modifier = Modifier.testTag("agent_session_status_${profile.id.name.lowercase()}")
                 )
             }
 
-            sessionDisplay?.detailLabel?.let {
+            status.detail?.let {
                 Text(
                     it,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp)
+                    color = if (status.label == "Unavailable") {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .testTag("agent_detail_${profile.id.name.lowercase()}")
                 )
             }
 
@@ -189,43 +208,26 @@ private fun AgentRow(
                 )
             }
 
-            if (report.isUnsatisfiable) {
-                Text(
-                    profile.unavailableReason
-                        ?: "Cannot run on this device. No install will resolve this.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
             Spacer(modifier = Modifier.height(10.dp))
-            when {
-                // A tracked session takes over the action slot entirely: requirement 1 is that this
-                // reads only VerbSession.state (via agentSessionDisplay), never report.isReady.
-                sessionDisplay?.showResume == true -> Button(
+            when (status.action) {
+                com.example.verb.session.AgentStatusResolver.Action.RESUME -> Button(
                     onClick = onResumeSession,
                     modifier = Modifier.testTag("agent_resume_${profile.id.name.lowercase()}")
                 ) { Text("Resume") }
 
-                sessionDisplay?.showStartNew == true -> OutlinedButton(
+                com.example.verb.session.AgentStatusResolver.Action.START_NEW -> OutlinedButton(
                     onClick = onStartNewSession,
                     modifier = Modifier.testTag("agent_start_new_${profile.id.name.lowercase()}")
                 ) { Text("Start new") }
 
-                sessionDisplay != null -> Unit // LIVE / INTERRUPTED: nothing to tap yet.
+                com.example.verb.session.AgentStatusResolver.Action.NONE -> Unit
 
-                // No action at all when Verb knows the agent cannot run here: neither Open (it
-                // would fail) nor Install (it would fail the same way every time). The reason is
-                // printed above instead.
-                report.isUnsatisfiable -> Unit
-
-                report.isReady -> Button(
+                com.example.verb.session.AgentStatusResolver.Action.OPEN -> Button(
                     onClick = { onLaunch(launch) },
                     modifier = Modifier.testTag("agent_open_${profile.id.name.lowercase()}")
                 ) { Text("Open ${profile.displayName}") }
 
-                report.isInstallable -> OutlinedButton(
+                com.example.verb.session.AgentStatusResolver.Action.INSTALL -> OutlinedButton(
                     onClick = { onInstall(profile.id) },
                     enabled = !anyInstalling,
                     modifier = Modifier.testTag("agent_install_${profile.id.name.lowercase()}")

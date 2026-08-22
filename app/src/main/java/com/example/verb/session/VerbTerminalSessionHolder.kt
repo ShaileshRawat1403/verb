@@ -21,8 +21,33 @@ object VerbTerminalSessionHolder {
     @Volatile
     private var runtime: TerminalRuntime? = null
 
+    /**
+     * Which agent is running in that terminal, when one is.
+     *
+     * The binding proves a PTY survived; it never proved *what* was inside it, and that gap is why
+     * two agents could both report "Running" while neither was: each coordinator saw the same live
+     * terminal and claimed it. The marker has exactly the lifetime of the thing it describes -- it
+     * lives beside the runtime, survives an Activity being recreated with it, and dies with the
+     * process, which is precisely when Verb also stops being able to prove anything.
+     */
+    @Volatile
+    private var foreground: String? = null
+
     /** Returns the process-scoped runtime if this Android process already owns one. */
     fun existing(): TerminalRuntime? = runtime
+
+    /** Records that [agentType] now occupies the terminal. */
+    fun claimForeground(agentType: String) {
+        foreground = agentType
+    }
+
+    /** Records that [agentType] has left the terminal, if it was the one holding it. */
+    fun releaseForeground(agentType: String) {
+        if (foreground == agentType) foreground = null
+    }
+
+    /** The agent occupying the terminal, or null when it is back at a shell prompt. */
+    fun foregroundAgent(): String? = foreground
 
     fun getOrCreate(factory: () -> TerminalRuntime): TerminalRuntime =
         runtime ?: synchronized(this) {
@@ -35,5 +60,6 @@ object VerbTerminalSessionHolder {
      */
     fun resetForTests() {
         runtime = null
+        foreground = null
     }
 }
