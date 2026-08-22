@@ -286,11 +286,7 @@ impl ShellIntegration {
     }
 }
 
-unsafe fn set_child_environment(
-    session_id: &str,
-    project: &Path,
-    extra: &[(CString, CString)],
-) {
+unsafe fn set_child_environment(session_id: &str, project: &Path, extra: &[(CString, CString)]) {
     let Ok(session_id) = CString::new(session_id) else {
         _exit(126);
     };
@@ -507,7 +503,9 @@ mod tests {
             )
             .unwrap();
         match first.as_slice() {
-            [Structural::CommandFinished { exit_code, label, .. }] => {
+            [Structural::CommandFinished {
+                exit_code, label, ..
+            }] => {
                 assert_eq!(*exit_code, 1);
                 assert_eq!(label.as_deref(), Some("npm test"));
             }

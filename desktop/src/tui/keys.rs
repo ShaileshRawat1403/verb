@@ -85,7 +85,10 @@ mod tests {
     #[test]
     fn ordinary_characters_pass_through_as_themselves() {
         assert_eq!(encode(key(KeyCode::Char('a'))), Some(b"a".to_vec()));
-        assert_eq!(encode(key(KeyCode::Char('é'))), Some("é".as_bytes().to_vec()));
+        assert_eq!(
+            encode(key(KeyCode::Char('é'))),
+            Some("é".as_bytes().to_vec())
+        );
     }
 
     #[test]

@@ -262,7 +262,7 @@ impl Session {
             .get("last_known_cwd")
             .or_else(|| values.get("project"))
             .filter(|value| !value.is_empty())
-            .map(|value| PathBuf::from(value));
+            .map(PathBuf::from);
         Some(Self {
             id: (*id).to_owned(),
             project_id: PathBuf::from(project_value),
@@ -455,7 +455,12 @@ fn print_sessions(json: bool) -> Result<(), String> {
 
     let mut sessions: Vec<Session> = entries
         .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|value| value == "session"))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|value| value == "session")
+        })
         .filter_map(|entry| fs::read_to_string(entry.path()).ok())
         .filter_map(|contents| Session::deserialize(&contents))
         .collect();
@@ -662,7 +667,14 @@ fn relative_time(elapsed_millis: u128) -> String {
 /// gathering the same evidence -- available on its own, with no model behind it.
 fn print_context(project: &Path, json: bool) -> Result<(), String> {
     let context = context::assemble(project)?;
-    println!("{}", if json { context.to_json() } else { context.to_text() });
+    println!(
+        "{}",
+        if json {
+            context.to_json()
+        } else {
+            context.to_text()
+        }
+    );
     Ok(())
 }
 
@@ -745,7 +757,9 @@ pub(crate) fn begin_session(project: &Path, agent: Agent, extra_args: Vec<String
     // is launched exactly as it would have been, and reports nothing, which stays unknown rather
     // than becoming a guess.
     let instrumented = if agent == Agent::Shell && extra_args.is_empty() {
-        state_root().ok().and_then(|root| integration::prepare(&command, &root))
+        state_root()
+            .ok()
+            .and_then(|root| integration::prepare(&command, &root))
     } else {
         None
     };
@@ -771,9 +785,10 @@ pub(crate) fn begin_resume(project: &Path) -> Result<SessionStart, Failure> {
         .map(reconcile_session)
         .transpose()?
         .ok_or_else(|| Failure::new(exit::NOTHING_TO_DO, "no session for this project"))?;
-    let agent = session.agent.clone().ok_or_else(|| {
-        Failure::new(exit::NOTHING_TO_DO, "this session has no resumable agent")
-    })?;
+    let agent = session
+        .agent
+        .clone()
+        .ok_or_else(|| Failure::new(exit::NOTHING_TO_DO, "this session has no resumable agent"))?;
     if session.state != SessionState::Recoverable {
         return Err(Failure::new(
             exit::NOTHING_TO_DO,
@@ -847,10 +862,7 @@ pub(crate) fn finish_session(session: &mut Session, exit_code: i32) -> Result<()
 
 /// The same closing-out without printing, for the TUI, which owns the screen and would be corrupted
 /// by a stray line of stdout.
-pub(crate) fn finish_session_quietly(
-    session: &mut Session,
-    exit_code: i32,
-) -> Result<(), String> {
+pub(crate) fn finish_session_quietly(session: &mut Session, exit_code: i32) -> Result<(), String> {
     session.last_seen_at = now_millis();
     if session.resume_identity.is_none() {
         session.resume_identity = session
@@ -1158,10 +1170,7 @@ impl EventLogger {
     }
 
     fn cwd_changed(&mut self, cwd: &str) -> Result<(), String> {
-        self.write_event(
-            "CWD_CHANGED",
-            &format!("\"cwd\":\"{}\"", json_escape(cwd)),
-        )
+        self.write_event("CWD_CHANGED", &format!("\"cwd\":\"{}\"", json_escape(cwd)))
     }
 
     fn session_state_changed(&mut self, state: &str) -> Result<(), String> {
@@ -1367,7 +1376,9 @@ mod tests {
         assert!(json.contains("\"sessionId\":\"session-1\""), "{json}");
         assert!(json.contains("\"state\":\"RECOVERABLE\""), "{json}");
         assert!(
-            json.contains("\"agent\":{\"agentType\":\"claude\",\"resumeIdentity\":\"claude-conversation\"}"),
+            json.contains(
+                "\"agent\":{\"agentType\":\"claude\",\"resumeIdentity\":\"claude-conversation\"}"
+            ),
             "{json}"
         );
         // Timestamps are ISO-8601 as the schema specifies, not raw milliseconds.
@@ -1461,7 +1472,10 @@ mod tests {
             Agent::Claude.resume_args(Some("claude-1")),
             vec!["--resume".to_owned(), "claude-1".to_owned()]
         );
-        assert_eq!(Agent::Claude.resume_args(None), vec!["--continue".to_owned()]);
+        assert_eq!(
+            Agent::Claude.resume_args(None),
+            vec!["--continue".to_owned()]
+        );
         // Codex resumes with the same flags a fresh launch uses, so a resumed conversation is not
         // quietly a differently configured Codex.
         assert_eq!(

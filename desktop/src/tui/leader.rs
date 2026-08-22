@@ -141,7 +141,11 @@ pub struct Leader {
 impl Leader {
     /// Reads `VERB_LEADER`, falling back to the provisional default.
     pub fn from_environment() -> Self {
-        match std::env::var("VERB_LEADER").ok().as_deref().and_then(Chord::parse) {
+        match std::env::var("VERB_LEADER")
+            .ok()
+            .as_deref()
+            .and_then(Chord::parse)
+        {
             Some(chord) => Self::configured(chord),
             None => Self::provisional(),
         }
@@ -320,7 +324,9 @@ mod tests {
     fn a_provisional_default_says_so_wherever_it_is_shown() {
         // A user must never discover the binding by having it fire.
         assert!(Leader::provisional().hint().contains("provisional"));
-        assert!(!Leader::configured(Chord::ctrl('g')).hint().contains("provisional"));
+        assert!(!Leader::configured(Chord::ctrl('g'))
+            .hint()
+            .contains("provisional"));
         assert_eq!(Leader::configured(Chord::ctrl('g')).hint(), "leader ^G");
     }
 }

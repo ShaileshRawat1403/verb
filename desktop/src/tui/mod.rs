@@ -1,5 +1,3 @@
-#![cfg(unix)]
-
 //! The Verb workspace: the terminal you were already using, with Verb's knowledge of it one leader
 //! key away.
 //!
@@ -20,9 +18,9 @@ mod render;
 mod term;
 
 use crate::{Agent, Session, SessionState};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use leader::{Command, Leader, Outcome};
 use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::Terminal;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
@@ -35,7 +33,9 @@ const TICK: Duration = Duration::from_millis(30);
 
 pub(super) fn run(project: &Path) -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err("verb ui needs a terminal; run it directly rather than through a pipe".to_owned());
+        return Err(
+            "verb ui needs a terminal; run it directly rather than through a pipe".to_owned(),
+        );
     }
 
     let mut screen = Screen::enter()?;
@@ -98,10 +98,7 @@ impl App {
         let mut sessions = crate::read_sessions_except(hosting.as_deref())?;
         if let Some(hosted) = self.hosted.as_ref() {
             let hosted_id = hosted.session.id.clone();
-            match sessions
-                .iter_mut()
-                .find(|session| session.id == hosted_id)
-            {
+            match sessions.iter_mut().find(|session| session.id == hosted_id) {
                 Some(session) => session.state = SessionState::Live,
                 None => sessions.insert(0, hosted.session.clone()),
             }
@@ -338,7 +335,9 @@ impl App {
                 // something to say. Asking for it when there is nothing says so rather than opening
                 // an empty panel.
                 if self.context == Context::None {
-                    self.message = Some("Nothing to report: no failure or state change observed yet.".to_owned());
+                    self.message = Some(
+                        "Nothing to report: no failure or state change observed yet.".to_owned(),
+                    );
                 }
             }
         }
@@ -356,11 +355,16 @@ impl App {
             }
             Action::NewAgent(agent) => {
                 let (rows, cols) = self.last_size();
-                self.start(crate::begin_session(&self.project.clone(), agent, Vec::new()), rows, cols)
+                self.start(
+                    crate::begin_session(&self.project.clone(), agent, Vec::new()),
+                    rows,
+                    cols,
+                )
             }
             Action::Reconcile => {
                 self.refresh_sessions()?;
-                self.message = Some("Recovery re-checked from each agent's own evidence.".to_owned());
+                self.message =
+                    Some("Recovery re-checked from each agent's own evidence.".to_owned());
                 Ok(())
             }
             Action::Quit => {
@@ -376,7 +380,11 @@ impl App {
     }
 
     fn resume_selected(&mut self, index: usize) -> Result<(), String> {
-        let Some(project) = self.sessions.get(index).map(|session| session.project_id.clone()) else {
+        let Some(project) = self
+            .sessions
+            .get(index)
+            .map(|session| session.project_id.clone())
+        else {
             return Ok(());
         };
         self.resume_project(&project)
@@ -390,7 +398,11 @@ impl App {
         let agent = session.agent.clone();
         let (rows, cols) = self.last_size();
         match agent {
-            Some(agent) => self.start(crate::begin_session(&project, agent, Vec::new()), rows, cols),
+            Some(agent) => self.start(
+                crate::begin_session(&project, agent, Vec::new()),
+                rows,
+                cols,
+            ),
             // A shell session records no agent, so there is nothing to start a *new* one of.
             None => {
                 self.message = Some("That session has no agent to start.".to_owned());

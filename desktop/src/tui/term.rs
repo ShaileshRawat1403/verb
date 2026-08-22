@@ -28,6 +28,8 @@ pub struct Hosted {
 
 impl Hosted {
     /// Starts `command` for `session` on its own PTY, sized to the pane it will be drawn in.
+    #[allow(clippy::too_many_arguments)] // Each argument is a distinct fact about the launch;
+                                         // bundling them would only move the list somewhere else.
     pub fn start(
         project: &std::path::Path,
         mut session: Session,
