@@ -9,7 +9,58 @@ development moment easier, clearer or safer, or does it merely add another capab
 
 ---
 
-## Current sprint — "Nothing to memorise, evidence on demand"
+## Current sprint — Mobile reliability
+
+> **A mobile Verb installation can be upgraded, reinstalled and recovered without losing the user's
+> working world, and every state Verb displays comes from one evidence-backed resolver.**
+
+That sentence is the whole scope. No new vendors, no new surfaces, nothing that is not one of these
+four.
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | `verb export` / `verb import` — the working world in one explicit, encrypted, versioned, checksummed archive | Done — device-verified 22 Aug |
+| 2 | One status resolver — every displayed state comes from evidence, through a single place | Done — `AgentStatusResolver` |
+| 3 | Install and build hardening — release builds on the device, no backup flag, one signing key | Done — `device` build type |
+| 4 | Re-prove Claude and Codex end to end on the device | Done — both resumed prior context |
+
+### What was proven on the device, 22 August
+
+The phone was upgraded in place (`adb install -r`, debug → `device` build) and the world survived.
+Then, in order: `verb export` wrote a 35 MB encrypted archive of a 69 MB world; **System → Working
+world → Save to Downloads** copied it to `Download/world.vbak`, which an uninstall cannot reach;
+**Bring an archive in** staged it back as `~/imported-world.vbak`; `verb import` printed the
+manifest, verified the payload checksum, listed the seven paths it would replace, and changed
+nothing. Claude resumed with its prior transcript intact, and Codex resumed its own session after
+Claude exited. Throughout, exactly one agent read `Running` and the other read `Session
+recoverable` — the state both used to claim at once.
+
+### Why this sprint exists
+
+The phone's entire world — the Linux userland, Claude's login, Codex's login, `~/.env`, session
+records — was created fresh at 12:45 on 21 August, because the package was installed fresh. An
+uninstall, a variant switch or a "clear storage" resets all of it, and the setup work starts again.
+Nothing in Verb defends against that, and it has cost real evenings.
+
+### Backup design constraints
+
+Recovery must not become a credential-leak surface. Therefore:
+
+* **Verb-owned metadata may be snapshotted automatically.** Session and project records contain no
+  credentials.
+* **Third-party credentials are never auto-snapshotted anywhere.** An archive containing Claude and
+  Codex auth or `~/.env` is **explicit, user-triggered, encrypted, versioned and integrity-checked**,
+  and nothing about it happens silently.
+* Import shows a **manifest and a dry-run preview** before replacing anything, and takes its own
+  snapshot of what it is about to overwrite.
+
+```text
+verb export ~/verb-world.vbak
+verb import ~/verb-world.vbak            # preview only
+verb import ~/verb-world.vbak --apply    # after reading the preview
+```
+
+## Previous sprint — "Nothing to memorise, evidence on demand"
 
 **Theme:** someone who has never read our documentation should be able to open Verb, understand what
 they are looking at, and find everything without knowing a key.
@@ -50,6 +101,7 @@ distribution, splitting PR #2.
 | A6 | ~~Mouse support~~ inside surfaces | done |
 | A8 | Mouse capture by default, so bar actions and status segments are clickable — **deferred deliberately**: it takes away native selection and copy, and should be decided from dogfooding evidence rather than assumed | M |
 | A7 | Windows support for the TUI (CLI already falls back to inherited stdio) | L |
+| A9 | Decide the Agents list's admission rule and apply it — Gemini CLI, Hermes and DeepSeek show as installable cards while never having been verified on a device, which is the catalogue shape the compatibility matrix exists to avoid | S |
 
 ## B. Blocked on the Android device
 
@@ -74,6 +126,28 @@ costume.
 | C3 | Last-known-good tracking | comparison and recovery |
 | C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |
 | C5 | Richer contextual triggers: risky Git operation, runtime mismatch | two of the four bands in `TUI_VISION.md` |
+
+## C0. Agent compatibility matrix
+
+Recorded so a candidate cannot become a tile on a screen. Nothing here is visible in the product
+until it has a reason to be, and each line says what has actually been verified.
+
+```text
+Claude Code      hosted CLI        upstream: yes   on Verb Android: yes, signed in, recovery proven
+Codex            hosted CLI        upstream: yes   on Verb Android: yes, signed in, recovery proven
+OpenCode         hosted CLI        upstream: yes   on Verb Android: runs; sign-in not required for use
+Gemini CLI       listed already    upstream: yes (@google/gemini-cli 0.56.0)
+                                   on Verb Android: not verified · priority: deferred
+                                   NOTE: already a visible card in Agents, from commit ad20571 —
+                                   predates the "no visible catalogue" rule and was left alone
+                                   rather than removed mid-sprint. See A9.
+Ollama           candidate         shape: remote provider endpoint, not a hosted agent.
+                                   The npm package is a client library; the runtime is a Go binary.
+                                   Verb would point at a server elsewhere · priority: deferred
+Antigravity      excluded          nothing hostable exists: @google/antigravity is a 404 and the
+                                   unscoped `antigravity` package is a placeholder joke
+dsh              excluded          koffi has no Android build; the card says why
+```
 
 ## D0. Shape constraints for work that has not started
 

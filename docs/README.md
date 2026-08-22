@@ -30,6 +30,7 @@ edited to look correct stops being evidence.
 | [`VERB_SESSION_SCHEMA.md`](VERB_SESSION_SCHEMA.md) | The host-neutral durable record and event shapes shared by Android and desktop. |
 | [`DURABLE_SESSION.md`](DURABLE_SESSION.md) | What survives what on Android — the evidence the contract was designed against. |
 | [`DESKTOP_MVP.md`](DESKTOP_MVP.md) | The desktop host: PTY, adapters, structural events, command surface. |
+| [`WORKING_WORLD.md`](WORKING_WORLD.md) | What an Android install must not lose, how `verb export`/`verb import` protect it, and the packaging rules that keep upgrades in place. |
 | [`AGENT_RUNTIME_V1.md`](AGENT_RUNTIME_V1.md) | The two Android execution environments. |
 | [`TERMINAL_RUNTIME_ROADMAP.md`](TERMINAL_RUNTIME_ROADMAP.md) | Why Termux-derived components are used, and the package-management boundary. |
 | [`P0.5_TERMINAL_CONTEXT.md`](P0.5_TERMINAL_CONTEXT.md) | The terminal context contract (cwd, command tracking). |
