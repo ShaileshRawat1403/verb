@@ -250,9 +250,23 @@ one obvious next action
 
 ### The target
 
-**90% terminal, 10% Verb.** Verb expands only when the user or the situation asks for it. In rows:
-one status line, at most two lines of context band, one Ask line — four rows of chrome at the
-absolute maximum, and two of those only when something happened.
+**90% terminal, 10% Verb** — a design target, not a literal guarantee at every terminal size. Verb
+expands only when the user or the situation asks for it. In rows: one status line, at most two lines
+of context band, one Ask line — four rows of chrome at the absolute maximum, and two of those only
+when something happened.
+
+What that means at the extremes, stated rather than implied:
+
+```text
+40 rows   quiet     2 chrome · 38 terminal    95%
+40 rows   a moment  4 chrome · 36 terminal    90%
+12 rows   quiet     2 chrome · 10 terminal    83%
+12 rows   a moment  4 chrome ·  8 terminal    67%
+```
+
+At the 12-row minimum a contextual moment leaves two thirds of the screen to the work. That is still
+terminal-majority, which is the guarantee; 90/10 is what it converges to at the sizes people
+actually work in.
 
 ### Explicitly prohibited
 
@@ -362,7 +376,29 @@ Two rules keep the chain honest:
 
 ---
 
-## 10. Admitting a new surface
+## 10. The anti-complexity funnel
+
+The sections above are one thing said five ways, and it is worth saying once directly. Capability
+growth is not resisted by taste or by discipline — both of which erode — but by a funnel it has to
+survive:
+
+```text
+Capability growth
+      ↓
+must fit an existing human moment
+      ↓
+must fit an existing surface
+      ↓
+must fit the chrome budget
+      ↓
+must offer an obvious next action
+```
+
+If something cannot survive that, it probably does not belong in Verb. Note what this is *not*: it
+is not "keep the UI simple", which is advice nobody has ever successfully followed. Each stage is a
+question with a wrong answer, and two of them are checked by tests rather than by opinion.
+
+## 11. Admitting a new surface
 
 Before anything new is built, all of these must have an answer:
 
@@ -391,4 +427,5 @@ If it is the second, it stays out.
 * `docs/PRODUCT_VISION.md` — why Verb exists.
 * `docs/PRD.md` — the problem, the pillars, the non-goals.
 * `docs/TUI_VISION.md` — the current implementation of this document.
-* `docs/BACKLOG.md` — what is undone, and the current sprint.
+* `docs/BACKLOG.md` — what is undone, and the current sprint. Section D0 records the required
+  *shape* of work that has not started, so the funnel is applied before anyone writes code.
