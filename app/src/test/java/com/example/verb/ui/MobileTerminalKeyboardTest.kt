@@ -5,6 +5,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performTextInput
@@ -247,5 +248,51 @@ class MobileTerminalKeyboardTest {
         composeTestRule.onNodeWithTag("btn_toggle_key_panel").performClick()
         composeTestRule.onNodeWithTag("btn_edit_quick_keys").performScrollTo().assertExists()
         assertTrue(true)
+    }
+
+    @Test
+    fun `DEL with an empty field still deletes from the line the terminal is showing`() {
+        // The case this exists for: an agent that restored its own composer on resume, or a field
+        // whose mirror was dropped. The field has nothing to delete; the line on screen does.
+        val keysSent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = { keysSent.add(it) },
+                onSendCommand = {},
+                onSendText = {},
+                terminalOutput = "",
+                onInspectOutput = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("key_backspace").performClick()
+        composeTestRule.onNodeWithTag("key_backspace").performClick()
+
+        assertEquals(listOf("BACKSPACE", "BACKSPACE"), keysSent)
+    }
+
+    @Test
+    fun `DEL on mirrored text edits the field, so the line is not deleted twice`() {
+        val keysSent = mutableListOf<String>()
+        val textSent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = { keysSent.add(it) },
+                onSendCommand = {},
+                onSendText = { textSent.add(it) },
+                terminalOutput = "",
+                onInspectOutput = {}
+            )
+        }
+
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("ls")
+        keysSent.clear()
+
+        composeTestRule.onNodeWithTag("key_backspace").performClick()
+
+        // One backspace for the one character removed -- and the field, not the PTY, is the thing
+        // that knew there was a character to remove.
+        assertEquals(listOf("BACKSPACE"), keysSent)
+        composeTestRule.onNodeWithTag("terminal_input_field").assertTextContains("l")
     }
 }

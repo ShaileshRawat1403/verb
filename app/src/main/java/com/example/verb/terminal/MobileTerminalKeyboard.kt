@@ -48,6 +48,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +78,7 @@ fun MobileTerminalKeyboard(
     isKeyboardVisible: Boolean = false,
     onInspectOutput: (String) -> Unit,
     onCommandExecuted: (String) -> Unit = {},
+    inputFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -94,7 +102,10 @@ fun MobileTerminalKeyboard(
     // Survives rotation and process recreation: a user who opened the panel should not have to
     // reopen it because the screen turned.
     var keysExpanded by rememberSaveable { mutableStateOf(false) }
-    var terminalInput by remember { mutableStateOf("") }
+    // Saveable, not merely remembered: switching to Agents and back used to drop this while the
+    // characters were still sitting on the shell line, after which the field and the line disagreed
+    // about what had been typed and every edit was computed against the wrong text.
+    var terminalInput by rememberSaveable { mutableStateOf("") }
     
     val scrollState1 = rememberScrollState()
     val scrollState2 = rememberScrollState()
@@ -122,6 +133,19 @@ fun MobileTerminalKeyboard(
             }
         }
         terminalInput = new
+    }
+
+    // The line belongs to whatever program owns the PTY -- a shell prompt, Claude's composer,
+    // Codex's -- and this field only mirrors what was typed through it. So a backspace with nothing
+    // left to mirror is still a real backspace: it is the only way to delete text the field did not
+    // put there, which is exactly the case after a resumed agent restores its own input, or after
+    // the mirror and the line have drifted apart for any other reason.
+    fun deleteOneCharacter() {
+        if (terminalInput.isEmpty()) {
+            onSendKey("BACKSPACE")
+        } else {
+            handleInputChange(terminalInput.dropLast(1))
+        }
     }
 
     fun submitTerminalInput() {
@@ -157,6 +181,23 @@ fun MobileTerminalKeyboard(
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 46.dp)
+                        .let { base ->
+                            inputFocusRequester?.let { base.focusRequester(it) } ?: base
+                        }
+                        // An empty field reports no change when the IME sends backspace, so without
+                        // this the key silently does nothing at the exact moment a person is trying
+                        // to clear a line they can see on screen.
+                        .onPreviewKeyEvent { event ->
+                            if (event.type == KeyEventType.KeyDown &&
+                                event.key == Key.Backspace &&
+                                terminalInput.isEmpty()
+                            ) {
+                                onSendKey("BACKSPACE")
+                                true
+                            } else {
+                                false
+                            }
+                        }
                         .testTag("terminal_input_field"),
                     placeholder = {
                         Text(
@@ -228,6 +269,10 @@ fun MobileTerminalKeyboard(
                     onSendKey(if (shiftActive) "SHIFT_TAB" else "TAB")
                     shiftActive = false
                 }
+                // Deleting is not an auxiliary key. Whatever owns the line -- a shell, an agent's
+                // composer -- deleting from it is as basic as typing into it, and the soft
+                // keyboard's own backspace only reaches text this field is mirroring.
+                KeyButton(label = "DEL", testTag = "key_backspace") { deleteOneCharacter() }
                 KeyButton(label = "^C", testTag = "key_essential_ctrl_c", isAccent = true) {
                     onSendKey("CTRL_C")
                 }

@@ -54,6 +54,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -137,6 +141,9 @@ fun TerminalScreen(
     // Back gestures resolve overlays top-down, then dismiss the keyboard, before the app-level
     // handler retraces tab history. Enables are mutually exclusive so the innermost surface wins.
     val keyboardController = LocalSoftwareKeyboardController.current
+    // Held here rather than inside the keyboard component, because the thing that asks for focus is
+    // a tap on the canvas above it.
+    val terminalInputFocusRequester = remember { FocusRequester() }
     val anyOverlayOpen = showFileExplorerSheet || showProjectSheet || showDiagnosticsSheet || showNaturalLanguageSheet ||
         showRunsSheet || showOverflowMenu || (aiExplanation != null || isAiExplaining)
     // Overflow menu is the innermost surface (a DropdownMenu can appear over any sheet's trigger),
@@ -557,6 +564,11 @@ fun TerminalScreen(
 
         // Real Terminal Canvas View boundary
         if (termuxAdapter != null) {
+            // Touching the output is a request to type into it. The canvas is a View that owns its
+            // own gestures (selection, scrolling), so this watches the initial pass and consumes
+            // nothing -- it only moves focus to the field, which is where keystrokes are composed.
+            // Before this, a person looking at a line they wanted to correct had no way to reach it
+            // except to find the field again by eye.
             AndroidView(
                 factory = { ctx ->
                     termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
@@ -567,6 +579,17 @@ fun TerminalScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .padding(12.dp)
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                if (event.type == PointerEventType.Press) {
+                                    terminalInputFocusRequester.requestFocus()
+                                    keyboardController?.show()
+                                }
+                            }
+                        }
+                    }
                     .testTag("termux_terminal_view")
             )
         } else {
@@ -601,7 +624,8 @@ fun TerminalScreen(
             terminalOutput = terminalOutput,
             isKeyboardVisible = isKeyboardVisible,
             onInspectOutput = onInspectText,
-            onCommandExecuted = onCommandExecuted
+            onCommandExecuted = onCommandExecuted,
+            inputFocusRequester = terminalInputFocusRequester
         )
     }
 
