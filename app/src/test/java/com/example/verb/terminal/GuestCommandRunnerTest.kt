@@ -112,9 +112,17 @@ class GuestCommandRunnerTest {
             rootfsDir = filesDir
         )
 
-        val result = GuestCommandRunner(filesDir).execute(environment, 3_000)
+        // The upper bound rather than the default: this asserts that a `#!/usr/bin/env node`
+        // shebang resolves, not that it resolves quickly, and starting a real node interpreter on a
+        // loaded CI runner has taken longer than the 3s default -- which surfaced as a bare
+        // "expected READY" with nothing to say why. Timeout behaviour has its own test above.
+        val result = GuestCommandRunner(filesDir).execute(environment, GuestCommandRunner.MAX_TIMEOUT_MS)
 
-        assertEquals(GuestCommandRunner.Outcome.READY, result.outcome)
+        assertEquals(
+            "outcome ${result.outcome}, output: ${result.output}",
+            GuestCommandRunner.Outcome.READY,
+            result.outcome
+        )
         assertTrue(result.output.contains("node-tool"))
     }
 
