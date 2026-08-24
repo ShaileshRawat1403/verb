@@ -137,7 +137,7 @@ object ContinuityArchive {
                 put("recordType", "origin")
                 put("hostId", hostId(context))
                 put("hostKind", "android")
-                put("verbVersion", "0.1.0-beta.1")
+                put("verbVersion", "0.1.0-beta.2")
                 put("exportedAt", timestamp(Instant.now()))
             })
             appendLine(JSONObject().apply {
