@@ -62,6 +62,8 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -107,6 +109,28 @@ fun TerminalScreen(
     onClearTerminal: () -> Unit,
     onInspectText: (String) -> Unit,
     onSubmitIntent: (VerbIntent) -> Unit,
+    /**
+     * Opens the searchable Verb sheet.
+     *
+     * The header chip used to open a second natural-language surface of its own, which meant the
+     * terminal offered a sentence box that neither the Ask tab nor the Assistant tab knew about.
+     * It is now the workspace's one way in to everything Verb can do, by name.
+     */
+    onOpenVerb: () -> Unit = {},
+    /**
+     * True while Verb has a surface of its own in front of the workspace.
+     *
+     * The workspace stays composed and the session stays alive underneath, which is the point -- but
+     * a mounted screen that still claims the back gesture would fight the surface drawn over it. The
+     * terminal owns input exactly when nothing of Verb's is deliberately open.
+     */
+    verbSurfaceOpen: Boolean = false,
+    /**
+     * An optional compact row under the header, for the workspace's single first action when
+     * nothing is hosted. A slot rather than a parameter list, so the terminal does not have to know
+     * what the offer is or how it was chosen.
+     */
+    verbFirstAction: (@Composable () -> Unit)? = null,
     aiExplanation: String? = null,
     isAiExplaining: Boolean = false,
     onExplainOutput: () -> Unit = {},
@@ -117,7 +141,6 @@ fun TerminalScreen(
     onSelectProject: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var showNaturalLanguageSheet by remember { mutableStateOf(false) }
     var showDiagnosticsSheet by remember { mutableStateOf(false) }
     var showFileExplorerSheet by remember { mutableStateOf(false) }
     var showProjectSheet by remember { mutableStateOf(false) }
@@ -144,30 +167,39 @@ fun TerminalScreen(
     // Held here rather than inside the keyboard component, because the thing that asks for focus is
     // a tap on the canvas above it.
     val terminalInputFocusRequester = remember { FocusRequester() }
-    val anyOverlayOpen = showFileExplorerSheet || showProjectSheet || showDiagnosticsSheet || showNaturalLanguageSheet ||
-        showRunsSheet || showOverflowMenu || (aiExplanation != null || isAiExplaining)
+
+    // A mounted workspace must not remain an input target while a deliberate Verb surface covers
+    // it. In particular, the terminal field can retain IME focus after the sheet is opened; without
+    // this boundary, the next characters typed into what looks like Verb can still reach the PTY.
+    // Clearing focus changes no terminal or session state -- it only hands input ownership to the
+    // visible surface.
+    LaunchedEffect(verbSurfaceOpen) {
+        if (verbSurfaceOpen) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
+    }
+    val anyOverlayOpen = verbSurfaceOpen || showFileExplorerSheet || showProjectSheet ||
+        showDiagnosticsSheet || showRunsSheet || showOverflowMenu ||
+        (aiExplanation != null || isAiExplaining)
     // Overflow menu is the innermost surface (a DropdownMenu can appear over any sheet's trigger),
     // so it takes priority over every other back handler below.
-    BackHandler(enabled = showOverflowMenu) { showOverflowMenu = false }
-    BackHandler(enabled = !showOverflowMenu && showFileExplorerSheet) { showFileExplorerSheet = false }
-    BackHandler(enabled = !showOverflowMenu && !showFileExplorerSheet && showProjectSheet) { showProjectSheet = false }
+    BackHandler(enabled = !verbSurfaceOpen && showOverflowMenu) { showOverflowMenu = false }
+    BackHandler(enabled = !verbSurfaceOpen && !showOverflowMenu && showFileExplorerSheet) { showFileExplorerSheet = false }
+    BackHandler(enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && showProjectSheet) { showProjectSheet = false }
     BackHandler(
-        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && showDiagnosticsSheet
+        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
+            showDiagnosticsSheet
     ) { showDiagnosticsSheet = false }
     BackHandler(
-        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && showRunsSheet
+        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
+            !showDiagnosticsSheet && showRunsSheet
     ) {
         showRunsSheet = false
     }
     BackHandler(
-        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && !showRunsSheet &&
-            showNaturalLanguageSheet
-    ) {
-        showNaturalLanguageSheet = false
-    }
-    BackHandler(
-        enabled = !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet && !showDiagnosticsSheet && !showRunsSheet &&
-            !showNaturalLanguageSheet && (aiExplanation != null || isAiExplaining)
+        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
+            !showDiagnosticsSheet && !showRunsSheet && (aiExplanation != null || isAiExplaining)
     ) { onDismissAiExplanation() }
     BackHandler(enabled = !anyOverlayOpen && isKeyboardVisible) {
         keyboardController?.hide()
@@ -219,8 +251,8 @@ fun TerminalScreen(
                             shape = RoundedCornerShape(12.dp),
                             color = Color(0xFF6366F1),
                             modifier = Modifier
-                                .clickable { showNaturalLanguageSheet = true }
-                                .testTag("verb_nl_trigger_top")
+                                .clickable(onClickLabel = "Open Verb") { onOpenVerb() }
+                                .testTag("verb_sheet_trigger")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -264,7 +296,12 @@ fun TerminalScreen(
                             )
                         }
 
-                        // Active status indicator; tap to restart a stopped/failed session
+                        // Active status indicator; tap to restart a stopped/failed session.
+                        //
+                        // Glyph *and* word, from one vocabulary shared with the desktop host: the
+                        // 7dp coloured dot this replaces carried the whole meaning in hue, which
+                        // survives neither a colour-blind reader nor a screen reader, and which
+                        // `docs/UX_FOUNDATION.md` rules out by name. Colour still reinforces it.
                         val statusColor = when (sessionState) {
                             com.example.verb.terminal.TerminalSessionState.RUNNING -> Color(0xFF22C55E)
                             com.example.verb.terminal.TerminalSessionState.STARTING,
@@ -272,14 +309,9 @@ fun TerminalScreen(
                             com.example.verb.terminal.TerminalSessionState.EXITED -> Color(0xFF94A3B8)
                             else -> Color(0xFFEF4444)
                         }
-                        val statusLabel = when (sessionState) {
-                            com.example.verb.terminal.TerminalSessionState.RUNNING -> "running"
-                            com.example.verb.terminal.TerminalSessionState.STARTING -> "starting"
-                            com.example.verb.terminal.TerminalSessionState.STOPPING -> "stopping"
-                            com.example.verb.terminal.TerminalSessionState.EXITED -> "exited"
-                            com.example.verb.terminal.TerminalSessionState.FAILED -> "failed"
-                            null -> "not ready"
-                        }
+                        val statusGlyph = VerbStatusVocabulary.processGlyph(sessionState)
+                        val statusLabel = VerbStatusVocabulary.processWord(sessionState)
+                        val statusDescription = VerbStatusVocabulary.processDescription(sessionState)
                         Surface(
                             shape = RoundedCornerShape(999.dp),
                             color = Color(0xFF222630),
@@ -290,16 +322,21 @@ fun TerminalScreen(
                             },
                             modifier = Modifier
                                 .padding(start = 2.dp)
+                                // On the clickable node itself: a nested merging node does not
+                                // propagate its description outward, so a screen reader would have
+                                // announced the raw glyph instead of the state.
+                                .semantics { contentDescription = statusDescription }
                                 .testTag("verb_session_status")
                         ) {
                             Row(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(statusColor, CircleShape)
+                                Text(
+                                    text = statusGlyph,
+                                    fontSize = 11.sp,
+                                    color = statusColor,
+                                    modifier = Modifier.testTag("verb_session_status_glyph")
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
@@ -375,7 +412,7 @@ fun TerminalScreen(
                                     modifier = Modifier.testTag("btn_files_overflow")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Explain with AI") },
+                                    text = { Text("Explain evidence with AI") },
                                     leadingIcon = {
                                         Icon(imageVector = Icons.Default.Psychology, contentDescription = null)
                                     },
@@ -458,6 +495,13 @@ fun TerminalScreen(
                 message = bootstrapState.message,
                 onRetry = onRetryBootstrap
             )
+        }
+
+        // The workspace's single first action, when there is one. Placed after the setup cards on
+        // purpose: while the userland is still installing, "start an agent" is not yet true, and a
+        // suggestion that cannot work is worse than none.
+        if (bootstrapState == TermuxBootstrapInstaller.State.Ready) {
+            verbFirstAction?.invoke()
         }
 
         // Stopped-session guidance: typing a command now auto-restarts the session, so tell the
@@ -625,18 +669,8 @@ fun TerminalScreen(
             isKeyboardVisible = isKeyboardVisible,
             onInspectOutput = onInspectText,
             onCommandExecuted = onCommandExecuted,
-            inputFocusRequester = terminalInputFocusRequester
-        )
-    }
-
-    // Natural Language Sheet Modal
-    if (showNaturalLanguageSheet) {
-        VerbNaturalLanguageSheet(
-            onDismiss = { showNaturalLanguageSheet = false },
-            onSubmitIntent = { intent ->
-                showNaturalLanguageSheet = false
-                onSubmitIntent(intent)
-            }
+            inputFocusRequester = terminalInputFocusRequester,
+            enabled = !verbSurfaceOpen
         )
     }
 
@@ -719,7 +753,7 @@ fun TerminalScreen(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Analyzing recent terminal output…",
+                            text = "Analyzing structural evidence…",
                             fontSize = 13.sp,
                             color = Color(0xFF94A3B8)
                         )

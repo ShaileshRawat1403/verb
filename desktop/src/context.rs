@@ -30,6 +30,8 @@ use std::path::{Path, PathBuf};
 
 /// One structural fact from the event log, as it was recorded.
 pub(crate) struct Event {
+    /// Origin-assigned per-session order. Absent only on legacy logs written before continuity v1.
+    pub seq: Option<u64>,
     pub kind: String,
     pub timestamp: u128,
     pub exit_code: Option<i64>,
@@ -101,8 +103,9 @@ fn read_events(project: &Path, session_id: &str) -> Result<Vec<Event>, String> {
         .iter()
         .filter_map(|line| {
             Some(Event {
+                seq: json_number(line, "seq").and_then(|value| u64::try_from(value).ok()),
                 kind: json_string(line, "type")?,
-                timestamp: json_number(line, "timestamp").unwrap_or(0),
+                timestamp: event_timestamp(line).unwrap_or(0),
                 // Read field by field, so a log that somehow grew a field Verb does not know about
                 // is ignored rather than carried along.
                 exit_code: json_integer(line, "exitCode"),
@@ -113,6 +116,75 @@ fn read_events(project: &Path, session_id: &str) -> Result<Vec<Event>, String> {
             })
         })
         .collect())
+}
+
+/// New logs use the shared ISO-8601 timestamp. Numeric milliseconds remain readable so upgrading
+/// Verb does not make structural evidence written by an older desktop disappear.
+fn event_timestamp(line: &str) -> Option<u128> {
+    json_string(line, "timestamp")
+        .as_deref()
+        .and_then(parse_iso8601_utc)
+        .or_else(|| json_number(line, "timestamp"))
+}
+
+fn parse_iso8601_utc(value: &str) -> Option<u128> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return None;
+    }
+    let number = |start: usize, end: usize| value.get(start..end)?.parse::<i64>().ok();
+    let year = number(0, 4)?;
+    let month = number(5, 7)?;
+    let day = number(8, 10)?;
+    let hour = number(11, 13)?;
+    let minute = number(14, 16)?;
+    let second = number(17, 19)?;
+    if !(1..=12).contains(&month)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=59).contains(&second)
+    {
+        return None;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if day < 1 || day > month_days[(month - 1) as usize] {
+        return None;
+    }
+
+    // Inverse of `iso8601`'s civil-from-days conversion.
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = adjusted_year.div_euclid(400);
+    let year_of_era = adjusted_year - era * 400;
+    let shifted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    if days < 0 {
+        return None;
+    }
+    let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
+    Some(seconds as u128 * 1_000)
 }
 
 /// Exit codes can be negative, which the unsigned reader cannot express.
@@ -232,6 +304,9 @@ impl Event {
             format!("\"type\":\"{}\"", crate::json_escape(&self.kind)),
             format!("\"timestamp\":\"{}\"", crate::iso8601(self.timestamp)),
         ];
+        if let Some(seq) = self.seq {
+            fields.push(format!("\"seq\":{seq}"));
+        }
         if let Some(exit_code) = self.exit_code {
             fields.push(format!("\"exitCode\":{exit_code}"));
         }
@@ -246,6 +321,9 @@ impl Event {
         }
         if let Some(state) = self.state.as_deref() {
             fields.push(format!("\"state\":\"{}\"", crate::json_escape(state)));
+        }
+        if let Some(tool) = self.tool.as_deref() {
+            fields.push(format!("\"tool\":\"{}\"", crate::json_escape(tool)));
         }
         format!("{{{}}}", fields.join(","))
     }
@@ -282,6 +360,7 @@ mod tests {
             },
             session: None,
             events: vec![Event {
+                seq: Some(1),
                 kind: "COMMAND_FINISHED".to_owned(),
                 timestamp: 1_787_320_092_493,
                 exit_code: Some(1),
@@ -333,8 +412,9 @@ mod tests {
         // asks for known fields rather than copying whatever it finds.
         let line = r#"{"type":"COMMAND_FINISHED","timestamp":1787320092493,"exitCode":1,"commandId":"c1","commandText":"rm -rf /secret"}"#;
         let event = Event {
+            seq: None,
             kind: json_string(line, "type").unwrap(),
-            timestamp: json_number(line, "timestamp").unwrap(),
+            timestamp: event_timestamp(line).unwrap(),
             exit_code: json_integer(line, "exitCode"),
             command_id: json_string(line, "commandId"),
             cwd: json_string(line, "cwd"),
@@ -347,5 +427,22 @@ mod tests {
         assert!(!json.contains("commandText"), "{json}");
         assert!(!json.contains("secret"), "{json}");
         assert!(!event.to_text().contains("secret"));
+    }
+
+    #[test]
+    fn event_timestamps_read_new_iso_and_legacy_milliseconds() {
+        assert_eq!(
+            event_timestamp(r#"{"timestamp":"2026-08-21T13:48:12Z"}"#),
+            Some(1_787_320_092_000)
+        );
+        assert_eq!(
+            event_timestamp(r#"{"timestamp":1787320092493}"#),
+            Some(1_787_320_092_493)
+        );
+        assert_eq!(
+            parse_iso8601_utc("2024-02-29T00:00:00Z"),
+            Some(1_709_164_800_000)
+        );
+        assert_eq!(parse_iso8601_utc("2023-02-29T00:00:00Z"), None);
     }
 }

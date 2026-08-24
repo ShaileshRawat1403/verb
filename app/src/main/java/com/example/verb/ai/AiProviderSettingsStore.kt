@@ -30,9 +30,17 @@ class AndroidKeystoreAiProviderSettingsStore(context: Context) : AiProviderSetti
         val provider = runCatching { AiProviderId.valueOf(providerName) }.getOrNull() ?: return AiProviderSettings()
         val model = preferences.getString(KEY_MODEL, "").orEmpty()
         val baseUrl = preferences.getString(KEY_BASE_URL, provider.defaultBaseUrl).orEmpty()
+        val hasReadableApiKey = preferences.getString(KEY_ENCRYPTED_API_KEY, null)
+            ?.let(::decrypt)
+            ?.isNotBlank() == true
+        if (!hasReadableApiKey && preferences.contains(KEY_ENCRYPTED_API_KEY)) {
+            // A world archive cannot carry the Android Keystore key. A restored ciphertext that
+            // this installation cannot decrypt is absence of a usable key, not a signed-in state.
+            preferences.edit().remove(KEY_ENCRYPTED_API_KEY).commit()
+        }
         return AiProviderSettings(
             config = AiProviderConfig(provider, model, baseUrl),
-            hasApiKey = preferences.contains(KEY_ENCRYPTED_API_KEY)
+            hasApiKey = hasReadableApiKey
         )
     }
 

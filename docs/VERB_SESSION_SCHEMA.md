@@ -150,3 +150,10 @@ VerbSession schema / contract
 
 The adapters implement the existing contract. They do not define new states or reinterpret
 `LIVE`, `INTERRUPTED`, `RECOVERABLE`, or `ENDED`.
+
+## Cross-host provenance
+
+Provenance belongs to transported evidence, never to local state. The continuity envelope adds an
+opaque install `hostId`, coarse `hostKind`, Verb version, and export/import times around the records
+defined here. It does not add durable fields to `VerbSession`, a fifth state, or a second lifecycle.
+See `VERB_CONTINUITY_ENVELOPE.md`.

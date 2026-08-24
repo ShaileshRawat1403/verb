@@ -18,17 +18,23 @@ Verb `v0.1.0-beta.1` is a direct-distribution Android build for arm64 devices. I
 
 ## Agent Tools
 
-Install JavaScript first in System & setup, then install Codex CLI, Claude Code, or Gemini CLI. Each CLI owns its own sign-in flow. Verb never exports its Assistant API key to a terminal CLI.
+Install JavaScript first in System & setup, then install Codex CLI, Claude Code, or OpenCode. Each
+CLI owns and verifies its own sign-in flow. A saved credential file is not proof that its login is
+still valid. Verb never exports its Assistant API key to a terminal CLI.
 
 ## AI Assistant
 
-Verb supports user-provided OpenAI, Anthropic, Gemini, and OpenAI-compatible API credentials. Keys are encrypted with Android Keystore. Suggested model IDs are local conveniences only; availability depends on the selected provider account and endpoint. Terminal explanation sends redacted recent output to the selected provider only when explicitly requested.
+Verb supports user-provided OpenAI, Anthropic, Gemini, and OpenAI-compatible API credentials. Keys are encrypted with Android Keystore. Suggested model IDs are local conveniences only; availability depends on the selected provider account and endpoint. Terminal explanation sends only bounded structural lifecycle evidence to the selected provider when explicitly requested; raw PTY output, command text, file contents, transcripts, credentials and absolute paths are excluded.
 
 ## Beta Limits
 
 - Full CLI is direct-distribution only because Android's current executable-storage policy prevents this runtime model in a Play-targeted app.
 - A selected project is the terminal launch directory. Verb does not infer later shell `cd` changes.
 - Agent installation/authentication and long-running process behavior should be treated as beta functionality.
+- Working World archives exclude project source trees. Keep every project in Git or another
+  independent backup before uninstalling or clearing Verb.
+- Claude and Codex recovery have physical-device evidence. OpenCode launches physically, but its
+  recovery path and Android↔desktop continuity round-trip are not yet accepted end to end.
 
 ## Updates And Support
 

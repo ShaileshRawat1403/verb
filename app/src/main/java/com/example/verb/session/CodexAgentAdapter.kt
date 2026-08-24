@@ -71,7 +71,7 @@ class CodexAgentAdapter(
      * reasoning about why "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
-        val resumeArgument = agent.resumeIdentity ?: "--last"
+        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity) ?: "--last"
         // The same flags a fresh launch uses, so resuming a conversation is not quietly a different
         // Codex from the one that started it.
         val flags = "--disable ${RuntimeProfiles.CODEX_APPS_FEATURE}"
@@ -108,7 +108,9 @@ class CodexAgentAdapter(
             val header = runCatching { file.useLines { it.firstOrNull() } }.getOrNull()
                 ?: return@mapNotNull null
             val cwd = JSON_CWD_PATTERN.find(header)?.groupValues?.get(1) ?: return@mapNotNull null
-            val sessionId = JSON_ID_PATTERN.find(header)?.groupValues?.get(1) ?: return@mapNotNull null
+            val sessionId = ResumeIdentity.validOrNull(
+                JSON_ID_PATTERN.find(header)?.groupValues?.get(1)
+            ) ?: return@mapNotNull null
             if (!GuestPathAliases.sameDirectory(cwd, project)) return@mapNotNull null
             if (agent.resumeIdentity != null && agent.resumeIdentity != sessionId) return@mapNotNull null
             Rollout(
@@ -190,7 +192,8 @@ fun CodexSessionCoordinator(
     terminalRuntimeAdapter = terminalRuntimeAdapter,
     coroutineScope = coroutineScope,
     sessionStore = sessionStore,
-    processBindingConfirmed = processBindingConfirmed
+    processBindingConfirmed = processBindingConfirmed,
+    eventLog = VerbEventLog(filesDir)
 )
 
 /** The [AgentRef.agentType] and [VerbSession.runtime] value for Codex sessions. */

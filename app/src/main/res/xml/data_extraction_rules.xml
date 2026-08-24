@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?><!--
    Verb's app-private storage holds an on-device Linux userland (proot rootfs, shell history, and
-   any credentials the user configures inside the terminal) plus a local database of command and
-   terminal-output history. None of that should leave the device via Auto Backup or device
-   transfer, so both are excluded below rather than left to the sample defaults.
+   any credentials the user configures inside the terminal). It must not leave the device via Auto
+   Backup or device transfer, so app files are excluded rather than left to the sample defaults.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="database" path="verb_database" />
         <exclude domain="file" path="." />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="database" path="verb_database" />
         <exclude domain="file" path="." />
     </device-transfer>
 </data-extraction-rules>

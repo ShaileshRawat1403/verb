@@ -30,24 +30,36 @@ object VerbTerminalSessionHolder {
      * lives beside the runtime, survives an Activity being recreated with it, and dies with the
      * process, which is precisely when Verb also stops being able to prove anything.
      */
+    data class ForegroundBinding(
+        val agentType: String,
+        val commandIdsBeforeLaunch: Set<String>
+    )
+
     @Volatile
-    private var foreground: String? = null
+    private var foreground: ForegroundBinding? = null
 
     /** Returns the process-scoped runtime if this Android process already owns one. */
     fun existing(): TerminalRuntime? = runtime
 
     /** Records that [agentType] now occupies the terminal. */
-    fun claimForeground(agentType: String) {
-        foreground = agentType
+    fun claimForeground(agentType: String, commandIdsBeforeLaunch: Set<String>) {
+        foreground = ForegroundBinding(agentType, commandIdsBeforeLaunch.toSet())
     }
 
     /** Records that [agentType] has left the terminal, if it was the one holding it. */
     fun releaseForeground(agentType: String) {
-        if (foreground == agentType) foreground = null
+        if (foreground?.agentType == agentType) foreground = null
     }
 
     /** The agent occupying the terminal, or null when it is back at a shell prompt. */
-    fun foregroundAgent(): String? = foreground
+    fun foregroundAgent(): String? = foreground?.agentType
+
+    /**
+     * Runtime-only evidence needed to reattach an agent-exit watch after Activity/ViewModel
+     * recreation. The command baseline is deliberately kept beside the PTY, never persisted:
+     * command-history IDs and process presence have meaning only inside this Android process.
+     */
+    fun foregroundBinding(): ForegroundBinding? = foreground
 
     fun getOrCreate(factory: () -> TerminalRuntime): TerminalRuntime =
         runtime ?: synchronized(this) {

@@ -15,11 +15,17 @@ files/home/.claude.json
 files/home/.codex                   Codex's auth and session transcripts
 files/home/.config/opencode
 files/home/.local/share/opencode
-shared_prefs                        Verb's own session and project records
+shared_prefs/verb_session*.xml      allowlisted Verb session records
+shared_prefs/verb_projects.xml      project metadata, not project contents
 ```
 
 Android deletes all of it on uninstall, on "clear storage", and on any install that has to remove
 the package first. Before this existed, that cost an evening each time.
+
+Project source directories are intentionally **not** part of Working World. The archive is a
+sensitive recovery envelope, not a repository backup: keep project source in Git or another
+independent backup. Restoring metadata for a project whose directory is gone cannot recreate that
+directory or its files.
 
 ## Two commands, and one thing the app does
 
@@ -64,6 +70,14 @@ name, and a read failure anywhere else aborts the export rather than writing one
 unknown` and the total becomes "at least". Printing `0 B` would be Verb stating a fact it does not
 have.
 
+### Schema compatibility
+
+The current writer produces schema v2 and the reader accepts v1–v2. A v1 archive may contain a
+broad `shared_prefs/` directory, but import restores only the current allowlist: session/project
+records. Legacy chat memory, provider ciphertext tied to another Android Keystore, UI preferences
+and privacy markers are ignored. Preview lists the allowlisted paths actually staged, not every
+member that happened to exist in the older archive.
+
 ## Install hygiene
 
 The archive is the recovery path. Not needing it is better, and that is a packaging property:
@@ -77,5 +91,8 @@ The archive is the recovery path. Not needing it is better, and that is a packag
 * **`android:allowBackup="false"`.** Verb's storage holds third-party credentials; it does not belong
   in an automatic cloud backup the user never asked for.
 
-Verified on the device on 22 August: upgraded in place from the debug build, world intact, both
-agents still signed in, both able to resume the sessions they had before the upgrade.
+Verified on the device on 24 August: a real encrypted schema-v1 archive was previewed and applied
+through the current reader, then upgraded in place to a non-debuggable build. Claude and Codex kept
+their conversation identities and resumed in new processes. Codex's saved login remained usable;
+Claude's saved files remained present but Claude itself required `/login`, proving why Verb must not
+equate a credential file with valid authentication.

@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?><!--
    Applies on API 23-30 (data_extraction_rules.xml takes over on API 31+, see that file). Same
-   exclusions: the terminal userland and local history database never leave the device.
+   exclusion: the terminal userland never leaves the device.
 -->
 <full-backup-content>
-    <exclude domain="database" path="verb_database" />
     <exclude domain="file" path="." />
 </full-backup-content>

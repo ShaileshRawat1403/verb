@@ -58,7 +58,7 @@ Outstanding against that condition:
 
 ## M1 — Desktop workspace
 
-**Status: the immediate focus, and the only thing being built now.**
+**Status: built and frozen for dogfooding. Reliability defects found in real use are still fixed.**
 
 Move the current `verb ui` scaffold to Ratatui and design one strong default workspace:
 
@@ -196,7 +196,7 @@ they can be built early.
 
 ## Scope freeze
 
-**We build only M1 now.**
+**M1 is frozen for dogfooding. M2 starts only from a reviewed, evidence-backed vertical slice.**
 
 No causal memory system. No CI integrations. No plugin SDK. No new harness. No autonomous assistant.
 

@@ -209,7 +209,14 @@ class AgentWrapperBootstrapTest {
         assertTrue(command.startsWith("npm install -g @openai/codex"))
         assertTrue("the version must come from the installed launcher", command.contains("require('"))
         assertTrue("npm must resolve the tarball location itself", command.contains("npm pack"))
-        assertTrue(command.contains("-linux-arm64"))
+        assertTrue(
+            "the shell must expand the installed launcher's version in the platform package spec",
+            command.contains("@openai/codex@${'$'}{codex_version}-linux-arm64")
+        )
+        assertFalse(
+            "escaping the dollar sends npm a literal variable name",
+            command.contains("@openai/codex@\\${'$'}{codex_version}-linux-arm64")
+        )
         assertTrue("it must unpack into the fallback codex.js reads", command.contains("/vendor"))
     }
 

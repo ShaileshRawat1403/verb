@@ -38,6 +38,18 @@ class VerbCliBootstrapTest {
         val script = command.readText()
         assertTrue("the command should be the world script", script.contains("verb export"))
         assertTrue("import must preview before it replaces", script.contains("--apply"))
+        assertTrue(
+            "existing schema-v1 backups must remain readable",
+            script.contains("MIN_READABLE_SCHEMA_VERSION=1"),
+        )
+        assertTrue(
+            "v1 broad preferences may only be staged for compatibility",
+            script.contains("shared_prefs|shared_prefs/*) return 0"),
+        )
+        assertTrue(
+            "restore must still copy only the current narrow allowlist",
+            script.contains("for path in \"\${WORLD_PATHS[@]}\""),
+        )
     }
 
     @Test
@@ -63,5 +75,31 @@ class VerbCliBootstrapTest {
         VerbCliBootstrap.install(context, filesDir)
 
         assertEquals(current, command.readText())
+    }
+
+    @Test
+    fun `fresh bootstrap activation reinstalls verb after replacing provisional usr`() {
+        val filesDir = temporaryFolder.newFolder("files")
+        val usrDir = File(filesDir, "usr")
+        val workDir = File(filesDir, ".bootstrap").apply { mkdirs() }
+        val stagingUsr = File(workDir, "usr-staging").apply {
+            mkdirs()
+            File(this, "fresh-runtime-marker").writeText("activated")
+        }
+
+        // ViewModel prepares Verb-owned files before the downloaded bootstrap is activated.
+        assertTrue(VerbCliBootstrap.install(context, filesDir))
+        assertTrue(VerbCliBootstrap.isInstalled(filesDir))
+
+        TermuxBootstrapInstaller.activateBootstrap(
+            context = context,
+            stagingUsr = stagingUsr,
+            usrDir = usrDir,
+            workDir = workDir,
+            filesDir = filesDir,
+        )
+
+        assertTrue(File(usrDir, "fresh-runtime-marker").isFile)
+        assertTrue(VerbCliBootstrap.isInstalled(filesDir))
     }
 }

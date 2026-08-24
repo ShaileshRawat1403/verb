@@ -369,8 +369,9 @@ Two rules keep the chain honest:
 
 * **The terminal owns the keyboard.** Verb reserves exactly one chord — the leader — which is
   configurable, forwardable (`leader leader`), and forwards anything it does not claim.
-* **The terminal owns the mouse too**, except while a Verb surface is open. Native selection and
-  copy are not Verb's to take.
+* **Verb captures the mouse by default** so its small action surface is directly usable. Full-screen
+  applications still own their terminal region; Option-drag preserves native selection, and
+  `leader m` hands the mouse back to the terminal entirely. The current mode is stated on screen.
 * **The mouse is never required.** Everything reachable by pointer is reachable by name in the
   palette.
 * **`Esc` always closes the topmost Verb surface** and never does anything else.

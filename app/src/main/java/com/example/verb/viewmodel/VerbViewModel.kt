@@ -12,16 +12,11 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.ai.AndroidKeystoreAiProviderSettingsStore
 import com.example.verb.ai.DefaultAiProviderClientFactory
-import com.example.verb.db.CommandHistoryEntity
-import com.example.verb.db.VerbRepository
 import com.example.verb.intent.IntentEngine
 import com.example.verb.model.ActionResult
-import com.example.verb.model.ChatMessage
-import com.example.verb.model.ChatSender
 import com.example.verb.model.SemanticEntity
 import com.example.verb.project.ProjectRepository
 import com.example.verb.project.VerbProject
-import com.example.verb.semantic.SecretGuard
 import com.example.verb.semantic.SemanticEngine
 import com.example.verb.terminal.BundledToolBootstrap
 import com.example.verb.terminal.AgentArtifactState
@@ -56,13 +51,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
-enum class VerbTab {
-    AGENTS,
-    ASK,
-    ASSISTANT,
-    SYSTEM,
-    TERMINAL
-}
 
 class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -75,7 +63,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         settingsStore = aiProviderSettingsStore,
         clientFactory = aiProviderClientFactory::invoke
     )
-    private val repository = VerbRepository.getInstance(application.applicationContext)
     private val projectRepository = ProjectRepository(application.applicationContext)
     private val runtimeCapabilityDetector = RuntimeCapabilityDetector(application.filesDir)
     private val agentRuntimeInstaller = AgentRuntimeInstaller(application.filesDir)
@@ -234,15 +221,16 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _agentRuntimeMessage = MutableStateFlow<String?>(null)
     val agentRuntimeMessage: StateFlow<String?> = _agentRuntimeMessage.asStateFlow()
 
-    // The terminal is the primary product surface, so the app lands on it at launch rather than
-    // the query/assistant tabs where raw shell commands would appear to do nothing.
-    private val _activeTab = MutableStateFlow(VerbTab.TERMINAL)
-    val activeTab: StateFlow<VerbTab> = _activeTab.asStateFlow()
+    // The terminal is the workspace and the root. There is no permanent navigation: this holds only
+    // what Verb has been asked to put in front of it, and [VerbSurface.None] is the resting state.
+    private val _surface = MutableStateFlow<VerbSurface>(VerbSurface.None)
+    val surface: StateFlow<VerbSurface> = _surface.asStateFlow()
 
-    // Tabs visited before the current one, newest first. Back gestures retrace this order until it
-    // empties (the terminal root), at which point back exits the app.
-    private val _tabBackStack = MutableStateFlow<List<VerbTab>>(emptyList())
-    val tabBackStack: StateFlow<List<VerbTab>> = _tabBackStack.asStateFlow()
+    // Whether the open task was reached through the Verb sheet. Back then returns to that sheet,
+    // because the user is retracing the list they chose from; a task opened directly (from the
+    // workspace's first action, or from a link inside another task) returns straight to the
+    // terminal rather than opening a surface the user never asked for.
+    private val _taskOpenedFromSheet = MutableStateFlow(false)
 
     // Reliable keyboard visibility driven by the Activity's window insets (edge-to-edge), not the
     // Compose-side isImeVisible read which can report a stale true on this configuration.
@@ -264,7 +252,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             "GEMINI_API_KEY"
         )
 
-        const val MAX_TAB_BACK_STACK = 8
         const val PROFILE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000L
 
         /**
@@ -309,9 +296,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _confirmationPendingResult = MutableStateFlow<ActionResult?>(null)
     val confirmationPendingResult: StateFlow<ActionResult?> = _confirmationPendingResult.asStateFlow()
 
-    private val _persistedCommandHistory = MutableStateFlow<List<CommandHistoryEntity>>(emptyList())
-    val persistedCommandHistory: StateFlow<List<CommandHistoryEntity>> = _persistedCommandHistory.asStateFlow()
-
     private val _terminalAiExplanation = MutableStateFlow<String?>(null)
     val terminalAiExplanation: StateFlow<String?> = _terminalAiExplanation.asStateFlow()
 
@@ -335,10 +319,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // each profile probe spawns a real process.
         viewModelScope.launch(Dispatchers.IO) { refreshRuntimeProfiles() }
 
-        // Mirror persisted command history into UI state as it changes
-        viewModelScope.launch(Dispatchers.IO) {
-            repository.commandHistory.collect { _persistedCommandHistory.value = it }
-        }
     }
 
     private fun runtimeReports(): List<RuntimeProfileReport> =
@@ -499,7 +479,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         runCatching { terminalRuntime.activateAgentRuntime(runtime) }
-            .onSuccess { selectTab(VerbTab.TERMINAL) }
+            .onSuccess { openTerminal() }
             .onFailure { _agentRuntimeMessage.value = it.message ?: "Could not open Agent Runtime." }
     }
 
@@ -592,21 +572,20 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      */
     private suspend fun installOneProfile(profile: RuntimeProfile): String? {
         val marker = "__VERB_PROFILE_${profile.id.name}_${System.currentTimeMillis()}__"
-        val command = "${profile.installCommand}; profile_status=${'$'}?; printf '\\n$marker:%s\\n' \"${'$'}profile_status\""
+        val command = ProfileInstallProtocol.command(profile.installCommand, marker)
         withContext(Dispatchers.Main.immediate) {
             terminalRuntime.sendCommand(command)
-            recordTerminalCommand(command)
         }
-        val completed: String? = withTimeoutOrNull(PROFILE_INSTALL_TIMEOUT_MS) {
-            var result: String? = null
+        val completed: Int? = withTimeoutOrNull(PROFILE_INSTALL_TIMEOUT_MS) {
+            var result: Int? = null
             while (result == null) {
                 val output = terminalRuntime.terminalOutput.value
-                if (output.contains(marker)) {
-                    result = output
+                ProfileInstallProtocol.exitCode(output, marker)?.let { exitCode ->
+                    result = exitCode
                     continue
                 }
                 if (runtimeCapabilityDetector.inspect(profile).isReady) {
-                    result = "profile-ready"
+                    result = 0
                     continue
                 }
                 delay(500)
@@ -615,8 +594,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         }
         return when {
             completed == null -> "${profile.displayName} timed out; inspect the terminal output."
-            completed == "profile-ready" -> null
-            completed.substringAfter("$marker:").trim().startsWith("0") -> null
+            completed == 0 -> null
             else -> "${profile.displayName} failed; inspect the terminal output."
         }
     }
@@ -674,7 +652,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * again by hand next time.
      */
     fun launchAgent(command: String) {
-        selectTab(VerbTab.TERMINAL)
+        openTerminal()
         val tracked = TRACKED_AGENT_LAUNCH_COMMANDS.entries.firstOrNull { it.value == command }?.key
         val coordinator = tracked?.let(sessionCoordinators::get)
         if (coordinator == null) {
@@ -691,7 +669,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     /** The Agents screen's Resume action once that agent's session is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
     fun resumeAgentSession(profileId: RuntimeProfileId) {
         val coordinator = sessionCoordinators[profileId] ?: return
-        selectTab(VerbTab.TERMINAL)
+        openTerminal()
         viewModelScope.launch(Dispatchers.Main.immediate) {
             coordinator.resume()
         }
@@ -716,6 +694,17 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _worldArchiveMessage = MutableStateFlow<String?>(null)
     val worldArchiveMessage: StateFlow<String?> = _worldArchiveMessage.asStateFlow()
+
+    private val _continuityMessage = MutableStateFlow<String?>(null)
+    val continuityMessage: StateFlow<String?> = _continuityMessage.asStateFlow()
+
+    private val _continuityPreviewReady = MutableStateFlow(false)
+    val continuityPreviewReady: StateFlow<Boolean> = _continuityPreviewReady.asStateFlow()
+
+    private val _importedContinuitySessions = MutableStateFlow(
+        com.example.verb.session.ContinuityArchive.importedSessionCount(application.filesDir)
+    )
+    val importedContinuitySessions: StateFlow<Int> = _importedContinuitySessions.asStateFlow()
 
     fun refreshWorldArchive() {
         _worldArchiveName.value =
@@ -753,36 +742,104 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         refreshWorldArchive()
     }
 
+    fun exportContinuity() {
+        val context = getApplication<Application>()
+        val project = _selectedProject.value
+        if (project == null) {
+            _continuityMessage.value = "Select a project before exporting continuity evidence."
+            return
+        }
+        _continuityMessage.value = when (
+            val outcome = com.example.verb.session.ContinuityArchive.exportToDownloads(
+                context,
+                project,
+                sessionCoordinators.values.mapNotNull { it.session.value }
+            )
+        ) {
+            is com.example.verb.session.ContinuityArchive.Outcome.Saved ->
+                "Saved ${outcome.summary.sessions} session records to ${outcome.displayName}. " +
+                    "No transcript, command text, terminal stream, credential, or absolute path was included."
+            is com.example.verb.session.ContinuityArchive.Outcome.Failed -> outcome.reason
+            else -> "Continuity export did not complete."
+        }
+    }
+
+    fun previewContinuity(uri: android.net.Uri) {
+        val context = getApplication<Application>()
+        _continuityMessage.value = when (
+            val outcome = com.example.verb.session.ContinuityArchive.previewImport(context, uri)
+        ) {
+            is com.example.verb.session.ContinuityArchive.Outcome.Previewed -> {
+                _continuityPreviewReady.value = true
+                "Preview: ${outcome.summary.display()}. Recorded state is history only; nothing local changed."
+            }
+            is com.example.verb.session.ContinuityArchive.Outcome.Failed -> {
+                _continuityPreviewReady.value = false
+                outcome.reason
+            }
+            else -> "Continuity preview did not complete."
+        }
+    }
+
+    fun applyContinuityPreview() {
+        val context = getApplication<Application>()
+        _continuityMessage.value = when (
+            val outcome = com.example.verb.session.ContinuityArchive.applyPreview(context)
+        ) {
+            is com.example.verb.session.ContinuityArchive.Outcome.Imported -> {
+                _continuityPreviewReady.value = false
+                _importedContinuitySessions.value =
+                    com.example.verb.session.ContinuityArchive.importedSessionCount(context.filesDir)
+                if (outcome.replay) {
+                    "This exact evidence was already imported; nothing changed."
+                } else {
+                    "Imported ${outcome.summary.sessions} session records as read-only evidence. " +
+                        "No local session or Resume action changed."
+                }
+            }
+            is com.example.verb.session.ContinuityArchive.Outcome.Failed -> outcome.reason
+            else -> "Continuity import did not complete."
+        }
+    }
+
     /** Opens the key file in the terminal's editor; Verb never displays or edits key values itself. */
     fun editAgentKeys() {
-        selectTab(VerbTab.TERMINAL)
+        openTerminal()
         sendTerminalCommand("nano ~/.env")
     }
 
-    fun selectTab(tab: VerbTab) {
-        // Opening the Agents screen re-checks recovery for any session whose process is gone: the
-        // evidence an agent leaves behind can appear after the coordinator's own bounded retries
-        // gave up, and this is the moment the user is about to read that state off a card.
-        if (tab == VerbTab.AGENTS) sessionCoordinators.values.forEach { it.refresh() }
-        val current = _activeTab.value
-        if (current == tab) return
-        // Push the outgoing tab so the system back gesture retraces tab hops in order.
-        val stack = _tabBackStack.value
-        if (stack.lastOrNull() != current && stack.size < MAX_TAB_BACK_STACK) {
-            _tabBackStack.value = stack + current
-        }
-        _activeTab.value = tab
+    /** Opens the searchable Verb sheet. Always the user's move; nothing opens it on Verb's behalf. */
+    fun openVerbSheet() {
+        _surface.value = VerbSurface.Sheet
     }
 
     /**
-     * Pops the tab history. Returns false when already at the root tab so the caller can decide
-     * whether the app should exit.
+     * Opens one named task.
+     *
+     * [fromSheet] records how the user got here so back can retrace it, and nothing else depends on
+     * it -- it is navigation history, not product state.
      */
-    fun navigateBack(): Boolean {
-        val stack = _tabBackStack.value
-        if (stack.isEmpty()) return false
-        _tabBackStack.value = stack.dropLast(1)
-        _activeTab.value = stack.last()
+    fun openTask(task: VerbTask, fromSheet: Boolean = false) {
+        // Opening anything that displays session recovery re-checks it first: the evidence an agent
+        // leaves behind can appear after the coordinator's own bounded retries gave up, and this is
+        // the moment the user is about to read that state off a card.
+        if (task == VerbTask.AGENTS || task == VerbTask.SESSIONS) {
+            sessionCoordinators.values.forEach { it.refresh() }
+        }
+        _taskOpenedFromSheet.value = fromSheet
+        _surface.value = VerbSurface.Task(task)
+    }
+
+    /**
+     * Dismisses the topmost Verb surface, innermost first: a task, then the sheet, then nothing.
+     *
+     * Returns false only when the terminal already owns the screen, so the caller can let the system
+     * back gesture exit the app.
+     */
+    fun dismissVerbSurface(): Boolean {
+        val next = _surface.value.afterBack(_taskOpenedFromSheet.value) ?: return false
+        _surface.value = next
+        _taskOpenedFromSheet.value = false
         return true
     }
 
@@ -804,10 +861,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _aiProviderSettings.value = aiProviderSettingsStore.load()
     }
 
-    fun openAssistant() {
-        selectTab(VerbTab.ASSISTANT)
-    }
-
     fun submitAssistantPrompt(prompt: String) {
         if (prompt.isBlank() || _assistantState.value is AiAssistantState.Generating) return
         _assistantInput.value = prompt
@@ -815,10 +868,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             _assistantState.value = try {
                 val response = aiAssistantService.respond(AiAssistantRequest(prompt))
-                runCatching {
-                    repository.saveChatMessage(ChatMessage(sender = ChatSender.USER, text = prompt))
-                    repository.saveChatMessage(ChatMessage(sender = ChatSender.AGENT, text = response.text))
-                }
                 AiAssistantState.Answer(response)
             } catch (exception: Exception) {
                 AiAssistantState.Failure(exception.message ?: "The assistant could not complete this request.")
@@ -829,13 +878,15 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun submitIntent(intent: com.example.verb.model.VerbIntent) {
         _isExecuting.value = true
         _queryInput.value = intent.summary
+        // The result appears in Ask Verb, so the surface that will show it is opened before the work
+        // starts. `terminal.open` is the exception: its whole point is to leave Verb's surfaces.
         if (intent.id != "terminal.open") {
-            selectTab(VerbTab.ASK)
+            ensureAskVerbVisible()
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 if (intent.id == "terminal.open") {
-                    selectTab(VerbTab.TERMINAL)
+                    openTerminal()
                     return@launch
                 }
                 handleActionResult(actionRegistry.executeAction(intent, confirmed = false), query = intent.summary)
@@ -858,9 +909,15 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 val resolvedIntent = intentEngine.resolveIntent(query)
                 intent = resolvedIntent
                 if (resolvedIntent.id == "terminal.open") {
-                    selectTab(VerbTab.TERMINAL)
+                    openTerminal()
                     return@launch
                 }
+                // A query can arrive from the semantic lens over the terminal, not only from Ask
+                // Verb's own input. Under the tab model the result landed in a tab the user was not
+                // looking at, so a suggested action appeared to do nothing at all. The surface that
+                // renders the result is opened here, after resolution, so `terminal.open` never
+                // flashes a surface on its way out.
+                ensureAskVerbVisible()
                 handleActionResult(actionRegistry.executeAction(resolvedIntent, confirmed = false), query = query)
             } catch (e: Exception) {
                 handleActionResult(unexpectedFailure(intent, e), query = query)
@@ -907,8 +964,23 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _activeSemanticEntity.value = null
     }
 
+    /**
+     * Brings Ask Verb forward if it is not already there.
+     *
+     * Deliberately not a plain [openTask]: re-opening the surface the user is already on would reset
+     * how they got there, so a person who reached Ask Verb through the sheet and then ran something
+     * would find back sending them to the terminal instead of the list they came from.
+     */
+    private fun ensureAskVerbVisible() {
+        if (_surface.value != VerbSurface.Task(VerbTask.ASK_VERB)) {
+            openTask(VerbTask.ASK_VERB)
+        }
+    }
+
+    /** Puts the terminal back in front. It was never destroyed; only covered. */
     fun openTerminal() {
-        selectTab(VerbTab.TERMINAL)
+        _taskOpenedFromSheet.value = false
+        _surface.value = VerbSurface.None
     }
 
     fun createProject(name: String) {
@@ -927,59 +999,22 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Sends a command to the real PTY and records a bounded transcript snapshot to Room. The
-     * command text is written to the TTY only; it is never parsed or executed by the AI layer.
-     */
+    /** Sends command text to the live PTY. It remains volatile and is never persisted by Verb. */
     fun sendTerminalCommand(cmd: String) {
         terminalRuntime.sendCommand(cmd)
-        recordTerminalCommand(cmd)
     }
 
-    /**
-     * Records a command + bounded transcript snapshot to Room without writing to the PTY. The
-     * mobile keyboard's live-echo typing path sends characters to the shell as they are typed and
-     * only submits a trailing newline through [sendTerminalCommand], so it calls this directly
-     * with the real typed text to keep command history meaningful instead of blank.
-     */
-    fun recordTerminalCommand(cmd: String) {
-        if (cmd.isBlank()) return
-        TerminalSessionLogger.info(LogCategory.IO, "Terminal command submitted (${cmd.length} chars)")
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
-                // Redacted through SecretGuard before it ever reaches disk, and capped well below
-                // the 50k in-memory buffer: this snapshot is written on every command send, so an
-                // unbounded copy would grow the local database roughly with (commands x buffer
-                // size) over a session.
-                repository.recordTerminalOutput(
-                    command = SecretGuard.redactKnownSensitiveText(cmd),
-                    output = SecretGuard.redactKnownSensitiveText(terminalRuntime.terminalOutput.value).takeLast(4_000),
-                    // The shell's own directory at submission time, as a guest path, or null when
-                    // it is unknown. The launch directory is deliberately NOT substituted here: a
-                    // stored row claiming a directory the command did not run in is worse than a
-                    // row that admits it does not know. The column is already nullable.
-                    workingDir = terminalRuntime.currentWorkingDirectory.value?.guestPath
-                )
-            }
-        }
-    }
-
-    /**
-     * Asks the user-configured provider to explain the recent terminal output. The transcript is
-     * redacted through [com.example.verb.semantic.SecretGuard] before leaving the device.
-     */
+    /** Asks the configured provider to explain structural facts; PTY output never leaves Verb. */
     fun explainTerminalOutput() {
         if (_isTerminalAiExplaining.value) return
-        val output = terminalRuntime.terminalOutput.value
-        if (output.isBlank()) return
 
         _isTerminalAiExplaining.value = true
         viewModelScope.launch(Dispatchers.IO) {
             _terminalAiExplanation.value = try {
                 TerminalAiHelper.analyze(
                     service = aiAssistantService,
-                    output = output,
-                    workingDir = terminalRuntime.currentWorkingDirectory.value?.guestPath,
+                    lastCommand = terminalRuntime.commandHistory.value.lastOrNull(),
+                    workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null,
                     sessionState = terminalRuntime.sessionState.value
                 )
             } catch (e: Exception) {
@@ -994,12 +1029,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleActionResult(result: ActionResult, query: String? = null) {
-        if (!result.requiresConfirmation) {
-            viewModelScope.launch(Dispatchers.IO) {
-                runCatching { repository.recordCommand(query ?: result.title, result) }
-            }
-        }
-
         if (result.requiresConfirmation) {
             _confirmationPendingResult.value = result
         } else {

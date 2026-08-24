@@ -11,53 +11,41 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Text
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.unit.dp
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.verb.ui.AgentsScreen
-import com.example.verb.ui.AskScreen
-import com.example.verb.ui.AssistantScreen
+import com.example.verb.ui.AskVerbScreen
+import com.example.verb.ui.RunsSheet
 import com.example.verb.ui.SemanticLensSheet
 import com.example.verb.ui.SystemScreen
+import com.example.verb.ui.SystemSection
+import com.example.verb.ui.TerminalDiagnosticsSheet
 import com.example.verb.ui.TerminalScreen
+import com.example.verb.ui.VerbFirstActionRow
+import com.example.verb.ui.VerbSheet
 import com.example.verb.ui.theme.VerbTheme
-import com.example.verb.viewmodel.VerbTab
+import com.example.verb.ui.verbFirstAction
+import com.example.verb.viewmodel.VerbSurface
+import com.example.verb.viewmodel.VerbTask
 import com.example.verb.viewmodel.VerbViewModel
 
 class MainActivity : ComponentActivity() {
@@ -84,9 +72,26 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * One terminal-first workspace, with everything else reached by name.
+ *
+ * The five-tab `NavigationBar` this replaces organised the app by subsystem -- Agents, Ask,
+ * Assistant, System, Terminal -- which is the shape `docs/UX_FOUNDATION.md` prohibits outright
+ * ("there is no permanent navigation chrome... one key opens everything") and `docs/BACKLOG.md` D0
+ * restates for agents specifically. It also cost the product its own thesis: the terminal, which is
+ * supposed to be most of the screen most of the time, was one fifth of a tab strip and listed last.
+ *
+ * Two structural consequences worth naming, because they are the point rather than side effects:
+ *
+ * * [TerminalScreen] is composed unconditionally and is never swapped out. Under the tab model,
+ *   navigating away disposed it; the PTY survived in [com.example.verb.session.VerbTerminalSessionHolder]
+ *   but the view did not. Now Verb's surfaces are drawn *over* a workspace that stays mounted, so the
+ *   hosted session keeps the keyboard whenever nothing is deliberately open in front of it.
+ * * Nothing appears here on Verb's initiative. The sheet and every task are the user's move.
+ */
 @Composable
 fun VerbAppContent(viewModel: VerbViewModel) {
-    val activeTab by viewModel.activeTab.collectAsStateWithLifecycle()
+    val surface by viewModel.surface.collectAsStateWithLifecycle()
     val queryInput by viewModel.queryInput.collectAsStateWithLifecycle()
     val isExecuting by viewModel.isExecuting.collectAsStateWithLifecycle()
     val currentResult by viewModel.currentActionResult.collectAsStateWithLifecycle()
@@ -112,6 +117,9 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val agentSessions by viewModel.agentSessions.collectAsStateWithLifecycle()
     val worldArchiveName by viewModel.worldArchiveName.collectAsStateWithLifecycle()
     val worldArchiveMessage by viewModel.worldArchiveMessage.collectAsStateWithLifecycle()
+    val continuityMessage by viewModel.continuityMessage.collectAsStateWithLifecycle()
+    val continuityPreviewReady by viewModel.continuityPreviewReady.collectAsStateWithLifecycle()
+    val importedContinuitySessions by viewModel.importedContinuitySessions.collectAsStateWithLifecycle()
     val agentSignInStates by viewModel.agentSignInStates.collectAsStateWithLifecycle()
     val agentRuntimeImporting by viewModel.agentRuntimeImporting.collectAsStateWithLifecycle()
     val agentRuntimeMessage by viewModel.agentRuntimeMessage.collectAsStateWithLifecycle()
@@ -131,16 +139,20 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val worldArchivePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::stageWorldArchive)
     }
+    val continuityPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::previewContinuity)
+    }
     val agentManifestPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) {
         agentManifestUri = it
     }
 
-    // System back at the root tab exits; otherwise it retraces visited tabs. Screen-level
-    // BackHandlers (sheets, dialogs, IME) register deeper in the tree and win first.
+    // Back resolves Verb's own surfaces innermost-first -- an open task, then the sheet -- and only
+    // exits once the terminal already owns the screen. Screen-level BackHandlers (the terminal's own
+    // sheets, dialogs, the IME) register deeper in the tree and win before this one.
     val activity = LocalActivity.current
     BackHandler {
         if (activity == null) return@BackHandler
-        if (!viewModel.navigateBack()) {
+        if (!viewModel.dismissVerbSurface()) {
             activity.finish()
         }
     }
@@ -157,7 +169,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
         if (url != null) {
             try {
                 activity?.startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 )
             } catch (e: Exception) {
                 android.util.Log.e("Verb", "Could not open terminal URL $url", e)
@@ -178,86 +190,14 @@ fun VerbAppContent(viewModel: VerbViewModel) {
         }
     }
 
-    // Terminal session color shown as a status dot on the Terminal tab.
-    val terminalStatusColor = when (terminalSessionState) {
-        com.example.verb.terminal.TerminalSessionState.RUNNING -> Color(0xFF22C55E)
-        com.example.verb.terminal.TerminalSessionState.STARTING,
-        com.example.verb.terminal.TerminalSessionState.STOPPING -> Color(0xFFEAB308)
-        com.example.verb.terminal.TerminalSessionState.EXITED -> Color(0xFF64748B)
-        else -> Color(0xFFEF4444)
-    }
+    // "Use the shell" is a UI-only preference for this visit: the shell was always usable, so
+    // dismissing the offer must not record anything about the session or the agent.
+    var firstActionDismissed by rememberSaveable { mutableStateOf(false) }
+    val firstAction = verbFirstAction(reports = runtimeProfileReports, sessions = agentSessions)
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        bottomBar = {
-            // A terminal (or any text-entry surface) needs the limited portrait space above the
-            // system keyboard. Removing navigation while the IME is visible keeps the active
-            // command field docked directly above it rather than marooned mid-screen.
-            if (!isKeyboardVisible || activeTab != VerbTab.TERMINAL) NavigationBar(
-                modifier = Modifier
-                    .windowInsetsPadding(WindowInsets.navigationBars)
-                    .testTag("verb_bottom_navigation")
-            ) {
-                NavigationBarItem(
-                    selected = activeTab == VerbTab.AGENTS,
-                    onClick = { viewModel.selectTab(VerbTab.AGENTS) },
-                    icon = {
-                        Icon(
-                            imageVector = Icons.Default.AutoAwesome,
-                            contentDescription = "Agents",
-                            modifier = Modifier.size(22.dp)
-                        )
-                    },
-                    label = { Text("Agents") },
-                    modifier = Modifier.testTag("tab_agents")
-                )
-
-                NavigationBarItem(
-                    selected = activeTab == VerbTab.ASK,
-                    onClick = { viewModel.selectTab(VerbTab.ASK) },
-                    icon = {
-                        TabIconWithDot(
-                            icon = Icons.AutoMirrored.Filled.Chat,
-                            contentDescription = "Ask",
-                            dotColor = if (confirmationPending != null) Color(0xFFF59E0B) else null
-                        )
-                    },
-                    label = { Text("Ask") },
-                    modifier = Modifier.testTag("tab_ask")
-                )
-
-                NavigationBarItem(
-                    selected = activeTab == VerbTab.ASSISTANT,
-                    onClick = viewModel::openAssistant,
-                    icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "Assistant") },
-                    label = { Text("Assistant") },
-                    modifier = Modifier.testTag("tab_assistant")
-                )
-
-                NavigationBarItem(
-                    selected = activeTab == VerbTab.SYSTEM,
-                    onClick = { viewModel.selectTab(VerbTab.SYSTEM) },
-                    icon = { Icon(Icons.Default.Dns, contentDescription = "System") },
-                    label = { Text("System") },
-                    modifier = Modifier.testTag("tab_system")
-                )
-
-                NavigationBarItem(
-                    selected = activeTab == VerbTab.TERMINAL,
-                    onClick = { viewModel.selectTab(VerbTab.TERMINAL) },
-                    icon = {
-                        TabIconWithDot(
-                            icon = Icons.Default.Terminal,
-                            contentDescription = "Terminal",
-                            dotColor = terminalStatusColor
-                        )
-                    },
-                    label = { Text("Terminal") },
-                    modifier = Modifier.testTag("tab_terminal")
-                )
-            }
-        }
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { innerPadding ->
         Box(
             modifier = Modifier
@@ -265,8 +205,222 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 .padding(innerPadding)
                 .imePadding()
         ) {
-            when (activeTab) {
-                VerbTab.AGENTS -> AgentsScreen(
+            // The workspace. Always composed, never replaced -- see this function's own note.
+            TerminalScreen(
+                terminalOutput = terminalOutput,
+                terminalRuntime = viewModel.terminalRuntime,
+                sessionState = terminalSessionState,
+                bootstrapState = terminalBootstrapState,
+                isKeyboardVisible = isKeyboardVisible,
+                onRetryBootstrap = viewModel::retryTermuxBootstrap,
+                onSendCommand = viewModel::sendTerminalCommand,
+                onSendKey = viewModel.terminalRuntime::sendControlKey,
+                onSendText = viewModel.terminalRuntime::sendText,
+                onClearTerminal = viewModel.terminalRuntime::clearBuffer,
+                onInspectText = viewModel::inspectSemanticText,
+                onSubmitIntent = viewModel::submitIntent,
+                onOpenVerb = viewModel::openVerbSheet,
+                verbSurfaceOpen = surface != VerbSurface.None,
+                aiExplanation = terminalAiExplanation,
+                isAiExplaining = isTerminalAiExplaining,
+                onExplainOutput = viewModel::explainTerminalOutput,
+                onDismissAiExplanation = viewModel::dismissTerminalAiExplanation,
+                projects = projects,
+                selectedProject = selectedProject,
+                onCreateProject = viewModel::createProject,
+                onSelectProject = viewModel::selectProject,
+                verbFirstAction = if (firstActionDismissed) {
+                    null
+                } else {
+                    {
+                        VerbFirstActionRow(
+                            action = firstAction,
+                            onStart = viewModel::launchAgent,
+                            onResume = viewModel::resumeAgentSession,
+                            onInstall = { profileId ->
+                                // Installing is long and its progress is only legible on the agents
+                                // surface, so the user is taken to where the result will appear
+                                // rather than left watching a workspace that says nothing.
+                                viewModel.openTask(VerbTask.AGENTS)
+                                viewModel.installRuntimeProfile(profileId)
+                            },
+                            onUseShell = { firstActionDismissed = true }
+                        )
+                    }
+                }
+            )
+
+            // Everything Verb puts in front of the workspace, and nothing that puts itself there.
+            when (val current = surface) {
+                VerbSurface.None -> Unit
+
+                VerbSurface.Sheet -> VerbSheet(
+                    onDismiss = { viewModel.dismissVerbSurface() },
+                    onOpenTask = { task -> viewModel.openTask(task, fromSheet = true) }
+                )
+
+                is VerbSurface.Task -> VerbTaskSurface(
+                    task = current.task,
+                    viewModel = viewModel,
+                    queryInput = queryInput,
+                    isExecuting = isExecuting,
+                    currentResult = currentResult,
+                    historyList = historyList,
+                    confirmationPending = confirmationPending,
+                    aiProviderSettings = aiProviderSettings,
+                    assistantInput = assistantInput,
+                    assistantState = assistantState,
+                    isKeyboardVisible = isKeyboardVisible,
+                    isSessionActive = isSessionActive,
+                    runtimeProfileReports = runtimeProfileReports,
+                    agentKeyStatus = agentKeyStatus,
+                    agentSignInStates = agentSignInStates,
+                    agentSessions = agentSessions,
+                    installingRuntimeProfile = installingRuntimeProfile,
+                    runtimeInstallMessage = runtimeInstallMessage,
+                    agentRuntimeStatus = agentRuntimeStatus,
+                    agentRuntimeImporting = agentRuntimeImporting,
+                    agentRuntimeMessage = agentRuntimeMessage,
+                    agentArchiveName = agentArchiveUri?.lastPathSegment,
+                    agentChecksumName = agentChecksumUri?.lastPathSegment,
+                    agentManifestName = agentManifestUri?.lastPathSegment,
+                    worldArchiveName = worldArchiveName,
+                    worldArchiveMessage = worldArchiveMessage,
+                    continuityMessage = continuityMessage,
+                    continuityPreviewReady = continuityPreviewReady,
+                    importedContinuitySessions = importedContinuitySessions,
+                    onPickAgentArchive = {
+                        agentArchivePicker.launch(
+                            arrayOf("application/gzip", "application/octet-stream", "*/*")
+                        )
+                    },
+                    onPickAgentChecksum = { agentChecksumPicker.launch(arrayOf("text/plain", "*/*")) },
+                    onPickAgentManifest = { agentManifestPicker.launch(arrayOf("text/plain", "*/*")) },
+                    onPickWorldArchive = {
+                        worldArchivePicker.launch(arrayOf("application/octet-stream", "*/*"))
+                    },
+                    onPickContinuity = {
+                        continuityPicker.launch(
+                            arrayOf("application/x-verb-continuity", "application/json", "*/*")
+                        )
+                    },
+                    onImportAgentRuntime = {
+                        val archive = agentArchiveUri
+                        val checksum = agentChecksumUri
+                        val manifest = agentManifestUri
+                        if (archive != null && checksum != null && manifest != null) {
+                            viewModel.importAgentRuntime(archive, checksum, manifest)
+                        }
+                    }
+                )
+            }
+
+            // Contextual, and the one thing here driven by something the user did in the terminal
+            // rather than by a navigation choice: it appears because text was selected.
+            if (semanticEntity != null) {
+                SemanticLensSheet(
+                    entity = semanticEntity!!,
+                    onDismiss = viewModel::closeSemanticLens,
+                    onExecuteSuggestedAction = viewModel::submitQuery,
+                    onExecuteSuggestedIntent = viewModel::submitIntent
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One named task, drawn over the workspace.
+ *
+ * Several tasks share a destination on purpose. "Add a provider key", "Install a runtime", "Import
+ * an agent runtime", "Save or restore my world" and "Move a session to another device" all land on
+ * [SystemScreen], because what makes a task a task is that a person can *find it by the name they
+ * already use* -- not that it owns a screen. Splitting that surface into five is visual work for a
+ * later, separate phase; inventing five half-screens now would be a rewrite pretending to be an
+ * information-architecture fix.
+ */
+@Composable
+private fun VerbTaskSurface(
+    task: VerbTask,
+    viewModel: VerbViewModel,
+    queryInput: String,
+    isExecuting: Boolean,
+    currentResult: com.example.verb.model.ActionResult?,
+    historyList: List<com.example.verb.model.ActionResult>,
+    confirmationPending: com.example.verb.model.ActionResult?,
+    aiProviderSettings: com.example.verb.ai.AiProviderSettings,
+    assistantInput: String,
+    assistantState: com.example.verb.ai.AiAssistantState,
+    isKeyboardVisible: Boolean,
+    isSessionActive: Boolean,
+    runtimeProfileReports: List<com.example.verb.terminal.RuntimeProfileReport>,
+    agentKeyStatus: List<com.example.verb.ui.AgentKeyStatus>,
+    agentSignInStates: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.terminal.AgentSignInState>,
+    agentSessions: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.session.VerbSession>,
+    installingRuntimeProfile: com.example.verb.terminal.RuntimeProfileId?,
+    runtimeInstallMessage: String?,
+    agentRuntimeStatus: com.example.verb.terminal.AgentRuntimeStatus,
+    agentRuntimeImporting: Boolean,
+    agentRuntimeMessage: String?,
+    agentArchiveName: String?,
+    agentChecksumName: String?,
+    agentManifestName: String?,
+    worldArchiveName: String?,
+    worldArchiveMessage: String?,
+    continuityMessage: String?,
+    continuityPreviewReady: Boolean,
+    importedContinuitySessions: Int,
+    onPickAgentArchive: () -> Unit,
+    onPickAgentChecksum: () -> Unit,
+    onPickAgentManifest: () -> Unit,
+    onPickWorldArchive: () -> Unit,
+    onPickContinuity: () -> Unit,
+    onImportAgentRuntime: () -> Unit
+) {
+    when (task) {
+        // Already a modal sheet, so it needs no opaque backing of its own.
+        VerbTask.EVIDENCE -> TerminalDiagnosticsSheet(
+            terminalRuntime = viewModel.terminalRuntime,
+            onDismiss = { viewModel.dismissVerbSurface() }
+        )
+
+        VerbTask.RUNS -> RunsSheet(
+            terminalRuntime = viewModel.terminalRuntime,
+            onDismiss = { viewModel.dismissVerbSurface() }
+        )
+
+        // Full-height destinations. The Surface is what stops the live terminal showing through and
+        // what stops a stray tap reaching it.
+        else -> Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            when (task) {
+                VerbTask.ASK_VERB -> AskVerbScreen(
+                    queryInput = queryInput,
+                    isExecuting = isExecuting,
+                    currentResult = currentResult,
+                    historyList = historyList,
+                    confirmationPending = confirmationPending,
+                    onQueryChange = viewModel::updateQueryInput,
+                    onSubmitQuery = viewModel::submitQuery,
+                    onSubmitIntent = viewModel::submitIntent,
+                    onConfirmAction = viewModel::confirmPendingAction,
+                    onDismissConfirmation = viewModel::dismissConfirmation,
+                    onOpenTerminal = viewModel::openTerminal,
+                    onInspectText = viewModel::inspectSemanticText,
+                    providerSettings = aiProviderSettings,
+                    assistantPrompt = assistantInput,
+                    assistantState = assistantState,
+                    onAssistantPromptChange = viewModel::updateAssistantInput,
+                    onSubmitAssistantPrompt = viewModel::submitAssistantPrompt,
+                    onOpenProviderSettings = { viewModel.openTask(VerbTask.PROVIDER) },
+                    isKeyboardVisible = isKeyboardVisible
+                )
+
+                // Two names, one surface: agents and their sessions are the same card, and a person
+                // looking for "resume" should not have to know that Verb files it under "agents".
+                VerbTask.AGENTS, VerbTask.SESSIONS -> AgentsScreen(
                     reports = runtimeProfileReports,
                     keyStatus = agentKeyStatus,
                     signInStates = agentSignInStates,
@@ -280,33 +434,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onStartNewSession = viewModel::startNewAgentSession
                 )
 
-                VerbTab.ASK -> AskScreen(
-                    queryInput = queryInput,
-                    isExecuting = isExecuting,
-                    currentResult = currentResult,
-                    historyList = historyList,
-                    confirmationPending = confirmationPending,
-                    isKeyboardVisible = isKeyboardVisible,
-                    onQueryChange = viewModel::updateQueryInput,
-                    onSubmitQuery = viewModel::submitQuery,
-                    onSubmitIntent = viewModel::submitIntent,
-                    onConfirmAction = viewModel::confirmPendingAction,
-                    onDismissConfirmation = viewModel::dismissConfirmation,
-                    onOpenTerminal = viewModel::openTerminal,
-                    onInspectText = viewModel::inspectSemanticText
-                )
-
-                VerbTab.ASSISTANT -> AssistantScreen(
-                    providerSettings = aiProviderSettings,
-                    prompt = assistantInput,
-                    state = assistantState,
-                    isKeyboardVisible = isKeyboardVisible,
-                    onPromptChange = viewModel::updateAssistantInput,
-                    onSubmitPrompt = viewModel::submitAssistantPrompt,
-                    onOpenProviderSettings = { viewModel.selectTab(VerbTab.SYSTEM) }
-                )
-
-                VerbTab.SYSTEM -> {
+                else -> {
                     // The archive list is read from disk, and `verb export` writes to that disk
                     // from the terminal, behind Verb's back. Reading it once when the ViewModel was
                     // built meant the card named whichever archive happened to exist at app start
@@ -314,98 +442,59 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     // save, under the name of a file they had already moved on from.
                     LaunchedEffect(Unit) { viewModel.refreshWorldArchive() }
                     SystemScreen(
-                    isTerminalSessionActive = isSessionActive,
-                    terminalEnvironment = viewModel.terminalRuntime.environment,
-                    aiProviderSettings = aiProviderSettings,
-                    onSaveAiProviderSettings = viewModel::saveAiProviderSettings,
-                    onClearAiProviderApiKey = viewModel::clearAiProviderApiKey,
-                    onOpenTerminal = viewModel::openTerminal,
-                    distributionName = if (BuildConfig.FULL_CLI) "Full CLI (direct distribution)" else "Play-safe system shell",
-                    runtimeProfileReports = runtimeProfileReports,
-                    installingRuntimeProfile = installingRuntimeProfile,
-                    runtimeInstallMessage = runtimeInstallMessage,
-                    onInstallRuntimeProfile = viewModel::installRuntimeProfile,
-                    agentRuntimeStatus = agentRuntimeStatus,
-                    agentRuntimeImporting = agentRuntimeImporting,
-                    agentRuntimeMessage = agentRuntimeMessage,
-                    agentArchiveName = agentArchiveUri?.lastPathSegment,
-                    agentChecksumName = agentChecksumUri?.lastPathSegment,
-                    agentManifestName = agentManifestUri?.lastPathSegment,
-                    onPickAgentArchive = { agentArchivePicker.launch(arrayOf("application/gzip", "application/octet-stream", "*/*")) },
-                    onPickAgentChecksum = { agentChecksumPicker.launch(arrayOf("text/plain", "*/*")) },
-                    onPickAgentManifest = { agentManifestPicker.launch(arrayOf("text/plain", "*/*")) },
-                    worldArchiveName = worldArchiveName,
-                    worldArchiveMessage = worldArchiveMessage,
-                    onSaveWorldToDownloads = viewModel::saveWorldToDownloads,
-                    onPickWorldArchive = { worldArchivePicker.launch(arrayOf("application/octet-stream", "*/*")) },
-                    onImportAgentRuntime = {
-                        val archive = agentArchiveUri
-                        val checksum = agentChecksumUri
-                        val manifest = agentManifestUri
-                        if (archive != null && checksum != null && manifest != null) {
-                            viewModel.importAgentRuntime(archive, checksum, manifest)
-                        }
-                    },
-                    onOpenAgentRuntime = viewModel::openAgentRuntime,
-                    onCheckAgentRuntime = viewModel::checkAgentRuntimeCompatibility,
-                    onReturnToVerbRuntime = viewModel::returnToVerbRuntime
+                        isTerminalSessionActive = isSessionActive,
+                        terminalEnvironment = viewModel.terminalRuntime.environment,
+                        aiProviderSettings = aiProviderSettings,
+                        onSaveAiProviderSettings = viewModel::saveAiProviderSettings,
+                        onClearAiProviderApiKey = viewModel::clearAiProviderApiKey,
+                        onOpenTerminal = viewModel::openTerminal,
+                        distributionName = if (BuildConfig.FULL_CLI) {
+                            "Full CLI (direct distribution)"
+                        } else {
+                            "Play-safe system shell"
+                        },
+                        runtimeProfileReports = runtimeProfileReports,
+                        installingRuntimeProfile = installingRuntimeProfile,
+                        runtimeInstallMessage = runtimeInstallMessage,
+                        onInstallRuntimeProfile = viewModel::installRuntimeProfile,
+                        agentRuntimeStatus = agentRuntimeStatus,
+                        agentRuntimeImporting = agentRuntimeImporting,
+                        agentRuntimeMessage = agentRuntimeMessage,
+                        agentArchiveName = agentArchiveName,
+                        agentChecksumName = agentChecksumName,
+                        agentManifestName = agentManifestName,
+                        onPickAgentArchive = onPickAgentArchive,
+                        onPickAgentChecksum = onPickAgentChecksum,
+                        onPickAgentManifest = onPickAgentManifest,
+                        worldArchiveName = worldArchiveName,
+                        worldArchiveMessage = worldArchiveMessage,
+                        onSaveWorldToDownloads = viewModel::saveWorldToDownloads,
+                        onPickWorldArchive = onPickWorldArchive,
+                        continuityMessage = continuityMessage,
+                        continuityPreviewReady = continuityPreviewReady,
+                        importedContinuitySessions = importedContinuitySessions,
+                        onExportContinuity = viewModel::exportContinuity,
+                        onPickContinuity = onPickContinuity,
+                        onApplyContinuity = viewModel::applyContinuityPreview,
+                        onImportAgentRuntime = onImportAgentRuntime,
+                        onOpenAgentRuntime = viewModel::openAgentRuntime,
+                        onCheckAgentRuntime = viewModel::checkAgentRuntimeCompatibility,
+                        onReturnToVerbRuntime = viewModel::returnToVerbRuntime,
+                        initialSection = systemSectionFor(task)
                     )
                 }
-
-                VerbTab.TERMINAL -> TerminalScreen(
-                    terminalOutput = terminalOutput,
-                    terminalRuntime = viewModel.terminalRuntime,
-                    sessionState = terminalSessionState,
-                    bootstrapState = terminalBootstrapState,
-                    isKeyboardVisible = isKeyboardVisible,
-                    onRetryBootstrap = viewModel::retryTermuxBootstrap,
-                    onSendCommand = viewModel::sendTerminalCommand,
-                    onSendKey = viewModel.terminalRuntime::sendControlKey,
-                    onSendText = viewModel.terminalRuntime::sendText,
-                    onCommandExecuted = viewModel::recordTerminalCommand,
-                    onClearTerminal = viewModel.terminalRuntime::clearBuffer,
-                    onInspectText = viewModel::inspectSemanticText,
-                    onSubmitIntent = viewModel::submitIntent,
-                    aiExplanation = terminalAiExplanation,
-                    isAiExplaining = isTerminalAiExplaining,
-                    onExplainOutput = viewModel::explainTerminalOutput,
-                    onDismissAiExplanation = viewModel::dismissTerminalAiExplanation,
-                    projects = projects,
-                    selectedProject = selectedProject,
-                    onCreateProject = viewModel::createProject,
-                    onSelectProject = viewModel::selectProject
-                )
-            }
-
-            // Contextual Semantic Lens Bottom Sheet
-            if (semanticEntity != null) {
-                SemanticLensSheet(
-                    entity = semanticEntity!!,
-                    onDismiss = viewModel::closeSemanticLens,
-                    onExecuteSuggestedAction = viewModel::submitQuery,
-                    onExecuteSuggestedIntent = viewModel::submitIntent
-                )
             }
         }
     }
 }
 
-@Composable
-private fun TabIconWithDot(
-    icon: ImageVector,
-    contentDescription: String?,
-    dotColor: Color?
-) {
-    Box {
-        Icon(icon, contentDescription)
-        if (dotColor != null) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 1.dp)
-                    .size(7.dp)
-                    .background(dotColor, CircleShape)
-            )
-        }
-    }
+/** The searchable name and the first visible System card must describe the same task. */
+internal fun systemSectionFor(task: VerbTask): SystemSection = when (task) {
+    VerbTask.PROVIDER -> SystemSection.PROVIDER
+    VerbTask.WORKING_WORLD -> SystemSection.WORKING_WORLD
+    VerbTask.CONTINUITY -> SystemSection.CONTINUITY
+    VerbTask.RUNTIMES -> SystemSection.RUNTIMES
+    VerbTask.AGENT_RUNTIME -> SystemSection.AGENT_RUNTIME
+    VerbTask.SYSTEM -> SystemSection.OVERVIEW
+    else -> SystemSection.OVERVIEW
 }

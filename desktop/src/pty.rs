@@ -10,6 +10,8 @@ use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::ptr;
+use std::thread;
+use std::time::Duration;
 
 const STDIN_FILENO: c_int = 0;
 const POLLIN: CShort = 0x001;
@@ -17,7 +19,11 @@ const POLLERR: CShort = 0x008;
 const POLLHUP: CShort = 0x010;
 const EIO: i32 = 5;
 const EINTR: i32 = 4;
+const ESRCH: i32 = 3;
 const WNOHANG: c_int = 1;
+const SIGHUP: c_int = 1;
+const SIGTERM: c_int = 15;
+const SIGKILL: c_int = 9;
 
 type CShort = i16;
 type PidT = c_int;
@@ -47,7 +53,28 @@ pub(super) struct WinSize {
     pub y_pixels: u16,
 }
 
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
 const TIOCSWINSZ: u64 = 0x8008_7467;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const TIOCGWINSZ: u64 = 0x4008_7468;
+#[cfg(target_os = "linux")]
+const TIOCSWINSZ: u64 = 0x5414;
+#[cfg(target_os = "linux")]
+const TIOCGWINSZ: u64 = 0x5413;
 
 unsafe extern "C" {
     fn ioctl(fd: c_int, request: u64, ...) -> c_int;
@@ -56,6 +83,7 @@ unsafe extern "C" {
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
     fn _exit(status: c_int) -> !;
     fn waitpid(pid: PidT, status: *mut c_int, options: c_int) -> PidT;
+    fn kill(pid: PidT, signal: c_int) -> c_int;
     fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int;
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
 }
@@ -78,10 +106,7 @@ pub(super) fn spawn(
     env: &[(String, String)],
     size: Option<(u16, u16)>,
 ) -> Result<PtyProcess, String> {
-    let (master, pid) = fork_pty(project, session_id, command, args, env)?;
-    if let Some((rows, cols)) = size {
-        set_window_size(&master, rows, cols);
-    }
+    let (master, pid) = fork_pty(project, session_id, command, args, env, size)?;
     Ok(PtyProcess { master, pid })
 }
 
@@ -99,8 +124,82 @@ pub(super) fn set_window_size(master: &File, rows: u16, cols: u16) {
     }
 }
 
+/// Initial size for the blocking CLI proxy. Some PTY hosts report a zero-sized terminal; passing
+/// that through makes full-screen programs render one character per line. A conservative 80x24 is
+/// more truthful and usable than pretending zero columns are a real viewport.
+fn terminal_window_size() -> Option<(u16, u16)> {
+    if !io::stdin().is_terminal() {
+        return None;
+    }
+    let mut size = WinSize {
+        rows: 0,
+        cols: 0,
+        x_pixels: 0,
+        y_pixels: 0,
+    };
+    let read = unsafe { ioctl(STDIN_FILENO, TIOCGWINSZ, &mut size) };
+    if read == 0 && size.rows > 0 && size.cols > 0 {
+        Some((size.rows, size.cols))
+    } else {
+        Some((24, 80))
+    }
+}
+
 pub(super) fn reap(pid: PidT) -> Result<Option<i32>, String> {
     wait_nonblocking(pid)
+}
+
+/// Stops the exact process group created by `forkpty` and returns the child's real exit status.
+///
+/// A hosted TUI session cannot be abandoned when the user quits Verb or starts another session:
+/// doing so leaves descendants running and a durable record claiming `LIVE`. `forkpty` makes the
+/// child a session leader, so its pid is also the process-group id. The bounded escalation keeps a
+/// cooperative shell graceful while ensuring an agent that ignores hangup cannot outlive its host.
+pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
+    if let Some(code) = wait_nonblocking(pid)? {
+        return Ok(code);
+    }
+
+    for signal in [SIGHUP, SIGTERM, SIGKILL] {
+        signal_group(pid, signal)?;
+        for _ in 0..10 {
+            if let Some(code) = wait_nonblocking(pid)? {
+                return Ok(code);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    // SIGKILL cannot be ignored. A blocking wait here only covers the small scheduler gap between
+    // delivery and collection; it cannot wait on a process that is still able to keep running.
+    wait_blocking(pid)
+}
+
+fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
+    let result = unsafe { kill(-pid, signal) };
+    if result == 0 {
+        return Ok(());
+    }
+
+    let group_error = io::Error::last_os_error();
+    if group_error.raw_os_error() != Some(ESRCH) {
+        return Err(format!("could not signal PTY process group: {group_error}"));
+    }
+
+    // There is a tiny launch race before the forkpty child has established its process group.
+    // Signalling the exact child still prevents it from escaping; this fallback never widens the
+    // target beyond the pid Verb itself received from forkpty.
+    let result = unsafe { kill(pid, signal) };
+    if result == 0 {
+        Ok(())
+    } else {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ESRCH) {
+            Ok(())
+        } else {
+            Err(format!("could not signal PTY child: {error}"))
+        }
+    }
 }
 
 pub(super) fn run(
@@ -111,7 +210,21 @@ pub(super) fn run(
     env: &[(String, String)],
     is_new_session: bool,
 ) -> Result<i32, String> {
-    let (mut master, pid) = fork_pty(project, &session.id, command, args, env)?;
+    // Capture the observation boundary before the process can create its record. Creating the
+    // watch after `forkpty` races a fast agent: its new record then appears older than the watch and
+    // Verb permanently misses both its structural events and its positive resume identity.
+    let mut watch = crate::observe::AgentWatch::for_agent(
+        session.agent.as_ref().map(|agent| agent.label()),
+        project,
+    );
+    let (mut master, pid) = fork_pty(
+        project,
+        &session.id,
+        command,
+        args,
+        env,
+        terminal_window_size(),
+    )?;
 
     let mut logger = EventLogger::new(session)?;
     if is_new_session {
@@ -126,10 +239,6 @@ pub(super) fn run(
     // The CLI proxy observes an agent exactly as the workspace does: same reader, same events, same
     // wording. Only the surface differs -- there is no band here to raise, so a failure is recorded
     // and left for `verb context` to report.
-    let mut watch = crate::observe::AgentWatch::for_agent(
-        session.agent.as_ref().map(|agent| agent.label()),
-        project,
-    );
     proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)
 }
 
@@ -139,6 +248,7 @@ fn fork_pty(
     command: &str,
     args: &[String],
     env: &[(String, String)],
+    size: Option<(u16, u16)>,
 ) -> Result<(File, PidT), String> {
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
@@ -170,8 +280,19 @@ fn fork_pty(
         })
         .collect::<Result<Vec<_>, String>>()?;
 
+    let window = size.map(|(rows, cols)| WinSize {
+        rows,
+        cols,
+        x_pixels: 0,
+        y_pixels: 0,
+    });
+    let window_pointer = window
+        .as_ref()
+        .map(|size| std::ptr::from_ref(size).cast::<c_void>())
+        .unwrap_or(ptr::null());
+
     let mut master_fd = -1;
-    let pid = unsafe { forkpty(&mut master_fd, ptr::null_mut(), ptr::null(), ptr::null()) };
+    let pid = unsafe { forkpty(&mut master_fd, ptr::null_mut(), ptr::null(), window_pointer) };
     if pid < 0 {
         return Err(io::Error::last_os_error().to_string());
     }
@@ -558,5 +679,60 @@ mod tests {
             !written.contains("npm test"),
             "command text must not be written anywhere durable:\n{written}"
         );
+    }
+
+    #[test]
+    fn terminating_a_hosted_process_reaps_it_promptly() {
+        let root = scratch("terminate");
+        let process = spawn(
+            &root,
+            "session-terminate",
+            "/bin/sh",
+            &["-c".to_owned(), "sleep 30".to_owned()],
+            &[],
+            None,
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+
+        let code = terminate(process.pid).unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(code >= 128, "signal exit should be explicit, got {code}");
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_cli_pty_starts_with_the_window_size_it_was_given() {
+        let root = scratch("window-size");
+        let process = spawn(
+            &root,
+            "session-size",
+            "/bin/sh",
+            &["-c".to_owned(), "stty size".to_owned()],
+            &[],
+            Some((7, 33)),
+        )
+        .unwrap();
+        let mut master = process.master;
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 128];
+        loop {
+            match master.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => bytes.extend_from_slice(&buffer[..count]),
+                Err(error) if error.raw_os_error() == Some(EIO) => break,
+                Err(error) => panic!("could not read child output: {error}"),
+            }
+        }
+        let code = wait_blocking(process.pid).unwrap();
+        let output = String::from_utf8_lossy(&bytes);
+
+        assert_eq!(code, 0);
+        assert!(
+            output.contains("7 33"),
+            "PTY reported the wrong size: {output:?}"
+        );
+        std::fs::remove_dir_all(root).ok();
     }
 }

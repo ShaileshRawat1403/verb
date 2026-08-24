@@ -1,6 +1,6 @@
 # Verb desktop MVP
 
-This is the first desktop slice of Verb: a native, dependency-free CLI that sits above the
+This is the desktop host of Verb: a native Rust CLI and Ratatui workspace that sit above the
 machine's existing shell, agents, and Git installation.
 
 It intentionally starts as a terminal experience rather than a GUI. The product boundary is:
@@ -20,6 +20,8 @@ cargo run --manifest-path desktop/Cargo.toml -- status
 cargo run --manifest-path desktop/Cargo.toml -- claude
 cargo run --manifest-path desktop/Cargo.toml -- codex
 cargo run --manifest-path desktop/Cargo.toml -- resume
+cargo run --manifest-path desktop/Cargo.toml -- continuity export /tmp/project.vcont
+cargo run --manifest-path desktop/Cargo.toml -- continuity import /tmp/project.vcont
 ```
 
 To install a local `verb` command:
@@ -30,8 +32,9 @@ verb status
 ```
 
 Verb uses the current Git repository root as the project context when one exists. Session metadata
-is kept under `~/.verb/sessions`; credentials, transcripts, and agent-specific state remain owned
-by the agent. `VERB_STATE_DIR` can point tests or a development build at an isolated state folder.
+is kept under `~/.verb/sessions`; read-only foreign evidence lives separately under
+`~/.verb/imported`. Credentials, transcripts, and agent-specific state remain owned by the agent.
+`VERB_STATE_DIR` can point tests or a development build at an isolated state folder.
 
 ## Current guarantees
 
@@ -44,6 +47,9 @@ by the agent. `VERB_STATE_DIR` can point tests or a development build at an isol
   enter to resume, `n` for a new session in that project, `r` to re-check. It hands the terminal
   back to the agent when one starts, and takes it back afterwards.
 - `verb sessions` lists every project Verb holds a session for, newest first.
+- `verb continuity export PATH` writes checksummed structural evidence for the current project.
+  `verb continuity import PATH` previews without changing state; `--apply` stores the validated file
+  as read-only foreign evidence. Origin state is history and never enables Resume by itself.
 - `verb context` assembles everything Verb currently knows about a project -- Git state read now,
   the session record, and the tail of its structural event log -- into one place, in text or with
   `--json`. It interprets nothing: there is no field for a conclusion, and no model behind it. It is
@@ -72,5 +78,5 @@ by the agent. `VERB_STATE_DIR` can point tests or a development build at an isol
   by its own conversation id (`desktop/src/agents.rs`). `dsh` is still tracked without a resume
   contract: Verb does not invent resume flags it has not observed.
 
-This is deliberately not the final desktop UI, PTY supervisor, remote sync layer, or credential
-broker. Those are the next product layers after the command boundary is proven.
+This is deliberately not a credential broker, cloud service, remote process supervisor or transcript
+sync layer. Broader assistant and transport work remains evidence-gated by the product roadmap.
