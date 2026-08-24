@@ -21,7 +21,7 @@ class ClaudeAgentAdapter(
      * Checks Claude-owned resume markers without persisting or reading transcript contents.
      *
      * Claude builds use either project transcript files under
-     * `~/.claude/projects/<cwd, "/" replaced by "-">/<transcript>.jsonl` or, as the Android arm64 build does,
+     * `~/.claude/projects/<Claude's normalized cwd>/<transcript>.jsonl` or, as the Android arm64 build does,
      * small metadata records under `~/.claude/sessions/` (JSON files). The latter contain the Claude
      * session id, CWD and lifecycle metadata; they are the useful recovery evidence after Verb's
      * process dies. Verb only matches their CWD (and an explicit session id when known).
@@ -96,8 +96,9 @@ class ClaudeAgentAdapter(
         return sessionFiles.mapNotNull { file ->
             val metadata = runCatching { file.readText() }.getOrNull() ?: return@mapNotNull null
             val cwd = JSON_CWD_PATTERN.find(metadata)?.groupValues?.get(1) ?: return@mapNotNull null
-            val sessionId = JSON_SESSION_ID_PATTERN.find(metadata)?.groupValues?.get(1)
-                ?: return@mapNotNull null
+            val sessionId = ResumeIdentity.validOrNull(
+                JSON_SESSION_ID_PATTERN.find(metadata)?.groupValues?.get(1)
+            ) ?: return@mapNotNull null
             if (pathsRepresentSameProject(cwd, project) &&
                 (agent.resumeIdentity == null || agent.resumeIdentity == sessionId)
             ) {
@@ -118,7 +119,7 @@ class ClaudeAgentAdapter(
         val filesRoots = GuestPathAliases.aliasesOf(filesDir)
         filesRoots.forEach { root ->
             projectAliases.forEach { alias ->
-                add(File(root, "home/.claude/projects/${alias.replace('/', '-')}"))
+                add(File(root, "home/.claude/projects/${ClaudeProjectDirectory.encode(alias)}"))
             }
         }
     }
@@ -129,7 +130,9 @@ class ClaudeAgentAdapter(
      * "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
-        val resumeArgument = agent.resumeIdentity?.let { "--resume $it" } ?: "--continue"
+        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity)
+            ?.let { "--resume $it" }
+            ?: "--continue"
         val stillRunning = AgentResumeLauncher.launch(
             terminalRuntimeAdapter = terminalRuntimeAdapter,
             command = "claude $resumeArgument",

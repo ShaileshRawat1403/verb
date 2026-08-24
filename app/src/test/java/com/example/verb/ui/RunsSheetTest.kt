@@ -262,7 +262,7 @@ class RunsSheetTest {
 
         composeTestRule.onNodeWithText("Diagnostics").assertExists()
         composeTestRule.onNodeWithText("Browse Files").assertExists()
-        composeTestRule.onNodeWithText("Explain with AI").assertExists()
+        composeTestRule.onNodeWithText("Explain evidence with AI").assertExists()
         composeTestRule.onNodeWithText("Restart Session").assertExists()
         composeTestRule.onNodeWithText("Clear Terminal").assertExists()
     }
@@ -307,7 +307,7 @@ class RunsSheetTest {
         }
 
         composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
-        composeTestRule.onNodeWithText("Explain with AI").performClick()
+        composeTestRule.onNodeWithText("Explain evidence with AI").performClick()
 
         assertEquals(1, explainCount)
     }

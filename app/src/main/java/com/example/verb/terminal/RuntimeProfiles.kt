@@ -295,7 +295,7 @@ object RuntimeProfiles {
         return "npm install -g @openai/codex && " +
             "codex_version=\$(node -p \"require('$pkg/package.json').version\") && " +
             "rm -rf $work && mkdir -p $work && " +
-            "(cd $work && npm pack --silent \"@openai/codex@\${'$'}{codex_version}-linux-arm64\") && " +
+            "(cd $work && npm pack --silent \"@openai/codex@${'$'}{codex_version}-linux-arm64\") && " +
             "mkdir -p $pkg/vendor && " +
             "tar -xzf $work/*.tgz -C $pkg/vendor --strip-components=2 package/vendor && " +
             "chmod -R +x $pkg/vendor/$CODEX_TARGET_TRIPLE/bin && " +

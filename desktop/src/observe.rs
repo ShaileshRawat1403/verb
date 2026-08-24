@@ -206,11 +206,16 @@ fn codex_events(line: &str, fallback_at: u128) -> Vec<AgentEvent> {
             tool: None,
             failed,
         });
-    } else if line.contains(r#""type":"function_call""#)
-        || line.contains(r#""type":"custom_tool_call""#)
-    {
-        if let Some(tool) = json_string(line, "name") {
-            events.push(AgentEvent::ToolCalled { at, tool });
+    } else {
+        for block in blocks(line, r#""type":"function_call""#)
+            .into_iter()
+            .chain(blocks(line, r#""type":"custom_tool_call""#))
+        {
+            // Scope the lookup to the call payload. A neighbouring `name` may be user/tool content;
+            // treating it as the tool name would carry content across the structural boundary.
+            if let Some(tool) = json_string(block, "name") {
+                events.push(AgentEvent::ToolCalled { at, tool });
+            }
         }
     }
     events
@@ -294,7 +299,7 @@ impl RecordTail {
             Record::Claude => vec![home
                 .join(".claude")
                 .join("projects")
-                .join(claude_project_dir(project))],
+                .join(crate::agents::claude_project_dir(project))],
             // Codex files itself by date rather than by project, so the whole tree is the haystack.
             Record::Codex => codex_day_directories(&home.join(".codex").join("sessions")),
         };
@@ -382,21 +387,6 @@ impl RecordTail {
         }
         events
     }
-}
-
-/// Claude names a project's directory after its path with the separators replaced.
-fn claude_project_dir(project: &Path) -> String {
-    project
-        .to_string_lossy()
-        .chars()
-        .map(|character| {
-            if character == '/' || character == '.' {
-                '-'
-            } else {
-                character
-            }
-        })
-        .collect()
 }
 
 /// `sessions/YYYY/MM/DD`, deepest first, so the newest day is looked at before older ones.
@@ -610,6 +600,19 @@ mod tests {
         assert_eq!(
             Record::Codex.events(done, 12),
             vec![AgentEvent::TurnFinished { at: 12 }]
+        );
+    }
+
+    #[test]
+    fn codex_tool_names_are_scoped_to_the_call_payload() {
+        let line = r#"{"name":"private neighbouring content","payload":{"type":"function_call","name":"exec","arguments":"secret"}}"#;
+
+        assert_eq!(
+            Record::Codex.events(line, 7),
+            vec![AgentEvent::ToolCalled {
+                at: 7,
+                tool: "exec".to_owned()
+            }]
         );
     }
 

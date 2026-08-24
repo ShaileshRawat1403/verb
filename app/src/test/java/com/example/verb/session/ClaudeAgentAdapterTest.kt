@@ -26,7 +26,7 @@ class ClaudeAgentAdapterTest {
     }
 
     private fun transcriptDir(filesDir: File, project: File): File =
-        File(filesDir, "home/.claude/projects/${project.absolutePath.replace('/', '-')}")
+        File(filesDir, "home/.claude/projects/${ClaudeProjectDirectory.encode(project.absolutePath)}")
 
     // --- canResume(): the three ugly cases from the contract's mapping table ---
 
@@ -161,5 +161,23 @@ class ClaudeAgentAdapterTest {
         advanceUntilIdle()
 
         assertNull(resumeCall.await())
+    }
+
+    @Test
+    fun `unsafe restored identity never reaches the shell`() = runTest {
+        val (filesDir, project) = setUpFilesystem()
+        val fake = FakeTerminalRuntimeAdapter(filesDir)
+        val adapter = ClaudeAgentAdapter(
+            filesDir,
+            project,
+            fake,
+            resumeSettleMs = 20,
+            pollIntervalMs = 5
+        )
+
+        adapter.resume(AgentRef("claude", "abc; touch owned"))
+
+        assertEquals(false, fake.terminalOutput.value.contains("touch owned"))
+        assertEquals(true, fake.terminalOutput.value.contains("claude --continue"))
     }
 }

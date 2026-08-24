@@ -27,7 +27,8 @@ fun ClaudeSessionCoordinator(
     terminalRuntimeAdapter = terminalRuntimeAdapter,
     coroutineScope = coroutineScope,
     sessionStore = sessionStore,
-    processBindingConfirmed = processBindingConfirmed
+    processBindingConfirmed = processBindingConfirmed,
+    eventLog = VerbEventLog(filesDir)
 )
 
 /** The [AgentRef.agentType] and [VerbSession.runtime] value for Claude Code sessions. */

@@ -48,13 +48,16 @@ jobs:
         run: ./gradlew :app:assembleFullCliRelease
 
       - name: Generate checksum
-        run: sha256sum app/build/outputs/apk/fullCli/release/app-fullCli-release.apk > app/build/outputs/apk/fullCli/release/verb-full-cli.apk.sha256
+        working-directory: app/build/outputs/apk/fullCli/release
+        run: |
+          sha256sum app-fullCli-release.apk > verb-full-cli.apk.sha256
+          sha256sum --check verb-full-cli.apk.sha256
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          prerelease: ${{ inputs.prerelease || false }}
+          prerelease: ${{ inputs.prerelease || contains(inputs.tag, '-') || contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             app/build/outputs/apk/fullCli/release/app-fullCli-release.apk

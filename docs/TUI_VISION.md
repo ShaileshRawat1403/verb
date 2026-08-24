@@ -192,10 +192,12 @@ contradicts the sentence directly above it.
 
 ### The mouse
 
-The same rule as the keyboard, for the same reason. Verb captures the mouse **only while one of its
-surfaces is open**; the rest of the time the terminal keeps it, and with it native selection and
-copy, which are not Verb's to take. Inside a surface: the wheel scrolls, a click selects the row
-under the pointer, and a click outside the panel closes it.
+Dogfooding changed the default: the first thing people reached for was the visible action bar, so
+Verb captures the mouse while the workspace is open and makes that bar clickable. The terminal
+still owns clicks in its region, full-screen applications keep their mouse input, Option-drag keeps
+native selection available, and `Leader m` hands the mouse back entirely. The mouse is never
+required; every action remains keyboard- and palette-accessible. Inside a Verb surface, the wheel
+scrolls, a click selects the row under the pointer, and a click outside the panel closes it.
 
 ### Verb Leader
 
@@ -353,7 +355,7 @@ Resume selected session       resume_session()      = verb resume
 Start new session             launch_session()      = verb claude | codex | opencode
 Session list / switch         read session records  = verb sessions
 Re-check recovery             reconcile_session()   = verb status
-Show evidence / raw events    the JSONL event log   = (M2/M3 surface over existing files)
+Show evidence / raw events    context + event log   = verb context (M1 evidence overlay)
 Explain / Diagnose            M2 assistant over the same evidence
 Ask Verb                      M2 — inactive in M1, so it maps to nothing and does nothing
 ```
@@ -405,5 +407,5 @@ If yes, the boundary is right.
 
 * `docs/PRODUCT_VISION.md` — why Verb exists.
 * `docs/PRD.md` — the problem, the pillars, the non-goals.
-* `docs/ROADMAP.md` — M1 is the current scope freeze.
+* `docs/ROADMAP.md` — M1 is built and frozen for dogfooding.
 * `docs/DESKTOP_MVP.md` — what the desktop backend already provides.

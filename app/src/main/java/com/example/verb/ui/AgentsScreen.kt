@@ -23,6 +23,13 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.example.verb.terminal.RuntimeProfileReport
+import com.example.verb.terminal.RuntimeProfileId
+
+private val VERIFIED_AGENT_PROFILES = setOf(
+    RuntimeProfileId.CLAUDE_CODE,
+    RuntimeProfileId.CODEX,
+    RuntimeProfileId.OPENCODE
+)
 
 /**
  * The agents surface: what you open, separated from what you install.
@@ -55,7 +62,10 @@ fun AgentsScreen(
     onStartNewSession: (com.example.verb.terminal.RuntimeProfileId) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val agents = reports.filter { it.profile.isAgent }
+    // Admission is evidence-based, not package-discovery based. Profiles remain available to the
+    // runtime layer for future validation work, but the product surface shows only integrations
+    // Verb has actually implemented and tested.
+    val agents = reports.filter { it.profile.id in VERIFIED_AGENT_PROFILES }
 
     Column(
         modifier = modifier
@@ -187,15 +197,17 @@ private fun AgentRow(
                 modifier = Modifier.padding(top = 2.dp)
             )
 
-            // "Ready" only ever meant the binary runs. Whether you are signed in is a separate
-            // fact, and the one that decides what happens when you tap Open. Shown only once the
-            // agent is installed -- sign-in is not a question you can act on before then -- and
-            // only when Verb actually knows: an agent whose credential location has not been
-            // observed says nothing rather than implying you are signed out.
-            if (report.isReady && signInState != com.example.verb.terminal.AgentSignInState.UNKNOWN) {
+            // "Ready" only ever means the binary runs. A credential file is evidence that login
+            // material was saved, not proof the provider still accepts it. Show that weaker fact
+            // only when the agent is installed and Verb actually knows it.
+            if (
+                report.isReady &&
+                status.detail == null &&
+                signInState != com.example.verb.terminal.AgentSignInState.UNKNOWN
+            ) {
                 val signedIn = signInState == com.example.verb.terminal.AgentSignInState.SIGNED_IN
                 Text(
-                    if (signedIn) "Signed in" else "Not signed in — run $launch to sign in",
+                    com.example.verb.session.AgentStatusResolver.signedInDetail(signedIn).orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = if (signedIn) {
                         MaterialTheme.colorScheme.primary

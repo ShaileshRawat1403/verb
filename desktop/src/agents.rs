@@ -32,14 +32,14 @@ struct Conversation {
 // Claude Code
 // ---------------------------------------------------------------------------
 
-/// Claude records a project's transcripts under `~/.claude/projects/<cwd with "/" as "-">/*.jsonl`,
+/// Claude records a project's transcripts under a normalized project-path directory.
 /// and (on builds that have one) session metadata under `~/.claude/sessions/*.json`. The metadata
 /// filename is a PID and is never used as identity -- the `sessionId` inside it is.
 pub fn claude_verdict(project: &Path, home: &Path) -> ResumeVerdict {
     let transcript_dir = home
         .join(".claude")
         .join("projects")
-        .join(project.to_string_lossy().replace('/', "-"));
+        .join(claude_project_dir(project));
 
     let transcripts = match fs::read_dir(&transcript_dir) {
         Ok(entries) => Some(
@@ -66,6 +66,23 @@ pub fn claude_verdict(project: &Path, home: &Path) -> ResumeVerdict {
             None => ResumeVerdict::Unknown,
         },
     }
+}
+
+/// The directory name written by the installed Claude Code build.
+///
+/// This is shared by recovery and live observation because a mismatch is not cosmetic: it turns a
+/// real recoverable conversation into `UNKNOWN`. Slash, dot and underscore normalization are all
+/// covered by local real-session evidence; other characters are preserved until evidence says
+/// Claude treats them differently.
+pub(crate) fn claude_project_dir(project: &Path) -> String {
+    project
+        .to_string_lossy()
+        .chars()
+        .map(|character| match character {
+            '/' | '.' | '_' => '-',
+            other => other,
+        })
+        .collect()
 }
 
 pub fn claude_identity(project: &Path, home: &Path) -> Option<String> {
@@ -352,12 +369,20 @@ mod tests {
             &home
                 .join(".claude")
                 .join("projects")
-                .join(project.to_string_lossy().replace('/', "-"))
+                .join(claude_project_dir(&project))
                 .join("conversation.jsonl"),
             "{}\n",
         );
 
         assert_eq!(claude_verdict(&project, &home), ResumeVerdict::Yes);
+    }
+
+    #[test]
+    fn claude_project_directory_matches_the_installed_normalization() {
+        assert_eq!(
+            claude_project_dir(Path::new("/tmp/Verb_Transfer.v1")),
+            "-tmp-Verb-Transfer-v1"
+        );
     }
 
     #[test]

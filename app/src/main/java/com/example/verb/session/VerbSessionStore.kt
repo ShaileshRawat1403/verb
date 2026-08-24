@@ -74,7 +74,9 @@ class SharedPreferencesVerbSessionStore(
             agent = agentType?.let {
                 AgentRef(
                     agentType = it,
-                    resumeIdentity = preferences.getNullableString(KEY_RESUME_IDENTITY)
+                    resumeIdentity = ResumeIdentity.validOrNull(
+                        preferences.getNullableString(KEY_RESUME_IDENTITY)
+                    )
                 )
             }
         )
@@ -95,7 +97,10 @@ class SharedPreferencesVerbSessionStore(
             .putLong(KEY_LAST_SEEN_AT, session.lastSeenAt.toEpochMilli())
             .putString(KEY_STATE, session.state.name)
             .putNullableString(KEY_AGENT_TYPE, session.agent?.agentType)
-            .putNullableString(KEY_RESUME_IDENTITY, session.agent?.resumeIdentity)
+            .putNullableString(
+                KEY_RESUME_IDENTITY,
+                ResumeIdentity.validOrNull(session.agent?.resumeIdentity)
+            )
             .commit()
     }
 
