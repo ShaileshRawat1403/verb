@@ -10,15 +10,17 @@ it true. Automated, emulator and physical-device results remain separate.
 - [x] Contributor and security-reporting guidance present.
 - [x] Integrate the vetted source transfer into the primary repository that owns the real Git
   history; no temporary transfer-repository history is imported.
-- [ ] Review the primary repository history and final archive for secrets, credentials, agent state,
-  transcripts, keystores and generated build output.
+- [x] Review the primary repository history and final source for secrets, credentials, agent state,
+  transcripts, keystores and generated build output. The staged source scan for PR #4 found none.
 
 ## Automated verification
 
-- [ ] Desktop format, clippy with warnings denied, all-target tests and release build pass on the
-  exact release commit.
-- [ ] Both Android flavors pass unit tests, lint and debug assembly on the exact release commit.
-- [ ] CI's emulator-only `connectedFullCliDebugAndroidTest` passes on the exact release commit.
+- [x] Desktop format, clippy with warnings denied, all-target tests and release build pass in CI
+  (PR #4, run 32732143051).
+- [x] Both Android flavors pass unit tests, lint and debug assembly in CI
+  (PR #4, run 32732143051).
+- [x] CI's emulator-only `connectedFullCliDebugAndroidTest` passes
+  (PR #4, run 32732143051).
   Never run this task on a phone containing a real Working World: instrumentation deployment may
   uninstall the target package during cleanup and erase app-private data.
 - [x] Working World and continuity planted-marker/privacy tests pass.
