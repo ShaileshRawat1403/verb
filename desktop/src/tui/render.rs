@@ -77,9 +77,13 @@ const MAX_CHROME_ROWS: u16 = STATUS_ROWS + BAND_ROWS + ASK_ROWS;
 /// around it, which inverts the budget the whole design rests on.
 const MINIMUM: (u16, u16) = (30, MAX_CHROME_ROWS * 3);
 
+pub(super) fn is_too_small(width: u16, height: u16) -> bool {
+    width < MINIMUM.0 || height < MINIMUM.1
+}
+
 pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
     let area = frame.area();
-    if area.width < MINIMUM.0 || area.height < MINIMUM.1 {
+    if is_too_small(area.width, area.height) {
         // Said plainly rather than drawn badly. The session underneath is untouched and comes back
         // as soon as there is room.
         frame.render_widget(
@@ -132,6 +136,7 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
         Surface::Sessions { selected } => sessions(
             frame,
             app.sessions(),
+            app.imported_sessions(),
             *selected,
             app.hosted().map(|hosted| hosted.session.id.as_str()),
         ),
@@ -1039,9 +1044,19 @@ fn palette(frame: &mut Frame, filter: &str, selected: usize) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Option<&str>) {
-    let inner = overlay(frame, "Sessions", sessions.len() as u16 + 4);
-    if sessions.is_empty() {
+fn sessions(
+    frame: &mut Frame,
+    sessions: &[Session],
+    imported: &[crate::continuity::ImportedSession],
+    selected: usize,
+    hosted: Option<&str>,
+) {
+    let inner = overlay(
+        frame,
+        "Sessions",
+        (sessions.len() + imported.len()) as u16 + 7,
+    );
+    if sessions.is_empty() && imported.is_empty() {
         frame.render_widget(
             Paragraph::new("No sessions yet. Run an agent in a project first."),
             inner,
@@ -1078,11 +1093,38 @@ fn sessions(frame: &mut Frame, sessions: &[Session], selected: usize, hosted: Op
             },
         )));
     }
+    if !imported.is_empty() {
+        if !sessions.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(Span::styled(
+            "Recorded elsewhere · read-only · unconfirmed here",
+            theme::secondary(),
+        )));
+        for session in imported {
+            let line = format!(
+                "  {:<13} {:<9}          {} · {} ({})",
+                format!("{}?", session.recorded_state.to_ascii_lowercase()),
+                session.runtime_id.as_deref().unwrap_or("shell"),
+                session.project_label,
+                session.host_kind,
+                &session.host_id[..8]
+            );
+            lines.push(Line::from(Span::styled(
+                truncate(&line, inner.width as usize),
+                theme::secondary(),
+            )));
+        }
+    }
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "enter resume · n new session · x forget record · esc close",
-        theme::secondary(),
-    )));
+    let help = if sessions.is_empty() {
+        "imported evidence has no actions · esc close"
+    } else if imported.is_empty() {
+        "enter resume · n new session · x forget record · esc close"
+    } else {
+        "local rows: enter resume · n new · x forget · imported rows: read-only · esc close"
+    };
+    lines.push(Line::from(Span::styled(help, theme::secondary())));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
@@ -1141,6 +1183,13 @@ fn help(frame: &mut Frame, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_minimum_size_guard_has_an_exact_boundary() {
+        assert!(is_too_small(29, 12));
+        assert!(is_too_small(30, 11));
+        assert!(!is_too_small(30, 12));
+    }
 
     #[test]
     fn every_slot_on_the_bar_is_hittable_across_its_whole_width() {

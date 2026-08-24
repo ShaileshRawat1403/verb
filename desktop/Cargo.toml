@@ -12,3 +12,8 @@ license = "Apache-2.0"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 # A terminal-state parser, so the embedded terminal region is a real screen rather than a log view.
 vt100 = "0.16.2"
+# Continuity is a strict external file format, not one of the tiny scalar agent-record reads handled
+# by `json.rs`. Typed parsing and an integrity checksum keep attacker-controlled imports bounded.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"

@@ -39,9 +39,13 @@ object VerbCliBootstrap {
             target.writeText(script)
         }
         target.setExecutable(true, false)
-        true
+        isInstalled(filesDir)
     }.getOrElse { error ->
         TerminalSessionLogger.warn(LogCategory.IO, "Verb CLI install failed: ${error.message}")
         false
     }
+
+    fun isInstalled(filesDir: File): Boolean =
+        File(File(filesDir, AgentWrapperBootstrap.RELATIVE_BIN_DIR), COMMAND)
+            .let { it.isFile && it.canRead() && it.canExecute() }
 }

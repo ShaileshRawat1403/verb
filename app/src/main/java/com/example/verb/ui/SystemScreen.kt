@@ -4,7 +4,9 @@ import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -18,6 +20,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -36,10 +40,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -60,6 +66,17 @@ import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.ui.theme.SecondaryCyan
 import java.util.Locale
 
+/** A named task may share this screen while still landing at the section the user selected. */
+enum class SystemSection {
+    OVERVIEW,
+    PROVIDER,
+    WORKING_WORLD,
+    CONTINUITY,
+    RUNTIMES,
+    AGENT_RUNTIME
+}
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SystemScreen(
     isTerminalSessionActive: Boolean,
@@ -86,13 +103,39 @@ fun SystemScreen(
     worldArchiveMessage: String? = null,
     onSaveWorldToDownloads: () -> Unit = {},
     onPickWorldArchive: () -> Unit = {},
+    continuityMessage: String? = null,
+    continuityPreviewReady: Boolean = false,
+    importedContinuitySessions: Int = 0,
+    onExportContinuity: () -> Unit = {},
+    onPickContinuity: () -> Unit = {},
+    onApplyContinuity: () -> Unit = {},
     onImportAgentRuntime: () -> Unit = {},
     onOpenAgentRuntime: () -> Unit = {},
     onCheckAgentRuntime: () -> Unit = {},
     onReturnToVerbRuntime: () -> Unit = {},
+    initialSection: SystemSection = SystemSection.OVERVIEW,
     modifier: Modifier = Modifier
 ) {
     val scrollState = rememberScrollState()
+    val initialSectionRequester = remember(initialSection) { BringIntoViewRequester() }
+
+    fun sectionModifier(section: SystemSection): Modifier = if (initialSection == section) {
+        Modifier.bringIntoViewRequester(initialSectionRequester)
+    } else {
+        Modifier
+    }
+
+    // The whole screen remains one existing destination, but selecting a named task must land on
+    // the named capability rather than at an unrelated card several screens above it.
+    LaunchedEffect(initialSection) {
+        if (initialSection != SystemSection.OVERVIEW) {
+            // The requester is attached during layout, one frame after this effect is scheduled.
+            // Waiting for that frame makes the target deterministic on both a device and the
+            // Robolectric Compose host instead of racing initial composition.
+            withFrameNanos { }
+            initialSectionRequester.bringIntoView()
+        }
+    }
 
     // Calculate live storage stats
     val dataDir = Environment.getDataDirectory()
@@ -125,11 +168,17 @@ fun SystemScreen(
             modifier = Modifier.padding(top = 4.dp, bottom = 20.dp)
         )
 
-        AiProviderSettingsCard(
-            settings = aiProviderSettings,
-            onSave = onSaveAiProviderSettings,
-            onClearApiKey = onClearAiProviderApiKey
-        )
+        Box(
+            modifier = sectionModifier(SystemSection.PROVIDER)
+                .fillMaxWidth()
+                .testTag("system_section_provider")
+        ) {
+            AiProviderSettingsCard(
+                settings = aiProviderSettings,
+                onSave = onSaveAiProviderSettings,
+                onClearApiKey = onClearAiProviderApiKey
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -197,12 +246,35 @@ fun SystemScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        WorldArchiveCard(
-            archiveName = worldArchiveName,
-            message = worldArchiveMessage,
-            onSaveToDownloads = onSaveWorldToDownloads,
-            onPickArchive = onPickWorldArchive
-        )
+        Box(
+            modifier = sectionModifier(SystemSection.WORKING_WORLD)
+                .fillMaxWidth()
+                .testTag("system_section_working_world")
+        ) {
+            WorldArchiveCard(
+                archiveName = worldArchiveName,
+                message = worldArchiveMessage,
+                onSaveToDownloads = onSaveWorldToDownloads,
+                onPickArchive = onPickWorldArchive
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Box(
+            modifier = sectionModifier(SystemSection.CONTINUITY)
+                .fillMaxWidth()
+                .testTag("system_section_continuity")
+        ) {
+            ContinuityCard(
+                message = continuityMessage,
+                previewReady = continuityPreviewReady,
+                importedSessions = importedContinuitySessions,
+                onExport = onExportContinuity,
+                onPick = onPickContinuity,
+                onApply = onApplyContinuity
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -238,36 +310,104 @@ fun SystemScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        RuntimeProfilesCard(
-            reports = runtimeProfileReports,
-            installingProfile = installingRuntimeProfile,
-            message = runtimeInstallMessage,
-            onInstall = onInstallRuntimeProfile
-        )
+        Box(
+            modifier = sectionModifier(SystemSection.RUNTIMES)
+                .fillMaxWidth()
+                .testTag("system_section_runtimes")
+        ) {
+            RuntimeProfilesCard(
+                reports = runtimeProfileReports,
+                installingProfile = installingRuntimeProfile,
+                message = runtimeInstallMessage,
+                onInstall = onInstallRuntimeProfile
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        AgentRuntimeCard(
-            status = agentRuntimeStatus,
-            importing = agentRuntimeImporting,
-            message = agentRuntimeMessage,
-            archiveName = agentArchiveName,
-            checksumName = agentChecksumName,
-            manifestName = agentManifestName,
-            onPickArchive = onPickAgentArchive,
-            onPickChecksum = onPickAgentChecksum,
-            onPickManifest = onPickAgentManifest,
-            onImport = onImportAgentRuntime,
-            onOpen = onOpenAgentRuntime,
-            onCheckCompatibility = onCheckAgentRuntime,
-            onReturnToVerb = onReturnToVerbRuntime
-        )
+        Box(
+            modifier = sectionModifier(SystemSection.AGENT_RUNTIME)
+                .fillMaxWidth()
+                .testTag("system_section_agent_runtime")
+        ) {
+            AgentRuntimeCard(
+                status = agentRuntimeStatus,
+                importing = agentRuntimeImporting,
+                message = agentRuntimeMessage,
+                archiveName = agentArchiveName,
+                checksumName = agentChecksumName,
+                manifestName = agentManifestName,
+                onPickArchive = onPickAgentArchive,
+                onPickChecksum = onPickAgentChecksum,
+                onPickManifest = onPickAgentManifest,
+                onImport = onImportAgentRuntime,
+                onOpen = onOpenAgentRuntime,
+                onCheckCompatibility = onCheckAgentRuntime,
+                onReturnToVerb = onReturnToVerbRuntime
+            )
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         UsbDebuggingDiagnosticCard()
 
         Spacer(modifier = Modifier.height(24.dp))
+    }
+}
+
+/** Evidence moves; processes, current state, transcripts, credentials and authority do not. */
+@Composable
+internal fun ContinuityCard(
+    message: String?,
+    previewReady: Boolean,
+    importedSessions: Int,
+    onExport: () -> Unit,
+    onPick: () -> Unit,
+    onApply: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("card_continuity"),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("Mobile ↔ desktop continuity", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Move structural session evidence with a user-owned .vcont file. Imported state is " +
+                    "dated history, never proof that a process or conversation can resume here.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Text(
+                "$importedSessions imported session record${if (importedSessions == 1) "" else "s"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 8.dp).testTag("continuity_imported_count")
+            )
+            message?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 6.dp).testTag("continuity_message")
+                )
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onExport, modifier = Modifier.testTag("btn_continuity_export")) {
+                    Text("Export evidence")
+                }
+                OutlinedButton(onClick = onPick, modifier = Modifier.testTag("btn_continuity_preview")) {
+                    Text("Preview import")
+                }
+            }
+            if (previewReady) {
+                Button(
+                    onClick = onApply,
+                    modifier = Modifier.padding(top = 8.dp).testTag("btn_continuity_apply")
+                ) { Text("Apply read-only import") }
+            }
+        }
     }
 }
 

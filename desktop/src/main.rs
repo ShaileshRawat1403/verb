@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(not(unix))]
@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agents;
 mod context;
+mod continuity;
 mod integration;
 mod json;
 mod observe;
@@ -48,7 +49,9 @@ impl Agent {
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
             Self::Dsh => "dsh",
-            Self::Custom(value) => value,
+            // The executable is volatile launch input, never a durable runtime identifier. Using
+            // it here would write full command text into the session record and event log.
+            Self::Custom(_) => "custom",
         }
     }
 
@@ -88,6 +91,7 @@ impl Agent {
     }
 
     fn resume_subcommand(&self, resume_identity: Option<&str>) -> Vec<String> {
+        let resume_identity = resume_identity.and_then(valid_resume_identity);
         match (self, resume_identity) {
             (Self::Claude, Some(id)) => vec!["--resume".to_owned(), id.to_owned()],
             (Self::Claude, None) => vec!["--continue".to_owned()],
@@ -281,7 +285,8 @@ impl Session {
             resume_identity: values
                 .get("resume_identity")
                 .filter(|value| !value.is_empty())
-                .map(|value| (*value).to_owned()),
+                .and_then(|value| valid_resume_identity(value))
+                .map(str::to_owned),
         })
     }
 }
@@ -349,6 +354,7 @@ fn run() -> Result<(), Failure> {
         "status" => print_status(&project, json)?,
         "sessions" => print_sessions(json)?,
         "context" => print_context(&project, json)?,
+        "continuity" => continuity::command(&project, rest)?,
         #[cfg(unix)]
         "ui" => tui::run(&project)?,
         "resume" => resume_session(&project)?,
@@ -410,6 +416,10 @@ Usage:
   verb status          Show project, Git, and last session
   verb sessions        List every project Verb has a session for
   verb context         Show everything Verb knows about this project right now
+  verb continuity export PATH
+                       Export structural evidence for this project
+  verb continuity import PATH [--apply]
+                       Preview or apply evidence recorded on another host
   verb ui              Browse and resume sessions on a full screen
   verb version         Print the version
   verb claude          Launch Claude in the current project
@@ -444,29 +454,24 @@ agent credentials and transcripts remain owned by the agent."#
 /// has no way to prove the session it is reading about is still running.
 fn print_sessions(json: bool) -> Result<(), String> {
     let directory = sessions_directory()?;
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            // An empty list, not an error and not a special case: a machine consumer gets `[]`.
-            println!("{}", if json { "[]" } else { "No sessions yet." });
-            return Ok(());
-        }
+    let mut sessions: Vec<Session> = match fs::read_dir(&directory) {
+        Ok(entries) => entries
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|value| value == "session")
+            })
+            .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+            .filter_map(|contents| Session::deserialize(&contents))
+            .collect(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(format!("could not read {}: {error}", directory.display())),
     };
+    let imported = continuity::imported_sessions()?;
 
-    let mut sessions: Vec<Session> = entries
-        .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|value| value == "session")
-        })
-        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
-        .filter_map(|contents| Session::deserialize(&contents))
-        .collect();
-
-    if sessions.is_empty() {
+    if sessions.is_empty() && imported.is_empty() {
         println!("{}", if json { "[]" } else { "No sessions yet." });
         return Ok(());
     }
@@ -475,7 +480,8 @@ fn print_sessions(json: bool) -> Result<(), String> {
     sessions.sort_by_key(|session| std::cmp::Reverse(session.last_seen_at));
 
     if json {
-        let rows: Vec<String> = sessions.iter().map(session_json).collect();
+        let mut rows: Vec<String> = sessions.iter().map(session_json).collect();
+        rows.extend(imported.iter().map(continuity::imported_session_json));
         println!("[{}]", rows.join(","));
         return Ok(());
     }
@@ -483,6 +489,17 @@ fn print_sessions(json: bool) -> Result<(), String> {
     let now = now_millis();
     for session in &sessions {
         println!("{}", describe_session(session, now));
+    }
+    for session in &imported {
+        println!(
+            "{} · {} · recorded {} on another {} host ({}) · unconfirmed here · {}",
+            session.project_label,
+            session.runtime_id.as_deref().unwrap_or("shell"),
+            session.recorded_state.to_ascii_lowercase(),
+            session.host_kind,
+            &session.host_id[..8],
+            session.session_id
+        );
     }
     Ok(())
 }
@@ -1127,6 +1144,7 @@ struct EventLogger {
     path: PathBuf,
     file: File,
     session_id: String,
+    next_seq: u64,
 }
 
 impl EventLogger {
@@ -1137,6 +1155,17 @@ impl EventLogger {
             .ok_or_else(|| "invalid event log path".to_owned())?;
         fs::create_dir_all(parent)
             .map_err(|error| format!("could not create Verb event directory: {error}"))?;
+        let next_seq = fs::read_to_string(&path)
+            .ok()
+            .and_then(|contents| {
+                contents
+                    .lines()
+                    .filter_map(|line| crate::json::json_number(line, "seq"))
+                    .max()
+            })
+            .and_then(|seq| u64::try_from(seq).ok())
+            .unwrap_or(0)
+            .saturating_add(1);
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -1146,6 +1175,7 @@ impl EventLogger {
             path,
             file,
             session_id: session.id.clone(),
+            next_seq,
         })
     }
 
@@ -1252,23 +1282,34 @@ impl EventLogger {
     }
 
     fn write_event(&mut self, kind: &str, fields: &str) -> Result<(), String> {
-        let field_suffix = if fields.is_empty() {
-            String::new()
-        } else {
-            format!(",{fields}")
-        };
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
         writeln!(
             self.file,
-            "{{\"schemaVersion\":1,\"timestamp\":{},\"session_id\":\"{}\",\"type\":\"{}\"{field_suffix}}}",
-            now_millis(),
-            json_escape(&self.session_id),
-            kind
+            "{}",
+            event_json(&self.session_id, seq, kind, fields, now_millis())
         )
         .map_err(|error| format!("could not write event log {}: {error}", self.path.display()))?;
         self.file
             .flush()
             .map_err(|error| format!("could not flush event log {}: {error}", self.path.display()))
     }
+}
+
+/// One durable event envelope in the shared Android/desktop schema.
+fn event_json(session_id: &str, seq: u64, kind: &str, fields: &str, timestamp: u128) -> String {
+    let field_suffix = if fields.is_empty() {
+        String::new()
+    } else {
+        format!(",{fields}")
+    };
+    format!(
+        "{{\"schemaVersion\":1,\"timestamp\":\"{}\",\"sessionId\":\"{}\",\"seq\":{},\"type\":\"{}\"{field_suffix}}}",
+        iso8601(timestamp),
+        json_escape(session_id),
+        seq,
+        json_escape(kind)
+    )
 }
 
 pub(crate) fn event_log_path(project: &Path, session_id: &str) -> Result<PathBuf, String> {
@@ -1321,14 +1362,34 @@ fn json_escape_bytes(bytes: &[u8]) -> String {
 }
 
 fn new_id() -> String {
-    format!("{}-{}", now_seconds(), std::process::id())
+    let mut bytes = [0_u8; 16];
+    if File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .is_err()
+    {
+        // Supported desktop hosts provide /dev/urandom. This collision-resistant fallback remains
+        // opaque and process-free for unusual Unix environments rather than reintroducing a PID.
+        let seed = now_millis();
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte =
+                (seed.rotate_left((index * 7) as u32) as u8) ^ ((index as u8).wrapping_mul(0x9d));
+        }
+    }
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn now_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+fn valid_resume_identity(value: &str) -> Option<&str> {
+    let mut characters = value.chars();
+    let first = characters.next()?;
+    if !first.is_ascii_alphanumeric()
+        || value.len() > 128
+        || !characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | ':' | '-')
+        })
+    {
+        return None;
+    }
+    Some(value)
 }
 
 fn now_millis() -> u128 {
@@ -1453,6 +1514,27 @@ mod tests {
     }
 
     #[test]
+    fn durable_event_envelope_matches_the_shared_schema() {
+        let json = event_json(
+            "session-1",
+            1,
+            "COMMAND_FINISHED",
+            "\"exitCode\":1,\"commandId\":\"c1\"",
+            1_787_320_092_493,
+        );
+
+        assert!(
+            json.contains("\"timestamp\":\"2026-08-21T13:48:12Z\""),
+            "{json}"
+        );
+        assert!(json.contains("\"sessionId\":\"session-1\""), "{json}");
+        assert!(json.contains("\"seq\":1"), "{json}");
+        assert!(!json.contains("session_id"), "{json}");
+        assert!(!json.contains("commandText"), "{json}");
+        assert!(!json.contains("processPresent"), "{json}");
+    }
+
+    #[test]
     fn a_global_flag_is_removed_from_the_arguments_it_was_mixed_into() {
         let mut args = vec!["--json".to_owned(), "extra".to_owned()];
         assert!(take_flag(&mut args, "--json"));
@@ -1483,7 +1565,21 @@ mod tests {
     fn parses_known_and_custom_agents() {
         assert_eq!(Agent::parse("Claude"), Agent::Claude);
         assert_eq!(Agent::parse("open-code"), Agent::OpenCode);
-        assert_eq!(Agent::parse("my-agent").label(), "my-agent");
+        assert_eq!(Agent::parse("my-agent").label(), "custom");
+        assert_eq!(Agent::parse("my-agent").command(), "my-agent");
+    }
+
+    #[test]
+    fn a_custom_command_is_launch_input_never_durable_runtime_text() {
+        let command = "/bin/tool --token planted-secret";
+        let session = Session::new(
+            PathBuf::from("/tmp/project"),
+            Agent::Custom(command.to_owned()),
+        );
+        let serialized = session.serialize();
+        assert_eq!(session.runtime_id.as_deref(), Some("custom"));
+        assert!(!serialized.contains(command), "{serialized}");
+        assert!(!serialized.contains("planted-secret"), "{serialized}");
     }
 
     #[test]
@@ -1559,6 +1655,29 @@ mod tests {
             Agent::OpenCode.resume_args(None),
             vec!["--continue".to_owned()]
         );
+        assert_eq!(
+            Agent::Claude.resume_args(Some("; touch owned")),
+            vec!["--continue".to_owned()]
+        );
+        assert_eq!(
+            Agent::Codex.resume_args(Some("--help")),
+            vec![
+                "--disable".to_owned(),
+                "apps".to_owned(),
+                "resume".to_owned(),
+                "--last".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn new_session_ids_are_opaque_random_values_with_no_pid_or_timestamp_shape() {
+        let first = new_id();
+        let second = new_id();
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|character| character.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+        assert_eq!(first.split('-').count(), 1);
     }
 
     #[test]

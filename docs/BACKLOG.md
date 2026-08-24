@@ -9,7 +9,21 @@ development moment easier, clearer or safer, or does it merely add another capab
 
 ---
 
-## Current sprint — Mobile reliability
+## Current beta-closure pass — 24 August
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Replace Android subsystem tabs with one terminal workspace and searchable named tasks | implemented; automated tests pass; physical acceptance pending |
+| 2 | Ensure a Verb overlay takes keyboard/back ownership from the mounted terminal | implemented with regression coverage; physical acceptance pending |
+| 3 | Public-source license, security policy and release checklist | done |
+| 4 | Complete desktop and both-flavor Android verification on the return revision | in progress |
+| 5 | Physical Android workspace, Claude/Codex and Android↔desktop continuity acceptance | pending primary device |
+| 6 | Integrate into the primary full-history repository and audit the final release archive | pending primary machine |
+
+M2 remains frozen during this pass. The optional provider interpretation screen is not the proposed
+evidence-linked M2 layer and makes no execution or terminal-observation claim.
+
+## Completed sprint — Mobile reliability
 
 > **A mobile Verb installation can be upgraded, reinstalled and recovered without losing the user's
 > working world, and every state Verb displays comes from one evidence-backed resolver.**
@@ -101,7 +115,7 @@ distribution, splitting PR #2.
 | A6 | ~~Mouse support~~ inside surfaces | done |
 | A8 | ~~Mouse capture by default, so bar actions are clickable~~ — decided from dogfooding on 22 Aug: the first thing reached for in the workspace was the bar. Captured by default, Option-drag still selects, `leader m` hands the mouse back. Status segments are still not clickable | done |
 | A7 | Windows support for the TUI (CLI already falls back to inherited stdio) | L |
-| A9 | Decide the Agents list's admission rule and apply it — Gemini CLI, Hermes and DeepSeek show as installable cards while never having been verified on a device, which is the catalogue shape the compatibility matrix exists to avoid | S |
+| A9 | ~~Apply an evidence-based Agents admission rule~~ — only Claude, Codex and OpenCode appear; unverified runtime profiles no longer become catalogue cards | done |
 
 ## B. Blocked on the Android device
 
@@ -138,9 +152,7 @@ Codex            hosted CLI        upstream: yes   on Verb Android: yes, signed 
 OpenCode         hosted CLI        upstream: yes   on Verb Android: runs; sign-in not required for use
 Gemini CLI       listed already    upstream: yes (@google/gemini-cli 0.56.0)
                                    on Verb Android: not verified · priority: deferred
-                                   NOTE: already a visible card in Agents, from commit ad20571 —
-                                   predates the "no visible catalogue" rule and was left alone
-                                   rather than removed mid-sprint. See A9.
+                                   hidden by the A9 admission rule; no product card
 Ollama           candidate         shape: remote provider endpoint, not a hosted agent.
                                    The npm package is a client library; the runtime is a Go binary.
                                    Verb would point at a server elsewhere · priority: deferred
@@ -164,11 +176,11 @@ quietly invent a different shape.
 
 | # | Item | Size |
 | --- | --- | --- |
-| D1 | PR #2 is 66 commits across Android, desktop, TUI and docs — merge as-is or split by subsystem | S–M |
-| D2 | No release or distribution path: `cargo install` only | M |
+| D1 | Integrate this source-only transfer into the primary repository's full history; do not publish the temporary transfer Git repository | S–M |
+| D2 | Android signed prerelease workflow exists; desktop distribution remains `cargo install`/source build only | partly |
 | D3 | The Rust crate has no library target, so integration tests drive the binary | S |
-| D4 | Dated snapshots (`HANDOFF.md`, `NEXT_SPRINT.md`, V0 validation) are marked, not rewritten | S |
-| D5 | No CONTRIBUTING or architecture overview | S |
+| D4 | ~~Dated snapshots (`HANDOFF.md`, `NEXT_SPRINT.md`, V0 validation) are marked, not rewritten~~ | done |
+| D5 | ~~Add CONTRIBUTING and architecture overview~~ | done |
 
 ## E. Android — paused, not abandoned
 
@@ -182,3 +194,12 @@ quietly invent a different shape.
 
 M2 — explain, compare, or guided action. Decided by friction notes, not by this list. See
 `docs/DOGFOODING.md`.
+
+## G. Cross-host continuity
+
+| # | Item | Status |
+| --- | --- | --- |
+| G1 | Manual checksummed `.vcont` export, preview and read-only import on Android and desktop | implemented; automated and desktop round-trip verified |
+| G2 | Physical Android→desktop→Android file round-trip and UI acceptance | pending primary device |
+| G3 | Optional encrypted wrapper for continuity metadata | post-beta; no credentials may enter the envelope |
+| G4 | Automatic/background/cloud/LAN sync, remote process resume, transcript transport | rejected for beta; requires separate product and threat-model approval |

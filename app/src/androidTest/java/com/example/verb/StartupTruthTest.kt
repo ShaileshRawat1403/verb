@@ -23,7 +23,7 @@ import org.junit.runner.RunWith
  *    initial empty value forever. Unit tests that construct the ViewModel and immediately assert
  *    on its state can still pass, because they don't wait for the async path the way a real user
  *    does. That exact bug shipped once in this codebase and was only caught by watching the
- *    Agents tab on a real device stay empty.
+ *    agents surface on a real device stay empty.
  */
 @RunWith(AndroidJUnit4::class)
 class StartupTruthTest {
@@ -31,9 +31,9 @@ class StartupTruthTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
 
-    /** The terminal is the launch tab; if the constructor blocks the main thread, this never draws. */
+    /** The terminal is the workspace root; if the constructor blocks the main thread, it never draws. */
     @Test
-    fun terminalTabRendersWithoutBlockingTheMainThread() {
+    fun terminalWorkspaceRendersWithoutBlockingTheMainThread() {
         composeRule.waitUntil(timeoutMillis = COLD_START_BUDGET_MS) {
             composeRule.onAllNodesWithTag("verb_session_status").fetchSemanticsNodes().isNotEmpty()
         }
@@ -44,10 +44,14 @@ class StartupTruthTest {
      * the device has any guest userland installed. If runtimeProfileReports is still the initial
      * empty list once this budget expires, the background refresh that is supposed to populate it
      * either never ran or is not wired to this screen.
+     *
+     * Reached the way a user reaches it now that there is no tab bar: the workspace's Verb chip, then
+     * the named task. That also makes this a live check that the sheet's rows really navigate.
      */
     @Test
-    fun agentsTabPopulatesFromTheBackgroundRefresh() {
-        composeRule.onNodeWithTag("tab_agents").performClick()
+    fun agentsSurfacePopulatesFromTheBackgroundRefresh() {
+        composeRule.onNodeWithTag("verb_sheet_trigger").performClick()
+        composeRule.onNodeWithTag("verb_task_agents").performClick()
         composeRule.waitUntil(timeoutMillis = PROFILE_REFRESH_BUDGET_MS) {
             composeRule.onAllNodesWithTag("agent_claude_code").fetchSemanticsNodes().isNotEmpty()
         }

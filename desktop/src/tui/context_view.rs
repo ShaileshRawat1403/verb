@@ -201,6 +201,7 @@ mod tests {
             },
             session: None,
             events: vec![Event {
+                seq: Some(1),
                 kind: "COMMAND_FINISHED".to_owned(),
                 timestamp: 1_787_320_092_493,
                 exit_code: Some(1),

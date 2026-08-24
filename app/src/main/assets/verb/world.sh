@@ -19,10 +19,10 @@
 
 set -euo pipefail
 
-SCHEMA_VERSION=1
+SCHEMA_VERSION=2
+MIN_READABLE_SCHEMA_VERSION=1
 HOME_DIR="${HOME:-/data/data/com.aistudio.verb.app/files/home}"
 APP_DIR="$(cd "$HOME_DIR/../.." && pwd)"
-PREFS_DIR="$APP_DIR/shared_prefs"
 
 # What the world is made of. Paths are relative to the app directory, so the archive is portable
 # between installs of the same package.
@@ -46,7 +46,10 @@ WORLD_PATHS=(
   "files/home/.codex"
   "files/home/.config/opencode"
   "files/home/.local/share/opencode"
-  "shared_prefs"
+  "shared_prefs/verb_session.xml"
+  "shared_prefs/verb_session_codex.xml"
+  "shared_prefs/verb_session_opencode.xml"
+  "shared_prefs/verb_projects.xml"
 )
 
 usage() {
@@ -204,10 +207,14 @@ decrypt_to() {
   # CBC has no authentication tag, so a wrong passphrase or a tampered file can decrypt into
   # plausible-looking rubbish. Both failures are caught here and reported as one honest sentence
   # rather than a tar error the user has to interpret.
-  if ! tar -C "$work" -xf "$work/bundle.tar" 2>/dev/null; then
+  local bundle_members
+  bundle_members=$(tar -tf "$work/bundle.tar" 2>/dev/null || true)
+  if [ "$bundle_members" != $'manifest.json\npayload.tgz' ]; then
     echo "verb: $archive did not open. Either the passphrase is wrong, or the file is damaged." >&2
     exit 1
   fi
+  tar -xOf "$work/bundle.tar" manifest.json > "$work/manifest.json"
+  tar -xOf "$work/bundle.tar" payload.tgz > "$work/payload.tgz"
   [ -f "$work/manifest.json" ] || {
     echo "verb: $archive is not a Verb world archive." >&2
     exit 1
@@ -223,12 +230,67 @@ decrypt_to() {
     exit 1
   fi
 
-  local schema
-  schema=$(grep -o '"schemaVersion": [0-9]*' "$work/manifest.json" | tr -d ' ' | cut -d: -f2)
-  if [ "$schema" != "$SCHEMA_VERSION" ]; then
-    echo "verb: this archive is schema v$schema; this Verb reads v$SCHEMA_VERSION." >&2
+  ARCHIVE_SCHEMA=$(grep -o '"schemaVersion": [0-9]*' "$work/manifest.json" | tr -d ' ' | cut -d: -f2)
+  if [ -z "$ARCHIVE_SCHEMA" ] ||
+      [ "$ARCHIVE_SCHEMA" -lt "$MIN_READABLE_SCHEMA_VERSION" ] ||
+      [ "$ARCHIVE_SCHEMA" -gt "$SCHEMA_VERSION" ]; then
+    echo "verb: this archive is schema v${ARCHIVE_SCHEMA:-unknown}; this Verb reads v$MIN_READABLE_SCHEMA_VERSION-v$SCHEMA_VERSION." >&2
     exit 1
   fi
+}
+
+payload_member_allowed() {
+  local member=${1%/} schema=$2 allowed
+  [ -n "$member" ] || return 1
+  case "$member" in
+    /*|../*|*/../*|*/..|*//*|*/./*|*/.|*\\*) return 1 ;;
+  esac
+
+  # Schema v1 exported the entire SharedPreferences directory. It may be staged so an existing
+  # user backup remains recoverable, but restore below still copies only WORLD_PATHS. That means
+  # obsolete chat memory, device-bound provider ciphertext, UI preferences and migration markers
+  # are inspected as ordinary files and then deliberately ignored.
+  if [ "$schema" = "1" ]; then
+    case "$member" in
+      shared_prefs|shared_prefs/*) return 0 ;;
+    esac
+  fi
+
+  for allowed in "${WORLD_PATHS[@]}"; do
+    if [ "$member" = "$allowed" ] || [[ "$member" == "$allowed/"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+stage_payload() {
+  local payload=$1 stage=$2 schema=$3 listing member type
+  listing=$(mktemp "${TMPDIR:-/tmp}/verb-payload-list.XXXXXX")
+  tar -tvzf "$payload" > "$listing" 2>/dev/null || {
+    rm -f "$listing"
+    echo "verb: the archive payload is not a readable tar file." >&2
+    exit 1
+  }
+
+  while IFS= read -r type; do
+    case "$type" in -|d) ;; *)
+      rm -f "$listing"
+      echo "verb: the archive contains a link or special file; restore refused." >&2
+      exit 1
+    esac
+  done < <(cut -c1 "$listing")
+  rm -f "$listing"
+
+  while IFS= read -r member; do
+    if ! payload_member_allowed "$member" "$schema"; then
+      echo "verb: the archive contains an unexpected path: $member" >&2
+      exit 1
+    fi
+  done < <(tar -tzf "$payload")
+
+  mkdir -p "$stage"
+  tar -C "$stage" -xzf "$payload"
 }
 
 cmd_import() {
@@ -241,15 +303,21 @@ cmd_import() {
   trap 'rm -rf "${work:-}"' EXIT
 
   decrypt_to "$archive" "$work"
+  stage_payload "$work/payload.tgz" "$work/staged" "$ARCHIVE_SCHEMA"
 
   echo "Archive: $archive"
   sed 's/^/  /' "$work/manifest.json"
   echo
-  # From the manifest rather than from the tar listing: the manifest is what the archive claims to
-  # contain, and a person deciding whether to restore should be reading the claim, not a file list
-  # folded to two levels deep.
+  if [ "$ARCHIVE_SCHEMA" = "1" ]; then
+    echo "Compatibility: schema v1 preferences are narrowed to structural session/project records."
+    echo "  Legacy chat memory, provider ciphertext and unrelated preferences will not be restored."
+    echo
+  fi
+  # Report the exact allowlisted paths that reached the validated staging area. This keeps a v1
+  # compatibility preview truthful even though its manifest claims the old broad shared_prefs path.
   echo "What would change:"
-  grep -o '"path": "[^"]*"' "$work/manifest.json" | cut -d'"' -f4 | while read -r path; do
+  for path in "${WORLD_PATHS[@]}"; do
+    [ -e "$work/staged/$path" ] || continue
     if [ -e "$APP_DIR/$path" ]; then
       printf '  replace  %s\n' "$path"
     else
@@ -273,7 +341,13 @@ cmd_import() {
   echo
   echo "Saved what is here now to $snapshot"
 
-  tar -C "$APP_DIR" -xzf "$work/payload.tgz"
+  local path
+  for path in "${WORLD_PATHS[@]}"; do
+    [ -e "$work/staged/$path" ] || continue
+    rm -rf "$APP_DIR/$path"
+    mkdir -p "$(dirname "$APP_DIR/$path")"
+    mv "$work/staged/$path" "$APP_DIR/$path"
+  done
   echo "Restored."
   echo "Restart the terminal session so the shell picks up the restored environment."
 }

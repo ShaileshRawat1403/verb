@@ -79,6 +79,8 @@ fun MobileTerminalKeyboard(
     onInspectOutput: (String) -> Unit,
     onCommandExecuted: (String) -> Unit = {},
     inputFocusRequester: FocusRequester? = null,
+    /** False while a deliberate Verb surface owns input in front of the mounted terminal. */
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -154,8 +156,8 @@ fun MobileTerminalKeyboard(
         if (terminalInput.isEmpty()) {
             onSendText("\r")
         } else {
-            // onSendCommand carries no text (already echoed); the real text goes to the caller
-            // separately so command history in Room isn't recorded as a blank string.
+            // onSendCommand carries no text (already echoed); the real text goes to the caller only
+            // for the current in-memory execution boundary. It is never durably recorded.
             onCommandExecuted(terminalInput)
             onSendCommand("")
         }
@@ -212,6 +214,7 @@ fun MobileTerminalKeyboard(
                         fontFamily = FontFamily.Monospace
                     ),
                     singleLine = true,
+                    enabled = enabled,
                     shape = RoundedCornerShape(10.dp),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                     keyboardActions = KeyboardActions(onSend = { submitTerminalInput() }),
@@ -224,6 +227,7 @@ fun MobileTerminalKeyboard(
                 )
                 IconButton(
                     onClick = ::submitTerminalInput,
+                    enabled = enabled,
                     modifier = Modifier.size(44.dp).testTag("terminal_input_submit")
                 ) {
                     Icon(

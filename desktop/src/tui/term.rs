@@ -28,6 +28,8 @@ pub struct Hosted {
     /// The agent's own record, once it has begun one. Shared with the CLI proxy, which observes
     /// the same way from its own loop.
     watch: AgentWatch,
+    /// Set only after the process and durable session have both been closed out.
+    closed: bool,
 }
 
 impl Hosted {
@@ -44,6 +46,10 @@ impl Hosted {
         rows: u16,
         cols: u16,
     ) -> Result<Self, String> {
+        // This boundary must precede process creation. A fast agent can create its transcript
+        // before `spawn` returns, and then a later boundary would reject the right record as old.
+        let watch =
+            AgentWatch::for_agent(session.agent.as_ref().map(|agent| agent.label()), project);
         let process = pty::spawn(project, &session.id, command, args, env, Some((rows, cols)))?;
 
         let mut logger = EventLogger::new(&session)?;
@@ -72,8 +78,6 @@ impl Hosted {
         });
 
         session.state = crate::SessionState::Live;
-        let watch =
-            AgentWatch::for_agent(session.agent.as_ref().map(|agent| agent.label()), project);
         Ok(Self {
             session,
             logger,
@@ -86,6 +90,7 @@ impl Hosted {
             exit_code: None,
             pending: Vec::new(),
             watch,
+            closed: false,
         })
     }
 
@@ -94,10 +99,12 @@ impl Hosted {
     /// The same bytes go two places and nowhere else: into the terminal state Verb draws, and past
     /// the shell-integration scanner that turns markers into structural events. Neither retains
     /// them.
-    pub fn poll(&mut self) -> Result<Option<i32>, String> {
+    pub fn poll(&mut self) -> Result<(Option<i32>, bool), String> {
+        let mut changed = false;
         loop {
             match self.output.try_recv() {
                 Ok(bytes) => {
+                    changed = true;
                     self.parser.process(&bytes);
                     let structural =
                         self.integration
@@ -112,27 +119,34 @@ impl Hosted {
             }
         }
 
-        self.poll_agent_record()?;
+        changed |= self.poll_agent_record()?;
 
         if self.exit_code.is_none() {
+            let previous = self.exit_code;
             self.exit_code = pty::reap(self.pid)?;
+            changed |= self.exit_code != previous;
         }
-        Ok(self.exit_code)
+        Ok((self.exit_code, changed))
     }
 
     /// Reads whatever the agent has appended to its own record since the last tick.
     ///
     /// A failure to read is not reported as "nothing happened": the tail simply produces no events,
     /// and [`Hosted::observed`] stays empty, which the overlay renders as unobserved.
-    fn poll_agent_record(&mut self) -> Result<(), String> {
+    fn poll_agent_record(&mut self) -> Result<bool, String> {
         let now = crate::now_millis();
-        for event in self.watch.poll(now) {
+        let events = self.watch.poll(now);
+        let changed = !events.is_empty();
+        for event in events {
             self.logger.agent_observed(&event)?;
-            if let AgentEvent::ToolOutcome { failed: true, .. } = event {
+            if let AgentEvent::ToolOutcome {
+                at, failed: true, ..
+            } = event
+            {
                 // The band's whole purpose is the moment something went wrong, and until now it
                 // could not speak about anything that happened inside an agent.
                 self.pending.push(Structural::AgentToolFailed {
-                    millis: now,
+                    millis: now.saturating_sub(at),
                     tool: self.watch.last_tool(),
                 });
             }
@@ -142,7 +156,7 @@ impl Hosted {
             // it.
             self.session.resume_identity = self.watch.conversation_id();
         }
-        Ok(())
+        Ok(changed)
     }
 
     /// What the agent's record says it has done so far, when Verb is reading one at all.
@@ -212,7 +226,36 @@ impl Hosted {
     /// from the agent's own evidence, session saved.
     pub fn finish(mut self, exit_code: i32) -> Result<Session, String> {
         crate::finish_session_quietly(&mut self.session, exit_code)?;
-        Ok(self.session)
+        self.closed = true;
+        Ok(self.session.clone())
+    }
+
+    /// Stops a still-running hosted program before closing its durable record.
+    pub fn stop(mut self) -> Result<Session, String> {
+        let exit_code = match self.exit_code {
+            Some(code) => code,
+            None => pty::terminate(self.pid)?,
+        };
+        crate::finish_session_quietly(&mut self.session, exit_code)?;
+        self.closed = true;
+        Ok(self.session.clone())
+    }
+}
+
+impl Drop for Hosted {
+    fn drop(&mut self) {
+        if self.closed {
+            return;
+        }
+        // Error unwinding must not strand either a process or a durable LIVE record. There is no
+        // useful error channel from Drop, so the explicit quit/switch paths still call `stop` and
+        // report failures; this is the last-resort integrity guard.
+        let exit_code = self
+            .exit_code
+            .or_else(|| pty::terminate(self.pid).ok())
+            .unwrap_or(1);
+        let _ = crate::finish_session_quietly(&mut self.session, exit_code);
+        self.closed = true;
     }
 }
 
