@@ -1,5 +1,8 @@
 # Third-Party Licenses
 
+The root `LICENSE` applies to Verb-authored code. It does not replace or narrow the licenses of the
+separable third-party components and derived runtime sources listed here.
+
 Verb embeds a locally-built Linux userland and the proot wrapper so the Terminal is a real
 PTY environment with no runtime dependency on another Android app. The components below are
 distributed with the app; the obligations of their licenses are addressed here.

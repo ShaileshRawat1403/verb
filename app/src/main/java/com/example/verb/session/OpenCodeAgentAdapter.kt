@@ -54,7 +54,9 @@ class OpenCodeAgentAdapter(
      * "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
-        val resumeArgument = agent.resumeIdentity?.let { "--session $it" } ?: "--continue"
+        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity)
+            ?.let { "--session $it" }
+            ?: "--continue"
         val stillRunning = AgentResumeLauncher.launch(
             terminalRuntimeAdapter = terminalRuntimeAdapter,
             command = "opencode $resumeArgument",
@@ -129,7 +131,7 @@ class OpenCodeAgentAdapter(
                             // the same Android path-alias rule every other adapter uses; SQL could
                             // only compare the literal strings.
                             if (GuestPathAliases.sameDirectory(cursor.getString(1), project)) {
-                                add(cursor.getString(0))
+                                ResumeIdentity.validOrNull(cursor.getString(0))?.let(::add)
                             }
                         }
                     }
@@ -169,7 +171,8 @@ fun OpenCodeSessionCoordinator(
     terminalRuntimeAdapter = terminalRuntimeAdapter,
     coroutineScope = coroutineScope,
     sessionStore = sessionStore,
-    processBindingConfirmed = processBindingConfirmed
+    processBindingConfirmed = processBindingConfirmed,
+    eventLog = VerbEventLog(filesDir)
 )
 
 /** The [AgentRef.agentType] and [VerbSession.runtime] value for OpenCode sessions. */

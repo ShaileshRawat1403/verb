@@ -579,7 +579,7 @@ object TermuxBootstrapInstaller {
             if (!isCompleteBootstrap(stagingUsr)) {
                 throw IOException("Bootstrap is missing required runtime files.")
             }
-            activateBootstrap(stagingUsr, usrDir, workDir)
+            activateBootstrap(context, stagingUsr, usrDir, workDir, filesDir)
 
             File(filesDir, MARKER_FILE).writeText("verb-bootstrap-core-shell-v1\n")
             onState(State.Ready)
@@ -653,7 +653,13 @@ object TermuxBootstrapInstaller {
             File(usrDir, "lib/libtermux-exec.so").isFile &&
             File(usrDir, "etc/apt/sources.list").isFile
 
-    private fun activateBootstrap(stagingUsr: File, usrDir: File, workDir: File) {
+    internal fun activateBootstrap(
+        context: Context,
+        stagingUsr: File,
+        usrDir: File,
+        workDir: File,
+        filesDir: File,
+    ) {
         val backupUsr = File(workDir, "usr-previous")
         if (backupUsr.exists() && !backupUsr.deleteRecursively()) {
             throw IOException("Could not clear the previous bootstrap backup.")
@@ -666,6 +672,14 @@ object TermuxBootstrapInstaller {
         try {
             if (!stagingUsr.renameTo(usrDir)) {
                 throw IOException("Could not activate the new bootstrap.")
+            }
+            // The provisional usr tree is replaced above. Anything Verb installed there before
+            // extraction (its `verb` world command, wrappers and shell integration) disappeared
+            // with it, so repair Verb-owned files against the activated tree before accepting the
+            // bootstrap. Keep the old tree until this succeeds so a failed repair can roll back.
+            ensureGuestShellStartupCurrent(filesDir, context)
+            if (!VerbCliBootstrap.isInstalled(filesDir)) {
+                throw IOException("Verb world command could not be installed.")
             }
             backupUsr.deleteRecursively()
         } catch (error: Exception) {

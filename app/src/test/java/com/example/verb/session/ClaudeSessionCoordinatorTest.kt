@@ -31,7 +31,7 @@ class ClaudeSessionCoordinatorTest {
     }
 
     private fun transcriptDir(filesDir: File, project: VerbProject): File =
-        File(filesDir, "home/.claude/projects/${project.directory.absolutePath.replace('/', '-')}")
+        File(filesDir, "home/.claude/projects/${ClaudeProjectDirectory.encode(project.directory.absolutePath)}")
 
     @Test
     fun `onLaunched sets LIVE with a fresh id and a process bound`() = runTest {
@@ -188,6 +188,8 @@ class ClaudeSessionCoordinatorTest {
     @Test
     fun `existing process binding is the only reason persisted LIVE stays LIVE`() = runTest {
         val (filesDir, project, fake) = setUp()
+        VerbTerminalSessionHolder.resetForTests()
+        VerbTerminalSessionHolder.claimForeground("claude", emptySet())
         val persisted = VerbSession(
             id = "persisted-id",
             projectId = project.id,
@@ -210,5 +212,36 @@ class ClaudeSessionCoordinatorTest {
         assertEquals(VerbSessionState.LIVE, coordinator.session.value!!.state)
         assertNotNull(coordinator.session.value!!.process)
         coordinator.cancelWatch()
+        VerbTerminalSessionHolder.resetForTests()
+    }
+
+    @Test
+    fun `Activity recreation observes an agent exit that happened before reattachment`() = runTest {
+        val (filesDir, project, fake) = setUp()
+        transcriptDir(filesDir, project).apply { mkdirs() }
+            .let { File(it, "session-x.jsonl").createNewFile() }
+        VerbTerminalSessionHolder.resetForTests()
+        val store = InMemoryVerbSessionStore()
+        val first = ClaudeSessionCoordinator(filesDir, fake, this, sessionStore = store)
+
+        first.onLaunched(project, idsBeforeLaunch = emptySet())
+        runCurrent()
+        first.cancelWatch() // the old ViewModel and its coroutine scope disappear
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandEnd(0))
+
+        val reattached = ClaudeSessionCoordinator(
+            filesDir = filesDir,
+            terminalRuntimeAdapter = fake,
+            coroutineScope = this,
+            sessionStore = store,
+            processBindingConfirmed = true
+        )
+        advanceUntilIdle()
+
+        assertEquals(VerbSessionState.RECOVERABLE, reattached.session.value!!.state)
+        assertNull(reattached.session.value!!.process)
+        assertNull(VerbTerminalSessionHolder.foregroundAgent())
+        VerbTerminalSessionHolder.resetForTests()
     }
 }

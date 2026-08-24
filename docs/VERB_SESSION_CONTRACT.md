@@ -220,8 +220,9 @@ Kept out on purpose, per the steer against over-generalizing for hypothetical ne
 - **Multiple agents per session.** One optional `agent` per session matches today's reality (one PTY,
   one shell, at most one foreground agent). If that stops being true, it's a new field then, not a
   speculative array now.
-- **Cross-device sync.** P4's "work context" is a different, looser object built from multiple
-  sessions' history — not a field on this one.
+- **Transported state.** Cross-host continuity carries read-only evidence in the bounded
+  `VERB_CONTINUITY_ENVELOPE.md` format. Identity may travel; state and process authority do not.
+  Imported evidence is not a field on this session and never occupies a locally-owned record.
 - **Persistence format.** Whether this is stored as a Room entity, a flat file, or in-memory only is
   an implementation choice for step 2, not part of the contract.
 - **Process supervision** (foreground service, `tmux`/`dtach`). Those are *consumers* of `state`

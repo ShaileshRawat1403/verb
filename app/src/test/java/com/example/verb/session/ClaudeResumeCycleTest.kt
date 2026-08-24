@@ -60,7 +60,10 @@ class ClaudeResumeCycleTest {
         )
 
         // Claude's transcript shows up on disk -- the real fact that makes resume possible.
-        val transcriptDir = File(filesDir, "home/.claude/projects/${project.absolutePath.replace('/', '-')}")
+        val transcriptDir = File(
+            filesDir,
+            "home/.claude/projects/${ClaudeProjectDirectory.encode(project.absolutePath)}"
+        )
         transcriptDir.mkdirs()
         File(transcriptDir, "session-abc.jsonl").createNewFile()
 

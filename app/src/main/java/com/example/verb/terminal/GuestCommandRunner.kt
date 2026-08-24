@@ -30,7 +30,7 @@ import java.io.File
  *   completion (just discarded past the bound) so a chatty process can never deadlock on a full
  *   pipe.
  * - This class has no dependency on, and must never be called from, any AI/assistant code path
- *   (see [TerminalAiHelper], which only ever reads terminal transcript text). It is wired solely
+ *   (see [TerminalAiHelper], which accepts structural command metadata only). It is wired solely
  *   from [RuntimeCapabilityDetector], itself driven only by explicit user action in the Runtime
  *   Capabilities UI.
  */

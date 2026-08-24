@@ -7,7 +7,7 @@ import com.example.verb.terminal.RuntimeProfileReport
  *
  * Verb had four sources of truth about an agent and four places that turned them into words:
  * a readiness probe said "Ready", a surviving PTY said "Running", a persisted record said `LIVE`,
- * and the existence of a credentials file said "Signed in". Each surface combined them slightly
+ * and the existence of a credentials file said "Saved login found". Each surface combined them slightly
  * differently, so every wrong label was a new bug in a new place -- most recently two agents both
  * reporting "Running" while neither process existed.
  *
@@ -64,38 +64,17 @@ object AgentStatusResolver {
             )
         }
 
-        // A tracked session is the strongest evidence Verb has about an agent, because it was
-        // observed rather than probed.
-        evidence.session?.let { session ->
-            return when (session.state) {
-                VerbSessionState.LIVE -> AgentStatus(
-                    label = "Running",
-                    detail = null,
-                    action = Action.NONE,
-                    because = "Verb is holding this agent's process binding"
-                )
-
-                VerbSessionState.RECOVERABLE -> AgentStatus(
-                    label = "Session recoverable",
-                    detail = null,
-                    action = Action.RESUME,
-                    because = "the agent's own evidence says the conversation can be resumed"
-                )
-
-                VerbSessionState.INTERRUPTED -> AgentStatus(
-                    label = "Session interrupted",
-                    detail = "Checking recovery status…",
-                    action = Action.START_NEW,
-                    because = "the process is gone and recovery is not yet established either way"
-                )
-
-                VerbSessionState.ENDED -> AgentStatus(
-                    label = "Session ended",
-                    detail = null,
-                    action = Action.START_NEW,
-                    because = "the agent's own evidence says there is nothing to recover"
-                )
-            }
+        // LIVE means the host owns a confirmed process binding, so it outranks a transient probe.
+        // Every other session state describes work on disk, not the executable needed to continue
+        // it: after a Working World restore that evidence can exist while the reinstallable CLI is
+        // absent. Never offer Resume/Start until the local binary is actually ready.
+        if (evidence.session?.state == VerbSessionState.LIVE) {
+            return AgentStatus(
+                label = "Running",
+                detail = null,
+                action = Action.NONE,
+                because = "Verb is holding this agent's process binding"
+            )
         }
 
         if (evidence.report.isUnsatisfiable) {
@@ -107,20 +86,44 @@ object AgentStatusResolver {
             )
         }
 
-        if (evidence.report.isReady) {
+        if (!evidence.report.isReady) {
             return AgentStatus(
-                label = "Ready",
-                detail = signedInDetail(evidence.signedIn),
-                action = Action.OPEN,
-                because = "the probe resolved and ran the command"
+                label = "Not installed",
+                detail = evidence.session?.let { "Saved session will remain available after reinstall" },
+                action = if (evidence.otherInstallRunning) Action.NONE else Action.INSTALL,
+                because = "the local probe could not run the agent binary"
             )
         }
 
+        evidence.session?.let { session ->
+            return when (session.state) {
+                VerbSessionState.LIVE -> error("LIVE was handled from its confirmed binding above")
+                VerbSessionState.RECOVERABLE -> AgentStatus(
+                    label = "Session recoverable",
+                    detail = null,
+                    action = Action.RESUME,
+                    because = "the binary is ready and the agent's own evidence says the conversation can be resumed"
+                )
+                VerbSessionState.INTERRUPTED -> AgentStatus(
+                    label = "Session interrupted",
+                    detail = "Checking recovery status…",
+                    action = Action.START_NEW,
+                    because = "the process is gone and recovery is not yet established either way"
+                )
+                VerbSessionState.ENDED -> AgentStatus(
+                    label = "Session ended",
+                    detail = null,
+                    action = Action.START_NEW,
+                    because = "the agent's own evidence says there is nothing to recover"
+                )
+            }
+        }
+
         return AgentStatus(
-            label = "Not installed",
-            detail = null,
-            action = if (evidence.otherInstallRunning) Action.NONE else Action.INSTALL,
-            because = "the probe could not resolve the command"
+            label = "Ready",
+            detail = signedInDetail(evidence.signedIn),
+            action = Action.OPEN,
+            because = "the probe resolved and ran the command"
         )
     }
 
@@ -129,9 +132,9 @@ object AgentStatusResolver {
      * looks: it says an agent once wrote credentials, not that they are still valid. So it is a
      * detail line and never a status of its own.
      */
-    private fun signedInDetail(signedIn: Boolean?): String? = when (signedIn) {
-        true -> "Signed in"
-        false -> "Not signed in — run it once to sign in"
+    fun signedInDetail(signedIn: Boolean?): String? = when (signedIn) {
+        true -> "Saved login found — the agent verifies it when opened"
+        false -> "No saved login found — run it once to sign in"
         null -> null
     }
 }

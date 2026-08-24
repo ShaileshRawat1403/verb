@@ -31,56 +31,17 @@ class VerbUIRegressionTest {
     @get:Rule
     val composeTestRule = createComposeRule()
 
-    @Test
-    fun defaultPromptSubmitsSupportedV0Intent() {
-        var submittedIntent: VerbIntent? = null
-        composeTestRule.setContent {
-            VerbNaturalLanguageSheet(
-                onDismiss = {},
-                onSubmitIntent = { intent ->
-                    submittedIntent = intent
-                }
-            )
-        }
-
-        composeTestRule.onNodeWithTag("verb_submit_intent_button").performClick()
-
-        assertNotNull(submittedIntent)
-        assertEquals("file.list", submittedIntent!!.id)
-    }
-
-    @Test
-    fun unsupportedInputCannotBeSubmitted() {
-        composeTestRule.setContent {
-            VerbNaturalLanguageSheet(
-                onDismiss = {},
-                onSubmitIntent = {}
-            )
-        }
-
-        composeTestRule.onNodeWithTag("verb_prompt_input").performTextReplacement("do a barrel roll")
-        composeTestRule.onNodeWithTag("verb_submit_intent_button").assertIsNotEnabled()
-    }
-
-    @Test
-    fun stopProcessSubmitsTypedIntentProcessStopWithPid() {
-        var submittedIntent: VerbIntent? = null
-        composeTestRule.setContent {
-            VerbNaturalLanguageSheet(
-                onDismiss = {},
-                onSubmitIntent = { intent ->
-                    submittedIntent = intent
-                }
-            )
-        }
-
-        composeTestRule.onNodeWithTag("verb_prompt_input").performTextReplacement("stop process 1234")
-        composeTestRule.onNodeWithTag("verb_submit_intent_button").performClick()
-
-        assertNotNull(submittedIntent)
-        assertEquals("process.stop", submittedIntent!!.id)
-        assertEquals("1234", submittedIntent!!.parameters["pid"])
-    }
+    // The three tests that used to sit here drove VerbNaturalLanguageSheet, a second
+    // natural-language surface reachable only from the terminal header. It has been retired: it
+    // asked for a sentence in a place neither Ask nor the Assistant knew about, so a user had three
+    // sentence boxes and no way to tell which one would understand them. Its one entry point now
+    // opens the Verb sheet, and typed intent resolution lives in the merged Ask Verb surface.
+    //
+    // The guards those tests asserted are behaviour of IntentEngine and ActionRegistry, not of that
+    // composable, and they are still covered where they belong -- `VerbLogicTest`'s
+    // `supported intent accepted`, `unsupported intent rejected`, and
+    // `process stop requires confirmation and retains original intent parameters`. Nothing was
+    // weakened to delete a screen.
 
     @Test
     fun actionResultCardPressingTerminalCallsZeroArgumentCallbackExactlyOnce() {

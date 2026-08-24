@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.example.verb.terminal.AgentSignInState
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
@@ -52,19 +53,18 @@ class AgentsScreenTest {
     }
 
     @Test
-    fun `an agent that cannot be installed says why, and offers no install button`() {
-        // dsh's native dependency has no Android build and cannot be compiled here either. A card
-        // offering "Install" would be a button that fails the same way every time.
-        // Reported as fully installed on purpose: dsh answers `--version` even though its native
-        // module never built, so a passing probe must not be allowed to say "Ready" and offer Open.
-        show(listOf(report(RuntimeProfileId.DEEPSEEK_HARNESS)))
+    fun `unverified runtime profiles never become catalog cards`() {
+        show(
+            listOf(
+                report(RuntimeProfileId.GEMINI_CLI),
+                report(RuntimeProfileId.HERMES),
+                report(RuntimeProfileId.DEEPSEEK_HARNESS)
+            )
+        )
 
-        composeTestRule.onNodeWithTag("agent_install_deepseek_harness").assertDoesNotExist()
-        composeTestRule.onNodeWithTag("agent_open_deepseek_harness").assertDoesNotExist()
-        composeTestRule.onNodeWithText("Unavailable").assertIsDisplayed()
-        composeTestRule
-            .onNodeWithText(RuntimeProfiles.forId(RuntimeProfileId.DEEPSEEK_HARNESS).unavailableReason!!)
-            .assertIsDisplayed()
+        composeTestRule.onNodeWithTag("agent_gemini_cli").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("agent_hermes").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("agent_deepseek_harness").assertDoesNotExist()
     }
 
     /** Toolchains are setup, agents are the product; this surface shows only the latter. */
@@ -87,6 +87,25 @@ class AgentsScreenTest {
     }
 
     @Test
+    fun `saved credential material is not presented as verified authentication`() {
+        composeTestRule.setContent {
+            AgentsScreen(
+                reports = listOf(report(RuntimeProfileId.CLAUDE_CODE)),
+                keyStatus = emptyList(),
+                signInStates = mapOf(RuntimeProfileId.CLAUDE_CODE to AgentSignInState.SIGNED_IN),
+                onLaunch = {},
+                onInstall = {},
+                onEditKeys = {}
+            )
+        }
+
+        composeTestRule
+            .onNodeWithText("Saved login found — the agent verifies it when opened")
+            .assertIsDisplayed()
+        composeTestRule.onNodeWithText("Signed in").assertDoesNotExist()
+    }
+
+    @Test
     fun `opening an agent hands back the command rather than launching invisibly`() {
         var launched: String? = null
         show(listOf(report(RuntimeProfileId.CODEX)), onLaunch = { launched = it })
@@ -102,17 +121,6 @@ class AgentsScreenTest {
 
         composeTestRule.onNodeWithTag("agent_install_opencode").assertIsDisplayed()
         composeTestRule.onNodeWithTag("agent_open_opencode").assertDoesNotExist()
-    }
-
-    /** An agent that can never run must not offer an action that cannot succeed. */
-    @Test
-    fun `an unsatisfiable agent offers neither open nor install`() {
-        show(listOf(report(RuntimeProfileId.HERMES, incompatible = listOf("python3.13"))))
-
-        composeTestRule.onNodeWithTag("agent_open_hermes").assertDoesNotExist()
-        composeTestRule.onNodeWithTag("agent_install_hermes").assertDoesNotExist()
-        composeTestRule.onNodeWithText("Cannot run on this device. No install will resolve this.")
-            .assertIsDisplayed()
     }
 
     /** Presence only: a screenshot of this screen must never be able to leak a key. */
@@ -142,8 +150,12 @@ class AgentsScreenTest {
     }
 
     @Test
-    fun `every catalog agent declares the command it launches`() {
-        val agents = RuntimeProfiles.all.filter { it.isAgent }
+    fun `every admitted agent declares the command it launches`() {
+        val agents = listOf(
+            RuntimeProfiles.forId(RuntimeProfileId.CLAUDE_CODE),
+            RuntimeProfiles.forId(RuntimeProfileId.CODEX),
+            RuntimeProfiles.forId(RuntimeProfileId.OPENCODE)
+        )
 
         assert(agents.isNotEmpty())
         agents.forEach { assert(!it.launchCommand.isNullOrBlank()) }

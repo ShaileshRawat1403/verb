@@ -28,7 +28,7 @@ use ratatui::crossterm::event::{
 use ratatui::Terminal;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use term::Hosted;
 
 const TICK: Duration = Duration::from_millis(30);
@@ -108,6 +108,7 @@ pub(crate) struct App {
     context: Context,
     hosted: Option<Hosted>,
     sessions: Vec<Session>,
+    imported_sessions: Vec<crate::continuity::ImportedSession>,
     message: Option<String>,
     quit: bool,
     /// Shown once, the first time Verb is opened on this machine: the keys, and the promise that
@@ -143,6 +144,7 @@ impl App {
             }
         }
         self.sessions = sessions;
+        self.imported_sessions = crate::continuity::imported_sessions()?;
         Ok(())
     }
 
@@ -154,6 +156,7 @@ impl App {
             context: Context::None,
             hosted: None,
             sessions: crate::read_sessions()?,
+            imported_sessions: crate::continuity::imported_sessions()?,
             message: None,
             quit: false,
             first_run: crate::mark_first_run_seen().unwrap_or(false),
@@ -175,33 +178,52 @@ impl App {
             self.surface = Surface::Welcome;
         }
 
+        let mut redraw = true;
+        let mut last_draw = Instant::now();
+        let mut undersized = render::is_too_small(size.width, size.height);
+        let mut drew_once = false;
         while !self.quit {
             // The rendered rectangle is the authority for how big the session thinks it is.
             let drawn = std::cell::Cell::new((0_u16, 0_u16));
             let frame_height = std::cell::Cell::new(0_u16);
-            terminal
-                .draw(|frame| {
-                    let area = render::workspace(frame, &self);
-                    drawn.set((area.height, area.width));
-                    frame_height.set(frame.area().height);
-                })
-                .map_err(|error| format!("could not draw: {error}"))?;
-            self.frame_height = frame_height.get();
+            let frame_undersized = std::cell::Cell::new(undersized);
+            let draw_due = !drew_once
+                || last_draw.elapsed() >= Duration::from_secs(1)
+                || (redraw && !undersized);
+            if draw_due {
+                terminal
+                    .draw(|frame| {
+                        let area = render::workspace(frame, &self);
+                        drawn.set((area.height, area.width));
+                        frame_height.set(frame.area().height);
+                        frame_undersized.set(render::is_too_small(
+                            frame.area().width,
+                            frame.area().height,
+                        ));
+                    })
+                    .map_err(|error| format!("could not draw: {error}"))?;
+                last_draw = Instant::now();
+                drew_once = true;
+                redraw = false;
+                undersized = frame_undersized.get();
+                self.frame_height = frame_height.get();
 
-            self.sync_mouse_capture()?;
+                self.sync_mouse_capture()?;
 
-            let (rows, cols) = drawn.get();
-            if rows > 0 && cols > 0 {
-                if let Some(hosted) = self.hosted.as_mut() {
-                    if hosted.screen().size() != (rows, cols) {
-                        hosted.resize(rows, cols);
+                let (rows, cols) = drawn.get();
+                if rows > 0 && cols > 0 {
+                    if let Some(hosted) = self.hosted.as_mut() {
+                        if hosted.screen().size() != (rows, cols) {
+                            hosted.resize(rows, cols);
+                        }
                     }
                 }
             }
 
-            self.pump()?;
+            redraw |= self.pump()?;
 
             if event::poll(TICK).map_err(|error| format!("could not read input: {error}"))? {
+                redraw = true;
                 match event::read().map_err(|error| format!("could not read input: {error}"))? {
                     Event::Key(key) if key.kind == KeyEventKind::Press => self.on_key(key)?,
                     Event::Mouse(mouse) => self.on_mouse(mouse)?,
@@ -211,21 +233,29 @@ impl App {
                     _ => {}
                 }
             }
+            // While the only usable view is the minimum-size notice, PTY output can continue to
+            // arrive but cannot change that notice. Do not turn a static guard into a 30 fps stream
+            // of terminal control bytes. A one-second refresh and resize events remain enough to
+            // recover immediately when the terminal becomes usable again.
+            if undersized {
+                redraw = false;
+            }
         }
         Ok(())
     }
 
     /// Moves the hosted session forward, and closes it out when it ends.
-    fn pump(&mut self) -> Result<(), String> {
+    fn pump(&mut self) -> Result<bool, String> {
         let Some(hosted) = self.hosted.as_mut() else {
-            return Ok(());
+            return Ok(false);
         };
         let previous_state = hosted.session.state.clone();
-        let exit = hosted.poll()?;
+        let (exit, mut changed) = hosted.poll()?;
 
         // A failed command outranks a state change in the band: it is the thing the user just
         // watched happen.
         for outcome in hosted.take_structural() {
+            changed = true;
             match outcome {
                 crate::pty::Structural::CommandFinished {
                     exit_code,
@@ -249,10 +279,12 @@ impl App {
         }
 
         if hosted.session.state != previous_state {
+            changed = true;
             self.context = Context::SessionState(hosted.session.state.clone());
         }
 
         if let Some(exit_code) = exit {
+            changed = true;
             // The session is over, so any command label it left on screen goes with it.
             self.context = Context::None;
             let hosted = self.hosted.take().expect("checked above");
@@ -264,7 +296,7 @@ impl App {
             };
             self.refresh_sessions()?;
         }
-        Ok(())
+        Ok(changed)
     }
 
     fn on_key(&mut self, key: KeyEvent) -> Result<(), String> {
@@ -676,6 +708,11 @@ impl App {
                 Ok(())
             }
             Action::Quit => {
+                if let Some(hosted) = self.hosted.take() {
+                    let session = hosted.stop()?;
+                    self.context = Context::SessionState(session.state.clone());
+                    self.refresh_sessions()?;
+                }
                 self.quit = true;
                 Ok(())
             }
@@ -769,7 +806,7 @@ impl App {
         if let Some(hosted) = self.hosted.take() {
             // One hosted session at a time in M1. The outgoing one is closed out honestly rather
             // than abandoned: its record must not be left claiming LIVE.
-            let session = hosted.finish(0)?;
+            let session = hosted.stop()?;
             self.context = Context::SessionState(session.state.clone());
         }
         let project = start.session.project_id.clone();
@@ -806,6 +843,7 @@ impl App {
             context: Context::None,
             hosted: None,
             sessions: Vec::new(),
+            imported_sessions: Vec::new(),
             message: None,
             quit: false,
             first_run: false,
@@ -861,6 +899,10 @@ impl App {
 
     pub(crate) fn sessions(&self) -> &[Session] {
         &self.sessions
+    }
+
+    pub(crate) fn imported_sessions(&self) -> &[crate::continuity::ImportedSession] {
+        &self.imported_sessions
     }
 
     pub(crate) fn hosted(&self) -> Option<&Hosted> {

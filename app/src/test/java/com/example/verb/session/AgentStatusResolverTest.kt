@@ -97,7 +97,7 @@ class AgentStatusResolverTest {
         // -- not that they are still valid.
         val signedIn = AgentStatusResolver.resolve(evidence(signedIn = true))
         assertEquals("Ready", signedIn.label)
-        assertEquals("Signed in", signedIn.detail)
+        assertEquals("Saved login found — the agent verifies it when opened", signedIn.detail)
 
         val unknown = AgentStatusResolver.resolve(evidence(signedIn = null))
         assertEquals("Ready", unknown.label)
@@ -112,6 +112,20 @@ class AgentStatusResolverTest {
 
         assertEquals("Not installed", status.label)
         assertEquals(Action.NONE, status.action)
+    }
+
+    @Test
+    fun `a saved recoverable session does not invent an installed executable`() {
+        val status = AgentStatusResolver.resolve(
+            evidence(
+                report = report(missingCommands = listOf("claude")),
+                session = session(VerbSessionState.RECOVERABLE)
+            )
+        )
+
+        assertEquals("Not installed", status.label)
+        assertEquals(Action.INSTALL, status.action)
+        assertTrue(status.detail.orEmpty().contains("available after reinstall"))
     }
 
     @Test
