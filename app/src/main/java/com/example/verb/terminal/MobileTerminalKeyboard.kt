@@ -3,9 +3,11 @@ package com.example.verb.terminal
 import android.content.Context
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -13,12 +15,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -52,10 +54,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -185,18 +189,20 @@ fun MobileTerminalKeyboard(
                     .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = terminalInput,
-                    onValueChange = ::handleInputChange,
+                // A hand-rolled field, not an OutlinedTextField: Material's version enforces a
+                // 56dp minimum height, which made the command bar the single tallest thing in the
+                // dock -- a text box wearing a terminal as an accessory. 42dp keeps a comfortable
+                // thumb target while the key rows below stay the visual equals of the input.
+                val fieldShape = RoundedCornerShape(10.dp)
+                var fieldFocused by remember { mutableStateOf(false) }
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 46.dp)
-                        .let { base ->
-                            inputFocusRequester?.let { base.focusRequester(it) } ?: base
-                        }
+                        .height(42.dp)
                         // An empty field reports no change when the IME sends backspace, so without
                         // this the key silently does nothing at the exact moment a person is trying
-                        // to clear a line they can see on screen.
+                        // to clear a line they can see on screen. Preview (tunnel) pass on the
+                        // ancestor sees every key the focused field is offered, including these.
                         .onPreviewKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown &&
                                 event.key == Key.Backspace &&
@@ -208,31 +214,48 @@ fun MobileTerminalKeyboard(
                                 false
                             }
                         }
-                        .testTag("terminal_input_field"),
-                    placeholder = {
+                        .background(if (fieldFocused) Color(0xFF10131B) else Color(0xFF0D0E12), fieldShape)
+                        .border(
+                            width = 1.dp,
+                            color = if (fieldFocused) Color(0xFF6366F1) else Color(0xFF3B4252),
+                            shape = fieldShape
+                        )
+                        .onFocusChanged { fieldFocused = it.hasFocus },
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (terminalInput.isEmpty()) {
                         Text(
                             "$ type a command",
                             color = Color(0xFF94A3B8),
                             fontSize = 14.sp,
-                            fontFamily = FontFamily.Monospace
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 12.dp)
                         )
-                    },
-                    textStyle = LocalTextStyle.current.copy(
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    singleLine = true,
-                    enabled = enabled,
-                    shape = RoundedCornerShape(10.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { submitTerminalInput() }),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF6366F1),
-                        unfocusedBorderColor = Color(0xFF3B4252)
+                    }
+                    BasicTextField(
+                        value = terminalInput,
+                        onValueChange = ::handleInputChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .let { base ->
+                                inputFocusRequester?.let { base.focusRequester(it) } ?: base
+                            }
+                            // On the editable node itself, not the chrome around it: input,
+                            // replacement and text assertions all target this tag.
+                            .testTag("terminal_input_field"),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace
+                        ),
+                        cursorBrush = SolidColor(Color(0xFF6366F1)),
+                        singleLine = true,
+                        enabled = enabled,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { submitTerminalInput() })
                     )
-                )
+                }
                 IconButton(
                     onClick = ::submitTerminalInput,
                     enabled = enabled,
@@ -513,9 +536,14 @@ private fun Modifier.fadingHorizontalEdges(edgeWidth: Dp): Modifier =
         .drawWithContent {
             drawContent()
             val width = edgeWidth.toPx()
+            // Each gradient is transparent at the screen edge and opaque toward the middle, and
+            // clamps to its last color beyond its span -- so the interior stays fully opaque and
+            // only the outer `edgeWidth` of each side dissolves. The two directions are NOT
+            // interchangeable: an earlier revision drew both the wrong way round, the two DstIn
+            // passes intersected at zero alpha, and the entire row silently vanished.
             drawRect(
                 brush = Brush.horizontalGradient(
-                    colors = listOf(Color.Black, Color.Transparent),
+                    colors = listOf(Color.Transparent, Color.Black),
                     startX = 0f,
                     endX = width
                 ),
@@ -523,7 +551,7 @@ private fun Modifier.fadingHorizontalEdges(edgeWidth: Dp): Modifier =
             )
             drawRect(
                 brush = Brush.horizontalGradient(
-                    colors = listOf(Color.Transparent, Color.Black),
+                    colors = listOf(Color.Black, Color.Transparent),
                     startX = size.width - width,
                     endX = size.width
                 ),

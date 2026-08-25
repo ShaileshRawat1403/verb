@@ -555,7 +555,17 @@ class TermuxTerminalRuntimeAdapter(
     // TerminalViewClient callbacks
     override fun onScale(scale: Float): Float = scale
 
+    /**
+     * Set by the terminal screen: a confirmed single tap on the canvas should move input focus to
+     * the command field and raise the IME. It rides the view's own gesture recognizer because the
+     * recognizer is what already separates taps from scrolls, flings, pinches and long-press
+     * selection -- a Compose-side watcher cannot make that call, since an interop view that claims
+     * the touch stream is never offered the release that would confirm a tap.
+     */
+    var onCanvasTap: (() -> Unit)? = null
+
     override fun onSingleTapUp(e: MotionEvent) {
+        onCanvasTap?.invoke()
         val view = terminalView ?: return
         val columnAndRow = view.getColumnAndRow(e, true)
         val column = columnAndRow[0]

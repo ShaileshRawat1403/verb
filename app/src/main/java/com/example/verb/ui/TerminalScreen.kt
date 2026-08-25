@@ -2,6 +2,11 @@ package com.example.verb.ui
 
 import com.example.verb.model.VerbIntent
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -59,9 +64,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -516,19 +518,29 @@ fun TerminalScreen(
         // Suppressed while the IME is up: with the keyboard open the terminal canvas is the
         // scarcest pixel row on a phone, and a suggestion the person cannot act on until they are
         // done typing is only space taken from it. It returns the moment the keyboard closes.
-        if (bootstrapState == TermuxBootstrapInstaller.State.Ready && !isKeyboardVisible) {
+        // The exit animates because it fires on the very frame the keyboard *starts* moving --
+        // a snap here is what made the whole dock feel like it was being yanked upward.
+        AnimatedVisibility(
+            visible = bootstrapState == TermuxBootstrapInstaller.State.Ready && !isKeyboardVisible,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
             verbFirstAction?.invoke()
         }
 
         // Stopped-session guidance: typing a command now auto-restarts the session, so tell the
         // user instead of leaving them staring at a dead terminal. Hidden while the IME is up --
-        // the person is already doing the one thing this banner asks for.
+        // the person is already doing the one thing this banner asks for -- with an animated
+        // exit, matching the first action above.
         val bootstrapReady = bootstrapState is TermuxBootstrapInstaller.State.Ready ||
             bootstrapState is TermuxBootstrapInstaller.State.NotStarted
-        if (bootstrapReady && !isKeyboardVisible && (
+        AnimatedVisibility(
+            visible = bootstrapReady && !isKeyboardVisible && (
                 sessionState == com.example.verb.terminal.TerminalSessionState.EXITED ||
                     sessionState == com.example.verb.terminal.TerminalSessionState.FAILED
-                )
+                ),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
         ) {
             Surface(
                 modifier = Modifier
@@ -556,9 +568,13 @@ fun TerminalScreen(
         }
 
         // First-run hint so the empty canvas is obviously a terminal you type into. Also hidden
-        // behind an open IME for the same reason as the first action above.
-        if (bootstrapReady && !isKeyboardVisible && terminalOutput.isBlank() &&
-            sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING
+        // behind an open IME for the same reason as the first action above, with the same
+        // animated exit so the dock never snaps.
+        AnimatedVisibility(
+            visible = bootstrapReady && !isKeyboardVisible && terminalOutput.isBlank() &&
+                sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
         ) {
             Surface(
                 modifier = Modifier
@@ -628,16 +644,20 @@ fun TerminalScreen(
 
         // Real Terminal Canvas View boundary
         if (termuxAdapter != null) {
-            // Touching the output is a request to type into it. The canvas is a View that owns its
-            // own gestures (selection, scrolling), so this watches the initial pass and consumes
-            // nothing -- it only moves focus to the field, which is where keystrokes are composed.
-            //
-            // Only a *confirmed tap* may summon the keyboard. Every scroll, fling, pinch and
-            // long-press selection begins with the same Press, so reacting to Press alone meant
-            // trying to read scrollback opened the IME over the very lines being scrolled to. A
-            // press now counts as a tap only when the finger lifts within touch slop, before the
-            // long-press timeout, without a second finger joining. Nothing is consumed on any
-            // pass, so the Termux view keeps its own gestures regardless of what focus does here.
+            // Touching the output is a request to type into it. The tap that grants that request
+            // is recognised by the Termux view itself -- its recognizer is what already separates
+            // taps from scrolls, flings, pinches and long-press selection, and it is the only
+            // authority here: an interop view that claims the touch stream never offers a
+            // Compose-side watcher the release that would confirm a tap, which is exactly how an
+            // earlier watcher ended up reacting to every Press and opening the IME over the
+            // scrollback a person was trying to read.
+            DisposableEffect(termuxAdapter) {
+                termuxAdapter.onCanvasTap = {
+                    terminalInputFocusRequester.requestFocus()
+                    keyboardController?.show()
+                }
+                onDispose { termuxAdapter.onCanvasTap = null }
+            }
             AndroidView(
                 factory = { ctx ->
                     termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
@@ -649,57 +669,6 @@ fun TerminalScreen(
                     .fillMaxWidth()
                     .heightIn(min = 96.dp)
                     .padding(12.dp)
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                if (event.type != PointerEventType.Press) continue
-                                val down = event.changes.firstOrNull() ?: continue
-                                val slop = viewConfiguration.touchSlop
-                                var isTap = true
-                                while (true) {
-                                    val step = awaitPointerEvent(PointerEventPass.Initial)
-                                    val change = step.changes.firstOrNull()
-                                    when (step.type) {
-                                        PointerEventType.Move -> {
-                                            if (change == null) break
-                                            val dx = change.position.x - down.position.x
-                                            val dy = change.position.y - down.position.y
-                                            if (dx * dx + dy * dy > slop * slop) {
-                                                isTap = false
-                                                break
-                                            }
-                                        }
-                                        // A second finger is pinch-zoom, not a tap.
-                                        PointerEventType.Press -> {
-                                            isTap = false
-                                            break
-                                        }
-                                        PointerEventType.Release -> {
-                                            // A consumed release means another handler (the
-                                            // Termux view's own recognizers) claimed the gesture;
-                                            // cancellation has no event type of its own.
-                                            val consumed = step.changes.any { it.isConsumed }
-                                            val upAt = change?.uptimeMillis ?: down.uptimeMillis
-                                            // A held lift is the long-press that starts text selection;
-                                            // raising the IME then would cover the selection handles.
-                                            if (consumed || upAt - down.uptimeMillis >=
-                                                viewConfiguration.longPressTimeoutMillis
-                                            ) {
-                                                isTap = false
-                                            }
-                                            break
-                                        }
-                                        else -> Unit
-                                    }
-                                }
-                                if (isTap) {
-                                    terminalInputFocusRequester.requestFocus()
-                                    keyboardController?.show()
-                                }
-                            }
-                        }
-                    }
                     .testTag("termux_terminal_view")
             )
         } else {
