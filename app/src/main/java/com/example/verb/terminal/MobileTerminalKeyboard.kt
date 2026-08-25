@@ -1,6 +1,7 @@
 package com.example.verb.terminal
 
 import android.content.Context
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -48,20 +49,27 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
@@ -263,6 +271,7 @@ fun MobileTerminalKeyboard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(scrollState1)
+                    .fadingHorizontalEdges(20.dp)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -318,6 +327,7 @@ fun MobileTerminalKeyboard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(scrollState2)
+                        .fadingHorizontalEdges(20.dp)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -459,12 +469,19 @@ private fun KeyButton(
     isAccent: Boolean = false,
     onClick: () -> Unit
 ) {
+    // Terminal keys are pressed by thumb while the eyes are on the output, not on the finger.
+    // The tick is the only acknowledgement that a key registered -- without it every tap feels
+    // like a guess, and a missed CTRL is felt minutes later as a hung process.
+    val view = LocalView.current
     Surface(
         shape = RoundedCornerShape(9.dp),
         color = if (isAccent) Color(0xFF6366F1) else Color(0xFF222630),
         modifier = Modifier
             .height(38.dp)
-            .clickable(onClick = onClick)
+            .clickable {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                onClick()
+            }
             .testTag(testTag)
     ) {
         Row(
@@ -481,3 +498,35 @@ private fun KeyButton(
         }
     }
 }
+
+/**
+ * Fades the visible left and right edges of a horizontally scrolling key row.
+ *
+ * The essential-keys row is wider than most phones; where it ran off-screen there was previously
+ * no signal at all that more keys existed past the edge -- PASTE was not "hidden", it was
+ * *unimaginable*. Applied after [androidx.compose.foundation.horizontalScroll] so the gradient
+ * tracks the viewport rather than the scrolled content, and drawn offscreen with DstIn so the
+ * fade multiplies the row's own alpha instead of punching a hole through what sits behind it.
+ */
+private fun Modifier.fadingHorizontalEdges(edgeWidth: Dp): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val width = edgeWidth.toPx()
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(Color.Black, Color.Transparent),
+                    startX = 0f,
+                    endX = width
+                ),
+                blendMode = BlendMode.DstIn
+            )
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(Color.Transparent, Color.Black),
+                    startX = size.width - width,
+                    endX = size.width
+                ),
+                blendMode = BlendMode.DstIn
+            )
+        }

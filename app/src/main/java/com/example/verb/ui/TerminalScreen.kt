@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -39,9 +41,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -146,6 +150,10 @@ fun TerminalScreen(
     var showProjectSheet by remember { mutableStateOf(false) }
     var showRunsSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    // Restarting a live session kills whatever runs inside it, and on a phone the pill that does
+    // it sits in a crowded header where a mis-tap is easy. A live session asks first; restarting
+    // an already-dead one is recovery and stays immediate.
+    var confirmRestart by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
     val focusManager: FocusManager = LocalFocusManager.current
     val clipboardManager = LocalClipboardManager.current
@@ -217,11 +225,6 @@ fun TerminalScreen(
         onDispose {
             terminalRuntime?.removeSelectionChangeListener(listener)
         }
-    }
-
-    // Auto-scroll terminal to bottom when new output arrives
-    LaunchedEffect(terminalOutput) {
-        scrollState.animateScrollTo(scrollState.maxValue)
     }
 
     Column(
@@ -316,7 +319,9 @@ fun TerminalScreen(
                             shape = RoundedCornerShape(999.dp),
                             color = Color(0xFF222630),
                             onClick = {
-                                if (sessionState != com.example.verb.terminal.TerminalSessionState.RUNNING) {
+                                if (sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING) {
+                                    confirmRestart = true
+                                } else {
                                     terminalRuntime?.restartSession()
                                 }
                             },
@@ -374,7 +379,10 @@ fun TerminalScreen(
                             IconButton(
                                 onClick = { showOverflowMenu = true },
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    // 48dp, not the 32dp this used to be: Material's own minimum
+                                    // touch target, in a header where every neighbour competes for
+                                    // the same thumb. The icon keeps its visual size.
+                                    .size(48.dp)
                                     .testTag("btn_terminal_overflow")
                             ) {
                                 Icon(
@@ -431,7 +439,11 @@ fun TerminalScreen(
                                     enabled = terminalRuntime != null,
                                     onClick = {
                                         showOverflowMenu = false
-                                        terminalRuntime?.restartSession()
+                                        if (sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING) {
+                                            confirmRestart = true
+                                        } else {
+                                            terminalRuntime?.restartSession()
+                                        }
                                     },
                                     modifier = Modifier.testTag("btn_restart_overflow")
                                 )
@@ -500,16 +512,23 @@ fun TerminalScreen(
         // The workspace's single first action, when there is one. Placed after the setup cards on
         // purpose: while the userland is still installing, "start an agent" is not yet true, and a
         // suggestion that cannot work is worse than none.
-        if (bootstrapState == TermuxBootstrapInstaller.State.Ready) {
+        //
+        // Suppressed while the IME is up: with the keyboard open the terminal canvas is the
+        // scarcest pixel row on a phone, and a suggestion the person cannot act on until they are
+        // done typing is only space taken from it. It returns the moment the keyboard closes.
+        if (bootstrapState == TermuxBootstrapInstaller.State.Ready && !isKeyboardVisible) {
             verbFirstAction?.invoke()
         }
 
         // Stopped-session guidance: typing a command now auto-restarts the session, so tell the
-        // user instead of leaving them staring at a dead terminal.
+        // user instead of leaving them staring at a dead terminal. Hidden while the IME is up --
+        // the person is already doing the one thing this banner asks for.
         val bootstrapReady = bootstrapState is TermuxBootstrapInstaller.State.Ready ||
             bootstrapState is TermuxBootstrapInstaller.State.NotStarted
-        if (bootstrapReady && (sessionState == com.example.verb.terminal.TerminalSessionState.EXITED ||
-                sessionState == com.example.verb.terminal.TerminalSessionState.FAILED)
+        if (bootstrapReady && !isKeyboardVisible && (
+                sessionState == com.example.verb.terminal.TerminalSessionState.EXITED ||
+                    sessionState == com.example.verb.terminal.TerminalSessionState.FAILED
+                )
         ) {
             Surface(
                 modifier = Modifier
@@ -536,8 +555,9 @@ fun TerminalScreen(
             }
         }
 
-        // First-run hint so the empty canvas is obviously a terminal you type into.
-        if (bootstrapReady && terminalOutput.isBlank() &&
+        // First-run hint so the empty canvas is obviously a terminal you type into. Also hidden
+        // behind an open IME for the same reason as the first action above.
+        if (bootstrapReady && !isKeyboardVisible && terminalOutput.isBlank() &&
             sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING
         ) {
             Surface(
@@ -611,8 +631,13 @@ fun TerminalScreen(
             // Touching the output is a request to type into it. The canvas is a View that owns its
             // own gestures (selection, scrolling), so this watches the initial pass and consumes
             // nothing -- it only moves focus to the field, which is where keystrokes are composed.
-            // Before this, a person looking at a line they wanted to correct had no way to reach it
-            // except to find the field again by eye.
+            //
+            // Only a *confirmed tap* may summon the keyboard. Every scroll, fling, pinch and
+            // long-press selection begins with the same Press, so reacting to Press alone meant
+            // trying to read scrollback opened the IME over the very lines being scrolled to. A
+            // press now counts as a tap only when the finger lifts within touch slop, before the
+            // long-press timeout, without a second finger joining. Nothing is consumed on any
+            // pass, so the Termux view keeps its own gestures regardless of what focus does here.
             AndroidView(
                 factory = { ctx ->
                     termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
@@ -622,12 +647,53 @@ fun TerminalScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .heightIn(min = 96.dp)
                     .padding(12.dp)
                     .pointerInput(Unit) {
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
-                                if (event.type == PointerEventType.Press) {
+                                if (event.type != PointerEventType.Press) continue
+                                val down = event.changes.firstOrNull() ?: continue
+                                val slop = viewConfiguration.touchSlop
+                                var isTap = true
+                                while (true) {
+                                    val step = awaitPointerEvent(PointerEventPass.Initial)
+                                    val change = step.changes.firstOrNull()
+                                    when (step.type) {
+                                        PointerEventType.Move -> {
+                                            if (change == null) break
+                                            val dx = change.position.x - down.position.x
+                                            val dy = change.position.y - down.position.y
+                                            if (dx * dx + dy * dy > slop * slop) {
+                                                isTap = false
+                                                break
+                                            }
+                                        }
+                                        // A second finger is pinch-zoom, not a tap.
+                                        PointerEventType.Press -> {
+                                            isTap = false
+                                            break
+                                        }
+                                        PointerEventType.Release -> {
+                                            // A consumed release means another handler (the
+                                            // Termux view's own recognizers) claimed the gesture;
+                                            // cancellation has no event type of its own.
+                                            val consumed = step.changes.any { it.isConsumed }
+                                            val upAt = change?.uptimeMillis ?: down.uptimeMillis
+                                            // A held lift is the long-press that starts text selection;
+                                            // raising the IME then would cover the selection handles.
+                                            if (consumed || upAt - down.uptimeMillis >=
+                                                viewConfiguration.longPressTimeoutMillis
+                                            ) {
+                                                isTap = false
+                                            }
+                                            break
+                                        }
+                                        else -> Unit
+                                    }
+                                }
+                                if (isTap) {
                                     terminalInputFocusRequester.requestFocus()
                                     keyboardController?.show()
                                 }
@@ -638,6 +704,12 @@ fun TerminalScreen(
             )
         } else {
             // Compose selection view fallback for unit tests and headless environments
+            // Auto-scroll to the newest output belongs to this fallback alone: with the real
+            // canvas mounted the Termux view scrolls itself, and an animation restarted on every
+            // throttled output publish only competed with the person's own finger on the screen.
+            LaunchedEffect(terminalOutput) {
+                scrollState.animateScrollTo(scrollState.maxValue)
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -671,6 +743,33 @@ fun TerminalScreen(
             onCommandExecuted = onCommandExecuted,
             inputFocusRequester = terminalInputFocusRequester,
             enabled = !verbSurfaceOpen
+        )
+    }
+
+    // Restart confirmation: the one destructive action in the header gets one barrier.
+    if (confirmRestart) {
+        AlertDialog(
+            onDismissRequest = { confirmRestart = false },
+            title = { Text("Restart session?") },
+            text = {
+                Text("The running shell and everything inside it will stop. This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRestart = false
+                        terminalRuntime?.restartSession()
+                    },
+                    modifier = Modifier.testTag("btn_confirm_restart")
+                ) {
+                    Text("Restart", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRestart = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 
@@ -727,7 +826,14 @@ fun TerminalScreen(
             contentColor = Color(0xFFE2E8F0),
             modifier = Modifier.testTag("terminal_ai_explanation_sheet")
         ) {
-            Column(modifier = Modifier.padding(20.dp)) {
+            // Scrollable, deliberately: an analysis of a long transcript can easily exceed the
+            // sheet's height, and a plain Column simply clipped whatever did not fit -- text the
+            // user asked for and could never reach.
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(20.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.Psychology,
