@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -44,6 +45,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -319,7 +321,19 @@ fun TerminalDiagnosticsSheet(
                         )
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    // The list follows new entries only while the reader is already near the
+                    // bottom -- reproducing a bug means watching lines arrive, but reading older
+                    // history means new lines must not yank the list out from under the eyes.
+                    val listState = rememberLazyListState()
+                    LaunchedEffect(filteredLogs.size) {
+                        val last = filteredLogs.lastIndex
+                        val bottomVisible = listState.layoutInfo.visibleItemsInfo
+                            .lastOrNull()?.index ?: last
+                        if (last >= 0 && bottomVisible >= last - 2) {
+                            listState.scrollToItem(last)
+                        }
+                    }
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                         items(filteredLogs) { entry ->
                             LogEntryRow(entry)
                         }
