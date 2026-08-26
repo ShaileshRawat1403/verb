@@ -169,39 +169,25 @@ class TerminalChromeThemeTest {
 
     /**
      * Hardcoded colours still allowed in the chrome files, each with its reason. Everything else
-     * -- hex or named -- fails this test and must either migrate to `MaterialTheme.colorScheme` or
-     * join this list deliberately.
+     * -- hex or named -- fails this test and must either migrate to `MaterialTheme.colorScheme`,
+     * or to `VerbStatusColors` when it is one of the four status roles, or join this list
+     * deliberately. The status palettes that used to live here are gone: they are theme-aware now.
      */
     private val allowedHexByFile: Map<String, Set<String>> = mapOf(
         "TerminalScreen.kt" to setOf(
-            // Session-status palette: RUNNING green, STOPPING yellow, EXITED dim, failed red.
-            // Semantic status roles from UX_FOUNDATION §4 with no colorScheme slot yet (Task 1b).
-            "ff22c55e", "ffeab308", "ff94a3b8", "ffef4444",
-            // The Compose fallback view that prints PTY output: terminal content, which stays dark.
+            // The Compose fallback view that prints PTY output: terminal content, which stays dark
+            // in both themes for the same reason TerminalCanvas does.
             "ffe2e8f0"
         ),
-        "TerminalDiagnosticsSheet.kt" to setOf(
-            // Session-status palette, same four roles as above plus STOPPING orange.
-            "ff22c55e", "ffeab308", "ffef4444", "ff94a3b8", "fff97316",
-            // Log-level palette: ERROR/WARN/INFO/DEBUG hues, Task 1b material.
-            "ffef4444", "ffeab308", "ff3b82f6", "ff94a3b8",
-            // Shell-verification success tint; success has no colorScheme slot yet.
-            "ff86efac",
-            // Copy Report action button: success-coloured by design.
-            "ff22c55e"
-        ),
+        "TerminalDiagnosticsSheet.kt" to emptySet(),
         "FileExplorerDrawer.kt" to setOf(
-            // File-type category tints (folder/code/media/archive) and the unknown-type fallback.
-            "ff3b82f6", "ff34d399", "ffa78bfa", "fff59e0b", "ff94a3b8"
+            // File-type category tints (folder/code/media/archive). These are category identity,
+            // not state, so they are not one of the four UX_FOUNDATION status roles and do not
+            // belong in VerbStatusColors.
+            "ff3b82f6", "ff34d399", "ffa78bfa", "fff59e0b"
         ),
-        "RunsSheet.kt" to setOf(
-            // Lifecycle status palette: completed green, interrupted yellow, running dim.
-            "ff22c55e", "ffeab308", "ff94a3b8"
-        ),
-        "UsbDebuggingDiagnosticCard.kt" to setOf(
-            // USB state accents: active green, partial orange.
-            "ff4caf50", "ffff9800"
-        )
+        "RunsSheet.kt" to emptySet(),
+        "UsbDebuggingDiagnosticCard.kt" to emptySet()
     )
 
     /** Named Compose colours hardcode exactly like hex literals; none are allowed in chrome. */

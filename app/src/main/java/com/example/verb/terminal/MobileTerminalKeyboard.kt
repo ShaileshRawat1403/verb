@@ -77,6 +77,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
+import androidx.compose.material3.MaterialTheme
+import com.example.verb.ui.theme.TerminalDock
 
 val DEFAULT_QUICK_KEYS = listOf("/", "|", "~", "-", "_", "\\", ":", ";", "&", "#")
 
@@ -179,7 +181,7 @@ fun MobileTerminalKeyboard(
     Surface(
         modifier = modifier
             .fillMaxWidth(),
-        color = Color(0xFF161820),
+        color = TerminalDock.surface,
         tonalElevation = 4.dp
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -214,10 +216,10 @@ fun MobileTerminalKeyboard(
                                 false
                             }
                         }
-                        .background(if (fieldFocused) Color(0xFF10131B) else Color(0xFF0D0E12), fieldShape)
+                        .background(if (fieldFocused) TerminalDock.fieldFocused else TerminalDock.field, fieldShape)
                         .border(
                             width = 1.dp,
-                            color = if (fieldFocused) Color(0xFF6366F1) else Color(0xFF3B4252),
+                            color = if (fieldFocused) TerminalDock.accent else TerminalDock.outline,
                             shape = fieldShape
                         )
                         .onFocusChanged { fieldFocused = it.hasFocus },
@@ -226,7 +228,7 @@ fun MobileTerminalKeyboard(
                     if (terminalInput.isEmpty()) {
                         Text(
                             "$ type a command",
-                            color = Color(0xFF94A3B8),
+                            color = TerminalDock.dim,
                             fontSize = 14.sp,
                             fontFamily = FontFamily.Monospace,
                             modifier = Modifier.padding(horizontal = 12.dp)
@@ -245,11 +247,11 @@ fun MobileTerminalKeyboard(
                             // replacement and text assertions all target this tag.
                             .testTag("terminal_input_field"),
                         textStyle = LocalTextStyle.current.copy(
-                            color = Color.White,
+                            color = TerminalDock.text,
                             fontSize = 14.sp,
                             fontFamily = FontFamily.Monospace
                         ),
-                        cursorBrush = SolidColor(Color(0xFF6366F1)),
+                        cursorBrush = SolidColor(TerminalDock.accent),
                         singleLine = true,
                         enabled = enabled,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -264,7 +266,7 @@ fun MobileTerminalKeyboard(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Run typed terminal input",
-                        tint = Color(0xFF818CF8)
+                        tint = TerminalDock.accentSoft
                     )
                 }
                 // One control for the whole auxiliary panel. Collapsed is the default because the
@@ -277,7 +279,7 @@ fun MobileTerminalKeyboard(
                     Icon(
                         imageVector = if (keysExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
                         contentDescription = if (keysExpanded) "Hide extra keys" else "Show extra keys",
-                        tint = Color(0xFF94A3B8),
+                        tint = TerminalDock.dim,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -330,7 +332,7 @@ fun MobileTerminalKeyboard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .background(Color(0xFF222630))
+                        .background(TerminalDock.key)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -373,7 +375,7 @@ fun MobileTerminalKeyboard(
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Edit Quick Keys",
-                            tint = Color(0xFF94A3B8),
+                            tint = TerminalDock.dim,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -385,7 +387,7 @@ fun MobileTerminalKeyboard(
     if (isSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { isSheetOpen = false },
-            containerColor = Color(0xFF161820)
+            containerColor = MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
@@ -397,9 +399,9 @@ fun MobileTerminalKeyboard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Quick Keys", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Quick Keys", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     IconButton(onClick = { saveQuickKeys(DEFAULT_QUICK_KEYS) }, modifier = Modifier.testTag("btn_reset_quick_keys")) {
-                        Icon(Icons.Default.Refresh, "Reset Defaults", tint = Color.White)
+                        Icon(Icons.Default.Refresh, "Reset Defaults", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
 
@@ -413,14 +415,14 @@ fun MobileTerminalKeyboard(
                     quickKeys.forEachIndexed { index, keyStr ->
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF222630),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.testTag("quick_key_edit_$index")
                         ) {
                             Row(
                                 modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(keyStr, color = Color.White, fontFamily = FontFamily.Monospace)
+                                Text(keyStr, color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.Monospace)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 IconButton(
                                     onClick = { 
@@ -430,7 +432,7 @@ fun MobileTerminalKeyboard(
                                     },
                                     modifier = Modifier.size(24.dp).testTag("btn_remove_quick_key_$index")
                                 ) {
-                                    Icon(Icons.Default.Close, "Remove", tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Close, "Remove", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                 }
                             }
                         }
@@ -445,18 +447,18 @@ fun MobileTerminalKeyboard(
                         value = newKey,
                         onValueChange = { newKey = it },
                         modifier = Modifier.weight(1f).testTag("input_new_quick_key"),
-                        placeholder = { Text("New symbol...", color = Color(0xFF64748B)) },
+                        placeholder = { Text("New symbol...", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFF6366F1)
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary
                         )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF6366F1),
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clickable {
                             val k = newKey.trim()
                             if (k.isNotEmpty() && k.length <= 8 && !quickKeys.contains(k)) {
@@ -467,7 +469,7 @@ fun MobileTerminalKeyboard(
                             }
                         }.padding(12.dp).testTag("btn_add_quick_key")
                     ) {
-                        Icon(Icons.Default.Add, "Add", tint = Color.White)
+                        Icon(Icons.Default.Add, "Add", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
                 Spacer(modifier = Modifier.height(24.dp))
@@ -498,7 +500,7 @@ private fun KeyButton(
     val view = LocalView.current
     Surface(
         shape = RoundedCornerShape(9.dp),
-        color = if (isAccent) Color(0xFF6366F1) else Color(0xFF222630),
+        color = if (isAccent) TerminalDock.accent else TerminalDock.key,
         modifier = Modifier
             .height(38.dp)
             .clickable {
@@ -513,7 +515,7 @@ private fun KeyButton(
         ) {
             Text(
                 text = label,
-                color = if (isAccent) Color.White else Color(0xFFE2E8F0),
+                color = if (isAccent) TerminalDock.text else TerminalDock.text,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace

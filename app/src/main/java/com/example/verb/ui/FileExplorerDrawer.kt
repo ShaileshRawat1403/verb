@@ -58,6 +58,7 @@ import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.VerbGuestPaths
 import java.io.File
 import java.util.Locale
+import com.example.verb.ui.theme.VerbStatus
 
 private val DirBlue = Color(0xFF3B82F6)
 private val CodeGreen = Color(0xFF34D399)
@@ -377,6 +378,7 @@ private fun fileIcon(file: File, isDir: Boolean): ImageVector = when {
     }
 }
 
+@Composable
 private fun fileTint(file: File): Color = when (file.extension.lowercase(Locale.US)) {
     "jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "bmp",
     "mp3", "wav", "ogg", "flac", "m4a", "aac",
@@ -384,7 +386,7 @@ private fun fileTint(file: File): Color = when (file.extension.lowercase(Locale.
     "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "deb", "tgz" -> ArchiveAmber
     "kt", "java", "py", "sh", "rs", "c", "cpp", "h", "hpp", "js", "ts", "json",
     "yaml", "yml", "toml", "xml", "html", "css", "go", "swift", "gradle", "kts" -> CodeGreen
-    else -> Color(0xFF94A3B8)
+    else -> VerbStatus.caveat
 }
 
 private fun displayPath(file: File, prefixDir: File?, homeDir: File?): String {

@@ -102,6 +102,7 @@ import com.example.verb.terminal.TermuxBootstrapInstaller
 import com.example.verb.terminal.TermuxTerminalRuntimeAdapter
 import com.example.verb.project.VerbProject
 import com.termux.view.TerminalView
+import com.example.verb.ui.theme.VerbStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -312,11 +313,11 @@ fun TerminalScreen(
                         // survives neither a colour-blind reader nor a screen reader, and which
                         // `docs/UX_FOUNDATION.md` rules out by name. Colour still reinforces it.
                         val statusColor = when (sessionState) {
-                            com.example.verb.terminal.TerminalSessionState.RUNNING -> Color(0xFF22C55E)
+                            com.example.verb.terminal.TerminalSessionState.RUNNING -> VerbStatus.confirmed
                             com.example.verb.terminal.TerminalSessionState.STARTING,
-                            com.example.verb.terminal.TerminalSessionState.STOPPING -> Color(0xFFEAB308)
-                            com.example.verb.terminal.TerminalSessionState.EXITED -> Color(0xFF94A3B8)
-                            else -> Color(0xFFEF4444)
+                            com.example.verb.terminal.TerminalSessionState.STOPPING -> VerbStatus.recoverable
+                            com.example.verb.terminal.TerminalSessionState.EXITED -> VerbStatus.caveat
+                            else -> VerbStatus.failed
                         }
                         val statusGlyph = VerbStatusVocabulary.processGlyph(sessionState)
                         val statusLabel = VerbStatusVocabulary.processWord(sessionState)

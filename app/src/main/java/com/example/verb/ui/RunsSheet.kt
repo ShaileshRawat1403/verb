@@ -49,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.verb.terminal.CommandExecutionRecord
 import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.TerminalRuntimeAdapter
+import com.example.verb.ui.theme.VerbStatus
 
 /**
  * Read-only "Command Runs" sheet: a bounded, session-local, non-persistent list of completed
@@ -170,14 +171,14 @@ private fun EmptyRunsMessage(text: String, testTag: String) {
 private fun RunRow(record: CommandExecutionRecord) {
     val commandLabel = record.commandText.ifBlank { "Command run" }
     val (icon, iconTint, statusLabel) = when (record.state) {
-        CommandLifecycleState.COMPLETED -> Triple(Icons.Default.CheckCircle, Color(0xFF22C55E), formatDuration(record.durationMs))
+        CommandLifecycleState.COMPLETED -> Triple(Icons.Default.CheckCircle, VerbStatus.confirmed, formatDuration(record.durationMs))
         CommandLifecycleState.FAILED -> Triple(
             Icons.Default.Error,
             MaterialTheme.colorScheme.error,
             "Failed · exit ${record.exitCode ?: "?"} · ${formatDuration(record.durationMs)}"
         )
-        CommandLifecycleState.ABANDONED -> Triple(Icons.Default.Warning, Color(0xFFEAB308), "Interrupted")
-        CommandLifecycleState.RUNNING -> Triple(Icons.Default.CheckCircle, Color(0xFF94A3B8), "") // not published to history; unreachable in practice
+        CommandLifecycleState.ABANDONED -> Triple(Icons.Default.Warning, VerbStatus.recoverable, "Interrupted")
+        CommandLifecycleState.RUNNING -> Triple(Icons.Default.CheckCircle, VerbStatus.caveat, "") // not published to history; unreachable in practice
     }
     val rowDescription = "$commandLabel. ${describeStateForAccessibility(record)}"
 

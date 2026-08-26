@@ -75,6 +75,7 @@ import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.example.verb.ui.theme.VerbStatus
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -107,11 +108,11 @@ fun TerminalDiagnosticsSheet(
     }
 
     val (statusLabel, statusColor) = when (sessionState) {
-        TerminalSessionState.RUNNING -> "Connected (Native PTY)" to Color(0xFF22C55E)
-        TerminalSessionState.STARTING -> "Connecting..." to Color(0xFFEAB308)
-        TerminalSessionState.FAILED -> "Session Failed" to Color(0xFFEF4444)
-        TerminalSessionState.EXITED -> "Disconnected" to Color(0xFF94A3B8)
-        TerminalSessionState.STOPPING -> "Stopping..." to Color(0xFFF97316)
+        TerminalSessionState.RUNNING -> "Connected (Native PTY)" to VerbStatus.confirmed
+        TerminalSessionState.STARTING -> "Connecting..." to VerbStatus.recoverable
+        TerminalSessionState.FAILED -> "Session Failed" to VerbStatus.failed
+        TerminalSessionState.EXITED -> "Disconnected" to VerbStatus.caveat
+        TerminalSessionState.STOPPING -> "Stopping..." to VerbStatus.recoverable
     }
 
     ModalBottomSheet(
@@ -269,7 +270,7 @@ fun TerminalDiagnosticsSheet(
                                 "System shell unavailable: ${report.errorDetails ?: "Unknown error"}"
                             },
                             fontSize = 12.sp,
-                            color = if (report.isAccessible) Color(0xFF86EFAC) else MaterialTheme.colorScheme.error
+                            color = if (report.isAccessible) VerbStatus.confirmed else MaterialTheme.colorScheme.error
                         )
                     }
                 }
@@ -385,7 +386,7 @@ fun TerminalDiagnosticsSheet(
                         copyNoticeVisible = true
                     },
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF22C55E)),
+                    colors = ButtonDefaults.buttonColors(containerColor = VerbStatus.confirmed),
                     modifier = Modifier.testTag("btn_copy_diagnostics_report")
                 ) {
                     Icon(
@@ -429,10 +430,10 @@ private fun FilterChip(
 @Composable
 private fun LogEntryRow(entry: TerminalLogEntry) {
     val levelColor = when (entry.level) {
-        LogLevel.ERROR -> Color(0xFFEF4444)
-        LogLevel.WARN -> Color(0xFFEAB308)
-        LogLevel.INFO -> Color(0xFF3B82F6)
-        LogLevel.DEBUG -> Color(0xFF94A3B8)
+        LogLevel.ERROR -> VerbStatus.failed
+        LogLevel.WARN -> VerbStatus.recoverable
+        LogLevel.INFO -> MaterialTheme.colorScheme.secondary
+        LogLevel.DEBUG -> VerbStatus.caveat
     }
 
     Column(
