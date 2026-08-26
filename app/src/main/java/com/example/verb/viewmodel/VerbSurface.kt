@@ -85,7 +85,7 @@ enum class VerbTask(
     ),
     PROVIDER(
         title = "Add or change a provider key",
-        subtitle = "Only used for the optional interpretation stage of Ask Verb",
+        subtitle = "Only used when you ask Verb a question; nothing else sends anything",
         keywords = "provider key api model ai settings token configure interpretation"
     ),
     RUNTIMES(

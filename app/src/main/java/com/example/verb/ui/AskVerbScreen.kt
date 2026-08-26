@@ -19,10 +19,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import com.example.verb.ai.AiAssistantState
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.model.ActionResult
 import com.example.verb.model.VerbIntent
+import com.example.verb.terminal.TerminalAiExchange
+import com.example.verb.terminal.TerminalEvidence
 
 /**
  * The one place a person types a sentence at Verb.
@@ -39,11 +40,16 @@ import com.example.verb.model.VerbIntent
  * * **Verb actions** is first and is the default. It resolves what you type to a capability Verb
  *   actually has, shows what it will do, and still requires confirmation for anything that changes
  *   state. No model is involved.
- * * **Interpretation** is second, optional, and visibly separate. It is a model talking, it can
- *   execute nothing, and it is labelled as such.
+ * * **Ask** is second, optional, and visibly separate. It is a model talking, it can execute
+ *   nothing, and it is labelled as such.
  *
  * Nothing is merged into one answer box, because a deterministic result and a model's opinion are
  * different kinds of claim and the interface must not blur them.
+ *
+ * The second stage used to be an "Interpretation" screen that sent nothing but the words the user
+ * typed -- the chatbot-you-must-explain-yourself-to that `docs/PRODUCT_VISION.md` rejects by name.
+ * It is now [AssistPanel], the same evidence-bound assistant the terminal opens, so the fourth ask
+ * box does not quietly reappear inside the screen built to remove the other three.
  */
 @Composable
 fun AskVerbScreen(
@@ -60,13 +66,16 @@ fun AskVerbScreen(
     onDismissConfirmation: () -> Unit,
     onOpenTerminal: () -> Unit,
     onInspectText: (String) -> Unit,
-    // Stage two: the optional, clearly-labelled provider interpretation.
-    providerSettings: AiProviderSettings,
-    assistantPrompt: String,
-    assistantState: AiAssistantState,
-    onAssistantPromptChange: (String) -> Unit,
-    onSubmitAssistantPrompt: (String) -> Unit,
-    onOpenProviderSettings: () -> Unit,
+    // Stage two: the optional, clearly-labelled, evidence-bound assistant.
+    providerSettings: AiProviderSettings = AiProviderSettings(),
+    onOpenProviderSettings: () -> Unit = {},
+    aiExplanation: String? = null,
+    isAiExplaining: Boolean = false,
+    aiEvidence: TerminalEvidence? = null,
+    aiThread: List<TerminalAiExchange> = emptyList(),
+    onAskVerbAi: (String) -> Unit = {},
+    onExplainEvidence: () -> Unit = {},
+    onClearAiThread: () -> Unit = {},
     isKeyboardVisible: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -91,9 +100,9 @@ fun AskVerbScreen(
                 modifier = Modifier.testTag("ask_stage_actions")
             )
             FilterChip(
-                selected = stage == AskVerbStage.INTERPRETATION,
-                onClick = { stage = AskVerbStage.INTERPRETATION },
-                label = { Text("Interpretation") },
+                selected = stage == AskVerbStage.ASK,
+                onClick = { stage = AskVerbStage.ASK },
+                label = { Text("Ask") },
                 modifier = Modifier.testTag("ask_stage_interpretation")
             )
         }
@@ -115,26 +124,33 @@ fun AskVerbScreen(
                 onInspectText = onInspectText
             )
 
-            AskVerbStage.INTERPRETATION -> Column(modifier = Modifier.fillMaxSize()) {
+            AskVerbStage.ASK -> Column(modifier = Modifier.fillMaxSize()) {
                 // Said before the input, not after: a person deciding whether to type something
-                // needs to know where it goes while they are still deciding.
+                // needs to know where it goes while they are still deciding. The claim is narrower
+                // than it used to be because the envelope is real -- structural facts Verb observed
+                // itself do travel, and the panel shows exactly which ones.
                 Text(
-                    text = "A model you configured answers here. It cannot run anything, and Verb " +
-                        "does not attach terminal output, command text, file contents, transcripts " +
-                        "or credentials — only the words you type below are sent.",
+                    text = "A model you configured answers here. It cannot run anything. Verb " +
+                        "attaches only the structural facts it observed itself, listed under " +
+                        "\"Based on\" — never terminal output, command text, file contents, " +
+                        "transcripts or credentials.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier
                         .padding(horizontal = 16.dp)
                         .testTag("ask_interpretation_boundary")
                 )
-                AssistantScreen(
+                AssistPanel(
+                    aiExplanation = aiExplanation,
+                    isAiExplaining = isAiExplaining,
+                    evidence = aiEvidence,
+                    thread = aiThread,
+                    onAsk = onAskVerbAi,
+                    onExplain = onExplainEvidence,
+                    onClearThread = onClearAiThread,
+                    showHeader = false,
+                    showBoundaryNote = false,
                     providerSettings = providerSettings,
-                    prompt = assistantPrompt,
-                    state = assistantState,
-                    isKeyboardVisible = isKeyboardVisible,
-                    onPromptChange = onAssistantPromptChange,
-                    onSubmitPrompt = onSubmitAssistantPrompt,
                     onOpenProviderSettings = onOpenProviderSettings
                 )
             }
@@ -143,4 +159,4 @@ fun AskVerbScreen(
 }
 
 /** The two stages of Ask Verb, in the order the architecture requires them to be read. */
-enum class AskVerbStage { ACTIONS, INTERPRETATION }
+enum class AskVerbStage { ACTIONS, ASK }

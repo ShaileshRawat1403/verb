@@ -13,6 +13,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -86,10 +87,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
+import com.example.verb.terminal.TerminalAiExchange
+import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.TerminalSessionState
@@ -147,8 +151,12 @@ fun TerminalScreen(
     isAiExplaining: Boolean = false,
     onExplainOutput: () -> Unit = {},
     onDismissAiExplanation: () -> Unit = {},
-    terminalAiEvidence: List<String> = emptyList(),
+    terminalAiEvidence: TerminalEvidence? = null,
+    terminalAiThread: List<TerminalAiExchange> = emptyList(),
     onAskTerminalAi: (String) -> Unit = {},
+    onClearAiThread: () -> Unit = {},
+    aiProviderSettings: com.example.verb.ai.AiProviderSettings = com.example.verb.ai.AiProviderSettings(),
+    onOpenProviderSettings: () -> Unit = {},
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
     onCreateProject: (String) -> Unit = {},
@@ -159,6 +167,7 @@ fun TerminalScreen(
     var showFileExplorerSheet by remember { mutableStateOf(false) }
     var showProjectSheet by remember { mutableStateOf(false) }
     var showRunsSheet by remember { mutableStateOf(false) }
+    var showAiSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     // Restarting a live session kills whatever runs inside it, and on a phone the pill that does
     // it sits in a crowded header where a mis-tap is easy. A live session asks first; restarting
@@ -430,14 +439,13 @@ fun TerminalScreen(
                                     modifier = Modifier.testTag("btn_files_overflow")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Explain evidence with AI") },
+                                    text = { Text("Ask Verb about this session") },
                                     leadingIcon = {
                                         Icon(imageVector = Icons.Default.Psychology, contentDescription = null)
                                     },
-                                    enabled = !isAiExplaining,
                                     onClick = {
                                         showOverflowMenu = false
-                                        onExplainOutput()
+                                        showAiSheet = true
                                     },
                                     modifier = Modifier.testTag("btn_ai_explain_overflow")
                                 )
@@ -795,135 +803,38 @@ fun TerminalScreen(
         )
     }
 
-    // AI Explanation Sheet
-    if (aiExplanation != null || isAiExplaining) {
+    // Ask Verb: the sheet the user opens to ask about their own work.
+    //
+    // It opens on its own, without spending a provider call first. Requiring a canned analysis
+    // before a person could type a question made the good surface cost something and put the
+    // question box behind an answer nobody asked for.
+    //
+    // Shown only when the user opened it here. It used to appear whenever the shared assistant
+    // state was non-null, which meant asking from the Ask Verb screen made this sheet slide up over
+    // that screen with the same conversation in it -- a surface Verb opened on its own, which
+    // `docs/UX_FOUNDATION.md` allows for exactly one thing, and this is not it.
+    //
+    // The body is `AssistPanel`, shared with the Ask Verb task screen, so the two entry points can
+    // never grow into two assistants that answer the same question differently.
+    if (showAiSheet) {
         ModalBottomSheet(
-            onDismissRequest = onDismissAiExplanation,
-            containerColor = Color(0xFF12141C),
-            contentColor = Color(0xFFE2E8F0),
+            onDismissRequest = { showAiSheet = false; onDismissAiExplanation() },
+            // The sheet must not eat the IME inset: the panel applies it itself so the question box
+            // stays above the keyboard instead of being pushed under it.
+            contentWindowInsets = { WindowInsets(0) },
             modifier = Modifier.testTag("terminal_ai_explanation_sheet")
         ) {
-            // Scrollable, deliberately: an analysis of a long transcript can easily exceed the
-            // sheet's height, and a plain Column simply clipped whatever did not fit -- text the
-            // user asked for and could never reach.
-            Column(
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(20.dp)
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Psychology,
-                        contentDescription = null,
-                        tint = Color(0xFF6366F1),
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Terminal Analysis",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-
-                // The M2 slice: the user asks their own question about this terminal moment. Verb
-                // assembles the evidence envelope; the answer is required to name what it used.
-                var question by rememberSaveable { mutableStateOf("") }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    BasicTextField(
-                        value = question,
-                        onValueChange = { question = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF1A1D27))
-                            .border(1.dp, Color(0xFF2A2E3A), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                            .testTag("terminal_ai_question_field"),
-                        textStyle = TextStyle(fontSize = 14.sp, color = Color(0xFFE2E8F0)),
-                        singleLine = true,
-                        decorationBox = { inner ->
-                            if (question.isEmpty()) {
-                                Text(
-                                    "Ask about this moment…",
-                                    fontSize = 14.sp,
-                                    color = Color(0xFF64748B)
-                                )
-                            }
-                            inner()
-                        }
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(
-                        onClick = {
-                            onAskTerminalAi(question)
-                            question = ""
-                            keyboardController?.hide()
-                        },
-                        enabled = question.isNotBlank() && !isAiExplaining,
-                        modifier = Modifier.size(48.dp).testTag("btn_ask_terminal_ai")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Send,
-                            contentDescription = "Ask",
-                            tint = if (question.isNotBlank()) Color(0xFF6366F1) else Color(0xFF475569)
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (terminalAiEvidence.isNotEmpty()) {
-                    Text(
-                        text = "Based on",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF6366F1)
-                    )
-                    terminalAiEvidence.forEach { line ->
-                        Text(
-                            text = line,
-                            fontSize = 12.sp,
-                            color = Color(0xFF94A3B8),
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
-
-                when {
-                    isAiExplaining -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = Color(0xFF6366F1)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Analyzing structural evidence…",
-                            fontSize = 13.sp,
-                            color = Color(0xFF94A3B8)
-                        )
-                    }
-                    !aiExplanation.isNullOrBlank() -> Text(
-                        text = aiExplanation,
-                        fontSize = 14.sp,
-                        color = Color(0xFFE2E8F0),
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                    else -> Button(
-                        onClick = onExplainOutput,
-                        modifier = Modifier.testTag("btn_retry_ai_explain")
-                    ) {
-                        Text("Retry")
-                    }
-                }
-            }
+            AssistPanel(
+                aiExplanation = aiExplanation,
+                isAiExplaining = isAiExplaining,
+                evidence = terminalAiEvidence,
+                thread = terminalAiThread,
+                onAsk = onAskTerminalAi,
+                onExplain = onExplainOutput,
+                onClearThread = onClearAiThread,
+                providerSettings = aiProviderSettings,
+                onOpenProviderSettings = onOpenProviderSettings
+            )
         }
     }
 }

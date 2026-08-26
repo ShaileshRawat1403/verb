@@ -9,6 +9,9 @@ import androidx.compose.ui.test.onChildren
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.example.verb.ai.AiProviderConfig
+import com.example.verb.ai.AiProviderId
+import com.example.verb.ai.AiProviderSettings
 import com.example.verb.terminal.CommandExecutionRecord
 import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.SelectionChangeListener
@@ -262,7 +265,7 @@ class RunsSheetTest {
 
         composeTestRule.onNodeWithText("Diagnostics").assertExists()
         composeTestRule.onNodeWithText("Browse Files").assertExists()
-        composeTestRule.onNodeWithText("Explain evidence with AI").assertExists()
+        composeTestRule.onNodeWithText("Ask Verb about this session").assertExists()
         composeTestRule.onNodeWithText("Restart Session").assertExists()
         composeTestRule.onNodeWithText("Clear Terminal").assertExists()
     }
@@ -289,8 +292,13 @@ class RunsSheetTest {
         assertEquals(1, clearCount)
     }
 
+    /**
+     * Opening the ask surface must not spend a provider call. The overflow item used to fire the
+     * canned analysis, which meant a person could not reach the question box without first paying
+     * for an answer they had not asked for.
+     */
     @Test
-    fun overflowExplainWithAiInvokesTheOriginalExplainHandler() {
+    fun overflowAskVerbOpensTheSheetWithoutCallingTheProvider() {
         var explainCount = 0
         composeTestRule.setContent {
             TerminalScreen(
@@ -307,7 +315,37 @@ class RunsSheetTest {
         }
 
         composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
-        composeTestRule.onNodeWithText("Explain evidence with AI").performClick()
+        composeTestRule.onNodeWithText("Ask Verb about this session").performClick()
+
+        composeTestRule.onNodeWithTag("terminal_ai_question_field").assertExists()
+        assertEquals(0, explainCount)
+    }
+
+    /** The explain path still exists; it is now a choice inside the sheet rather than the door. */
+    @Test
+    fun theSheetOffersTheUnpromptedExplanationAsAChoice() {
+        var explainCount = 0
+        composeTestRule.setContent {
+            TerminalScreen(
+                terminalOutput = "",
+                terminalRuntime = null,
+                onSendCommand = {},
+                onSendKey = {},
+                onSendText = {},
+                onClearTerminal = {},
+                onInspectText = {},
+                onSubmitIntent = {},
+                onExplainOutput = { explainCount++ },
+                aiProviderSettings = AiProviderSettings(
+                    config = AiProviderConfig(AiProviderId.OPENAI, "test-model", "https://api.openai.com/v1"),
+                    hasApiKey = true
+                )
+            )
+        }
+
+        composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
+        composeTestRule.onNodeWithText("Ask Verb about this session").performClick()
+        composeTestRule.onNodeWithTag("btn_retry_ai_explain").performClick()
 
         assertEquals(1, explainCount)
     }

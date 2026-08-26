@@ -3,8 +3,8 @@ package com.example.verb.ui
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import com.example.verb.ai.AiAssistantState
 import com.example.verb.ai.AiProviderSettings
 import org.junit.Rule
 import org.junit.Test
@@ -43,10 +43,6 @@ class AskVerbScreenTest {
                 onOpenTerminal = {},
                 onInspectText = {},
                 providerSettings = AiProviderSettings(),
-                assistantPrompt = "",
-                assistantState = AiAssistantState.Idle,
-                onAssistantPromptChange = {},
-                onSubmitAssistantPrompt = {},
                 onOpenProviderSettings = {}
             )
         }
@@ -94,5 +90,30 @@ class AskVerbScreenTest {
         composeTestRule.onNodeWithTag("ask_verb_screen").assertIsDisplayed()
         composeTestRule.onNodeWithTag("ask_stage_actions").assertIsDisplayed()
         composeTestRule.onNodeWithTag("ask_stage_interpretation").assertIsDisplayed()
+    }
+
+    /**
+     * The second stage is the *same* assistant the terminal opens, not a second one. Two ask boxes
+     * that answer the same question differently is the ambiguity this screen exists to remove, and
+     * it had reappeared one level down: the old stage sent nothing but the typed words.
+     */
+    @Test
+    fun theSecondStageIsTheEvidenceBoundAssistant() {
+        setScreen()
+
+        composeTestRule.onNodeWithTag("ask_stage_interpretation").performClick()
+
+        composeTestRule.onNodeWithTag("terminal_ai_question_field").assertExists()
+        composeTestRule.onNodeWithTag("assistant_submit_button").assertDoesNotExist()
+    }
+
+    /** The boundary claim must describe the envelope that actually travels, not an empty one. */
+    @Test
+    fun theBoundaryNoteNamesTheEvidenceThatTravels() {
+        setScreen()
+
+        composeTestRule.onNodeWithTag("ask_stage_interpretation").performClick()
+
+        composeTestRule.onNodeWithText("Based on", substring = true).assertExists()
     }
 }

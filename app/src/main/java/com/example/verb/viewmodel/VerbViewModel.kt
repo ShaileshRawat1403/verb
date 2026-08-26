@@ -35,6 +35,9 @@ import com.example.verb.terminal.RuntimeProfile
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
+import com.example.verb.terminal.AgentWorkFact
+import com.example.verb.terminal.TerminalAiExchange
+import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalSessionLogger
@@ -274,11 +277,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiProviderSettings = MutableStateFlow(aiProviderSettingsStore.load())
     val aiProviderSettings: StateFlow<AiProviderSettings> = _aiProviderSettings.asStateFlow()
 
-    private val _assistantInput = MutableStateFlow("")
-    val assistantInput: StateFlow<String> = _assistantInput.asStateFlow()
-
-    private val _assistantState = MutableStateFlow<AiAssistantState>(AiAssistantState.Idle)
-    val assistantState: StateFlow<AiAssistantState> = _assistantState.asStateFlow()
 
     private val _queryInput = MutableStateFlow("")
     val queryInput: StateFlow<String> = _queryInput.asStateFlow()
@@ -302,8 +300,17 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     val terminalAiExplanation: StateFlow<String?> = _terminalAiExplanation.asStateFlow()
 
     /** The evidence snapshot the last ask sent, rendered beside every answer. */
-    private val _terminalAiEvidence = MutableStateFlow<List<String>>(emptyList())
-    val terminalAiEvidence: StateFlow<List<String>> = _terminalAiEvidence.asStateFlow()
+    /**
+     * The evidence snapshot the newest answer was actually built from. The UI reads it back in
+     * plain language; the provider received the same snapshot in the contract's vocabulary. Holding
+     * the snapshot rather than rendered lines is what keeps those two from drifting apart.
+     */
+    private val _terminalAiEvidence = MutableStateFlow<TerminalEvidence?>(null)
+    val terminalAiEvidence: StateFlow<TerminalEvidence?> = _terminalAiEvidence.asStateFlow()
+
+    /** The ask thread: prior exchanges ride the prompt so a follow-up never restates context. */
+    private val _terminalAiThread = MutableStateFlow<List<TerminalAiExchange>>(emptyList())
+    val terminalAiThread: StateFlow<List<TerminalAiExchange>> = _terminalAiThread.asStateFlow()
 
     private val _isTerminalAiExplaining = MutableStateFlow(false)
     val isTerminalAiExplaining: StateFlow<Boolean> = _isTerminalAiExplaining.asStateFlow()
@@ -868,10 +875,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _queryInput.value = newInput
     }
 
-    fun updateAssistantInput(newInput: String) {
-        _assistantInput.value = newInput
-    }
-
     fun saveAiProviderSettings(config: AiProviderConfig, apiKey: String?): Result<Unit> = runCatching {
         aiProviderSettingsStore.save(config, apiKey)
         _aiProviderSettings.value = aiProviderSettingsStore.load()
@@ -880,20 +883,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAiProviderApiKey() {
         aiProviderSettingsStore.clearApiKey()
         _aiProviderSettings.value = aiProviderSettingsStore.load()
-    }
-
-    fun submitAssistantPrompt(prompt: String) {
-        if (prompt.isBlank() || _assistantState.value is AiAssistantState.Generating) return
-        _assistantInput.value = prompt
-        _assistantState.value = AiAssistantState.Generating
-        viewModelScope.launch(Dispatchers.IO) {
-            _assistantState.value = try {
-                val response = aiAssistantService.respond(AiAssistantRequest(prompt))
-                AiAssistantState.Answer(response)
-            } catch (exception: Exception) {
-                AiAssistantState.Failure(exception.message ?: "The assistant could not complete this request.")
-            }
-        }
     }
 
     fun submitIntent(intent: com.example.verb.model.VerbIntent) {
@@ -1025,19 +1014,23 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         terminalRuntime.sendCommand(cmd)
     }
 
-    /** Asks the configured provider to explain structural facts; PTY output never leaves Verb. */
+    /**
+     * Asks the configured provider to explain structural facts; PTY output never leaves Verb.
+     *
+     * The snapshot is published before the request for the same reason the ask path publishes one:
+     * an answer displayed beside stale evidence -- or beside no evidence at all -- is exactly the
+     * unverifiable claim this surface exists to prevent.
+     */
     fun explainTerminalOutput() {
         if (_isTerminalAiExplaining.value) return
+
+        val evidence = currentEvidence()
+        _terminalAiEvidence.value = evidence
 
         _isTerminalAiExplaining.value = true
         viewModelScope.launch(Dispatchers.IO) {
             _terminalAiExplanation.value = try {
-                TerminalAiHelper.analyze(
-                    service = aiAssistantService,
-                    lastCommand = terminalRuntime.commandHistory.value.lastOrNull(),
-                    workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null,
-                    sessionState = terminalRuntime.sessionState.value
-                )
+                TerminalAiHelper.analyze(service = aiAssistantService, evidence = evidence)
             } catch (e: Exception) {
                 e.message ?: "AI analysis failed."
             }
@@ -1046,40 +1039,74 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * The M2 slice: the user's own question about this terminal moment, answered from exactly the
-     * evidence Verb holds. The evidence snapshot is taken once, before the request, so what the UI
-     * displays as "what the model saw" is what was actually sent even if the session moves on while
-     * the request is in flight.
+     * The M2 surface: the user's own question about their work, answered from exactly the evidence
+     * Verb holds. The evidence snapshot is taken once, before the request, so what the UI displays
+     * as "what the model saw" is what was actually sent even if the session moves on while the
+     * request is in flight. Each exchange joins the thread, so a follow-up never restates context
+     * Verb already heard.
      */
     fun askTerminalAi(question: String) {
         if (question.isBlank() || _isTerminalAiExplaining.value) return
 
-        val lastCommand = terminalRuntime.commandHistory.value.lastOrNull()
-        val workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null
-        val sessionState = terminalRuntime.sessionState.value
-        _terminalAiEvidence.value =
-            TerminalAiHelper.evidenceLines(lastCommand, workingDirectoryKnown, sessionState)
+        val evidence = currentEvidence()
+        val priors = _terminalAiThread.value
+        _terminalAiEvidence.value = evidence
 
         _isTerminalAiExplaining.value = true
         viewModelScope.launch(Dispatchers.IO) {
-            _terminalAiExplanation.value = try {
+            val answer = try {
                 TerminalAiHelper.ask(
                     service = aiAssistantService,
                     question = question,
-                    lastCommand = lastCommand,
-                    workingDirectoryKnown = workingDirectoryKnown,
-                    sessionState = sessionState
+                    priorExchanges = priors,
+                    evidence = evidence
                 )
             } catch (e: Exception) {
                 e.message ?: "AI analysis failed."
             }
+            _terminalAiExplanation.value = answer
+            _terminalAiThread.value = (priors + TerminalAiExchange(question.trim(), answer)).takeLast(5)
             _isTerminalAiExplaining.value = false
         }
     }
 
+    /**
+     * What Verb knows right now, assembled at ask time: the terminal session's lifecycle, whether
+     * the shell reports command boundaries, the newest command boundaries (facts only, text
+     * withheld), and the recorded state of every agent session. This is the whole envelope -- the
+     * model never receives more than this.
+     */
+    private fun currentEvidence(): TerminalEvidence = TerminalEvidence(
+        sessionState = terminalRuntime.sessionState.value,
+        workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null,
+        shellIntegrationActive = terminalRuntime.shellIntegrationActive.value,
+        commandTail = terminalRuntime.commandHistory.value.takeLast(5),
+        agentWork = agentSessions.value.map { (profileId, session) ->
+            AgentWorkFact(
+                profileName = RuntimeProfiles.forId(profileId).displayName,
+                sessionState = session.state,
+                lastSeenAt = session.lastSeenAt,
+                agentType = session.agent?.agentType
+            )
+        }
+    )
+
+    /**
+     * Closes the sheet. The thread survives on purpose: a modal sheet is dismissed by a downward
+     * swipe or a tap on the scrim, both of which happen by accident on a phone, and losing a
+     * conversation to a mistaken gesture is not a recoverable state. [clearTerminalAiThread] is the
+     * deliberate way to start over.
+     */
     fun dismissTerminalAiExplanation() {
         _terminalAiExplanation.value = null
-        _terminalAiEvidence.value = emptyList()
+        _terminalAiEvidence.value = null
+    }
+
+    /** Starts a new conversation: the user's explicit move, never a side effect of closing a sheet. */
+    fun clearTerminalAiThread() {
+        _terminalAiExplanation.value = null
+        _terminalAiEvidence.value = null
+        _terminalAiThread.value = emptyList()
     }
 
     private fun handleActionResult(result: ActionResult, query: String? = null) {
