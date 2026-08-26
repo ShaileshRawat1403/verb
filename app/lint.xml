@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What lint is allowed to say, and why.
+
+  The goal is not a zero-warning build. It is that every warning left standing is one somebody
+  should act on, because a report nobody reads is the same as no report. Two categories are silenced
+  here, each narrowly and with its reason; everything else stays visible on purpose, including the
+  dependency-freshness warnings, which are real information even when today is the wrong day to act
+  on them.
+-->
+<lint>
+
+    <!--
+      Vendored Termux sources. Verb derives its terminal view and emulator from Termux
+      (see THIRD_PARTY_LICENSES.md), and keeping that code close to upstream is worth more than
+      keeping it stylish: every local edit is a merge conflict the next time it is synced. These
+      checks are all about code Verb did not write and should not rewrite.
+    -->
+    <issue id="ObsoleteSdkInt">
+        <ignore path="**/com/termux/**" />
+    </issue>
+    <issue id="UseRequiresApi">
+        <ignore path="**/com/termux/**" />
+    </issue>
+    <issue id="DefaultLocale">
+        <ignore path="**/com/termux/**" />
+    </issue>
+    <issue id="DiscouragedPrivateApi">
+        <ignore path="**/com/termux/**" />
+    </issue>
+    <issue id="UnsafeNativeCodeLocation">
+        <ignore path="**/com/termux/**" />
+    </issue>
+
+    <!--
+      GuestPathAliases exists precisely because Android exposes app storage under two spellings,
+      /data/user/0/<pkg> and /data/data/<pkg>, and an agent's own session metadata may record
+      either. Lint's advice here is to use Context.getFilesDir(), which returns exactly one of the
+      two — the problem this file was written to solve. The literals are the point.
+    -->
+    <issue id="SdCardPath">
+        <ignore path="**/com/example/verb/session/GuestPathAliases.kt" />
+    </issue>
+
+</lint>

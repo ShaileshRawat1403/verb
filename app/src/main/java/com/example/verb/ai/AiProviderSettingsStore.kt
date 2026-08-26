@@ -36,6 +36,11 @@ class AndroidKeystoreAiProviderSettingsStore(context: Context) : AiProviderSetti
         if (!hasReadableApiKey && preferences.contains(KEY_ENCRYPTED_API_KEY)) {
             // A world archive cannot carry the Android Keystore key. A restored ciphertext that
             // this installation cannot decrypt is absence of a usable key, not a signed-in state.
+            //
+            // commit(), not apply(): this removal is the app deciding a credential is unusable, and
+            // a background write that loses the race with a process kill would leave the ciphertext
+            // behind to be re-read as if it meant something.
+            @Suppress("ApplySharedPref")
             preferences.edit().remove(KEY_ENCRYPTED_API_KEY).commit()
         }
         return AiProviderSettings(

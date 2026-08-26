@@ -10,10 +10,10 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.session.VerbSessionState
-import com.example.verb.terminal.TerminalSessionState
 import com.example.verb.terminal.AgentWorkFact
 import com.example.verb.terminal.TerminalAiExchange
 import com.example.verb.terminal.TerminalEvidence
+import com.example.verb.terminal.TerminalSessionState
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -29,7 +29,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
-class AssistSheetTest {
+class AssistPanelTest {
 
     @get:Rule
     val composeTestRule = createComposeRule()

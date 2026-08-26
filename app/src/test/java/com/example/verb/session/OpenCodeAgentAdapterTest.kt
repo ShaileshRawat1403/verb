@@ -75,12 +75,12 @@ class OpenCodeAgentAdapterTest {
     ) = execSQL(
         "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version," +
             " time_created, time_updated) VALUES (?,?,?,?,?,?,?,?,?)",
-        arrayOf(id, "project-1", parentId, id, directory, "a session", "1.0.0", 1L, updatedAt)
+        arrayOf<Any?>(id, "project-1", parentId, id, directory, "a session", "1.0.0", 1L, updatedAt)
     )
 
     private fun SQLiteDatabase.insertUserMessage(sessionId: String, text: String = "hi") = execSQL(
         "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?)",
-        arrayOf("$sessionId-msg", sessionId, 1L, 1L, """{"role":"user","parts":[{"text":"$text"}]}""")
+        arrayOf<Any?>("$sessionId-msg", sessionId, 1L, 1L, """{"role":"user","parts":[{"text":"$text"}]}""")
     )
 
     private fun adapter(filesDir: File, project: File?, fake: FakeTerminalRuntimeAdapter) =

@@ -93,7 +93,8 @@ data class GitDelta(
  */
 class GitObserver(
     private val appFilesDir: File,
-    private val runCommand: (List<String>, File) -> CommandOutput = ::runInGuest
+    private val runCommand: (List<String>, File) -> CommandOutput =
+        { argv, directory -> runInGuest(appFilesDir, argv, directory) }
 ) {
 
     /** Stdout of a guest command, or null when it did not run or exited nonzero. */
@@ -144,9 +145,9 @@ class GitObserver(
         /** Short: this runs under proot, off the hot path, and lateness is worth less than silence. */
         const val TIMEOUT_MS = 4_000L
 
-        private fun runInGuest(argv: List<String>, directory: File): CommandOutput {
+        private fun runInGuest(appFilesDir: File, argv: List<String>, directory: File): CommandOutput {
             val resolver = TerminalEnvironmentResolver(
-                appFilesDir = directory.guestAppFilesDir(),
+                appFilesDir = appFilesDir,
                 projectDirectory = directory
             )
             val environment = resolver.resolveGuestCommand(argv)
@@ -158,19 +159,6 @@ class GitObserver(
                 timeoutMs = TIMEOUT_MS
             )
             return CommandOutput(result.exitCode, result.output)
-        }
-
-        /**
-         * The guest rootfs is the app's files directory, which every project directory lives under.
-         * Walking up to it keeps the caller from having to thread it through separately.
-         */
-        private fun File.guestAppFilesDir(): File {
-            var candidate: File? = this
-            while (candidate != null) {
-                if (File(candidate, "usr/bin/proot").exists()) return candidate
-                candidate = candidate.parentFile
-            }
-            return this
         }
     }
 }

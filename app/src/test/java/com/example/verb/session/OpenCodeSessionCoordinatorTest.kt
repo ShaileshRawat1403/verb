@@ -55,12 +55,12 @@ class OpenCodeSessionCoordinatorTest {
             database.execSQL(
                 "INSERT INTO session (id, project_id, parent_id, slug, directory, title, version," +
                     " time_created, time_updated) VALUES (?,?,?,?,?,?,?,?,?)",
-                arrayOf(sessionId, "p", null, sessionId, project.directory.absolutePath, "t", "1", 1L, 1L)
+                arrayOf<Any?>(sessionId, "p", null, sessionId, project.directory.absolutePath, "t", "1", 1L, 1L)
             )
             if (used) {
                 database.execSQL(
                     "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?)",
-                    arrayOf("$sessionId-m", sessionId, 1L, 1L, """{"role":"user","parts":[]}""")
+                    arrayOf<Any?>("$sessionId-m", sessionId, 1L, 1L, """{"role":"user","parts":[]}""")
                 )
             }
         }

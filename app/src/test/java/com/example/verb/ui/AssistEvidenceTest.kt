@@ -104,7 +104,7 @@ class AssistEvidenceTest {
     }
 
     @Test
-    fun `a single command boundary reads as one command, not as "1 commands"`() {
+    fun `a single command boundary reads as one command rather than as 1 commands`() {
         val one = TerminalEvidence(
             sessionState = TerminalSessionState.RUNNING,
             workingDirectoryKnown = true,

@@ -1,5 +1,6 @@
 package com.example.verb.session
 
+import android.annotation.SuppressLint
 import android.content.Context
 import java.time.Instant
 
@@ -82,6 +83,7 @@ class SharedPreferencesVerbSessionStore(
         )
     }
 
+    @SuppressLint("ApplySharedPref")
     override fun save(session: VerbSession) {
         // commit() is deliberate: this metadata is the recovery anchor if Android kills the app
         // immediately after the launch or state transition.
@@ -101,9 +103,14 @@ class SharedPreferencesVerbSessionStore(
                 KEY_RESUME_IDENTITY,
                 ResumeIdentity.validOrNull(session.agent?.resumeIdentity)
             )
+            // commit(), not apply(), and lint's ApplySharedPref advice is wrong here. apply()
+            // writes in the background; this record exists to survive the process being killed,
+            // which is the exact moment a background write is lost. A session record that did not
+            // reach disk is a session Verb cannot prove it ever had.
             .commit()
     }
 
+    @SuppressLint("ApplySharedPref")
     override fun clear() {
         preferences.edit().clear().commit()
     }

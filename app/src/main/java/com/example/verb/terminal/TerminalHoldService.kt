@@ -1,11 +1,13 @@
 package com.example.verb.terminal
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
@@ -74,7 +76,7 @@ class TerminalHoldService : Service() {
             this,
             NOTIFICATION_ID,
             notification,
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            foregroundServiceTypeFor(Build.VERSION.SDK_INT)
         )
         return START_STICKY
     }
@@ -82,6 +84,28 @@ class TerminalHoldService : Service() {
     companion object {
         private const val CHANNEL_ID = "terminal_hold"
         private const val NOTIFICATION_ID = 1
+
+        /**
+         * `specialUse` is an API 34 foreground-service type, and the platform requires the type
+         * passed to `startForeground` to be a subset of what the manifest declares. An API 30
+         * device cannot parse `android:foregroundServiceType="specialUse"`, so it reads no type at
+         * all -- and asking for one anyway makes `startForeground` throw. The service then never
+         * reaches the foreground, and the system kills the whole process with
+         * `Context.startForegroundService() did not then call Service.startForeground()`.
+         *
+         * That crash took the app down on Android 11 the moment a session started. It was invisible
+         * on the API 34 phone this was developed against, and was caught by CI's API 30 emulator.
+         *
+         * Below 34 the hold still works: a foreground service without a declared type is exactly
+         * what the platform expected before types existed.
+         */
+        @SuppressLint("InlinedApi") // Compile-time constant; the call site is guarded by sdkInt.
+        internal fun foregroundServiceTypeFor(sdkInt: Int): Int =
+            if (sdkInt >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                0
+            }
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(

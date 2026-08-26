@@ -3,6 +3,7 @@ package com.example.verb.ui
 import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalEvidence
 import java.time.Instant
+import java.util.Locale
 
 /**
  * The evidence envelope, read back to the person who asked.
@@ -91,10 +92,16 @@ object AssistEvidence {
         }
     }
 
-    /** Sub-second work reads in milliseconds; anything longer reads the way a person would say it. */
+    /**
+     * Sub-second work reads in milliseconds; anything longer reads the way a person would say it.
+     *
+     * `Locale.ROOT`, not the device's: this sits beside `exit 2` and a commit hash in a line of
+     * machine facts, and a device set to a comma-decimal locale would render "2,0s" in the middle
+     * of it. The evidence panel is not prose.
+     */
     internal fun duration(millis: Long): String = when {
         millis < 1_000 -> "${millis}ms"
-        millis < 60_000 -> String.format("%.1fs", millis / 1000.0)
+        millis < 60_000 -> String.format(Locale.ROOT, "%.1fs", millis / 1000.0)
         else -> "${millis / 60_000}m ${(millis % 60_000) / 1000}s"
     }
 
