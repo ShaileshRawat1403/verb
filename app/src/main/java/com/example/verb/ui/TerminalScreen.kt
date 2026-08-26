@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,9 +26,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleaningServices
@@ -58,10 +61,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalFocusManager
@@ -141,6 +147,8 @@ fun TerminalScreen(
     isAiExplaining: Boolean = false,
     onExplainOutput: () -> Unit = {},
     onDismissAiExplanation: () -> Unit = {},
+    terminalAiEvidence: List<String> = emptyList(),
+    onAskTerminalAi: (String) -> Unit = {},
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
     onCreateProject: (String) -> Unit = {},
@@ -819,6 +827,75 @@ fun TerminalScreen(
                     )
                 }
                 Spacer(modifier = Modifier.height(14.dp))
+
+                // The M2 slice: the user asks their own question about this terminal moment. Verb
+                // assembles the evidence envelope; the answer is required to name what it used.
+                var question by rememberSaveable { mutableStateOf("") }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BasicTextField(
+                        value = question,
+                        onValueChange = { question = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF1A1D27))
+                            .border(1.dp, Color(0xFF2A2E3A), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                            .testTag("terminal_ai_question_field"),
+                        textStyle = TextStyle(fontSize = 14.sp, color = Color(0xFFE2E8F0)),
+                        singleLine = true,
+                        decorationBox = { inner ->
+                            if (question.isEmpty()) {
+                                Text(
+                                    "Ask about this moment…",
+                                    fontSize = 14.sp,
+                                    color = Color(0xFF64748B)
+                                )
+                            }
+                            inner()
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = {
+                            onAskTerminalAi(question)
+                            question = ""
+                            keyboardController?.hide()
+                        },
+                        enabled = question.isNotBlank() && !isAiExplaining,
+                        modifier = Modifier.size(48.dp).testTag("btn_ask_terminal_ai")
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Ask",
+                            tint = if (question.isNotBlank()) Color(0xFF6366F1) else Color(0xFF475569)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (terminalAiEvidence.isNotEmpty()) {
+                    Text(
+                        text = "Based on",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF6366F1)
+                    )
+                    terminalAiEvidence.forEach { line ->
+                        Text(
+                            text = line,
+                            fontSize = 12.sp,
+                            color = Color(0xFF94A3B8),
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
                 when {
                     isAiExplaining -> Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(

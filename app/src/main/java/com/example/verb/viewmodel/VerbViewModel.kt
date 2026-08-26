@@ -27,6 +27,8 @@ import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.MuslLoaderBootstrap
+import com.example.verb.terminal.TerminalHoldService
+import com.example.verb.terminal.TerminalSessionState
 import com.example.verb.ui.AgentKeyStatus
 import com.example.verb.terminal.RuntimeCapabilityDetector
 import com.example.verb.terminal.RuntimeProfile
@@ -299,6 +301,10 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _terminalAiExplanation = MutableStateFlow<String?>(null)
     val terminalAiExplanation: StateFlow<String?> = _terminalAiExplanation.asStateFlow()
 
+    /** The evidence snapshot the last ask sent, rendered beside every answer. */
+    private val _terminalAiEvidence = MutableStateFlow<List<String>>(emptyList())
+    val terminalAiEvidence: StateFlow<List<String>> = _terminalAiEvidence.asStateFlow()
+
     private val _isTerminalAiExplaining = MutableStateFlow(false)
     val isTerminalAiExplaining: StateFlow<Boolean> = _isTerminalAiExplaining.asStateFlow()
 
@@ -319,6 +325,21 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // each profile probe spawns a real process.
         viewModelScope.launch(Dispatchers.IO) { refreshRuntimeProfiles() }
 
+        // E1: a live session holds the process at foreground priority, so backgrounding Verb stops
+        // handing a running command or agent to the low-memory killer. The claim follows the
+        // session, not the screen: RUNNING holds it, a finished or failed session releases it.
+        viewModelScope.launch {
+            terminalRuntime.sessionState.collect { state ->
+                val context = getApplication<Application>()
+                when (state) {
+                    TerminalSessionState.RUNNING, TerminalSessionState.STARTING ->
+                        TerminalHoldService.start(context)
+                    TerminalSessionState.EXITED, TerminalSessionState.FAILED ->
+                        TerminalHoldService.stop(context)
+                    else -> Unit
+                }
+            }
+        }
     }
 
     private fun runtimeReports(): List<RuntimeProfileReport> =
@@ -1024,8 +1045,41 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * The M2 slice: the user's own question about this terminal moment, answered from exactly the
+     * evidence Verb holds. The evidence snapshot is taken once, before the request, so what the UI
+     * displays as "what the model saw" is what was actually sent even if the session moves on while
+     * the request is in flight.
+     */
+    fun askTerminalAi(question: String) {
+        if (question.isBlank() || _isTerminalAiExplaining.value) return
+
+        val lastCommand = terminalRuntime.commandHistory.value.lastOrNull()
+        val workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null
+        val sessionState = terminalRuntime.sessionState.value
+        _terminalAiEvidence.value =
+            TerminalAiHelper.evidenceLines(lastCommand, workingDirectoryKnown, sessionState)
+
+        _isTerminalAiExplaining.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            _terminalAiExplanation.value = try {
+                TerminalAiHelper.ask(
+                    service = aiAssistantService,
+                    question = question,
+                    lastCommand = lastCommand,
+                    workingDirectoryKnown = workingDirectoryKnown,
+                    sessionState = sessionState
+                )
+            } catch (e: Exception) {
+                e.message ?: "AI analysis failed."
+            }
+            _isTerminalAiExplaining.value = false
+        }
+    }
+
     fun dismissTerminalAiExplanation() {
         _terminalAiExplanation.value = null
+        _terminalAiEvidence.value = emptyList()
     }
 
     private fun handleActionResult(result: ActionResult, query: String? = null) {

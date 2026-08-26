@@ -108,6 +108,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val terminalSessionState by viewModel.terminalRuntime.sessionState.collectAsStateWithLifecycle()
     val terminalAiExplanation by viewModel.terminalAiExplanation.collectAsStateWithLifecycle()
     val isTerminalAiExplaining by viewModel.isTerminalAiExplaining.collectAsStateWithLifecycle()
+    val terminalAiEvidence by viewModel.terminalAiEvidence.collectAsStateWithLifecycle()
     val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
@@ -225,6 +226,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 isAiExplaining = isTerminalAiExplaining,
                 onExplainOutput = viewModel::explainTerminalOutput,
                 onDismissAiExplanation = viewModel::dismissTerminalAiExplanation,
+                terminalAiEvidence = terminalAiEvidence,
+                onAskTerminalAi = viewModel::askTerminalAi,
                 projects = projects,
                 selectedProject = selectedProject,
                 onCreateProject = viewModel::createProject,
