@@ -4,6 +4,7 @@ import com.example.verb.session.VerbSessionState
 import com.example.verb.terminal.AgentWorkFact
 import com.example.verb.terminal.CommandExecutionRecord
 import com.example.verb.terminal.CommandLifecycleState
+import com.example.verb.terminal.GitDelta
 import com.example.verb.terminal.GitSnapshot
 import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalEvidence
@@ -190,6 +191,38 @@ class AssistEvidenceTest {
         val none = TerminalEvidence(TerminalSessionState.RUNNING, true, true)
 
         assertTrue(AssistEvidence.displayLines(none, now).any { it.contains("not observed") })
+    }
+
+    @Test
+    fun `the delta across the most recent command reads in both renderings`() {
+        val moved = TerminalEvidence(
+            TerminalSessionState.RUNNING, true, true,
+            git = GitSnapshot(observed = true, insideRepository = true, changedFiles = 4, headShort = "e4f5a6b"),
+            gitSinceLastCommand = GitDelta(comparable = true, changedFilesDelta = 3, headMoved = true)
+        )
+
+        val panel = AssistEvidence.displayLines(moved, now).joinToString("\n")
+        val envelope = TerminalAiHelper.evidenceLines(moved, now).joinToString("\n")
+
+        assertTrue(panel.contains("3 more files changed"))
+        assertTrue(panel.contains("HEAD moved"))
+        assertTrue(envelope.contains("Across the most recent command"))
+        assertTrue(envelope.contains("3 more files changed"))
+    }
+
+    /** An uncomparable delta is silent. Saying "nothing changed" would be a claim Verb cannot make. */
+    @Test
+    fun `an uncomparable delta is not mentioned at all`() {
+        val unknown = TerminalEvidence(
+            TerminalSessionState.RUNNING, true, true,
+            git = GitSnapshot(observed = true, insideRepository = true, changedFiles = 4, headShort = "e4f5a6b")
+        )
+
+        val panel = AssistEvidence.displayLines(unknown, now).joinToString("\n")
+        val envelope = TerminalAiHelper.evidenceLines(unknown, now).joinToString("\n")
+
+        assertFalse(panel.contains("across the last command"))
+        assertFalse(envelope.contains("Across the most recent command"))
     }
 
     @Test

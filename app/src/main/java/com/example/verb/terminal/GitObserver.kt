@@ -37,6 +37,50 @@ data class GitSnapshot(
 }
 
 /**
+ * What the most recent command did to the working tree.
+ *
+ * This is the question `docs/PRODUCT_VISION.md` names the product after -- *what did the agent just
+ * do to my world* -- and it needs two snapshots, not one. A count on its own says the tree is dirty;
+ * a count taken either side of a command says what that command actually did.
+ *
+ * An earlier version measured against "the last command that exited 0", which read well and was
+ * useless: the command that made the change usually exits 0 too, so it became its own baseline and
+ * every delta was zero. Verified on a device, where creating three files reported no change. The
+ * baseline has to be the tree *before* the command, not after some earlier one.
+ *
+ * Both sides must be observed for the delta to mean anything. One unobserved snapshot makes the
+ * comparison unknown, never zero.
+ */
+data class GitDelta(
+    val comparable: Boolean,
+    /** Positive when files changed since; negative when they were reverted or committed away. */
+    val changedFilesDelta: Int = 0,
+    /** True when HEAD is not the commit it was -- something committed, checked out or reset. */
+    val headMoved: Boolean = false
+) {
+    companion object {
+        val UNKNOWN = GitDelta(comparable = false)
+
+        /**
+         * [before] is the tree as it stood before the most recent command; [after] is after it.
+         * A missing HEAD on either side is not evidence of a move, so [headMoved] stays false
+         * unless both sides named a commit and the names differ.
+         */
+        fun between(before: GitSnapshot?, after: GitSnapshot?): GitDelta {
+            if (before == null || after == null) return UNKNOWN
+            if (!before.observed || !after.observed) return UNKNOWN
+            if (!before.insideRepository || !after.insideRepository) return UNKNOWN
+            val bothNamedACommit = before.headShort != null && after.headShort != null
+            return GitDelta(
+                comparable = true,
+                changedFilesDelta = after.changedFiles - before.changedFiles,
+                headMoved = bothNamedACommit && before.headShort != after.headShort
+            )
+        }
+    }
+}
+
+/**
  * Reads the working tree through the guest userland, the same way a user's own `git` would run.
  *
  * Three bounded commands, each of which either answers or is treated as unknown. Nothing here

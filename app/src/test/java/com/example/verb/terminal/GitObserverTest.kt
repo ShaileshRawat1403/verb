@@ -113,6 +113,60 @@ class GitObserverTest {
         assertEquals("deadbee", snapshot.headShort)
     }
 
+    private fun snapshot(changed: Int, head: String?, observed: Boolean = true, inRepo: Boolean = true) =
+        GitSnapshot(
+            observed = observed,
+            insideRepository = inRepo,
+            onNamedBranch = true,
+            changedFiles = changed,
+            headShort = head
+        )
+
+    /**
+     * The question the product is named for: what did the last thing to run do to the tree.
+     *
+     * The baseline is the tree *before* that command. Measuring from "the last command that exited
+     * 0" made the changing command its own baseline, and every delta came out zero.
+     */
+    @Test
+    fun `the delta counts files the most recent command changed`() {
+        val delta = GitDelta.between(snapshot(1, "a1b2c3d"), snapshot(4, "a1b2c3d"))
+
+        assertTrue(delta.comparable)
+        assertEquals(3, delta.changedFilesDelta)
+        assertFalse(delta.headMoved)
+    }
+
+    @Test
+    fun `a commit shows as HEAD moving and files leaving the working tree`() {
+        val delta = GitDelta.between(snapshot(4, "a1b2c3d"), snapshot(0, "e4f5a6b"))
+
+        assertTrue(delta.headMoved)
+        assertEquals(-4, delta.changedFilesDelta)
+    }
+
+    /** One unobserved side makes the comparison unknown. It must never read as "nothing changed". */
+    @Test
+    fun `a delta against an unobserved snapshot is unknown, not zero`() {
+        assertFalse(GitDelta.between(snapshot(2, "a1b2c3d"), GitSnapshot.unobserved()).comparable)
+        assertFalse(GitDelta.between(GitSnapshot.unobserved(), snapshot(2, "a1b2c3d")).comparable)
+        assertFalse(GitDelta.between(null, snapshot(2, "a1b2c3d")).comparable)
+        assertFalse(GitDelta.between(snapshot(2, "a1b2c3d"), null).comparable)
+    }
+
+    /** A tree with no commits on either side cannot evidence a move, so it does not claim one. */
+    @Test
+    fun `an unknown HEAD on either side is not evidence that HEAD moved`() {
+        assertFalse(GitDelta.between(snapshot(1, null), snapshot(1, "a1b2c3d")).headMoved)
+        assertFalse(GitDelta.between(snapshot(1, "a1b2c3d"), snapshot(1, null)).headMoved)
+        assertFalse(GitDelta.between(snapshot(1, null), snapshot(1, null)).headMoved)
+    }
+
+    @Test
+    fun `leaving the repository makes the comparison unknown`() {
+        assertFalse(GitDelta.between(snapshot(1, "a1b2c3d"), snapshot(0, null, inRepo = false)).comparable)
+    }
+
     /**
      * The whole point of the type: it can carry how much moved, and cannot carry what moved. If a
      * file name or a branch name ever becomes a field, this test is where that decision gets made.

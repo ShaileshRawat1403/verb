@@ -71,6 +71,16 @@ object AssistEvidence {
             }
         }
 
+        evidence.gitSinceLastCommand.takeIf { it.comparable }?.let { delta ->
+            val files = when {
+                delta.changedFilesDelta > 0 -> "${delta.changedFilesDelta} more files changed"
+                delta.changedFilesDelta < 0 -> "${-delta.changedFilesDelta} fewer files changed"
+                else -> "the same files changed"
+            }
+            val head = if (delta.headMoved) " · HEAD moved" else ""
+            add("· across the last command: $files$head")
+        }
+
         evidence.agentWork.forEach { fact ->
             val agent = fact.agentType?.let { " ($it)" } ?: ""
             add(

@@ -21,7 +21,9 @@ data class TerminalEvidence(
     /** One entry per agent session Verb holds. */
     val agentWork: List<AgentWorkFact> = emptyList(),
     /** The working tree as Verb last read it, or null when it has not looked. */
-    val git: GitSnapshot? = null
+    val git: GitSnapshot? = null,
+    /** What the most recent command did to the working tree. */
+    val gitSinceLastCommand: GitDelta = GitDelta.UNKNOWN
 )
 
 /**
@@ -136,6 +138,17 @@ object TerminalAiHelper {
                         "on a named branch: ${if (git.onNamedBranch) "yes" else "no"} (name withheld)"
                 )
             }
+        }
+        // The delta is the answer to "what did that just do", and it is only stated when both
+        // sides of the comparison were actually observed.
+        evidence.gitSinceLastCommand.takeIf { it.comparable }?.let { delta ->
+            val files = when {
+                delta.changedFilesDelta > 0 -> "${delta.changedFilesDelta} more files changed"
+                delta.changedFilesDelta < 0 -> "${-delta.changedFilesDelta} fewer files changed"
+                else -> "no change in how many files are changed"
+            }
+            val head = if (delta.headMoved) ", and HEAD moved" else ", HEAD unchanged"
+            add("Across the most recent command: $files$head")
         }
         evidence.agentWork.forEach { fact ->
             val agent = fact.agentType?.let { " ($it)" } ?: ""
