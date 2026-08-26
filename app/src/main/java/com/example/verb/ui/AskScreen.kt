@@ -233,11 +233,18 @@ fun AskScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Worded as moments a person actually has, not as a device-info menu
+            // (`docs/UX_FOUNDATION.md` §3), and ordered with development work first.
+            //
+            // Each string is submitted verbatim to the intent engine, so each must still contain a
+            // substring `IntentEngine` matches on -- "files in", "process", "disk space", "memory".
+            // `AskScreenSuggestionsTest` holds that: a chip that resolves to nothing is worse than
+            // a chip that reads plainly.
             val suggestions = listOf(
-                "Check my storage",
-                "Check memory",
-                "Show running processes",
-                "Show files"
+                "List files in this directory",
+                "What processes are running",
+                "How much disk space is left",
+                "How much memory is free"
             )
             suggestions.forEach { prompt ->
                 Surface(
