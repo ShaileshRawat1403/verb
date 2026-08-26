@@ -23,6 +23,32 @@ development moment easier, clearer or safer, or does it merely add another capab
 M2 remains frozen during this pass. The optional provider interpretation screen is not the proposed
 evidence-linked M2 layer and makes no execution or terminal-observation claim.
 
+## Completed sprint — Mobile touch and layout
+
+> **A person can read the terminal with their finger on it: scroll, select and zoom stay gestures,
+> typing stays one tap away, and every control survives the soft keyboard.**
+
+All items below are verified on the Vivo I2202 (Android 14) production `device` build; details and
+the hard-won constraints behind them live in `docs/HANDOFF_MOBILE_UX_SLICE.md`.
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Scrolling no longer opens the IME — gesture verdicts come from the Termux recognizer, not a Compose watcher | Done — device-verified |
+| 2 | Dock collapses animated under the keyboard; canvas keeps a 96dp floor | Done — device-verified |
+| 3 | Essential key row always visible; edge fades drawn transparent-at-edge (DstIn gradient clamp trap) | Done — device-verified |
+| 4 | Command field is a compact 42dp `BasicTextField` with preserved focus ring and test tag | Done — device-verified |
+| 5 | Tap-to-focus rides the view's own `onSingleTapUp` (`TermuxTerminalRuntimeAdapter.onCanvasTap`) | Done — device-verified |
+| 6 | Restarting a live session asks first; restarting a dead one is immediate | Done — device-verified |
+| 7 | `RunsSheet` consumes navigation-bar insets | Done — device-verified |
+| 8 | AI sheet scrolls, key rows fade at edges, keys tick haptically, overflow is a 48dp target | Done — device-verified |
+| 9 | Output auto-follow scoped to the Compose fallback view only; diagnostics log follows only while read near the bottom | Done — device-verified |
+
+This also closes NEXT_SPRINT's "same layout pattern exists elsewhere" carry-over: Runs was the last
+fraction-height sheet — SemanticLens, Verb, Project and FileExplorer sheets were audited clean.
+
+Still open from this slice: landscape layout, system theme (VerbTheme hardcodes dark), and the
+Agent Runtime "Choose" buttons under the scrolling thumb.
+
 ## Completed sprint — Mobile reliability
 
 > **A mobile Verb installation can be upgraded, reinstalled and recovered without losing the user's
