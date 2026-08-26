@@ -249,12 +249,12 @@ fun TerminalScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0E12))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // Thin Terminal Header Bar
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF161820)
+            color = MaterialTheme.colorScheme.surface
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -271,7 +271,7 @@ fun TerminalScreen(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF6366F1),
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
                                 .clickable(onClickLabel = "Open Verb") { onOpenVerb() }
                                 .testTag("verb_sheet_trigger")
@@ -283,7 +283,7 @@ fun TerminalScreen(
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
                                     contentDescription = null,
-                                    tint = Color.White,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -291,13 +291,13 @@ fun TerminalScreen(
                                     text = "Verb",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    color = MaterialTheme.colorScheme.onPrimary
                                 )
                             }
                         }
                         Surface(
                             shape = RoundedCornerShape(999.dp),
-                            color = Color(0xFF222630),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = { showProjectSheet = true },
                             modifier = Modifier.testTag("terminal_project_selector")
                         ) {
@@ -312,7 +312,7 @@ fun TerminalScreen(
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                                     .widthIn(max = 56.dp),
                                 fontSize = 11.sp,
-                                color = Color(0xFFCBD5E1),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -336,7 +336,7 @@ fun TerminalScreen(
                         val statusDescription = VerbStatusVocabulary.processDescription(sessionState)
                         Surface(
                             shape = RoundedCornerShape(999.dp),
-                            color = Color(0xFF222630),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = {
                                 if (sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING) {
                                     confirmRestart = true
@@ -366,7 +366,7 @@ fun TerminalScreen(
                                 Text(
                                     text = statusLabel,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF94A3B8)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -390,7 +390,7 @@ fun TerminalScreen(
                             Icon(
                                 imageVector = Icons.Default.History,
                                 contentDescription = "Command run history",
-                                tint = Color(0xFF94A3B8),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -407,7 +407,7 @@ fun TerminalScreen(
                                 Icon(
                                     imageVector = Icons.Default.MoreVert,
                                     contentDescription = "More terminal actions",
-                                    tint = Color(0xFF94A3B8),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -564,7 +564,7 @@ fun TerminalScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
                     .testTag("session_stopped_banner"),
                 shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF2A1A1C)
+                color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -577,7 +577,7 @@ fun TerminalScreen(
                             "Session stopped. Type a command below to start a new one."
                         },
                         fontSize = 12.sp,
-                        color = Color(0xFFFCA5A5)
+                        color = MaterialTheme.colorScheme.error
                     )
                 }
             }
@@ -598,7 +598,7 @@ fun TerminalScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
                     .testTag("first_run_terminal_hint"),
                 shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF1A1D27)
+                color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -607,7 +607,7 @@ fun TerminalScreen(
                     Text(
                         text = "Type a command below — try \"git --version\"",
                         fontSize = 12.sp,
-                        color = Color(0xFF94A3B8)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -623,7 +623,7 @@ fun TerminalScreen(
         if (pendingEnvironmentChange) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF2A2418),
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp, vertical = 4.dp)
@@ -637,12 +637,12 @@ fun TerminalScreen(
                     Text(
                         "Environment updated — restart the session to apply it.",
                         fontSize = 12.sp,
-                        color = Color(0xFFFCD34D),
+                        color = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.weight(1f)
                     )
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF6366F1),
+                        color = MaterialTheme.colorScheme.primary,
                         onClick = { terminalRuntime?.restartSession() },
                         modifier = Modifier.testTag("apply_environment_restart")
                     ) {
@@ -650,7 +650,7 @@ fun TerminalScreen(
                             "Restart",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
@@ -778,13 +778,12 @@ fun TerminalScreen(
     if (showFileExplorerSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFileExplorerSheet = false },
-            containerColor = Color(0xFF12141C),
-            contentColor = Color(0xFFE2E8F0),
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("terminal_file_explorer_sheet")
         ) {
             FileExplorerDrawer(
                 terminalRuntime = terminalRuntime,
-                isDark = true,
                 onFileClicked = { path -> clipboardManager.setText(AnnotatedString(path)) }
             )
         }
@@ -855,10 +854,18 @@ private fun ProjectSheet(
             name = ""
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFF12141C), contentColor = Color(0xFFE2E8F0)) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface
+    ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text("Project", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text("Launches a new terminal session in the selected directory.", fontSize = 12.sp, color = Color(0xFF94A3B8))
+            Text(
+                "Launches a new terminal session in the selected directory.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -897,7 +904,7 @@ private fun BootstrapProgressCard(
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag("bootstrap_progress_card"),
         shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF161820)
+        color = MaterialTheme.colorScheme.surface
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -907,14 +914,14 @@ private fun BootstrapProgressCard(
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
-                    color = Color(0xFF6366F1)
+                    color = MaterialTheme.colorScheme.primary
                 )
             } else {
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier.width(48.dp),
-                    color = Color(0xFF6366F1),
-                    trackColor = Color(0xFF222630),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
                 )
             }
@@ -924,18 +931,18 @@ private fun BootstrapProgressCard(
                     text = title,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = stepLabel,
                     fontSize = 11.sp,
-                    color = Color(0xFF818CF8)
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     fontSize = 12.sp,
-                    color = Color(0xFF94A3B8)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -953,7 +960,7 @@ private fun BootstrapErrorCard(
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag("bootstrap_error_card"),
         shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF2A1A1C)
+        color = MaterialTheme.colorScheme.surfaceVariant
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -964,19 +971,19 @@ private fun BootstrapErrorCard(
                     text = "Verb CLI userland install failed",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFFCA5A5)
+                    color = MaterialTheme.colorScheme.error
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = message,
                     fontSize = 12.sp,
-                    color = Color(0xFFE2E8F0)
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "Check your internet connection and storage, then try again.",
                     fontSize = 11.sp,
-                    color = Color(0xFF94A3B8)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))

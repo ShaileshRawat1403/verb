@@ -1,0 +1,185 @@
+package com.example.verb.ui
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
+import com.example.verb.ai.AiProviderConfig
+import com.example.verb.ai.AiProviderId
+import com.example.verb.ai.AiProviderSettings
+import com.example.verb.ui.theme.VerbTheme
+import java.nio.file.Path
+import kotlin.io.path.readText
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+
+/**
+ * The terminal chrome follows the system theme (`VerbTheme`), while the terminal emulator view
+ * itself stays dark by design. These tests hold both halves of that sentence.
+ *
+ * The render tests prove every migrated surface still composes under both schemes -- the failure
+ * this guards against is a colour lookup that crashes or a sheet whose content silently depends on
+ * a dark container.
+ *
+ * The source assertion is the real regression lock: any new hardcoded colour in the five chrome
+ * files must either use a scheme token or be added to the documented allowlist below *with a
+ * reason*. It scans both hex literals and named Compose colours (`Color.White` and friends), since
+ * a named constant hardcodes exactly the same way a hex literal does.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class TerminalChromeThemeTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
+
+    private val readyProvider = AiProviderSettings(
+        config = AiProviderConfig(AiProviderId.OPENAI, "test-model", "https://api.openai.com/v1"),
+        hasApiKey = true
+    )
+
+    /**
+     * One composition per test (the rule forbids a second `setContent`), containing the surface
+     * twice -- once under the dark scheme, once under light. Both instances must compose.
+     */
+    private fun bothThemes(content: @Composable () -> Unit) {
+        composeTestRule.setContent {
+            Column {
+                VerbTheme(darkTheme = true) { content() }
+                VerbTheme(darkTheme = false) { content() }
+            }
+        }
+    }
+
+    private fun assertRenderedInBothThemes(tag: String) {
+        composeTestRule.onAllNodesWithTag(tag).assertCountEquals(2)
+    }
+
+    @Test
+    fun runsSheetComposesUnderDarkAndLight() {
+        bothThemes { RunsSheet(terminalRuntime = null, onDismiss = {}) }
+        assertRenderedInBothThemes("terminal_runs_sheet")
+    }
+
+    @Test
+    fun diagnosticsSheetComposesUnderDarkAndLight() {
+        bothThemes { TerminalDiagnosticsSheet(terminalRuntime = null, onDismiss = {}) }
+        assertRenderedInBothThemes("terminal_diagnostics_sheet")
+    }
+
+    @Test
+    fun fileExplorerComposesUnderDarkAndLight() {
+        bothThemes { FileExplorerDrawer(terminalRuntime = null, onFileClicked = {}) }
+        assertRenderedInBothThemes("file_explorer_current_path")
+    }
+
+    @Test
+    fun usbDiagnosticCardComposesUnderDarkAndLight() {
+        bothThemes { UsbDebuggingDiagnosticCard() }
+        assertRenderedInBothThemes("usb_debugging_card")
+    }
+
+    @Test
+    fun terminalWorkspaceComposesUnderDarkAndLight() {
+        bothThemes {
+            TerminalScreen(
+                terminalOutput = "",
+                terminalRuntime = null,
+                onSendCommand = {},
+                onSendKey = {},
+                onSendText = {},
+                onClearTerminal = {},
+                onInspectText = {},
+                onSubmitIntent = {},
+                aiProviderSettings = readyProvider
+            )
+        }
+        assertRenderedInBothThemes("verb_sheet_trigger")
+    }
+
+    /**
+     * Hardcoded colours still allowed in the chrome files, each with its reason. Everything else
+     * -- hex or named -- fails this test and must either migrate to `MaterialTheme.colorScheme` or
+     * join this list deliberately.
+     */
+    private val allowedHexByFile: Map<String, Set<String>> = mapOf(
+        "TerminalScreen.kt" to setOf(
+            // Session-status palette: RUNNING green, STOPPING yellow, EXITED dim, failed red.
+            // Semantic status roles from UX_FOUNDATION §4 with no colorScheme slot yet (Task 1b).
+            "ff22c55e", "ffeab308", "ff94a3b8", "ffef4444",
+            // The Compose fallback view that prints PTY output: terminal content, which stays dark.
+            "ffe2e8f0"
+        ),
+        "TerminalDiagnosticsSheet.kt" to setOf(
+            // Session-status palette, same four roles as above plus STOPPING orange.
+            "ff22c55e", "ffeab308", "ffef4444", "ff94a3b8", "fff97316",
+            // Log-level palette: ERROR/WARN/INFO/DEBUG hues, Task 1b material.
+            "ffef4444", "ffeab308", "ff3b82f6", "ff94a3b8",
+            // Shell-verification success tint; success has no colorScheme slot yet.
+            "ff86efac",
+            // Copy Report action button: success-coloured by design.
+            "ff22c55e"
+        ),
+        "FileExplorerDrawer.kt" to setOf(
+            // File-type category tints (folder/code/media/archive) and the unknown-type fallback.
+            "ff3b82f6", "ff34d399", "ffa78bfa", "fff59e0b", "ff94a3b8"
+        ),
+        "RunsSheet.kt" to setOf(
+            // Lifecycle status palette: completed green, interrupted yellow, running dim.
+            "ff22c55e", "ffeab308", "ff94a3b8"
+        ),
+        "UsbDebuggingDiagnosticCard.kt" to setOf(
+            // USB state accents: active green, partial orange.
+            "ff4caf50", "ffff9800"
+        )
+    )
+
+    /** Named Compose colours hardcode exactly like hex literals; none are allowed in chrome. */
+    private val namedColourRegex =
+        Regex("""Color\.(White|Black|Red|Green|Blue|Yellow|Gray|LightGray|DarkGray|Cyan|Magenta|Transparent)\b""")
+    private val hexColourRegex = Regex("""Color\(\s*(0x[0-9A-Fa-f]{8})\s*\)""")
+
+    @Test
+    fun chromeFilesCarryOnlyDocumentedHardcodedColours() {
+        val uiDir = appModuleDir().resolve("src/main/java/com/example/verb/ui")
+        val violations = mutableListOf<String>()
+
+        for ((fileName, allowed) in allowedHexByFile) {
+            val source = uiDir.resolve(fileName).readText()
+            source.lines().forEachIndexed { index, line ->
+                hexColourRegex.findAll(line).forEach { match ->
+                    val argb = match.groupValues[1].substring(2).lowercase()
+                    if (argb !in allowed) {
+                        violations += "$fileName:${index + 1} hardcoded hex ${match.value} " +
+                            "(use MaterialTheme.colorScheme, or document it in allowedHexByFile)"
+                    }
+                }
+                namedColourRegex.findAll(line).forEach { match ->
+                    violations += "$fileName:${index + 1} hardcoded named colour ${match.value} " +
+                        "(use MaterialTheme.colorScheme)"
+                }
+            }
+        }
+
+        assert(violations.isEmpty()) {
+            "Hardcoded colours found in terminal chrome:\n" + violations.joinToString("\n")
+        }
+    }
+
+    /** Works whether Gradle starts the test JVM at the repo root or inside `app/`. */
+    private fun appModuleDir(): Path {
+        var dir: Path? = Path.of(System.getProperty("user.dir")).toAbsolutePath()
+        repeat(6) {
+            val current = dir ?: return@repeat
+            if (current.resolve("settings.gradle.kts").toFile().exists()) {
+                return current.resolve("app")
+            }
+            dir = current.parent
+        }
+        error("Could not locate the Verb app module from ${System.getProperty("user.dir")}")
+    }
+}

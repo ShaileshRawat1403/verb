@@ -91,7 +91,7 @@ class FileExplorerDrawerTest {
         )
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
 
         path().assertTextEquals(live.absolutePath)
@@ -110,7 +110,7 @@ class FileExplorerDrawerTest {
         )
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
 
         path().assertTextEquals(launch.absolutePath)
@@ -122,7 +122,7 @@ class FileExplorerDrawerTest {
         val adapter = ExplorerTestRuntimeAdapter(launchWorkingDirectory = launch)
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
 
         path().assertTextEquals(launch.absolutePath)
@@ -144,7 +144,7 @@ class FileExplorerDrawerTest {
         )
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
         path().assertTextEquals(opened.absolutePath)
 
@@ -165,7 +165,7 @@ class FileExplorerDrawerTest {
         )
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
 
         // The user navigates away using the browser's own Root shortcut.
@@ -196,7 +196,7 @@ class FileExplorerDrawerTest {
 
         composeTestRule.setContent {
             if (open) {
-                FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+                FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
             }
         }
         path().assertTextEquals(firstOpen.absolutePath)
@@ -226,7 +226,7 @@ class FileExplorerDrawerTest {
         )
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
 
         adapter.emitWorkingDirectory(TerminalWorkingDirectory("/guest/shell-moved-here", movedTo))
@@ -246,7 +246,7 @@ class FileExplorerDrawerTest {
         )
 
         composeTestRule.setContent {
-            FileExplorerDrawer(terminalRuntime = adapter, isDark = true, onFileClicked = {})
+            FileExplorerDrawer(terminalRuntime = adapter, onFileClicked = {})
         }
 
         adapter.emitWorkingDirectory(TerminalWorkingDirectory("/system", hostPath = null))

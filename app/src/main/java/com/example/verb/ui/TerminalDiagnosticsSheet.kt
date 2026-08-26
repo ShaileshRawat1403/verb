@@ -39,6 +39,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -116,8 +117,8 @@ fun TerminalDiagnosticsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF12141C),
-        contentColor = Color(0xFFE2E8F0),
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.testTag("terminal_diagnostics_sheet")
     ) {
         // The bottom action row (Clear Logs / Copy Report) used to be laid out past the bottom of
@@ -144,7 +145,7 @@ fun TerminalDiagnosticsSheet(
                     Icon(
                         imageVector = Icons.Default.BugReport,
                         contentDescription = null,
-                        tint = Color(0xFF6366F1),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -152,14 +153,14 @@ fun TerminalDiagnosticsSheet(
                         text = "Terminal Session Diagnostics",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 IconButton(onClick = onDismiss, modifier = Modifier.testTag("btn_close_diagnostics")) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close",
-                        tint = Color(0xFF94A3B8)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -169,7 +170,7 @@ fun TerminalDiagnosticsSheet(
             Surface(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
-                color = Color(0xFF1E202C)
+                color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Row(
@@ -188,13 +189,15 @@ fun TerminalDiagnosticsSheet(
                                 text = "State: $statusLabel",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = Color.White
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
 
                         Button(
                             onClick = { terminalRuntime?.restartSession() },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .height(32.dp)
@@ -220,7 +223,7 @@ fun TerminalDiagnosticsSheet(
                         text = "Launch directory (device path): ${launchWorkingDirectory?.absolutePath ?: "Unknown"}",
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = Color(0xFF94A3B8),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("diagnostics_launch_directory")
                     )
                     Spacer(modifier = Modifier.height(4.dp))
@@ -229,7 +232,7 @@ fun TerminalDiagnosticsSheet(
                             (currentWorkingDirectory?.guestPath ?: "Unknown — shell integration unavailable"),
                         fontSize = 12.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = Color(0xFF94A3B8),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.testTag("diagnostics_current_directory")
                     )
 
@@ -254,7 +257,7 @@ fun TerminalDiagnosticsSheet(
                         Text(
                             if (isVerifyingShell) "Verifying system shell..." else "Verify system shell",
                             fontSize = 11.sp,
-                            color = Color(0xFF818CF8)
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                     shellVerification?.let { report ->
@@ -266,7 +269,7 @@ fun TerminalDiagnosticsSheet(
                                 "System shell unavailable: ${report.errorDetails ?: "Unknown error"}"
                             },
                             fontSize = 12.sp,
-                            color = if (report.isAccessible) Color(0xFF86EFAC) else Color(0xFFFCA5A5)
+                            color = if (report.isAccessible) Color(0xFF86EFAC) else MaterialTheme.colorScheme.error
                         )
                     }
                 }
@@ -308,15 +311,15 @@ fun TerminalDiagnosticsSheet(
                     .weight(1f, fill = false)
                     .heightIn(min = 96.dp)
                     .fillMaxWidth()
-                    .background(Color(0xFF090A0E), RoundedCornerShape(8.dp))
-                    .border(1.dp, Color(0xFF222630), RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
                     .padding(8.dp)
             ) {
                 if (filteredLogs.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             text = "No log entries recorded for this category.",
-                            color = Color(0xFF64748B),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 13.sp
                         )
                     }
@@ -356,7 +359,9 @@ fun TerminalDiagnosticsSheet(
                 OutlinedButton(
                     onClick = { TerminalSessionLogger.clear() },
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF4444)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
                     modifier = Modifier.testTag("btn_clear_diagnostics_logs")
                 ) {
                     Icon(
@@ -404,14 +409,18 @@ private fun FilterChip(
 ) {
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = if (isSelected) Color(0xFF6366F1) else Color(0xFF1E202C),
+        color = if (isSelected) {
+            MaterialTheme.colorScheme.primary
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant
+        },
         modifier = Modifier.clickable { onClick() }
     ) {
         Text(
             text = label,
             fontSize = 11.sp,
             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-            color = if (isSelected) Color.White else Color(0xFF94A3B8),
+            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
         )
     }
@@ -436,7 +445,7 @@ private fun LogEntryRow(entry: TerminalLogEntry) {
                 text = entry.timestamp,
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
-                color = Color(0xFF64748B)
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.width(6.dp))
             Surface(
@@ -456,7 +465,7 @@ private fun LogEntryRow(entry: TerminalLogEntry) {
                 text = "[${entry.category.name}]",
                 fontSize = 10.sp,
                 fontFamily = FontFamily.Monospace,
-                color = Color(0xFF818CF8)
+                color = MaterialTheme.colorScheme.primary
             )
         }
         Spacer(modifier = Modifier.height(2.dp))
@@ -464,7 +473,7 @@ private fun LogEntryRow(entry: TerminalLogEntry) {
             text = entry.message,
             fontSize = 11.sp,
             fontFamily = FontFamily.Monospace,
-            color = Color(0xFFE2E8F0)
+            color = MaterialTheme.colorScheme.onSurface
         )
     }
 }

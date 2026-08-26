@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -76,8 +77,8 @@ fun RunsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF12141C),
-        contentColor = Color(0xFFE2E8F0),
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.testTag("terminal_runs_sheet")
     ) {
         Column(
@@ -102,7 +103,7 @@ fun RunsSheet(
                     Icon(
                         imageVector = Icons.Default.History,
                         contentDescription = null,
-                        tint = Color(0xFF6366F1),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -110,14 +111,14 @@ fun RunsSheet(
                         text = "Command Runs",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 IconButton(onClick = onDismiss, modifier = Modifier.testTag("btn_close_runs")) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close",
-                        tint = Color(0xFF94A3B8)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -146,7 +147,7 @@ fun RunsSheet(
             Text(
                 text = "Local terminal activity. Nothing is sent to AI.",
                 fontSize = 11.sp,
-                color = Color(0xFF64748B),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("runs_privacy_footer")
             )
         }
@@ -158,7 +159,7 @@ private fun EmptyRunsMessage(text: String, testTag: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
             text = text,
-            color = Color(0xFF64748B),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 13.sp,
             modifier = Modifier.testTag(testTag)
         )
@@ -172,7 +173,7 @@ private fun RunRow(record: CommandExecutionRecord) {
         CommandLifecycleState.COMPLETED -> Triple(Icons.Default.CheckCircle, Color(0xFF22C55E), formatDuration(record.durationMs))
         CommandLifecycleState.FAILED -> Triple(
             Icons.Default.Error,
-            Color(0xFFEF4444),
+            MaterialTheme.colorScheme.error,
             "Failed · exit ${record.exitCode ?: "?"} · ${formatDuration(record.durationMs)}"
         )
         CommandLifecycleState.ABANDONED -> Triple(Icons.Default.Warning, Color(0xFFEAB308), "Interrupted")
@@ -201,7 +202,7 @@ private fun RunRow(record: CommandExecutionRecord) {
             text = commandLabel,
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
-            color = Color(0xFFE2E8F0),
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
