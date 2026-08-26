@@ -1,3 +1,47 @@
+# Verb 0.1.0-beta.3 — developer preview
+
+## Restore notice — read this if you have an archive from beta.1 or beta.2
+
+**A Working World archive made by an earlier beta may not restore.** `verb export` wrote archives
+that `verb import` then refused:
+
+```text
+verb: the archive contains a link or special file; restore refused.
+```
+
+It affects you if you had run Codex or installed OpenCode before exporting — both leave symlinks
+(`.codex/tmp/arg0`, `node_modules/.bin`) that the exporter should have excluded and did not, and
+that import correctly refuses because a symlink inside an archive is a path traversal.
+
+**What to do:** re-export with this version — `verb export ~/world.vbak` — and save the new file.
+Your old archive is not corrupt, but this version cannot restore it either; the fix is on the
+writing side. Keep the old one until the new export succeeds.
+
+Export now verifies every archive against import's own rule before writing, and refuses to produce
+one that could not be restored. `docs/WORKING_WORLD.md` records how this was found and why the fix
+is a check rather than two more exclusions.
+
+## What changed since beta.2
+
+- **Ask about your own work.** One assistant, reachable from Ask Verb and from the terminal,
+  answering from the evidence Verb observed itself — including what the working tree did across the
+  last command. Every answer renders beside the same facts in plain language. It still cannot
+  receive command text, terminal output, file contents, transcripts, credentials, absolute paths or
+  a branch name. The provider-only interpretation screen, which sent nothing but the words you
+  typed, has been removed.
+- **Light and dark, by choice.** Verb follows the device, or you can tell it. Type "theme" into the
+  Verb sheet. The terminal itself stays dark in both, because a terminal is dark.
+- **A crash on Android 7.** The foreground service that holds a session at priority called an
+  API-26 notification channel on a `minSdk` 24 build, so it threw the moment a session started.
+- **The Android↔desktop continuity round-trip** is now physically accepted in both directions.
+
+## Known gaps
+
+- OpenCode recovery is unverified and labelled as such in the product.
+- The desktop preview still does not publish prebuilt binaries; build from source.
+
+---
+
 # Verb 0.1.0-beta.2 — developer preview
 
 This is an evidence-gathering preview, not a claim that Verb is finished. It is intended for people
