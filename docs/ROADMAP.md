@@ -100,7 +100,9 @@ is also reachable from the CLI.
 
 ## M2 — Contextual Verb Assistant
 
-**Status: not started. Its groundwork exists.**
+**Status: vertical slice shipped in the Android beta (26 August); the milestone is otherwise not started.**
+The slice: a user can ask their own question about the terminal moment, Verb attaches exactly its
+evidence envelope, and every answer names the evidence it used and renders beside it.
 
 `verb context` (`desktop/src/context.rs`) assembles what Verb knows about a moment -- project and
 Git state read at the time of asking, the session record, the tail of the structural event log --

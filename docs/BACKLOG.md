@@ -63,8 +63,28 @@ the hard-won constraints behind them live in `docs/HANDOFF_MOBILE_UX_SLICE.md`.
 This also closes NEXT_SPRINT's "same layout pattern exists elsewhere" carry-over: Runs was the last
 fraction-height sheet — SemanticLens, Verb, Project and FileExplorer sheets were audited clean.
 
-Still open from this slice: landscape layout, system theme (VerbTheme hardcodes dark), and the
-Agent Runtime "Choose" buttons under the scrolling thumb.
+Still open from this slice: landscape layout (deliberately deferred — the terminal workspace is a
+portrait-first surface).
+
+## Added to beta — 26 August, second pass
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Theme follows the system dark setting (the light scheme was dead code) | Done — verified on device in both modes; the terminal workspace keeps a dark canvas by design |
+| 2 | Agent Runtime file pickers clear of the scroll thumb (NEXT_SPRINT carry-over, cosmetic) | Done — the Choose buttons reserve the thumb strip instead of sitting under it |
+| 3 | **M2 vertical slice** — ask your own question about the terminal moment | Done — device-verified |
+| 4 | E1 — foreground service holds the process while a session is live | Done — service verified foreground on device |
+
+The M2 slice is the roadmap's first M2 increment: the user asks their own question about this
+terminal moment, Verb attaches exactly its evidence envelope (structural facts only — never command
+text, paths or PTY output), the prompt requires the answer to name the facts it used, and the same
+evidence renders as a "Based on" block beside every answer. The model stays replaceable; the
+context is Verb. What the sheet shows as "what the model saw" is snapshotted before the request, so
+it cannot drift from what was sent.
+
+The E1 foreground service lowers the probability of a background kill and is not immunity: it owns
+nothing, follows the session (RUNNING holds the claim, a finished session releases it), and a
+force-stop still ends everything — exactly as `docs/DURABLE_SESSION.md` promised.
 
 ## Completed sprint — Mobile reliability
 
