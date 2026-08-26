@@ -143,12 +143,40 @@ Four further defects surfaced only on the device and are fixed:
 - The model answered in the contract's uppercase spellings beside a panel using the plain ones; the
   system instruction now asks for the plain reading.
 
-**Still open:** in the *terminal's* bottom sheet only, the soft keyboard covers the question box.
-The sheet renders in its own dialog window, which does not inherit the activity's `adjustResize`;
-pinning the input row and applying `imePadding` were not sufficient and a `DialogWindowProvider`
-soft-input override had no effect on this device. The keyboard's own send key does submit, and the
-Ask Verb host — the promoted primary surface — is unaffected and was verified with the keyboard
-open. Worth fixing before the tag, but it does not block the flow.
+**Closed.** The soft keyboard covered the question box in the terminal's bottom sheet. The cause
+was Material3 1.3.0: `ModalBottomSheet` renders in its own `WindowManager` window that never
+receives IME insets, so no padding inside the sheet could move a field the window did not know was
+covered. The sheet is gone — the terminal opens Ask Verb on the assistant stage, which is the host
+that works and the one a person goes to in order to ask. Verified with the keyboard open.
+
+## C2 — the working tree, observed — 26 August
+
+The assistant could not answer the question the product is named for. The envelope carried session
+lifecycle, exit codes and durations, and nothing at all about the world the agent was changing.
+
+`GitObserver` reads the tree through the guest userland — inside-work-tree, branch presence, HEAD,
+porcelain status — bounded to four seconds and off the terminal's hot path, because this is proot on
+a phone. Every command boundary takes a snapshot, and the reading it replaces becomes the baseline,
+so the delta says what that command did.
+
+`GitSnapshot` carries how much moved, never what moved: no paths, no file names, no diff, and
+deliberately no branch name. A repository root like `/private/acme-corp` names a client and
+`feature/acme-login` carries the same disclosure, and neither is needed to answer how much changed.
+A test plants both and asserts neither survives.
+
+Two mistakes the device caught that the tests could not:
+
+- The delta first measured from "the last command that exited 0". The command that changes the tree
+  usually exits 0 too, so it became its own baseline and every delta was zero — three new files
+  reported as no change. The baseline is now the tree *before* the command.
+- Unknown had to stay unknown throughout: a `git` that could not run is not a clean tree, and an
+  uncomparable delta is silent rather than zero.
+
+Device-verified on the Vivo I2202: two files created, answer read "2 more files being changed, with
+the HEAD remaining unchanged", while stating plainly that it could not name them.
+
+**Still open in C2:** `docs/BACKLOG.md` C3 (last-known-good tracking) is the natural next step —
+a delta against a state the *user* considered working, rather than against the previous command.
 
 ## Completed sprint — Mobile reliability
 
@@ -263,7 +291,7 @@ costume.
 | # | Item | Unlocks |
 | --- | --- | --- |
 | C1 | ~~Agent sessions emit nothing structural~~ — both hosts now follow the record the agent writes for itself and emit turn/tool/failure events, worded as reported rather than witnessed. OpenCode has no reader yet | done for Claude and Codex |
-| C2 | Git snapshot at command boundaries | "what changed since it last worked" |
+| C2 | ~~Git snapshot at command boundaries~~ — the tree is observed and the delta says what the last command did; see the C2 section above | done |
 | C3 | Last-known-good tracking | comparison and recovery |
 | C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |
 | C5 | Richer contextual triggers: risky Git operation, runtime mismatch | two of the four bands in `TUI_VISION.md` |
