@@ -13,12 +13,29 @@ development moment easier, clearer or safer, or does it merely add another capab
 
 | # | Item | Status |
 | --- | --- | --- |
-| 1 | Replace Android subsystem tabs with one terminal workspace and searchable named tasks | implemented; automated tests pass; physical acceptance pending |
-| 2 | Ensure a Verb overlay takes keyboard/back ownership from the mounted terminal | implemented with regression coverage; physical acceptance pending |
+| 1 | Replace Android subsystem tabs with one terminal workspace and searchable named tasks | done — physically accepted 26 Aug |
+| 2 | Ensure a Verb overlay takes keyboard/back ownership from the mounted terminal | done — physically accepted 26 Aug |
 | 3 | Public-source license, security policy and release checklist | done |
-| 4 | Complete desktop and both-flavor Android verification on the return revision | in progress |
-| 5 | Physical Android workspace, Claude/Codex and Android↔desktop continuity acceptance | pending primary device |
+| 4 | Complete desktop and both-flavor Android verification on the return revision | done — 26 Aug |
+| 5 | Physical Android workspace, Claude/Codex and Android↔desktop continuity acceptance | done — Claude/Codex resume 22 Aug; workspace and continuity round-trip 26 Aug |
 | 6 | Integrate into the primary full-history repository and audit the final release archive | pending primary machine |
+
+### What was proven on 26 August
+
+Both flavors verified on the Vivo I2202: `fullCliDevice` (daily-driver, updated in place) and — for
+the first time — `playDevice`, built, installed and booted into its own sandbox. On desktop, 117
+Rust tests pass, the release binary builds, and `verb context` renders live evidence. The terminal
+workspace was re-accepted by driving the real app over adb: tap opens the IME, back hides it,
+scrolling and flinging keep it hidden, back again leaves the workspace, and a pinched font size
+survives a full process stop.
+
+The Android↔desktop continuity round-trip (G2) completed in both directions: the phone exported a
+`.vcont` to Downloads, the desktop imported it preview-first then applied, the desktop exported its
+own envelope including that imported evidence, and the phone previewed and applied it as read-only
+evidence ("1 imported session record", no local session or Resume action changed). The round-trip
+caught two real desktop defects — `verb continuity export` crashed on legacy event logs (integer
+millis timestamps, a snake_case `session_id`) and wrote lowercase event states the Android host
+correctly rejects — both fixed with regression tests.
 
 M2 remains frozen during this pass. The optional provider interpretation screen is not the proposed
 evidence-linked M2 layer and makes no execution or terminal-observation claim.
@@ -226,6 +243,6 @@ M2 — explain, compare, or guided action. Decided by friction notes, not by thi
 | # | Item | Status |
 | --- | --- | --- |
 | G1 | Manual checksummed `.vcont` export, preview and read-only import on Android and desktop | implemented; automated and desktop round-trip verified |
-| G2 | Physical Android→desktop→Android file round-trip and UI acceptance | pending primary device |
+| G2 | Physical Android→desktop→Android file round-trip and UI acceptance | done — 26 Aug, both directions on the Vivo I2202 |
 | G3 | Optional encrypted wrapper for continuity metadata | post-beta; no credentials may enter the envelope |
 | G4 | Automatic/background/cloud/LAN sync, remote process resume, transcript transport | rejected for beta; requires separate product and threat-model approval |
