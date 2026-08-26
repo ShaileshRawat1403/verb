@@ -13,6 +13,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import android.app.Activity
+import androidx.core.view.WindowCompat
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +48,7 @@ import com.example.verb.ui.VerbFirstActionRow
 import com.example.verb.ui.VerbSheet
 import com.example.verb.ui.theme.VerbTheme
 import com.example.verb.ui.verbFirstAction
+import com.example.verb.ui.AppearanceScreen
 import com.example.verb.viewmodel.VerbSurface
 import com.example.verb.viewmodel.VerbTask
 import com.example.verb.viewmodel.VerbViewModel
@@ -65,7 +70,23 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            VerbTheme {
+            // The stored choice overrides the device; SYSTEM means keep following it.
+            val themeChoice by viewModel.themeChoice.collectAsStateWithLifecycle()
+            val dark = themeChoice.resolveDark(isSystemInDarkTheme())
+
+            // The system bars draw over the app, so their icon colour has to follow the resolved
+            // theme rather than the device's. Without this, choosing Light on a dark-mode phone
+            // left white status icons on a white bar -- the clock and battery simply vanished.
+            val view = LocalView.current
+            LaunchedEffect(dark) {
+                val window = (view.context as Activity).window
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+
+            VerbTheme(darkTheme = dark) {
                 VerbAppContent(viewModel = viewModel)
             }
         }
@@ -109,6 +130,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val terminalAiEvidence by viewModel.terminalAiEvidence.collectAsStateWithLifecycle()
     val terminalAiThread by viewModel.terminalAiThread.collectAsStateWithLifecycle()
     val assistantStageRequested by viewModel.assistantStageRequested.collectAsStateWithLifecycle()
+    val themeChoice by viewModel.themeChoice.collectAsStateWithLifecycle()
     val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
@@ -271,6 +293,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     terminalAiEvidence = terminalAiEvidence,
                     terminalAiThread = terminalAiThread,
                     assistantStageRequested = assistantStageRequested,
+                    themeChoice = themeChoice,
                     isKeyboardVisible = isKeyboardVisible,
                     isSessionActive = isSessionActive,
                     runtimeProfileReports = runtimeProfileReports,
@@ -355,6 +378,7 @@ private fun VerbTaskSurface(
     terminalAiEvidence: com.example.verb.terminal.TerminalEvidence?,
     terminalAiThread: List<com.example.verb.terminal.TerminalAiExchange>,
     assistantStageRequested: Boolean,
+    themeChoice: com.example.verb.ui.theme.VerbThemeChoice,
     isKeyboardVisible: Boolean,
     isSessionActive: Boolean,
     runtimeProfileReports: List<com.example.verb.terminal.RuntimeProfileReport>,
@@ -441,6 +465,11 @@ private fun VerbTaskSurface(
                     agentSessions = agentSessions,
                     onResumeSession = viewModel::resumeAgentSession,
                     onStartNewSession = viewModel::startNewAgentSession
+                )
+
+                VerbTask.APPEARANCE -> AppearanceScreen(
+                    choice = themeChoice,
+                    onChoose = viewModel::setThemeChoice
                 )
 
                 else -> {

@@ -38,6 +38,8 @@ import com.example.verb.terminal.RuntimeProfiles
 import com.example.verb.terminal.AgentWorkFact
 import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.GitDelta
+import com.example.verb.ui.theme.VerbThemeChoice
+import com.example.verb.ui.theme.VerbThemeStore
 import com.example.verb.terminal.GitObserver
 import com.example.verb.terminal.GitSnapshot
 import com.example.verb.terminal.TerminalAiExchange
@@ -314,6 +316,19 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     val terminalAiEvidence: StateFlow<TerminalEvidence?> = _terminalAiEvidence.asStateFlow()
 
     private val gitObserver = GitObserver(application.applicationContext.filesDir)
+
+    private val themeStore = VerbThemeStore(application.applicationContext)
+
+    private val _themeChoice = MutableStateFlow(themeStore.load())
+
+    /** System, light or dark. System is the default, so a fresh install is unchanged. */
+    val themeChoice: StateFlow<VerbThemeChoice> = _themeChoice.asStateFlow()
+
+    fun setThemeChoice(choice: VerbThemeChoice) {
+        if (_themeChoice.value == choice) return
+        themeStore.save(choice)
+        _themeChoice.value = choice
+    }
 
     /**
      * The working tree as Verb last read it.
