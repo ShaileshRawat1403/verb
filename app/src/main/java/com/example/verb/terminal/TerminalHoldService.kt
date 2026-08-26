@@ -46,9 +46,24 @@ class TerminalHoldService : Service() {
         )
     }
 
-    // START_STICKY rather than NOT_STICKY: if the system does kill us under real memory pressure,
-    // a restart attempt costs nothing and re-claims the priority even though the session itself
-    // would be gone.
+    /**
+     * Promote to the foreground first, always -- even when the reason we were started has already
+     * gone away.
+     *
+     * `startForegroundService` opens a countdown: reach the foreground within a few seconds or the
+     * platform kills the whole process with "did not then call Service.startForeground()". The hold
+     * follows the session, and a session that goes STARTING -> FAILED quickly used to have its
+     * `stopService` land *before* this method ran, so the countdown expired with nothing to show for
+     * it. On a fast phone that window is almost closed; on a loaded emulator it is wide open, which
+     * is why CI saw it and an API 34 device never did.
+     *
+     * Releasing is therefore a message to this service rather than a `stopService` behind its back:
+     * promote, then stand down. The contract with the platform is honoured either way.
+     *
+     * START_STICKY rather than NOT_STICKY: if the system does kill us under real memory pressure, a
+     * restart attempt costs nothing and re-claims the priority even though the session itself would
+     * be gone.
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
@@ -78,6 +93,12 @@ class TerminalHoldService : Service() {
             notification,
             foregroundServiceTypeFor(Build.VERSION.SDK_INT)
         )
+
+        if (intent?.action == ACTION_RELEASE) {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         return START_STICKY
     }
 
@@ -107,6 +128,9 @@ class TerminalHoldService : Service() {
                 0
             }
 
+        /** Distinguishes "hold the process" from "stand down"; see [onStartCommand]. */
+        internal const val ACTION_RELEASE = "com.example.verb.terminal.action.RELEASE_HOLD"
+
         fun start(context: Context) {
             ContextCompat.startForegroundService(
                 context,
@@ -114,8 +138,18 @@ class TerminalHoldService : Service() {
             )
         }
 
+        /**
+         * Asks the service to stand down, rather than stopping it from outside.
+         *
+         * `stopService` could land before `onStartCommand` had promoted the service, leaving the
+         * platform's countdown to expire and take the process with it. Routing the release through
+         * the same entry point means the service always reaches the foreground before it leaves it.
+         */
         fun stop(context: Context) {
-            context.stopService(Intent(context, TerminalHoldService::class.java))
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, TerminalHoldService::class.java).setAction(ACTION_RELEASE)
+            )
         }
     }
 }

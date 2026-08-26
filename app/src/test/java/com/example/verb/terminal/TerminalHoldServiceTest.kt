@@ -1,24 +1,76 @@
 package com.example.verb.terminal
 
+import android.content.Context
 import android.content.pm.ServiceInfo
 import android.os.Build
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.Shadows
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
- * The foreground-service type the hold asks for, per platform version.
+ * The two ways the hold can fail the platform's `startForegroundService` contract.
  *
- * This is a unit test for a one-line decision because the bug it pins was a process kill. The
- * service asked for `specialUse` — an API 34 type — on every platform. The system requires the type
- * passed to `startForeground` to be a subset of what the manifest declares, and an API 30 device
- * cannot parse `specialUse` from the manifest at all, so the call threw, the service never reached
- * the foreground, and Android killed the app with `Context.startForegroundService() did not then
- * call Service.startForeground()`.
+ * Android gives a service started that way a few seconds to reach the foreground, and kills the
+ * whole process otherwise: `Context.startForegroundService() did not then call
+ * Service.startForeground()`. That crash took the app down on Android 11 whenever a session
+ * started, and was invisible on the API 34 phone this was developed against.
  *
- * It took the app down on Android 11 the moment a session started, and was invisible on the API 34
- * phone this was developed against. CI's API 30 emulator caught it.
+ * **The cause was a race.** The hold follows the session, and a session that goes STARTING ->
+ * FAILED quickly had its `stopService` land before `onStartCommand` had promoted the service, so
+ * the countdown expired with nothing to show for it. CI's loaded emulator hits that window every
+ * time because there is no real userland there for a session to start into. Releasing is now a
+ * message to the service, which promotes first and then stands down.
+ *
+ * **The type was a second hazard, found while chasing the first and guarded anyway.** `specialUse`
+ * is an API 34 type, the platform requires the type passed to `startForeground` to be a subset of
+ * what the manifest declares, and an API 30 device cannot parse `specialUse` from the manifest at
+ * all. Asking for it there was never going to be right, whether or not it was what crashed.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class TerminalHoldServiceTest {
+
+    /**
+     * Releasing must travel through the service, not around it.
+     *
+     * `stopService` from outside could land before `onStartCommand` had promoted the service, so
+     * the platform's startForegroundService countdown expired and it killed the process. A session
+     * that goes STARTING -> FAILED quickly hits that window every time, which is what CI's loaded
+     * emulator reproduced and an API 34 phone never did.
+     */
+    @Test
+    fun `releasing the hold is an action on the service, not a stop from outside`() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+
+        TerminalHoldService.stop(context)
+
+        val started = Shadows.shadowOf(context as android.app.Application).nextStartedService
+        assertEquals(
+            "release must be delivered to the service itself",
+            TerminalHoldService::class.java.name,
+            started.component?.className
+        )
+        assertEquals(TerminalHoldService.ACTION_RELEASE, started.action)
+    }
+
+    /** Holding is the same entry point with no action, so the two cannot diverge. */
+    @Test
+    fun `holding the process starts the same service with no action`() {
+        val context: Context = ApplicationProvider.getApplicationContext()
+
+        TerminalHoldService.start(context)
+
+        val started = Shadows.shadowOf(context as android.app.Application).nextStartedService
+        assertEquals(
+            TerminalHoldService::class.java.name,
+            started.component?.className
+        )
+        assertEquals(null, started.action)
+    }
 
     @Test
     fun `API 34 and above asks for the special-use type it declares`() {

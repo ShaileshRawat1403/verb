@@ -810,11 +810,8 @@ mod tests {
 
     #[test]
     fn legacy_millisecond_timestamps_normalize_into_the_envelope() {
-        let normalized = normalized_timestamp(
-            serde_json::from_str("1787392941473").unwrap(),
-            1,
-        )
-        .unwrap();
+        let normalized =
+            normalized_timestamp(serde_json::from_str("1787392941473").unwrap(), 1).unwrap();
         assert_eq!(
             normalized,
             crate::iso8601(1_787_392_941_473),
