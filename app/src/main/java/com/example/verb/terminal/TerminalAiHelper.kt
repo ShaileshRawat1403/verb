@@ -2,49 +2,204 @@ package com.example.verb.terminal
 
 import com.example.verb.ai.AiAssistantRequest
 import com.example.verb.ai.AiAssistantService
+import com.example.verb.session.VerbSessionState
+import java.time.Duration
+import java.time.Instant
+
 /**
- * Explains structural terminal evidence using the user's configured provider. Raw PTY output and
- * command text are deliberately not accepted by this API, so they cannot leave the device through
- * this path. Unknown detail stays unknown rather than being filled from transcript surveillance.
+ * The evidence Verb attaches when the user asks about their work. Everything here is structural
+ * fact Verb observed itself; command text, PTY output and absolute paths are deliberately absent,
+ * so they cannot leave the device through this path. Unknown detail stays unknown rather than
+ * being filled from transcript surveillance.
  */
+data class TerminalEvidence(
+    val sessionState: TerminalSessionState,
+    val workingDirectoryKnown: Boolean,
+    val shellIntegrationActive: Boolean,
+    /** The newest command boundaries last; only lifecycle facts travel, never command text. */
+    val commandTail: List<CommandExecutionRecord> = emptyList(),
+    /** One entry per agent session Verb holds. */
+    val agentWork: List<AgentWorkFact> = emptyList(),
+    /** The working tree as Verb last read it, or null when it has not looked. */
+    val git: GitSnapshot? = null,
+    /** What the most recent command did to the working tree. */
+    val gitSinceLastCommand: GitDelta = GitDelta.UNKNOWN
+)
+
+/**
+ * What Verb knows about one agent session, as fields rather than as a formatted line.
+ *
+ * This is structured on purpose. An earlier shape accepted pre-formatted strings from the caller,
+ * which punched a free-text hole straight through the privacy boundary this type exists to be: a
+ * caller could put an absolute path or a transcript excerpt in it and nothing here would notice.
+ * Fields cannot carry what fields do not have.
+ */
+data class AgentWorkFact(
+    /** The runtime profile's display name -- "Claude Code", not a path. */
+    val profileName: String,
+    val sessionState: VerbSessionState,
+    val lastSeenAt: Instant,
+    /** The agent kind the session record names, when one is bound. Never a resume identity. */
+    val agentType: String? = null
+)
+
+/** One question and its evidence-bound answer, kept so a follow-up can build on the last ones. */
+data class TerminalAiExchange(
+    val question: String,
+    val answer: String
+)
+
 object TerminalAiHelper {
 
+    /**
+     * The last sentence exists because the envelope legitimately speaks the contract's vocabulary
+     * and the model was quoting it straight back -- a user reading "RECOVERABLE" beside a panel
+     * that says "recoverable" is reading two spellings of one fact. `docs/UX_FOUNDATION.md`: plain
+     * language on screen, exact vocabulary underneath, and the answer is on screen.
+     */
     private const val TERMINAL_SYSTEM_INSTRUCTION =
         "You are Verb's evidence-bound terminal assistant. Use only the structural facts provided. " +
             "Say when the evidence cannot explain a cause. Keep answers brief and propose at most " +
-            "two diagnostic actions. Never claim an action ran and never invent terminal content."
+            "two diagnostic actions. Never claim an action ran and never invent terminal content. " +
+            "Write session and command states in plain words -- running, recoverable, recovery " +
+            "status unknown, ended, failed, finished, never finished -- not in the uppercase " +
+            "spellings the evidence uses."
+
+    /** How much of the conversation rides along so a follow-up needs no restating. */
+    private const val MAX_PRIOR_EXCHANGES = 3
+
+    suspend fun analyze(service: AiAssistantService, evidence: TerminalEvidence): String {
+        val prompt = evidenceEnvelope(evidence, emptyList()) +
+            "Explain what these facts establish, what remains unknown, and the safest next diagnostic step."
+        return respond(service, prompt)
+    }
 
     /**
-     * Only lifecycle metadata crosses the provider boundary. [workingDirectoryKnown] carries the
-     * distinction between observed and unknown without disclosing an absolute path.
+     * The M2 surface: the user asks their own question about their work, and the model receives
+     * exactly the evidence envelope Verb holds -- plus at most the last few exchanges of this
+     * conversation, so a follow-up never has to restate what Verb already heard. The prompt
+     * requires the answer to name the facts it relied on; the UI renders the same evidence beside
+     * it, built by [evidenceLines] from the same snapshot.
      */
-    suspend fun analyze(
+    suspend fun ask(
         service: AiAssistantService,
-        lastCommand: CommandExecutionRecord?,
-        workingDirectoryKnown: Boolean,
-        sessionState: TerminalSessionState
+        question: String,
+        priorExchanges: List<TerminalAiExchange>,
+        evidence: TerminalEvidence
     ): String {
-        val prompt = buildString {
-            appendLine("Evidence source: Verb shell integration (structural metadata only).")
-            appendLine("Working directory observed: $workingDirectoryKnown (path withheld).")
-            appendLine("Session state: ${sessionState.name}")
-            if (lastCommand == null) {
-                appendLine("Last command boundary: unknown.")
-            } else {
-                appendLine("Last command lifecycle: ${lastCommand.state.name}")
-                appendLine("Last command exit code: ${lastCommand.exitCode ?: "unknown"}")
-                appendLine("Last command duration ms: ${lastCommand.durationMs ?: "unknown"}")
-            }
-            appendLine("Explain what these facts establish, what remains unknown, and the safest next diagnostic step.")
-        }
+        require(question.isNotBlank()) { "The question is empty." }
+        val prompt = evidenceEnvelope(evidence, priorExchanges.takeLast(MAX_PRIOR_EXCHANGES)) +
+            "The user asks about this work: ${question.trim()}\n" +
+            "Answer from the evidence above. Name which facts your answer relies on. " +
+            "If the evidence cannot answer, say exactly what is missing."
+        return respond(service, prompt)
+    }
 
-        val response = service.respond(
+    /**
+     * The evidence this helper attaches, as the lines that actually cross the provider boundary.
+     *
+     * These carry the contract's exact vocabulary (`RUNNING`, `LIVE`, `FAILED`) because that is
+     * what a model should reason over. The user sees the same facts read back in plain language by
+     * `com.example.verb.ui.AssistEvidence`, from this same snapshot --
+     * `docs/UX_FOUNDATION.md`: plain language on screen, exact vocabulary underneath.
+     */
+    fun evidenceLines(evidence: TerminalEvidence, now: Instant = Instant.now()): List<String> = buildList {
+        add("Session state: ${evidence.sessionState.name}")
+        add("Working directory observed: ${if (evidence.workingDirectoryKnown) "yes" else "no"} (path withheld)")
+        add("Shell command boundaries reported: ${if (evidence.shellIntegrationActive) "yes" else "no"}")
+        if (evidence.commandTail.isEmpty()) {
+            add("Command boundaries recorded: none")
+        } else {
+            add(
+                if (evidence.commandTail.size == 1) {
+                    "Last command boundary (text withheld):"
+                } else {
+                    "Last ${evidence.commandTail.size} command boundaries (newest first, text withheld):"
+                }
+            )
+            evidence.commandTail.asReversed().forEachIndexed { index, record ->
+                add(
+                    "  ${index + 1}. ${record.state.name}, exit ${record.exitCode ?: "unknown"}, " +
+                        "duration ${record.durationMs ?: "unknown"} ms"
+                )
+            }
+        }
+        // Unknown and clean are different claims and are never collapsed into one line.
+        when {
+            evidence.git == null || !evidence.git.observed ->
+                add("Working tree: not observed")
+            !evidence.git.insideRepository ->
+                add("Working tree: not a git repository")
+            else -> {
+                val git = evidence.git
+                add(
+                    "Working tree: ${git.changedFiles} changed files " +
+                        "(${git.stagedFiles} staged), HEAD ${git.headShort ?: "unknown"}, " +
+                        "on a named branch: ${if (git.onNamedBranch) "yes" else "no"} (name withheld)"
+                )
+            }
+        }
+        // The delta is the answer to "what did that just do", and it is only stated when both
+        // sides of the comparison were actually observed.
+        evidence.gitSinceLastCommand.takeIf { it.comparable }?.let { delta ->
+            val files = when {
+                delta.changedFilesDelta > 0 -> "${delta.changedFilesDelta} more files changed"
+                delta.changedFilesDelta < 0 -> "${-delta.changedFilesDelta} fewer files changed"
+                else -> "no change in how many files are changed"
+            }
+            val head = if (delta.headMoved) ", and HEAD moved" else ", HEAD unchanged"
+            add("Across the most recent command: $files$head")
+        }
+        evidence.agentWork.forEach { fact ->
+            val agent = fact.agentType?.let { " ($it)" } ?: ""
+            add(
+                "${fact.profileName}: session ${fact.sessionState.name}, " +
+                    "last seen ${relativeAge(fact.lastSeenAt, now)}$agent"
+            )
+        }
+    }
+
+    /**
+     * How long ago, not when.
+     *
+     * The envelope used to carry a raw `Instant`, and the model read it back verbatim -- answers
+     * quoted "2026-08-26T12:51:17.260Z" beside a panel that said "4m ago". Same defect as the
+     * uppercase state names: the envelope is reasoned over by a model whose output a person reads,
+     * so a fact that has a readable form should travel in it. A future instant reads as "just now";
+     * clock skew is not evidence of anything.
+     */
+    fun relativeAge(then: Instant, now: Instant): String {
+        val seconds = Duration.between(then, now).seconds
+        return when {
+            seconds < 60 -> "just now"
+            seconds < 3_600 -> "${seconds / 60}m ago"
+            seconds < 86_400 -> "${seconds / 3_600}h ago"
+            else -> "${seconds / 86_400}d ago"
+        }
+    }
+
+    private fun evidenceEnvelope(
+        evidence: TerminalEvidence,
+        priorExchanges: List<TerminalAiExchange>
+    ): String = buildString {
+        appendLine("Evidence source: Verb shell integration and session records (structural metadata only).")
+        evidenceLines(evidence, Instant.now()).forEach(::appendLine)
+        if (priorExchanges.isNotEmpty()) {
+            appendLine()
+            appendLine("Earlier in this conversation (oldest first):")
+            priorExchanges.forEach { exchange ->
+                appendLine("Q: ${exchange.question}")
+                appendLine("A: ${exchange.answer.take(600)}")
+            }
+        }
+        appendLine()
+    }
+
+    private suspend fun respond(service: AiAssistantService, prompt: String): String =
+        service.respond(
             AiAssistantRequest(
                 prompt = prompt,
                 systemInstruction = TERMINAL_SYSTEM_INSTRUCTION
             )
-        )
-        return response.text
-    }
-
+        ).text
 }

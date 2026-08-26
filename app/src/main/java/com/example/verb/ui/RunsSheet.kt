@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -33,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -45,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.verb.terminal.CommandExecutionRecord
 import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.TerminalRuntimeAdapter
+import com.example.verb.ui.theme.VerbStatus
 
 /**
  * Read-only "Command Runs" sheet: a bounded, session-local, non-persistent list of completed
@@ -73,14 +78,21 @@ fun RunsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = Color(0xFF12141C),
-        contentColor = Color(0xFFE2E8F0),
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         modifier = Modifier.testTag("terminal_runs_sheet")
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.85f)
+                // A maximum fraction, not an exact height, with the system insets consumed here
+                // and only the run list allowed to grow -- the same repair the diagnostics sheet
+                // needed first: a fixed 0.85 of the full container laid the privacy footer out
+                // underneath the navigation bars on gesture-nav devices, where nothing could
+                // scroll it into view.
+                .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.85f)
+                .navigationBarsPadding()
+                .imePadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
             Row(
@@ -92,7 +104,7 @@ fun RunsSheet(
                     Icon(
                         imageVector = Icons.Default.History,
                         contentDescription = null,
-                        tint = Color(0xFF6366F1),
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -100,14 +112,14 @@ fun RunsSheet(
                         text = "Command Runs",
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 IconButton(onClick = onDismiss, modifier = Modifier.testTag("btn_close_runs")) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close",
-                        tint = Color(0xFF94A3B8)
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -136,7 +148,7 @@ fun RunsSheet(
             Text(
                 text = "Local terminal activity. Nothing is sent to AI.",
                 fontSize = 11.sp,
-                color = Color(0xFF64748B),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("runs_privacy_footer")
             )
         }
@@ -148,7 +160,7 @@ private fun EmptyRunsMessage(text: String, testTag: String) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text(
             text = text,
-            color = Color(0xFF64748B),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 13.sp,
             modifier = Modifier.testTag(testTag)
         )
@@ -159,14 +171,14 @@ private fun EmptyRunsMessage(text: String, testTag: String) {
 private fun RunRow(record: CommandExecutionRecord) {
     val commandLabel = record.commandText.ifBlank { "Command run" }
     val (icon, iconTint, statusLabel) = when (record.state) {
-        CommandLifecycleState.COMPLETED -> Triple(Icons.Default.CheckCircle, Color(0xFF22C55E), formatDuration(record.durationMs))
+        CommandLifecycleState.COMPLETED -> Triple(Icons.Default.CheckCircle, VerbStatus.confirmed, formatDuration(record.durationMs))
         CommandLifecycleState.FAILED -> Triple(
             Icons.Default.Error,
-            Color(0xFFEF4444),
+            MaterialTheme.colorScheme.error,
             "Failed · exit ${record.exitCode ?: "?"} · ${formatDuration(record.durationMs)}"
         )
-        CommandLifecycleState.ABANDONED -> Triple(Icons.Default.Warning, Color(0xFFEAB308), "Interrupted")
-        CommandLifecycleState.RUNNING -> Triple(Icons.Default.CheckCircle, Color(0xFF94A3B8), "") // not published to history; unreachable in practice
+        CommandLifecycleState.ABANDONED -> Triple(Icons.Default.Warning, VerbStatus.recoverable, "Interrupted")
+        CommandLifecycleState.RUNNING -> Triple(Icons.Default.CheckCircle, VerbStatus.caveat, "") // not published to history; unreachable in practice
     }
     val rowDescription = "$commandLabel. ${describeStateForAccessibility(record)}"
 
@@ -191,7 +203,7 @@ private fun RunRow(record: CommandExecutionRecord) {
             text = commandLabel,
             fontFamily = FontFamily.Monospace,
             fontSize = 13.sp,
-            color = Color(0xFFE2E8F0),
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)

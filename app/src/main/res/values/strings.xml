@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Verb</string>
+    <string name="terminal_hold_notification_title">Terminal session running</string>
+    <string name="terminal_hold_notification_text">Commands and agents keep running while Verb is in the background. Tap to return.</string>
 </resources>

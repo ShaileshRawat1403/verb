@@ -1,6 +1,7 @@
 package com.example.verb.ui
 
 import com.example.verb.session.VerbSessionState
+import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.TerminalSessionState
 
 /**
@@ -94,4 +95,31 @@ object VerbStatusVocabulary {
     /** What a screen reader announces for an agent's session status. */
     fun sessionDescription(agentName: String, state: VerbSessionState?): String =
         "$agentName session ${sessionWord(state)}"
+
+    /**
+     * The glyph for one command boundary the shell reported.
+     *
+     * `◐` is absent for the same reason it is absent from [processGlyph]: "recoverable" is a claim
+     * about an agent conversation, and a finished command cannot make it.
+     */
+    fun commandGlyph(state: CommandLifecycleState): String = when (state) {
+        CommandLifecycleState.RUNNING -> "●"
+        CommandLifecycleState.COMPLETED -> "○"
+        CommandLifecycleState.FAILED -> "✕"
+        CommandLifecycleState.ABANDONED -> "◌"
+    }
+
+    /**
+     * The plain word beside [commandGlyph].
+     *
+     * `ABANDONED` reads as "never finished" rather than "abandoned": the record says no exit code
+     * was ever observed, which is a statement about what Verb knows, not about what the command
+     * did. Calling it "failed" would be the inference-as-fact mistake the contract forbids.
+     */
+    fun commandWord(state: CommandLifecycleState): String = when (state) {
+        CommandLifecycleState.RUNNING -> "running"
+        CommandLifecycleState.COMPLETED -> "finished"
+        CommandLifecycleState.FAILED -> "failed"
+        CommandLifecycleState.ABANDONED -> "never finished"
+    }
 }

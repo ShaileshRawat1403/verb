@@ -13,6 +13,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import android.app.Activity
+import androidx.core.view.WindowCompat
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +48,7 @@ import com.example.verb.ui.VerbFirstActionRow
 import com.example.verb.ui.VerbSheet
 import com.example.verb.ui.theme.VerbTheme
 import com.example.verb.ui.verbFirstAction
+import com.example.verb.ui.AppearanceScreen
 import com.example.verb.viewmodel.VerbSurface
 import com.example.verb.viewmodel.VerbTask
 import com.example.verb.viewmodel.VerbViewModel
@@ -65,7 +70,23 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            VerbTheme {
+            // The stored choice overrides the device; SYSTEM means keep following it.
+            val themeChoice by viewModel.themeChoice.collectAsStateWithLifecycle()
+            val dark = themeChoice.resolveDark(isSystemInDarkTheme())
+
+            // The system bars draw over the app, so their icon colour has to follow the resolved
+            // theme rather than the device's. Without this, choosing Light on a dark-mode phone
+            // left white status icons on a white bar -- the clock and battery simply vanished.
+            val view = LocalView.current
+            LaunchedEffect(dark) {
+                val window = (view.context as Activity).window
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+
+            VerbTheme(darkTheme = dark) {
                 VerbAppContent(viewModel = viewModel)
             }
         }
@@ -99,8 +120,6 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val confirmationPending by viewModel.confirmationPendingResult.collectAsStateWithLifecycle()
     val semanticEntity by viewModel.activeSemanticEntity.collectAsStateWithLifecycle()
     val aiProviderSettings by viewModel.aiProviderSettings.collectAsStateWithLifecycle()
-    val assistantInput by viewModel.assistantInput.collectAsStateWithLifecycle()
-    val assistantState by viewModel.assistantState.collectAsStateWithLifecycle()
     val isKeyboardVisible by viewModel.isKeyboardVisible.collectAsStateWithLifecycle()
 
     val terminalOutput by viewModel.terminalRuntime.terminalOutput.collectAsStateWithLifecycle()
@@ -108,6 +127,10 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val terminalSessionState by viewModel.terminalRuntime.sessionState.collectAsStateWithLifecycle()
     val terminalAiExplanation by viewModel.terminalAiExplanation.collectAsStateWithLifecycle()
     val isTerminalAiExplaining by viewModel.isTerminalAiExplaining.collectAsStateWithLifecycle()
+    val terminalAiEvidence by viewModel.terminalAiEvidence.collectAsStateWithLifecycle()
+    val terminalAiThread by viewModel.terminalAiThread.collectAsStateWithLifecycle()
+    val assistantStageRequested by viewModel.assistantStageRequested.collectAsStateWithLifecycle()
+    val themeChoice by viewModel.themeChoice.collectAsStateWithLifecycle()
     val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
@@ -221,10 +244,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 onSubmitIntent = viewModel::submitIntent,
                 onOpenVerb = viewModel::openVerbSheet,
                 verbSurfaceOpen = surface != VerbSurface.None,
-                aiExplanation = terminalAiExplanation,
-                isAiExplaining = isTerminalAiExplaining,
-                onExplainOutput = viewModel::explainTerminalOutput,
-                onDismissAiExplanation = viewModel::dismissTerminalAiExplanation,
+                onOpenAssistant = viewModel::openAssistant,
                 projects = projects,
                 selectedProject = selectedProject,
                 onCreateProject = viewModel::createProject,
@@ -268,8 +288,12 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     historyList = historyList,
                     confirmationPending = confirmationPending,
                     aiProviderSettings = aiProviderSettings,
-                    assistantInput = assistantInput,
-                    assistantState = assistantState,
+                    terminalAiExplanation = terminalAiExplanation,
+                    isTerminalAiExplaining = isTerminalAiExplaining,
+                    terminalAiEvidence = terminalAiEvidence,
+                    terminalAiThread = terminalAiThread,
+                    assistantStageRequested = assistantStageRequested,
+                    themeChoice = themeChoice,
                     isKeyboardVisible = isKeyboardVisible,
                     isSessionActive = isSessionActive,
                     runtimeProfileReports = runtimeProfileReports,
@@ -349,8 +373,12 @@ private fun VerbTaskSurface(
     historyList: List<com.example.verb.model.ActionResult>,
     confirmationPending: com.example.verb.model.ActionResult?,
     aiProviderSettings: com.example.verb.ai.AiProviderSettings,
-    assistantInput: String,
-    assistantState: com.example.verb.ai.AiAssistantState,
+    terminalAiExplanation: String?,
+    isTerminalAiExplaining: Boolean,
+    terminalAiEvidence: com.example.verb.terminal.TerminalEvidence?,
+    terminalAiThread: List<com.example.verb.terminal.TerminalAiExchange>,
+    assistantStageRequested: Boolean,
+    themeChoice: com.example.verb.ui.theme.VerbThemeChoice,
     isKeyboardVisible: Boolean,
     isSessionActive: Boolean,
     runtimeProfileReports: List<com.example.verb.terminal.RuntimeProfileReport>,
@@ -410,11 +438,16 @@ private fun VerbTaskSurface(
                     onOpenTerminal = viewModel::openTerminal,
                     onInspectText = viewModel::inspectSemanticText,
                     providerSettings = aiProviderSettings,
-                    assistantPrompt = assistantInput,
-                    assistantState = assistantState,
-                    onAssistantPromptChange = viewModel::updateAssistantInput,
-                    onSubmitAssistantPrompt = viewModel::submitAssistantPrompt,
                     onOpenProviderSettings = { viewModel.openTask(VerbTask.PROVIDER) },
+                    aiExplanation = terminalAiExplanation,
+                    isAiExplaining = isTerminalAiExplaining,
+                    aiEvidence = terminalAiEvidence,
+                    aiThread = terminalAiThread,
+                    onAskVerbAi = viewModel::askTerminalAi,
+                    onExplainEvidence = viewModel::explainTerminalOutput,
+                    onClearAiThread = viewModel::clearTerminalAiThread,
+                    startOnAssistant = assistantStageRequested,
+                    onAssistantStageConsumed = viewModel::assistantStageConsumed,
                     isKeyboardVisible = isKeyboardVisible
                 )
 
@@ -432,6 +465,11 @@ private fun VerbTaskSurface(
                     agentSessions = agentSessions,
                     onResumeSession = viewModel::resumeAgentSession,
                     onStartNewSession = viewModel::startNewAgentSession
+                )
+
+                VerbTask.APPEARANCE -> AppearanceScreen(
+                    choice = themeChoice,
+                    onChoose = viewModel::setThemeChoice
                 )
 
                 else -> {

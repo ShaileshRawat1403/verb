@@ -83,7 +83,10 @@ struct EventRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RawEvent {
     schema_version: u8,
-    timestamp: String,
+    #[serde(default)]
+    timestamp: serde_json::Value,
+    // Logs written by the transitional writer used snake_case here amid camelCase siblings.
+    #[serde(alias = "session_id")]
     session_id: String,
     seq: Option<u64>,
     #[serde(rename = "type")]
@@ -309,6 +312,30 @@ fn session_record(session: &Session, project: &Path, project_key: &str) -> Sessi
     }
 }
 
+/// The envelope's event-state vocabulary is the uppercase shared set (the Android host validates
+/// exactly those four values), while legacy local logs recorded them lowercase. Normalized here,
+/// at the only place an event leaves this host.
+fn envelope_event_state(raw: Option<String>, resolved: Option<String>) -> Option<String> {
+    raw.or(resolved).map(|value| value.to_ascii_uppercase())
+}
+
+/// New event logs carry ISO-8601 timestamps; logs written before the shared timestamp format
+/// used epoch milliseconds (the reader in `context.rs` has always taken both). The envelope's
+/// `recorded_at` is a string, so legacy numbers are normalized on the way out instead of failing
+/// the whole export.
+fn normalized_timestamp(raw: serde_json::Value, position: usize) -> Result<String, String> {
+    match raw {
+        serde_json::Value::String(text) => Ok(text),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(|millis| iso8601(u128::from(millis)))
+            .ok_or_else(|| format!("structural event {position} has an unusable timestamp")),
+        _ => Err(format!(
+            "structural event {position} has an unusable timestamp"
+        )),
+    }
+}
+
 fn export_events(project: &Path, session: &Session) -> Result<Vec<EventRecord>, String> {
     let path = event_log_path(project, &session.id)?;
     let contents = match fs::read_to_string(path) {
@@ -349,14 +376,14 @@ fn export_events(project: &Path, session: &Session) -> Result<Vec<EventRecord>, 
             session_id: raw.session_id,
             seq: raw.seq.unwrap_or(index as u64 + 1),
             event_type: raw.event_type,
-            recorded_at: raw.timestamp,
+            recorded_at: normalized_timestamp(raw.timestamp, index + 1)?,
             exit_code: raw.exit_code,
             command_id: raw.command_id.filter(|value| valid_opaque(value, 128)),
             cwd_relative: raw
                 .cwd
                 .as_deref()
                 .and_then(|cwd| relative_path(project, Path::new(cwd))),
-            state: raw.state.or(raw.resolved_state),
+            state: envelope_event_state(raw.state, raw.resolved_state),
             tool: raw.tool.filter(|value| valid_display(value, 128)),
             source,
         });
@@ -779,5 +806,52 @@ mod tests {
         assert!(crate::valid_resume_identity("abc-123:turn").is_some());
         assert!(crate::valid_resume_identity("--resume").is_none());
         assert!(crate::valid_resume_identity("x;touch-pwned").is_none());
+    }
+
+    #[test]
+    fn legacy_millisecond_timestamps_normalize_into_the_envelope() {
+        let normalized = normalized_timestamp(
+            serde_json::from_str("1787392941473").unwrap(),
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            normalized,
+            crate::iso8601(1_787_392_941_473),
+            "a legacy integer timestamp must export as the same instant iso8601 produces"
+        );
+        assert!(normalized.ends_with('Z'));
+    }
+
+    #[test]
+    fn string_timestamps_pass_through_untouched() {
+        let raw = serde_json::Value::String("2026-08-22T10:02:55Z".to_owned());
+        assert_eq!(
+            normalized_timestamp(raw, 1).unwrap(),
+            "2026-08-22T10:02:55Z"
+        );
+    }
+
+    #[test]
+    fn unusable_timestamps_name_the_offending_event() {
+        let raw = serde_json::Value::Bool(true);
+        assert_eq!(
+            normalized_timestamp(raw, 7).unwrap_err(),
+            "structural event 7 has an unusable timestamp"
+        );
+    }
+
+    #[test]
+    fn event_states_leave_the_host_in_the_uppercase_shared_vocabulary() {
+        assert_eq!(
+            envelope_event_state(Some("recoverable".to_owned()), None),
+            Some("RECOVERABLE".to_owned())
+        );
+        assert_eq!(
+            envelope_event_state(None, Some("ended".to_owned())),
+            Some("ENDED".to_owned()),
+            "the resolved state is the fallback"
+        );
+        assert_eq!(envelope_event_state(None, None), None);
     }
 }

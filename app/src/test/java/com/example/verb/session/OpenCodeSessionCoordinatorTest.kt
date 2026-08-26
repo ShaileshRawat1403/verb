@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.verb.project.VerbProject
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -24,6 +25,7 @@ import java.time.Instant
  * still one state machine. Only the evidence lookup differs, and here it is a SQLite database.
  */
 @RunWith(RobolectricTestRunner::class)
+@OptIn(ExperimentalCoroutinesApi::class)
 class OpenCodeSessionCoordinatorTest {
 
     @get:Rule

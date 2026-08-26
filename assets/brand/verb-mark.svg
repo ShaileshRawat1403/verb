@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" role="img" aria-label="Verb mark">
+  <title>Verb</title>
+  <!-- The mark alone, for places too small for the word: prompt-as-V, plus the cursor. -->
+  <rect width="108" height="108" rx="24" fill="#121318"/>
+  <g fill="none" stroke="#6366F1" stroke-width="9" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M30 36 L48 64 L66 36" />
+  </g>
+  <rect x="60" y="66" width="18" height="8" fill="#38BDF8"/>
+</svg>

@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
@@ -158,9 +159,14 @@ fun AgentRuntimeCard(
 
 @Composable
 private fun FileChoiceRow(label: String, selectedName: String?, onPick: () -> Unit) {
+    // The button keeps clear of the row's right edge: that strip is exactly where the scrolling
+    // thumb rests, and a full-width row put Choose under it, so scrolling the page opened the
+    // system file picker by accident. The reservation is wider than any thumb and cheaper than
+    // restacking the three rows, which pushed the import actions off small viewports.
     Row(
-        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp, end = 56.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Text("$label: ${selectedName ?: "not selected"}", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
         OutlinedButton(onClick = onPick) { Text("Choose") }

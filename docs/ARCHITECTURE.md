@@ -59,8 +59,19 @@ credential-free Git remote identity when available and otherwise remains unresol
 
 Verb is not a model provider. The existing Android explanation path sends only structural command
 lifecycle facts—state, exit code, duration and whether cwd was observed—to the configured provider.
-It has no raw-terminal or command-text parameter. The proposed M2 slice remains read-only,
-provider-neutral and evidence-linked; it is not implemented without product approval.
+It has no raw-terminal or command-text parameter. The M2 assistant remains read-only,
+provider-neutral and evidence-linked; its bounded envelope also includes recent command lifecycle
+facts, shell-integration state and agent-session facts, never command text, paths or PTY output.
+
+`TerminalEvidence` is the envelope, and it is a structured type on purpose: every field is a fact
+Verb observed itself, so no caller can widen the boundary by handing it a formatted string. One
+snapshot feeds both directions — `TerminalAiHelper.evidenceLines` renders it for the provider in the
+contract's vocabulary, `ui/AssistEvidence` renders the same snapshot for the person in plain
+language — so what the user is shown as "what the model saw" cannot drift from what was sent.
+
+There is exactly one surface where a model answers (`ui/AssistPanel`), reachable from Ask Verb and
+from the terminal. A second ask box that attached no context existed until 26 August; two boxes
+answering the same question differently is the ambiguity `AskVerbScreen` was built to remove.
 
 ## Verification
 

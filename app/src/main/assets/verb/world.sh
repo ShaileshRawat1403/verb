@@ -32,12 +32,45 @@ APP_DIR="$(cd "$HOME_DIR/../.." && pwd)"
 # entries beside the files it rewrites. Both are unstat-able through the proot mount, and both are
 # recreated by the tools that made them -- excluding them loses nothing, while failing on them would
 # make every export impossible. Everything *else* that cannot be read still refuses to archive.
+#
+# The symlink exclusions below were found by running the round-trip on a device: the export happily
+# wrote an archive that `verb import` then refused, because import rejects any member that is not a
+# regular file or a directory. That refusal is right -- a symlink in an archive is a path-traversal
+# waiting to happen -- so the export has to stop producing them.
+#
+# Two sources, both derived state that the tools regenerate:
+#
+#   * `.codex/tmp/arg0/*` -- Codex's arg0 shims. Note `tmp`, not `.tmp`: the existing rule above
+#     missed them by a single dot, which is why a Codex user's archive was unrestorable.
+#   * `node_modules/.bin/*` -- npm's executable shims, under `.config/opencode` and anywhere else
+#     a tool vendors its dependencies. Nothing about a user's world lives in them.
 WORLD_EXCLUDES=(
   "--exclude=*/.tmp"
   "--exclude=*/.tmp/*"
   "--exclude=.l2s.*"
   "--exclude=*/.l2s.*"
+  "--exclude=*/.codex/tmp"
+  "--exclude=*/.codex/tmp/*"
+  "--exclude=.codex/tmp"
+  "--exclude=.codex/tmp/*"
+  "--exclude=*/node_modules/.bin"
+  "--exclude=*/node_modules/.bin/*"
 )
+
+# What `stage_payload` will accept on the way back in. Kept beside the excludes because the two have
+# to agree: an export that writes what import refuses is not a backup, it is a file.
+assert_payload_restorable() {
+  local payload=$1 listing bad
+  listing=$(tar -tvzf "$payload" 2>/dev/null | cut -c1 | sort -u | tr -d '\n')
+  bad=$(printf '%s' "$listing" | tr -d 'd-')
+  if [ -n "$bad" ]; then
+    echo "verb: the archive would contain a link or special file, which restore refuses." >&2
+    echo "  Entry types found: $listing" >&2
+    echo "  This is a bug in Verb's own exclusions, not something you did." >&2
+    return 1
+  fi
+  return 0
+}
 
 WORLD_PATHS=(
   "files/home/.env"
@@ -176,6 +209,12 @@ cmd_export() {
     echo "  A partial archive is worse than none: it looks like a backup." >&2
     exit 1
   fi
+  # Refuse to write an archive this build's own importer would reject. Checked here rather than
+  # trusted, because the exclusions above are a list of things somebody remembered.
+  if ! assert_payload_restorable "$work/payload.tgz"; then
+    exit 1
+  fi
+
   local payload_sum
   payload_sum=$(sha256sum "$work/payload.tgz" | cut -d' ' -f1)
   write_manifest "$work/manifest.json" "$payload_sum"

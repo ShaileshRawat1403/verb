@@ -100,7 +100,9 @@ is also reachable from the CLI.
 
 ## M2 — Contextual Verb Assistant
 
-**Status: not started. Its groundwork exists.**
+**Status: beta surface implemented and device-accepted (26 August).** The user can ask their own question about their work, Verb attaches exactly its
+evidence envelope, keeps a bounded recent thread, and every answer names the evidence it used and
+renders beside it.
 
 `verb context` (`desktop/src/context.rs`) assembles what Verb knows about a moment -- project and
 Git state read at the time of asking, the session record, the tail of the structural event log --
@@ -128,7 +130,10 @@ The model is replaceable. The context system is Verb. Anything that makes a spec
 load-bearing violates the constitutional constraint in `docs/PRODUCT_VISION.md`.
 
 **Exit condition:** a user can ask a question about their own work without restating context Verb
-already holds, and every answer can name the evidence it came from.
+already holds, and every answer can name the evidence it came from. The implementation satisfies
+this condition, verified on a physical device on 26 August: a question about a real failed command
+was answered from the envelope alone, and the evidence panel beneath the answer carried the same
+facts in plain language. One assistant serves both entry points — Ask Verb and the terminal.
 
 ---
 

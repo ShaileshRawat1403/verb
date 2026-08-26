@@ -46,10 +46,15 @@ it true. Automated, emulator and physical-device results remain separate.
 - [x] A real encrypted schema-v1 Working World previews and applies through the current v2 reader,
   preserves allowlisted agent/session state across an in-place non-debuggable upgrade, and does not
   claim to contain project source.
-- [ ] A newly exported schema-v2 Working World completes its own physical export/preview/apply
-  round-trip.
-- [ ] Android → desktop → Android `.vcont` export/preview/apply works through the real file pickers;
+- [x] A newly exported schema-v2 Working World completes its own physical export/preview/apply
+  round-trip. Completed 26 August on the Vivo I2202 — and it failed the first time, which is why
+  this box was worth having: `verb export` wrote an archive `verb import` refused. See
+  `docs/WORKING_WORLD.md`, "The export that its own importer refused".
+- [x] Android → desktop → Android `.vcont` export/preview/apply works through the real file pickers;
   imported state remains dated, read-only evidence and never creates a Resume action by itself.
+  Completed 26 August on the Vivo I2202, both directions — see `docs/BACKLOG.md` G2. The round-trip
+  found and fixed two desktop defects on the way (`a37bc7c`), which is the evidence that it really
+  ran rather than being asserted.
 - [x] OpenCode 1.18.21 installs, launches its real TUI and exits to the shell physically; recovery
   is clearly labelled unverified/experimental.
 

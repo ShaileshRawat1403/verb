@@ -42,12 +42,51 @@ class TermuxTerminalRuntimeAdapter(
         // first layout NPEs in TerminalView.updateSize(). Width is 0 here so updateSize() no-ops
         // safely; the size is applied once the view is measured.
         if (view.mRenderer == null) {
-            val textSize = android.util.TypedValue.applyDimension(
-                android.util.TypedValue.COMPLEX_UNIT_DIP, 9f, view.context.resources.displayMetrics
-            ).toInt()
-            view.setTextSize(textSize)
+            minTextSizePx = dpToPx(MIN_TEXT_SIZE_DP, view)
+            maxTextSizePx = dpToPx(MAX_TEXT_SIZE_DP, view)
+            // Coerce the loaded value into range before it becomes the base, so an accumulated
+            // scale of exactly 1 always maps to the size currently on screen.
+            baseTextSizePx = loadPersistedTextSizePx(view).coerceIn(minTextSizePx, maxTextSizePx)
+            appliedTextSizePx = baseTextSizePx
+            view.setTextSize(baseTextSizePx)
         }
         session?.let { view.attachSession(it) }
+    }
+
+    /**
+     * Font size actually applied to the mounted [TerminalView], in pixels. Vendored
+     * `TerminalView.setTextSize(int)` takes pixels despite its javadoc claiming dp
+     * (`TerminalRenderer` feeds it straight into `TextPaint.setTextSize`), so everything here is
+     * px end to end.
+     */
+    var appliedTextSizePx: Int? = null
+        private set
+
+    private var baseTextSizePx = 0
+    private var minTextSizePx = 0
+    private var maxTextSizePx = 0
+
+    private fun loadPersistedTextSizePx(view: TerminalView): Int {
+        val prefs = view.context.applicationContext.getSharedPreferences(
+            TEXT_SIZE_PREFERENCES, Context.MODE_PRIVATE
+        )
+        val stored = prefs.getInt(TEXT_SIZE_PX_KEY, -1)
+        return if (stored > 0) stored else dpToPx(DEFAULT_TEXT_SIZE_DP, view)
+    }
+
+    private fun dpToPx(dp: Float, view: TerminalView): Int =
+        android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_DIP, dp, view.context.resources.displayMetrics
+        ).toInt()
+
+    private val textSizePersistHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val textSizePersistRunnable = Runnable {
+        val size = appliedTextSizePx ?: return@Runnable
+        terminalView?.context?.applicationContext
+            ?.getSharedPreferences(TEXT_SIZE_PREFERENCES, Context.MODE_PRIVATE)
+            ?.edit()
+            ?.putInt(TEXT_SIZE_PX_KEY, size)
+            ?.apply()
     }
 
     private val _sessionState = MutableStateFlow<TerminalSessionState>(TerminalSessionState.STARTING)
@@ -384,6 +423,12 @@ class TermuxTerminalRuntimeAdapter(
         const val TAG = "VerbTerminal"
         const val OUTPUT_THROTTLE_MS = 120L
         const val METRICS_WINDOW_MS = 5_000L
+        const val DEFAULT_TEXT_SIZE_DP = 9f
+        const val MIN_TEXT_SIZE_DP = 6f
+        const val MAX_TEXT_SIZE_DP = 20f
+        const val TEXT_SIZE_PREFERENCES = "verb_terminal_display"
+        const val TEXT_SIZE_PX_KEY = "text_size_px"
+        const val TEXT_SIZE_PERSIST_DELAY_MS = 500L
     }
 
     // TerminalSessionClient callbacks
@@ -553,9 +598,40 @@ class TermuxTerminalRuntimeAdapter(
     override fun getTerminalCursorStyle(): Int = 0
 
     // TerminalViewClient callbacks
-    override fun onScale(scale: Float): Float = scale
+
+    /**
+     * Pinch zoom. `scale` is the accumulated factor since the view was created (the vendored view
+     * multiplies it in and feeds us the running total), so the applied size is always
+     * `baseTextSizePx * scale` -- consistent across recreations because the base itself is loaded
+     * from storage at bind time. The clamped ratio is returned so the view's accumulated factor
+     * tracks what is actually displayed rather than drifting past the clamp.
+     */
+    override fun onScale(scale: Float): Float {
+        val base = baseTextSizePx
+        if (base <= 0) return scale
+        val newPx = (base * scale).toInt().coerceIn(minTextSizePx, maxTextSizePx)
+        if (newPx != appliedTextSizePx) {
+            appliedTextSizePx = newPx
+            terminalView?.setTextSize(newPx)
+            // A pinch delivers a callback per gesture frame; debounce the write so one gesture
+            // costs one persist instead of sixty.
+            textSizePersistHandler.removeCallbacks(textSizePersistRunnable)
+            textSizePersistHandler.postDelayed(textSizePersistRunnable, TEXT_SIZE_PERSIST_DELAY_MS)
+        }
+        return newPx.toFloat() / base
+    }
+
+    /**
+     * Set by the terminal screen: a confirmed single tap on the canvas should move input focus to
+     * the command field and raise the IME. It rides the view's own gesture recognizer because the
+     * recognizer is what already separates taps from scrolls, flings, pinches and long-press
+     * selection -- a Compose-side watcher cannot make that call, since an interop view that claims
+     * the touch stream is never offered the release that would confirm a tap.
+     */
+    var onCanvasTap: (() -> Unit)? = null
 
     override fun onSingleTapUp(e: MotionEvent) {
+        onCanvasTap?.invoke()
         val view = terminalView ?: return
         val columnAndRow = view.getColumnAndRow(e, true)
         val column = columnAndRow[0]

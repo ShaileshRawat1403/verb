@@ -1,4 +1,4 @@
-# Verb 0.1.0-beta.1 — developer preview
+# Verb 0.1.0-beta.2 — developer preview
 
 This is an evidence-gathering preview, not a claim that Verb is finished. It is intended for people
 comfortable using a terminal who want Claude Code, Codex or OpenCode hosted inside a more

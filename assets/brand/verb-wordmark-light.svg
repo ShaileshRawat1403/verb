@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 140" role="img" aria-label="Verb">
+  <title>Verb</title>
+  <!-- Same mark, retuned for a light surface: the indigo darkens so it survives on white. -->
+  <g fill="none" stroke="#4F46E5" stroke-width="17" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M34 38 L74 96 L114 38" />
+  </g>
+  <text x="132" y="97"
+        font-family="'JetBrains Mono','SFMono-Regular',Menlo,Consolas,'Liberation Mono',monospace"
+        font-size="76" font-weight="700" letter-spacing="-1" fill="#0F172A">erb</text>
+  <rect x="352" y="72" width="34" height="24" fill="#0284C7"/>
+</svg>

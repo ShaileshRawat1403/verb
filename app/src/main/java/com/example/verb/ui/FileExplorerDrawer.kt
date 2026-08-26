@@ -58,6 +58,7 @@ import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.VerbGuestPaths
 import java.io.File
 import java.util.Locale
+import com.example.verb.ui.theme.VerbStatus
 
 private val DirBlue = Color(0xFF3B82F6)
 private val CodeGreen = Color(0xFF34D399)
@@ -72,7 +73,6 @@ private val ArchiveAmber = Color(0xFFF59E0B)
 @Composable
 fun FileExplorerDrawer(
     terminalRuntime: TerminalRuntimeAdapter?,
-    isDark: Boolean,
     onFileClicked: (String) -> Unit
 ) {
     val launchDir = terminalRuntime?.launchWorkingDirectory
@@ -104,11 +104,11 @@ fun FileExplorerDrawer(
     var error by remember { mutableStateOf<String?>(null) }
     var copiedPath by remember { mutableStateOf<String?>(null) }
 
-    val textPrimary = if (isDark) Color(0xFFE2E8F0) else Color(0xFF0F172A)
-    val textSecondary = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
-    val headerBg = if (isDark) Color(0xFF161820) else Color(0xFFE2E8F0)
-    val rowHoverBg = if (isDark) Color(0xFF1B1E26) else Color(0xFFF1F5F9)
-    val chipBg = if (isDark) Color(0xFF222630) else Color(0xFFE2E8F0)
+    val textPrimary = MaterialTheme.colorScheme.onSurface
+    val textSecondary = MaterialTheme.colorScheme.onSurfaceVariant
+    val headerBg = MaterialTheme.colorScheme.surface
+    val rowHoverBg = MaterialTheme.colorScheme.surfaceVariant
+    val chipBg = MaterialTheme.colorScheme.surfaceVariant
 
     LaunchedEffect(currentDir) {
         val list = currentDir.listFiles()
@@ -247,7 +247,7 @@ fun FileExplorerDrawer(
             }
         }
 
-        HorizontalDivider(color = if (isDark) Color(0xFF333333) else Color(0xFFCCCCCC))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         copiedPath?.let { path ->
             Text(
@@ -269,7 +269,6 @@ fun FileExplorerDrawer(
                 items(files, key = { it.absolutePath }) { file ->
                     FileRow(
                         file = file,
-                        isDark = isDark,
                         textPrimary = textPrimary,
                         textSecondary = textSecondary,
                         hoverBg = rowHoverBg,
@@ -292,7 +291,6 @@ fun FileExplorerDrawer(
 @Composable
 private fun FileRow(
     file: File,
-    isDark: Boolean,
     textPrimary: Color,
     textSecondary: Color,
     hoverBg: Color,
@@ -339,7 +337,7 @@ private fun FileRow(
             )
         }
     }
-    HorizontalDivider(color = if (isDark) Color(0xFF262A33) else Color(0xFFEEF2F7))
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
@@ -380,6 +378,7 @@ private fun fileIcon(file: File, isDir: Boolean): ImageVector = when {
     }
 }
 
+@Composable
 private fun fileTint(file: File): Color = when (file.extension.lowercase(Locale.US)) {
     "jpg", "jpeg", "png", "gif", "webp", "heic", "svg", "bmp",
     "mp3", "wav", "ogg", "flac", "m4a", "aac",
@@ -387,7 +386,7 @@ private fun fileTint(file: File): Color = when (file.extension.lowercase(Locale.
     "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "deb", "tgz" -> ArchiveAmber
     "kt", "java", "py", "sh", "rs", "c", "cpp", "h", "hpp", "js", "ts", "json",
     "yaml", "yml", "toml", "xml", "html", "css", "go", "swift", "gradle", "kts" -> CodeGreen
-    else -> Color(0xFF94A3B8)
+    else -> VerbStatus.caveat
 }
 
 private fun displayPath(file: File, prefixDir: File?, homeDir: File?): String {

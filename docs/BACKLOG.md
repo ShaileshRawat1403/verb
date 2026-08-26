@@ -3,9 +3,10 @@
 Everything known to be undone, and what it costs to say yes. The current sprint is at the top; the
 rest is a menu, not a plan.
 
-Milestone definitions live in `docs/ROADMAP.md`. M2 remains deliberately undecided. Anything
-proposed here must first pass the admission test in `docs/UX_FOUNDATION.md`: does it make an existing
-development moment easier, clearer or safer, or does it merely add another capability?
+Milestone definitions live in `docs/ROADMAP.md`. M2 is now defined by the evidence-bound assistant
+surface recorded below. Anything proposed beyond it must first pass the admission test in
+`docs/UX_FOUNDATION.md`: does it make an existing development moment easier, clearer or safer, or
+does it merely add another capability?
 
 ---
 
@@ -13,15 +14,169 @@ development moment easier, clearer or safer, or does it merely add another capab
 
 | # | Item | Status |
 | --- | --- | --- |
-| 1 | Replace Android subsystem tabs with one terminal workspace and searchable named tasks | implemented; automated tests pass; physical acceptance pending |
-| 2 | Ensure a Verb overlay takes keyboard/back ownership from the mounted terminal | implemented with regression coverage; physical acceptance pending |
+| 1 | Replace Android subsystem tabs with one terminal workspace and searchable named tasks | done — physically accepted 26 Aug |
+| 2 | Ensure a Verb overlay takes keyboard/back ownership from the mounted terminal | done — physically accepted 26 Aug |
 | 3 | Public-source license, security policy and release checklist | done |
-| 4 | Complete desktop and both-flavor Android verification on the return revision | in progress |
-| 5 | Physical Android workspace, Claude/Codex and Android↔desktop continuity acceptance | pending primary device |
+| 4 | Complete desktop and both-flavor Android verification on the return revision | done — 26 Aug |
+| 5 | Physical Android workspace, Claude/Codex and Android↔desktop continuity acceptance | done — Claude/Codex resume 22 Aug; workspace and continuity round-trip 26 Aug |
 | 6 | Integrate into the primary full-history repository and audit the final release archive | pending primary machine |
 
-M2 remains frozen during this pass. The optional provider interpretation screen is not the proposed
-evidence-linked M2 layer and makes no execution or terminal-observation claim.
+### What was proven on 26 August
+
+Both flavors verified on the Vivo I2202: `fullCliDevice` (daily-driver, updated in place) and — for
+the first time — `playDevice`, built, installed and booted into its own sandbox. On desktop, 117
+Rust tests pass, the release binary builds, and `verb context` renders live evidence. The terminal
+workspace was re-accepted by driving the real app over adb: tap opens the IME, back hides it,
+scrolling and flinging keep it hidden, back again leaves the workspace, and a pinched font size
+survives a full process stop.
+
+The Android↔desktop continuity round-trip (G2) completed in both directions: the phone exported a
+`.vcont` to Downloads, the desktop imported it preview-first then applied, the desktop exported its
+own envelope including that imported evidence, and the phone previewed and applied it as read-only
+evidence ("1 imported session record", no local session or Resume action changed). The round-trip
+caught two real desktop defects — `verb continuity export` crashed on legacy event logs (integer
+millis timestamps, a snake_case `session_id`) and wrote lowercase event states the Android host
+correctly rejects — both fixed with regression tests.
+
+The optional provider interpretation screen was rejected, and has now been removed rather than
+merely marked so — it shipped for a further pass after this line was written, which is how a doc
+stops being evidence. Ask Verb's second stage is the evidence-linked assistant described in the
+completion pass below, the same one the terminal opens. It makes no execution or
+terminal-observation claim.
+
+## Completed sprint — Mobile touch and layout
+
+> **A person can read the terminal with their finger on it: scroll, select and zoom stay gestures,
+> typing stays one tap away, and every control survives the soft keyboard.**
+
+All items below are verified on the Vivo I2202 (Android 14) production `device` build; details and
+the hard-won constraints behind them live in `docs/HANDOFF_MOBILE_UX_SLICE.md`.
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Scrolling no longer opens the IME — gesture verdicts come from the Termux recognizer, not a Compose watcher | Done — device-verified |
+| 2 | Dock collapses animated under the keyboard; canvas keeps a 96dp floor | Done — device-verified |
+| 3 | Essential key row always visible; edge fades drawn transparent-at-edge (DstIn gradient clamp trap) | Done — device-verified |
+| 4 | Command field is a compact 42dp `BasicTextField` with preserved focus ring and test tag | Done — device-verified |
+| 5 | Tap-to-focus rides the view's own `onSingleTapUp` (`TermuxTerminalRuntimeAdapter.onCanvasTap`) | Done — device-verified |
+| 6 | Restarting a live session asks first; restarting a dead one is immediate | Done — device-verified |
+| 7 | `RunsSheet` consumes navigation-bar insets | Done — device-verified |
+| 8 | AI sheet scrolls, key rows fade at edges, keys tick haptically, overflow is a 48dp target | Done — device-verified |
+| 9 | Output auto-follow scoped to the Compose fallback view only; diagnostics log follows only while read near the bottom | Done — device-verified |
+
+This also closes NEXT_SPRINT's "same layout pattern exists elsewhere" carry-over: Runs was the last
+fraction-height sheet — SemanticLens, Verb, Project and FileExplorer sheets were audited clean.
+
+Still open from this slice: landscape layout (deliberately deferred — the terminal workspace is a
+portrait-first surface).
+
+## Added to beta — 26 August, second pass
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Theme follows the system dark setting (the light scheme was dead code) | Done — verified on device in both modes; the terminal workspace keeps a dark canvas by design |
+| 2 | Agent Runtime file pickers clear of the scroll thumb (NEXT_SPRINT carry-over, cosmetic) | Done — the Choose buttons reserve the thumb strip instead of sitting under it |
+| 3 | **M2 vertical slice** — ask your own question about the terminal moment | Done — device-verified |
+| 4 | E1 — foreground service holds the process while a session is live | Done — service verified foreground on device |
+
+The M2 slice is the roadmap's first M2 increment: the user asks their own question about this
+terminal moment, Verb attaches exactly its evidence envelope (structural facts only — never command
+text, paths or PTY output), the prompt requires the answer to name the facts it used, and the same
+evidence renders as a "Based on" block beside every answer. The model stays replaceable; the
+context is Verb. What the sheet shows as "what the model saw" is snapshotted before the request, so
+it cannot drift from what was sent.
+
+The E1 foreground service lowers the probability of a background kill and is not immunity: it owns
+nothing, follows the session (RUNNING holds the claim, a finished session releases it), and a
+force-stop still ends everything — exactly as `docs/DURABLE_SESSION.md` promised.
+
+## M2 beta completion pass — 26 August, third pass
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Enriched structural context: session, shell integration, command-boundary tail and agent facts | Implemented — privacy/unit tests pass |
+| 2 | Bounded follow-up thread: last five exchanges retained, last three sent to the provider | Implemented — unit-tested |
+| 3 | Evidence-linked answer rendering with small markdown support | Implemented — unit-tested |
+| 4 | Provider boundary remains free of command text, paths and PTY output | Implemented — regression-tested |
+| 5 | The panel reads the envelope back in plain language, from the same snapshot | Implemented — unit-tested |
+| 6 | Asking opens without spending a provider call; the thread survives an accidental dismissal | Implemented — Compose-tested |
+| 7 | One assistant: Ask Verb's second stage is the same evidence-bound panel the terminal opens | Implemented — Compose-tested |
+| 8 | Physical-device acceptance of the follow-up flow | Done — Vivo I2202, 26 August |
+
+Review of the first draft of this pass found four defects the unit tests could not see, all fixed
+here and all now covered:
+
+- The envelope labelled the command tail "oldest first" and rendered it newest first. The model was
+  handed a false claim about which command ran last — the exact `Inference ≠ Fact` failure this
+  surface exists to prevent.
+- `TerminalEvidence` accepted pre-formatted agent lines from its caller, which is a free-text hole
+  through the privacy boundary the type exists to be. It now takes `AgentWorkFact` fields.
+- The unprompted-explanation path published no evidence snapshot, so an answer could be displayed
+  beside evidence belonging to an earlier question.
+- The newest answer was drawn twice: once as the thread's tail and once as the standing explanation.
+
+Two UX rules were also being broken by the new surface. The panel showed the contract's vocabulary
+(`RUNNING`, `LIVE`, `FAILED`) directly on screen, against the plain-language rule in
+`docs/UX_FOUNDATION.md`; it now reads back through `VerbStatusVocabulary`. And the only way in was
+an overflow item that fired a canned analysis, so a person could not reach the question box without
+first paying for an answer they had not asked for.
+
+An earlier draft of this section recorded "this shell has no Java runtime or `adb`" as a blocker;
+that was wrong — both exist, off `PATH`. No execution authority or transcript transport was added by
+this pass.
+
+### Physical acceptance, Vivo I2202, 26 August
+
+Asked "Why did my last command fail" after a real `ls /definitely-not-here`. The answer said *exit
+code 2, ran for 35 ms* and the panel beneath it read `✕ failed · exit 2 · 35ms` — the same fact in
+two vocabularies from one snapshot, which is the whole claim this surface makes. The model stated
+plainly that it had not been given the command text. The thread, the follow-up placeholder, `Clear`,
+and the unprompted-explanation path were all exercised in both hosts.
+
+Four further defects surfaced only on the device and are fixed:
+
+- The terminal's sheet opened itself whenever the shared assistant state filled, so asking from Ask
+  Verb slid the terminal sheet up over that screen with the same conversation inside. It is now
+  shown only when the user opened it there.
+- The evidence panel read "Last 1 commands".
+- Ask Verb stated the provider boundary and the panel stated it again underneath.
+- The model answered in the contract's uppercase spellings beside a panel using the plain ones; the
+  system instruction now asks for the plain reading.
+
+**Closed.** The soft keyboard covered the question box in the terminal's bottom sheet. The cause
+was Material3 1.3.0: `ModalBottomSheet` renders in its own `WindowManager` window that never
+receives IME insets, so no padding inside the sheet could move a field the window did not know was
+covered. The sheet is gone — the terminal opens Ask Verb on the assistant stage, which is the host
+that works and the one a person goes to in order to ask. Verified with the keyboard open.
+
+## C2 — the working tree, observed — 26 August
+
+The assistant could not answer the question the product is named for. The envelope carried session
+lifecycle, exit codes and durations, and nothing at all about the world the agent was changing.
+
+`GitObserver` reads the tree through the guest userland — inside-work-tree, branch presence, HEAD,
+porcelain status — bounded to four seconds and off the terminal's hot path, because this is proot on
+a phone. Every command boundary takes a snapshot, and the reading it replaces becomes the baseline,
+so the delta says what that command did.
+
+`GitSnapshot` carries how much moved, never what moved: no paths, no file names, no diff, and
+deliberately no branch name. A repository root like `/private/acme-corp` names a client and
+`feature/acme-login` carries the same disclosure, and neither is needed to answer how much changed.
+A test plants both and asserts neither survives.
+
+Two mistakes the device caught that the tests could not:
+
+- The delta first measured from "the last command that exited 0". The command that changes the tree
+  usually exits 0 too, so it became its own baseline and every delta was zero — three new files
+  reported as no change. The baseline is now the tree *before* the command.
+- Unknown had to stay unknown throughout: a `git` that could not run is not a clean tree, and an
+  uncomparable delta is silent rather than zero.
+
+Device-verified on the Vivo I2202: two files created, answer read "2 more files being changed, with
+the HEAD remaining unchanged", while stating plainly that it could not name them.
+
+**Still open in C2:** `docs/BACKLOG.md` C3 (last-known-good tracking) is the natural next step —
+a delta against a state the *user* considered working, rather than against the previous command.
 
 ## Completed sprint — Mobile reliability
 
@@ -136,7 +291,7 @@ costume.
 | # | Item | Unlocks |
 | --- | --- | --- |
 | C1 | ~~Agent sessions emit nothing structural~~ — both hosts now follow the record the agent writes for itself and emit turn/tool/failure events, worded as reported rather than witnessed. OpenCode has no reader yet | done for Claude and Codex |
-| C2 | Git snapshot at command boundaries | "what changed since it last worked" |
+| C2 | ~~Git snapshot at command boundaries~~ — the tree is observed and the delta says what the last command did; see the C2 section above | done |
 | C3 | Last-known-good tracking | comparison and recovery |
 | C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |
 | C5 | Richer contextual triggers: risky Git operation, runtime mismatch | two of the four bands in `TUI_VISION.md` |
@@ -200,6 +355,6 @@ M2 — explain, compare, or guided action. Decided by friction notes, not by thi
 | # | Item | Status |
 | --- | --- | --- |
 | G1 | Manual checksummed `.vcont` export, preview and read-only import on Android and desktop | implemented; automated and desktop round-trip verified |
-| G2 | Physical Android→desktop→Android file round-trip and UI acceptance | pending primary device |
+| G2 | Physical Android→desktop→Android file round-trip and UI acceptance | done — 26 Aug, both directions on the Vivo I2202 |
 | G3 | Optional encrypted wrapper for continuity metadata | post-beta; no credentials may enter the envelope |
 | G4 | Automatic/background/cloud/LAN sync, remote process resume, transcript transport | rejected for beta; requires separate product and threat-model approval |

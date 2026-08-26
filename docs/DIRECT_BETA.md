@@ -1,6 +1,6 @@
 # Verb Direct Beta
 
-Verb `v0.1.0-beta.1` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
+Verb `v0.1.0-beta.2` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
 
 ## Install
 

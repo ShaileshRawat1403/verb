@@ -27,12 +27,23 @@ import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.MuslLoaderBootstrap
+import com.example.verb.terminal.TerminalHoldService
+import com.example.verb.terminal.TerminalSessionState
 import com.example.verb.ui.AgentKeyStatus
 import com.example.verb.terminal.RuntimeCapabilityDetector
 import com.example.verb.terminal.RuntimeProfile
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
+import com.example.verb.terminal.AgentWorkFact
+import com.example.verb.terminal.CommandLifecycleState
+import com.example.verb.terminal.GitDelta
+import com.example.verb.ui.theme.VerbThemeChoice
+import com.example.verb.ui.theme.VerbThemeStore
+import com.example.verb.terminal.GitObserver
+import com.example.verb.terminal.GitSnapshot
+import com.example.verb.terminal.TerminalAiExchange
+import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalSessionLogger
@@ -44,6 +55,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -272,11 +284,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _aiProviderSettings = MutableStateFlow(aiProviderSettingsStore.load())
     val aiProviderSettings: StateFlow<AiProviderSettings> = _aiProviderSettings.asStateFlow()
 
-    private val _assistantInput = MutableStateFlow("")
-    val assistantInput: StateFlow<String> = _assistantInput.asStateFlow()
-
-    private val _assistantState = MutableStateFlow<AiAssistantState>(AiAssistantState.Idle)
-    val assistantState: StateFlow<AiAssistantState> = _assistantState.asStateFlow()
 
     private val _queryInput = MutableStateFlow("")
     val queryInput: StateFlow<String> = _queryInput.asStateFlow()
@@ -299,10 +306,61 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _terminalAiExplanation = MutableStateFlow<String?>(null)
     val terminalAiExplanation: StateFlow<String?> = _terminalAiExplanation.asStateFlow()
 
+    /** The evidence snapshot the last ask sent, rendered beside every answer. */
+    /**
+     * The evidence snapshot the newest answer was actually built from. The UI reads it back in
+     * plain language; the provider received the same snapshot in the contract's vocabulary. Holding
+     * the snapshot rather than rendered lines is what keeps those two from drifting apart.
+     */
+    private val _terminalAiEvidence = MutableStateFlow<TerminalEvidence?>(null)
+    val terminalAiEvidence: StateFlow<TerminalEvidence?> = _terminalAiEvidence.asStateFlow()
+
+    private val gitObserver = GitObserver(application.applicationContext.filesDir)
+
+    private val themeStore = VerbThemeStore(application.applicationContext)
+
+    private val _themeChoice = MutableStateFlow(themeStore.load())
+
+    /** System, light or dark. System is the default, so a fresh install is unchanged. */
+    val themeChoice: StateFlow<VerbThemeChoice> = _themeChoice.asStateFlow()
+
+    fun setThemeChoice(choice: VerbThemeChoice) {
+        if (_themeChoice.value == choice) return
+        themeStore.save(choice)
+        _themeChoice.value = choice
+    }
+
+    /**
+     * The working tree as Verb last read it.
+     *
+     * Read off the terminal's hot path, never on it: this runs `git` under proot on a phone, and a
+     * session that stutters because Verb wanted a file count is a worse product than one that
+     * answers "not observed". Null until the first observation completes.
+     */
+    private val _gitSnapshot = MutableStateFlow<GitSnapshot?>(null)
+
+    /**
+     * The tree as it stood *before* the most recent command, which is what the delta measures from.
+     *
+     * Not "the last command that exited 0": the command that changes the tree usually exits 0 too,
+     * so it became its own baseline and every delta came out zero. Held in memory beside the
+     * command history, which is itself non-persistent -- a snapshot outliving the session it
+     * describes would be a claim about a world that has moved on.
+     */
+    private val _previousGitSnapshot = MutableStateFlow<GitSnapshot?>(null)
+
+    /** Guards against a slow proot run overlapping the next command boundary. */
+    private val gitObservationInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** The ask thread: prior exchanges ride the prompt so a follow-up never restates context. */
+    private val _terminalAiThread = MutableStateFlow<List<TerminalAiExchange>>(emptyList())
+    val terminalAiThread: StateFlow<List<TerminalAiExchange>> = _terminalAiThread.asStateFlow()
+
     private val _isTerminalAiExplaining = MutableStateFlow(false)
     val isTerminalAiExplaining: StateFlow<Boolean> = _isTerminalAiExplaining.asStateFlow()
 
     init {
+        observeCommandBoundaries()
         TerminalSessionLogger.info(
             LogCategory.DIAGNOSTIC,
             "Bundled tools: installed=${bundledTools.installed}, skipped=${bundledTools.skipped.size}"
@@ -319,6 +377,21 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // each profile probe spawns a real process.
         viewModelScope.launch(Dispatchers.IO) { refreshRuntimeProfiles() }
 
+        // E1: a live session holds the process at foreground priority, so backgrounding Verb stops
+        // handing a running command or agent to the low-memory killer. The claim follows the
+        // session, not the screen: RUNNING holds it, a finished or failed session releases it.
+        viewModelScope.launch {
+            terminalRuntime.sessionState.collect { state ->
+                val context = getApplication<Application>()
+                when (state) {
+                    TerminalSessionState.RUNNING, TerminalSessionState.STARTING ->
+                        TerminalHoldService.start(context)
+                    TerminalSessionState.EXITED, TerminalSessionState.FAILED ->
+                        TerminalHoldService.stop(context)
+                    else -> Unit
+                }
+            }
+        }
     }
 
     private fun runtimeReports(): List<RuntimeProfileReport> =
@@ -819,6 +892,31 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * [fromSheet] records how the user got here so back can retrace it, and nothing else depends on
      * it -- it is navigation history, not product state.
      */
+    /**
+     * Opens Ask Verb on the assistant stage.
+     *
+     * The terminal used to host the assistant in its own bottom sheet. In Material3 1.3.0 that
+     * sheet renders in a `WindowManager` window that never receives IME insets, so the soft
+     * keyboard covered the question box and no amount of padding inside the sheet could move it --
+     * an ask box you cannot see while typing into it. The assistant already has a host that works,
+     * and it is the one a person goes to in order to ask, so the terminal now sends them there
+     * instead of growing a second half-working copy of the same surface.
+     */
+    fun openAssistant() {
+        _assistantStageRequested.value = true
+        openTask(VerbTask.ASK_VERB)
+    }
+
+    private val _assistantStageRequested = MutableStateFlow(false)
+
+    /** True when Ask Verb should open on the assistant rather than on the deterministic actions. */
+    val assistantStageRequested: StateFlow<Boolean> = _assistantStageRequested.asStateFlow()
+
+    /** Consumed once the screen has honoured it, so returning later starts on actions again. */
+    fun assistantStageConsumed() {
+        _assistantStageRequested.value = false
+    }
+
     fun openTask(task: VerbTask, fromSheet: Boolean = false) {
         // Opening anything that displays session recovery re-checks it first: the evidence an agent
         // leaves behind can appear after the coordinator's own bounded retries gave up, and this is
@@ -847,10 +945,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _queryInput.value = newInput
     }
 
-    fun updateAssistantInput(newInput: String) {
-        _assistantInput.value = newInput
-    }
-
     fun saveAiProviderSettings(config: AiProviderConfig, apiKey: String?): Result<Unit> = runCatching {
         aiProviderSettingsStore.save(config, apiKey)
         _aiProviderSettings.value = aiProviderSettingsStore.load()
@@ -859,20 +953,6 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAiProviderApiKey() {
         aiProviderSettingsStore.clearApiKey()
         _aiProviderSettings.value = aiProviderSettingsStore.load()
-    }
-
-    fun submitAssistantPrompt(prompt: String) {
-        if (prompt.isBlank() || _assistantState.value is AiAssistantState.Generating) return
-        _assistantInput.value = prompt
-        _assistantState.value = AiAssistantState.Generating
-        viewModelScope.launch(Dispatchers.IO) {
-            _assistantState.value = try {
-                val response = aiAssistantService.respond(AiAssistantRequest(prompt))
-                AiAssistantState.Answer(response)
-            } catch (exception: Exception) {
-                AiAssistantState.Failure(exception.message ?: "The assistant could not complete this request.")
-            }
-        }
     }
 
     fun submitIntent(intent: com.example.verb.model.VerbIntent) {
@@ -1004,19 +1084,23 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         terminalRuntime.sendCommand(cmd)
     }
 
-    /** Asks the configured provider to explain structural facts; PTY output never leaves Verb. */
+    /**
+     * Asks the configured provider to explain structural facts; PTY output never leaves Verb.
+     *
+     * The snapshot is published before the request for the same reason the ask path publishes one:
+     * an answer displayed beside stale evidence -- or beside no evidence at all -- is exactly the
+     * unverifiable claim this surface exists to prevent.
+     */
     fun explainTerminalOutput() {
         if (_isTerminalAiExplaining.value) return
 
         _isTerminalAiExplaining.value = true
         viewModelScope.launch(Dispatchers.IO) {
+            refreshGitSnapshot()
+            val evidence = currentEvidence()
+            _terminalAiEvidence.value = evidence
             _terminalAiExplanation.value = try {
-                TerminalAiHelper.analyze(
-                    service = aiAssistantService,
-                    lastCommand = terminalRuntime.commandHistory.value.lastOrNull(),
-                    workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null,
-                    sessionState = terminalRuntime.sessionState.value
-                )
+                TerminalAiHelper.analyze(service = aiAssistantService, evidence = evidence)
             } catch (e: Exception) {
                 e.message ?: "AI analysis failed."
             }
@@ -1024,8 +1108,127 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * The M2 surface: the user's own question about their work, answered from exactly the evidence
+     * Verb holds. The evidence snapshot is taken once, before the request, so what the UI displays
+     * as "what the model saw" is what was actually sent even if the session moves on while the
+     * request is in flight. Each exchange joins the thread, so a follow-up never restates context
+     * Verb already heard.
+     */
+    fun askTerminalAi(question: String) {
+        if (question.isBlank() || _isTerminalAiExplaining.value) return
+
+        val priors = _terminalAiThread.value
+
+        _isTerminalAiExplaining.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            refreshGitSnapshot()
+            val evidence = currentEvidence()
+            _terminalAiEvidence.value = evidence
+            val answer = try {
+                TerminalAiHelper.ask(
+                    service = aiAssistantService,
+                    question = question,
+                    priorExchanges = priors,
+                    evidence = evidence
+                )
+            } catch (e: Exception) {
+                e.message ?: "AI analysis failed."
+            }
+            _terminalAiExplanation.value = answer
+            _terminalAiThread.value = (priors + TerminalAiExchange(question.trim(), answer)).takeLast(5)
+            _isTerminalAiExplaining.value = false
+        }
+    }
+
+    /**
+     * What Verb knows right now, assembled at ask time: the terminal session's lifecycle, whether
+     * the shell reports command boundaries, the newest command boundaries (facts only, text
+     * withheld), and the recorded state of every agent session. This is the whole envelope -- the
+     * model never receives more than this.
+     */
+    /**
+     * Refreshes the working-tree snapshot, off the main thread, before the evidence is assembled.
+     *
+     * Deliberately awaited rather than fired and forgotten: an answer about what changed is worth
+     * the few hundred milliseconds, and stale evidence displayed as current is the one thing this
+     * surface promises not to do. A failure leaves the previous snapshot rather than inventing one.
+     */
+    /**
+     * Watches command boundaries and reads the tree after each one.
+     *
+     * This is the half of C2 that makes "what did that just do" answerable: a snapshot after every
+     * boundary keeps [_gitSnapshot] current, and the reading it replaces becomes the baseline.
+     *
+     * Overlapping runs are dropped rather than queued. Under proot a status can outlast the next
+     * command, and a backlog of stale observations is worse than a missed one -- the next boundary
+     * will take a fresher reading anyway.
+     */
+    private fun observeCommandBoundaries() {
+        viewModelScope.launch {
+            terminalRuntime.commandHistory
+                .map { it.lastOrNull() }
+                .distinctUntilChanged()
+                .collect { record ->
+                    if (record == null || record.state == CommandLifecycleState.RUNNING) return@collect
+                    if (!gitObservationInFlight.compareAndSet(false, true)) return@collect
+                    try {
+                        // Whatever the tree was before this boundary becomes the baseline, so the
+                        // delta describes what this command did rather than what it inherited.
+                        _previousGitSnapshot.value = _gitSnapshot.value
+                        refreshGitSnapshot()
+                    } finally {
+                        gitObservationInFlight.set(false)
+                    }
+                }
+        }
+    }
+
+    private suspend fun refreshGitSnapshot() {
+        // hostPath, not guestPath: TerminalWorkingDirectory has already translated it through the
+        // bind allowlist, so a cwd Verb cannot legitimately reach resolves to null and is skipped.
+        val directory = terminalRuntime.currentWorkingDirectory.value?.hostPath
+            ?: _selectedProject.value?.directory
+            ?: return
+        val snapshot = withContext(Dispatchers.IO) {
+            runCatching { gitObserver.observe(directory) }.getOrNull()
+        }
+        if (snapshot != null) _gitSnapshot.value = snapshot
+    }
+
+    private fun currentEvidence(): TerminalEvidence = TerminalEvidence(
+        sessionState = terminalRuntime.sessionState.value,
+        workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null,
+        shellIntegrationActive = terminalRuntime.shellIntegrationActive.value,
+        commandTail = terminalRuntime.commandHistory.value.takeLast(5),
+        agentWork = agentSessions.value.map { (profileId, session) ->
+            AgentWorkFact(
+                profileName = RuntimeProfiles.forId(profileId).displayName,
+                sessionState = session.state,
+                lastSeenAt = session.lastSeenAt,
+                agentType = session.agent?.agentType
+            )
+        },
+        git = _gitSnapshot.value,
+        gitSinceLastCommand = GitDelta.between(_previousGitSnapshot.value, _gitSnapshot.value)
+    )
+
+    /**
+     * Closes the sheet. The thread survives on purpose: a modal sheet is dismissed by a downward
+     * swipe or a tap on the scrim, both of which happen by accident on a phone, and losing a
+     * conversation to a mistaken gesture is not a recoverable state. [clearTerminalAiThread] is the
+     * deliberate way to start over.
+     */
     fun dismissTerminalAiExplanation() {
         _terminalAiExplanation.value = null
+        _terminalAiEvidence.value = null
+    }
+
+    /** Starts a new conversation: the user's explicit move, never a side effect of closing a sheet. */
+    fun clearTerminalAiThread() {
+        _terminalAiExplanation.value = null
+        _terminalAiEvidence.value = null
+        _terminalAiThread.value = emptyList()
     }
 
     private fun handleActionResult(result: ActionResult, query: String? = null) {

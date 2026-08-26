@@ -47,6 +47,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.example.verb.ui.theme.VerbStatus
 
 data class UsbAdbDiagnosticResult(
     val isAdbDaemonRunning: Boolean,
@@ -145,8 +146,8 @@ fun UsbDebuggingDiagnosticCard(
             val current = result
             if (current != null) {
                 val statusColor = when {
-                    current.isAdbDaemonRunning && current.isUsbDebuggingConfigured -> Color(0xFF4CAF50)
-                    current.isAdbDaemonRunning || current.isUsbDebuggingConfigured -> Color(0xFFFF9800)
+                    current.isAdbDaemonRunning && current.isUsbDebuggingConfigured -> VerbStatus.confirmed
+                    current.isAdbDaemonRunning || current.isUsbDebuggingConfigured -> VerbStatus.recoverable
                     else -> MaterialTheme.colorScheme.error
                 }
 

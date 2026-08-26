@@ -7,6 +7,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextReplacement
@@ -148,40 +149,52 @@ class VerbUIRegressionTest {
         composeTestRule.onAllNodesWithText("# ", substring = true).assertCountEquals(0)
     }
 
+    /**
+     * The gate the removed `AssistantScreen` held, carried onto the surface that replaced it: an
+     * unconfigured provider must be said out loud, not discovered by tapping Send and reading a raw
+     * exception where the answer should be.
+     */
     @Test
-    fun assistantDoesNotSubmitUntilProviderAndKeyAreConfigured() {
-        var submitCount = 0
+    fun theAssistantDoesNotSubmitUntilProviderAndKeyAreConfigured() {
         composeTestRule.setContent {
-            AssistantScreen(
-                providerSettings = AiProviderSettings(),
-                prompt = "Explain ls",
-                state = AiAssistantState.Idle,
-                onPromptChange = {},
-                onSubmitPrompt = { submitCount++ },
-                onOpenProviderSettings = {}
+            AssistPanel(
+                aiExplanation = null,
+                isAiExplaining = false,
+                evidence = null,
+                thread = emptyList(),
+                onAsk = {},
+                onExplain = {},
+                onClearThread = {},
+                providerSettings = AiProviderSettings()
             )
         }
 
-        composeTestRule.onNodeWithTag("assistant_submit_button").assertIsNotEnabled()
-        assertEquals(0, submitCount)
+        composeTestRule.onNodeWithTag("assist_provider_missing").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("btn_ask_terminal_ai").assertIsNotEnabled()
     }
 
     @Test
-    fun assistantEnablesSubmissionOnlyWhenProviderIsReady() {
+    fun theAssistantEnablesSubmissionOnlyWhenProviderIsReady() {
         composeTestRule.setContent {
-            AssistantScreen(
+            AssistPanel(
+                aiExplanation = null,
+                isAiExplaining = false,
+                evidence = null,
+                thread = emptyList(),
+                onAsk = {},
+                onExplain = {},
+                onClearThread = {},
                 providerSettings = AiProviderSettings(
                     config = AiProviderConfig(AiProviderId.OPENAI, "test-model", "https://api.openai.com/v1"),
                     hasApiKey = true
-                ),
-                prompt = "Explain ls",
-                state = AiAssistantState.Idle,
-                onPromptChange = {},
-                onSubmitPrompt = {},
-                onOpenProviderSettings = {}
+                )
             )
         }
 
-        composeTestRule.onNodeWithTag("assistant_submit_button").assertIsEnabled()
+        composeTestRule.onNodeWithTag("assist_provider_missing").assertDoesNotExist()
+        // Still off until there is a question: readiness is necessary, not sufficient.
+        composeTestRule.onNodeWithTag("btn_ask_terminal_ai").assertIsNotEnabled()
+        composeTestRule.onNodeWithTag("terminal_ai_question_field").performTextInput("Why?")
+        composeTestRule.onNodeWithTag("btn_ask_terminal_ai").assertIsEnabled()
     }
 }

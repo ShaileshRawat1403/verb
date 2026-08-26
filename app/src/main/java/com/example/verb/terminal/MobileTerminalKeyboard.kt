@@ -1,10 +1,13 @@
 package com.example.verb.terminal
 
 import android.content.Context
+import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -12,12 +15,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -48,23 +51,34 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
+import androidx.compose.material3.MaterialTheme
+import com.example.verb.ui.theme.TerminalDock
 
 val DEFAULT_QUICK_KEYS = listOf("/", "|", "~", "-", "_", "\\", ":", ";", "&", "#")
 
@@ -167,7 +181,7 @@ fun MobileTerminalKeyboard(
     Surface(
         modifier = modifier
             .fillMaxWidth(),
-        color = Color(0xFF161820),
+        color = TerminalDock.surface,
         tonalElevation = 4.dp
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -177,18 +191,20 @@ fun MobileTerminalKeyboard(
                     .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = terminalInput,
-                    onValueChange = ::handleInputChange,
+                // A hand-rolled field, not an OutlinedTextField: Material's version enforces a
+                // 56dp minimum height, which made the command bar the single tallest thing in the
+                // dock -- a text box wearing a terminal as an accessory. 42dp keeps a comfortable
+                // thumb target while the key rows below stay the visual equals of the input.
+                val fieldShape = RoundedCornerShape(10.dp)
+                var fieldFocused by remember { mutableStateOf(false) }
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 46.dp)
-                        .let { base ->
-                            inputFocusRequester?.let { base.focusRequester(it) } ?: base
-                        }
+                        .height(42.dp)
                         // An empty field reports no change when the IME sends backspace, so without
                         // this the key silently does nothing at the exact moment a person is trying
-                        // to clear a line they can see on screen.
+                        // to clear a line they can see on screen. Preview (tunnel) pass on the
+                        // ancestor sees every key the focused field is offered, including these.
                         .onPreviewKeyEvent { event ->
                             if (event.type == KeyEventType.KeyDown &&
                                 event.key == Key.Backspace &&
@@ -200,31 +216,48 @@ fun MobileTerminalKeyboard(
                                 false
                             }
                         }
-                        .testTag("terminal_input_field"),
-                    placeholder = {
+                        .background(if (fieldFocused) TerminalDock.fieldFocused else TerminalDock.field, fieldShape)
+                        .border(
+                            width = 1.dp,
+                            color = if (fieldFocused) TerminalDock.accent else TerminalDock.outline,
+                            shape = fieldShape
+                        )
+                        .onFocusChanged { fieldFocused = it.hasFocus },
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (terminalInput.isEmpty()) {
                         Text(
                             "$ type a command",
-                            color = Color(0xFF94A3B8),
+                            color = TerminalDock.dim,
+                            fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+                    BasicTextField(
+                        value = terminalInput,
+                        onValueChange = ::handleInputChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp)
+                            .let { base ->
+                                inputFocusRequester?.let { base.focusRequester(it) } ?: base
+                            }
+                            // On the editable node itself, not the chrome around it: input,
+                            // replacement and text assertions all target this tag.
+                            .testTag("terminal_input_field"),
+                        textStyle = LocalTextStyle.current.copy(
+                            color = TerminalDock.text,
                             fontSize = 14.sp,
                             fontFamily = FontFamily.Monospace
-                        )
-                    },
-                    textStyle = LocalTextStyle.current.copy(
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    singleLine = true,
-                    enabled = enabled,
-                    shape = RoundedCornerShape(10.dp),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { submitTerminalInput() }),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF6366F1),
-                        unfocusedBorderColor = Color(0xFF3B4252)
+                        ),
+                        cursorBrush = SolidColor(TerminalDock.accent),
+                        singleLine = true,
+                        enabled = enabled,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { submitTerminalInput() })
                     )
-                )
+                }
                 IconButton(
                     onClick = ::submitTerminalInput,
                     enabled = enabled,
@@ -233,7 +266,7 @@ fun MobileTerminalKeyboard(
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Send,
                         contentDescription = "Run typed terminal input",
-                        tint = Color(0xFF818CF8)
+                        tint = TerminalDock.accentSoft
                     )
                 }
                 // One control for the whole auxiliary panel. Collapsed is the default because the
@@ -246,7 +279,7 @@ fun MobileTerminalKeyboard(
                     Icon(
                         imageVector = if (keysExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
                         contentDescription = if (keysExpanded) "Hide extra keys" else "Show extra keys",
-                        tint = Color(0xFF94A3B8),
+                        tint = TerminalDock.dim,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -263,6 +296,7 @@ fun MobileTerminalKeyboard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(scrollState1)
+                    .fadingHorizontalEdges(20.dp)
                     .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -298,7 +332,7 @@ fun MobileTerminalKeyboard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState())
-                        .background(Color(0xFF222630))
+                        .background(TerminalDock.key)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -318,6 +352,7 @@ fun MobileTerminalKeyboard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(scrollState2)
+                        .fadingHorizontalEdges(20.dp)
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(5.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -340,7 +375,7 @@ fun MobileTerminalKeyboard(
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = "Edit Quick Keys",
-                            tint = Color(0xFF94A3B8),
+                            tint = TerminalDock.dim,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -352,7 +387,7 @@ fun MobileTerminalKeyboard(
     if (isSheetOpen) {
         ModalBottomSheet(
             onDismissRequest = { isSheetOpen = false },
-            containerColor = Color(0xFF161820)
+            containerColor = MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
@@ -364,9 +399,9 @@ fun MobileTerminalKeyboard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Quick Keys", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                    Text("Quick Keys", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                     IconButton(onClick = { saveQuickKeys(DEFAULT_QUICK_KEYS) }, modifier = Modifier.testTag("btn_reset_quick_keys")) {
-                        Icon(Icons.Default.Refresh, "Reset Defaults", tint = Color.White)
+                        Icon(Icons.Default.Refresh, "Reset Defaults", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
 
@@ -380,14 +415,14 @@ fun MobileTerminalKeyboard(
                     quickKeys.forEachIndexed { index, keyStr ->
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = Color(0xFF222630),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.testTag("quick_key_edit_$index")
                         ) {
                             Row(
                                 modifier = Modifier.padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(keyStr, color = Color.White, fontFamily = FontFamily.Monospace)
+                                Text(keyStr, color = MaterialTheme.colorScheme.onSurface, fontFamily = FontFamily.Monospace)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 IconButton(
                                     onClick = { 
@@ -397,7 +432,7 @@ fun MobileTerminalKeyboard(
                                     },
                                     modifier = Modifier.size(24.dp).testTag("btn_remove_quick_key_$index")
                                 ) {
-                                    Icon(Icons.Default.Close, "Remove", tint = Color(0xFFEF4444), modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Close, "Remove", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                 }
                             }
                         }
@@ -412,18 +447,18 @@ fun MobileTerminalKeyboard(
                         value = newKey,
                         onValueChange = { newKey = it },
                         modifier = Modifier.weight(1f).testTag("input_new_quick_key"),
-                        placeholder = { Text("New symbol...", color = Color(0xFF64748B)) },
+                        placeholder = { Text("New symbol...", color = MaterialTheme.colorScheme.onSurfaceVariant) },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFF6366F1)
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            focusedBorderColor = MaterialTheme.colorScheme.primary
                         )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF6366F1),
+                        color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clickable {
                             val k = newKey.trim()
                             if (k.isNotEmpty() && k.length <= 8 && !quickKeys.contains(k)) {
@@ -434,7 +469,7 @@ fun MobileTerminalKeyboard(
                             }
                         }.padding(12.dp).testTag("btn_add_quick_key")
                     ) {
-                        Icon(Icons.Default.Add, "Add", tint = Color.White)
+                        Icon(Icons.Default.Add, "Add", tint = MaterialTheme.colorScheme.onSurface)
                     }
                 }
                 Spacer(modifier = Modifier.height(24.dp))
@@ -459,12 +494,19 @@ private fun KeyButton(
     isAccent: Boolean = false,
     onClick: () -> Unit
 ) {
+    // Terminal keys are pressed by thumb while the eyes are on the output, not on the finger.
+    // The tick is the only acknowledgement that a key registered -- without it every tap feels
+    // like a guess, and a missed CTRL is felt minutes later as a hung process.
+    val view = LocalView.current
     Surface(
         shape = RoundedCornerShape(9.dp),
-        color = if (isAccent) Color(0xFF6366F1) else Color(0xFF222630),
+        color = if (isAccent) TerminalDock.accent else TerminalDock.key,
         modifier = Modifier
             .height(38.dp)
-            .clickable(onClick = onClick)
+            .clickable {
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                onClick()
+            }
             .testTag(testTag)
     ) {
         Row(
@@ -473,7 +515,7 @@ private fun KeyButton(
         ) {
             Text(
                 text = label,
-                color = if (isAccent) Color.White else Color(0xFFE2E8F0),
+                color = if (isAccent) TerminalDock.text else TerminalDock.text,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.Monospace
@@ -481,3 +523,40 @@ private fun KeyButton(
         }
     }
 }
+
+/**
+ * Fades the visible left and right edges of a horizontally scrolling key row.
+ *
+ * The essential-keys row is wider than most phones; where it ran off-screen there was previously
+ * no signal at all that more keys existed past the edge -- PASTE was not "hidden", it was
+ * *unimaginable*. Applied after [androidx.compose.foundation.horizontalScroll] so the gradient
+ * tracks the viewport rather than the scrolled content, and drawn offscreen with DstIn so the
+ * fade multiplies the row's own alpha instead of punching a hole through what sits behind it.
+ */
+private fun Modifier.fadingHorizontalEdges(edgeWidth: Dp): Modifier =
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        .drawWithContent {
+            drawContent()
+            val width = edgeWidth.toPx()
+            // Each gradient is transparent at the screen edge and opaque toward the middle, and
+            // clamps to its last color beyond its span -- so the interior stays fully opaque and
+            // only the outer `edgeWidth` of each side dissolves. The two directions are NOT
+            // interchangeable: an earlier revision drew both the wrong way round, the two DstIn
+            // passes intersected at zero alpha, and the entire row silently vanished.
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(Color.Transparent, Color.Black),
+                    startX = 0f,
+                    endX = width
+                ),
+                blendMode = BlendMode.DstIn
+            )
+            drawRect(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(Color.Black, Color.Transparent),
+                    startX = size.width - width,
+                    endX = size.width
+                ),
+                blendMode = BlendMode.DstIn
+            )
+        }

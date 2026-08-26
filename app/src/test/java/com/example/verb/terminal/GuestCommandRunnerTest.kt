@@ -22,6 +22,21 @@ import org.junit.rules.TemporaryFolder
  */
 class GuestCommandRunnerTest {
 
+    /**
+     * A bound generous enough that the clock is never what these tests measure.
+     *
+     * They spawn a real shell to check how an outcome is *classified* -- non-zero exit, not found,
+     * not executable. On the 3-second default that classification raced process startup: under a
+     * loaded build (two flavours plus two lint analyses) the spawn outlived the bound and the
+     * runner reported TIMEOUT instead, failing a test that was not about timing at all. CI runners
+     * are more loaded than a laptop, not less.
+     *
+     * The tests that genuinely exercise the bound -- the hanging tool, and the clamp against
+     * MAX_TIMEOUT_MS -- deliberately keep their own tight values and are not changed.
+     */
+    private val CLASSIFICATION_TIMEOUT_MS = GuestCommandRunner.MAX_TIMEOUT_MS
+
+
     @get:Rule
     val temporaryFolder = TemporaryFolder()
 
@@ -51,7 +66,10 @@ class GuestCommandRunnerTest {
         writeGuestTool(filesDir, "shell-tool", "#!/bin/sh\necho \"shell-tool v1.0.0\"\nexit 0\n")
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("shell-tool", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("shell-tool", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.READY, result.outcome)
         assertEquals(0, result.exitCode)
@@ -73,7 +91,10 @@ class GuestCommandRunnerTest {
         target.setExecutable(true)
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("native-tool", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("native-tool", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.READY, result.outcome)
         assertEquals(0, result.exitCode)
@@ -133,7 +154,10 @@ class GuestCommandRunnerTest {
         writeGuestTool(filesDir, "broken-tool", "#!/bin/sh\necho boom\nexit 1\n")
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("broken-tool", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("broken-tool", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.NONZERO_EXIT, result.outcome)
         assertEquals(1, result.exitCode)
@@ -147,7 +171,10 @@ class GuestCommandRunnerTest {
         // PATH and sh reports exit 127, matching POSIX env's own not-found convention.
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("missing-tool", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("missing-tool", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.NOT_FOUND, result.outcome)
     }
@@ -166,7 +193,10 @@ class GuestCommandRunnerTest {
         }
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("unexecutable-tool", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("unexecutable-tool", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.NOT_EXECUTABLE, result.outcome)
         assertEquals(126, result.exitCode)
@@ -220,7 +250,10 @@ class GuestCommandRunnerTest {
         )
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("chatty-tool", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("chatty-tool", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.READY, result.outcome)
         assertTrue(result.output.length <= GuestCommandRunner.MAX_OUTPUT_CHARS + "...[truncated]".length)
@@ -246,7 +279,10 @@ class GuestCommandRunnerTest {
         // No login/proot/execShim written at all.
 
         val result = GuestCommandRunner(filesDir)
-            .probe(RuntimeRequirement("git", "", versionProbeArgs = listOf("--version")))
+            .probe(
+                RuntimeRequirement("git", "", versionProbeArgs = listOf("--version")),
+                timeoutMs = CLASSIFICATION_TIMEOUT_MS
+            )
 
         assertEquals(GuestCommandRunner.Outcome.GUEST_UNAVAILABLE, result.outcome)
     }

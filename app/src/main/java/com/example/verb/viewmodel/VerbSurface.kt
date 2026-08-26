@@ -83,9 +83,14 @@ enum class VerbTask(
         subtitle = "The commands this session recorded, and how they ended",
         keywords = "runs commands history exit code duration boundaries recorded"
     ),
+    APPEARANCE(
+        title = "Appearance",
+        subtitle = "Follow the device, or always light or dark",
+        keywords = "theme appearance dark light mode colour color night day scheme"
+    ),
     PROVIDER(
         title = "Add or change a provider key",
-        subtitle = "Only used for the optional interpretation stage of Ask Verb",
+        subtitle = "Only used when you ask Verb a question; nothing else sends anything",
         keywords = "provider key api model ai settings token configure interpretation"
     ),
     RUNTIMES(

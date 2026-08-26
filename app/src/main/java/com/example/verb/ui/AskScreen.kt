@@ -69,6 +69,9 @@ import com.example.verb.model.ActionResult
 import com.example.verb.model.VerbIntent
 import com.example.verb.ui.theme.SecondaryCyan
 
+/** Newest runs kept as individual cards; anything older collapses into a single count line. */
+private const val MAX_VISIBLE_ASK_HISTORY = 10
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskScreen(
@@ -230,11 +233,18 @@ fun AskScreen(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Worded as moments a person actually has, not as a device-info menu
+            // (`docs/UX_FOUNDATION.md` §3), and ordered with development work first.
+            //
+            // Each string is submitted verbatim to the intent engine, so each must still contain a
+            // substring `IntentEngine` matches on -- "files in", "process", "disk space", "memory".
+            // `AskScreenSuggestionsTest` holds that: a chip that resolves to nothing is worse than
+            // a chip that reads plainly.
             val suggestions = listOf(
-                "Check my storage",
-                "Check memory",
-                "Show running processes",
-                "Show files"
+                "List files in this directory",
+                "What processes are running",
+                "How much disk space is left",
+                "How much memory is free"
             )
             suggestions.forEach { prompt ->
                 Surface(
@@ -282,7 +292,13 @@ fun AskScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            historyList.drop(1).forEach { item ->
+            // The whole screen is one scrolling Column, so an unbounded history would compose
+            // every card ever produced this session. Only the newest runs render; the rest are a
+            // single summary line.
+            val visibleRuns = historyList.drop(1).takeLast(MAX_VISIBLE_ASK_HISTORY)
+            val earlierCount = (historyList.size - 1) - visibleRuns.size
+
+            visibleRuns.forEach { item ->
                 val replayIntent = item.originalIntent
                 Card(
                     modifier = Modifier
@@ -325,6 +341,16 @@ fun AskScreen(
                     }
                 }
             }
+
+            if (earlierCount > 0) {
+                Text(
+                    text = "…and $earlierCount earlier run${if (earlierCount == 1) "" else "s"} this session",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, start = 12.dp)
+                )
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }

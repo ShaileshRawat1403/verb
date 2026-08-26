@@ -1,17 +1,26 @@
 package com.example.verb.ui
 
 import com.example.verb.model.VerbIntent
+import com.example.verb.ui.theme.TerminalCanvas
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,9 +28,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleaningServices
@@ -31,6 +42,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -39,9 +51,11 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -49,15 +63,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerEventType
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -74,10 +88,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.flow.MutableStateFlow
 import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
+import com.example.verb.terminal.TerminalAiExchange
+import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.TerminalSessionState
@@ -85,6 +102,7 @@ import com.example.verb.terminal.TermuxBootstrapInstaller
 import com.example.verb.terminal.TermuxTerminalRuntimeAdapter
 import com.example.verb.project.VerbProject
 import com.termux.view.TerminalView
+import com.example.verb.ui.theme.VerbStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -131,10 +149,8 @@ fun TerminalScreen(
      * what the offer is or how it was chosen.
      */
     verbFirstAction: (@Composable () -> Unit)? = null,
-    aiExplanation: String? = null,
-    isAiExplaining: Boolean = false,
-    onExplainOutput: () -> Unit = {},
-    onDismissAiExplanation: () -> Unit = {},
+    /** Opens Ask Verb on the assistant stage; the terminal no longer hosts a copy of it. */
+    onOpenAssistant: () -> Unit = {},
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
     onCreateProject: (String) -> Unit = {},
@@ -146,6 +162,10 @@ fun TerminalScreen(
     var showProjectSheet by remember { mutableStateOf(false) }
     var showRunsSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    // Restarting a live session kills whatever runs inside it, and on a phone the pill that does
+    // it sits in a crowded header where a mis-tap is easy. A live session asks first; restarting
+    // an already-dead one is recovery and stays immediate.
+    var confirmRestart by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
     val focusManager: FocusManager = LocalFocusManager.current
     val clipboardManager = LocalClipboardManager.current
@@ -180,8 +200,7 @@ fun TerminalScreen(
         }
     }
     val anyOverlayOpen = verbSurfaceOpen || showFileExplorerSheet || showProjectSheet ||
-        showDiagnosticsSheet || showRunsSheet || showOverflowMenu ||
-        (aiExplanation != null || isAiExplaining)
+        showDiagnosticsSheet || showRunsSheet || showOverflowMenu
     // Overflow menu is the innermost surface (a DropdownMenu can appear over any sheet's trigger),
     // so it takes priority over every other back handler below.
     BackHandler(enabled = !verbSurfaceOpen && showOverflowMenu) { showOverflowMenu = false }
@@ -197,10 +216,6 @@ fun TerminalScreen(
     ) {
         showRunsSheet = false
     }
-    BackHandler(
-        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
-            !showDiagnosticsSheet && !showRunsSheet && (aiExplanation != null || isAiExplaining)
-    ) { onDismissAiExplanation() }
     BackHandler(enabled = !anyOverlayOpen && isKeyboardVisible) {
         keyboardController?.hide()
         focusManager.clearFocus(force = true)
@@ -219,20 +234,15 @@ fun TerminalScreen(
         }
     }
 
-    // Auto-scroll terminal to bottom when new output arrives
-    LaunchedEffect(terminalOutput) {
-        scrollState.animateScrollTo(scrollState.maxValue)
-    }
-
     Column(
         modifier = modifier
             .fillMaxSize()
-            .background(Color(0xFF0D0E12))
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // Thin Terminal Header Bar
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            color = Color(0xFF161820)
+            color = MaterialTheme.colorScheme.surface
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
@@ -249,7 +259,7 @@ fun TerminalScreen(
                     ) {
                         Surface(
                             shape = RoundedCornerShape(12.dp),
-                            color = Color(0xFF6366F1),
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
                                 .clickable(onClickLabel = "Open Verb") { onOpenVerb() }
                                 .testTag("verb_sheet_trigger")
@@ -261,7 +271,7 @@ fun TerminalScreen(
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
                                     contentDescription = null,
-                                    tint = Color.White,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -269,13 +279,13 @@ fun TerminalScreen(
                                     text = "Verb",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color.White
+                                    color = MaterialTheme.colorScheme.onPrimary
                                 )
                             }
                         }
                         Surface(
                             shape = RoundedCornerShape(999.dp),
-                            color = Color(0xFF222630),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = { showProjectSheet = true },
                             modifier = Modifier.testTag("terminal_project_selector")
                         ) {
@@ -290,7 +300,7 @@ fun TerminalScreen(
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
                                     .widthIn(max = 56.dp),
                                 fontSize = 11.sp,
-                                color = Color(0xFFCBD5E1),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -303,20 +313,22 @@ fun TerminalScreen(
                         // survives neither a colour-blind reader nor a screen reader, and which
                         // `docs/UX_FOUNDATION.md` rules out by name. Colour still reinforces it.
                         val statusColor = when (sessionState) {
-                            com.example.verb.terminal.TerminalSessionState.RUNNING -> Color(0xFF22C55E)
+                            com.example.verb.terminal.TerminalSessionState.RUNNING -> VerbStatus.confirmed
                             com.example.verb.terminal.TerminalSessionState.STARTING,
-                            com.example.verb.terminal.TerminalSessionState.STOPPING -> Color(0xFFEAB308)
-                            com.example.verb.terminal.TerminalSessionState.EXITED -> Color(0xFF94A3B8)
-                            else -> Color(0xFFEF4444)
+                            com.example.verb.terminal.TerminalSessionState.STOPPING -> VerbStatus.recoverable
+                            com.example.verb.terminal.TerminalSessionState.EXITED -> VerbStatus.caveat
+                            else -> VerbStatus.failed
                         }
                         val statusGlyph = VerbStatusVocabulary.processGlyph(sessionState)
                         val statusLabel = VerbStatusVocabulary.processWord(sessionState)
                         val statusDescription = VerbStatusVocabulary.processDescription(sessionState)
                         Surface(
                             shape = RoundedCornerShape(999.dp),
-                            color = Color(0xFF222630),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = {
-                                if (sessionState != com.example.verb.terminal.TerminalSessionState.RUNNING) {
+                                if (sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING) {
+                                    confirmRestart = true
+                                } else {
                                     terminalRuntime?.restartSession()
                                 }
                             },
@@ -342,7 +354,7 @@ fun TerminalScreen(
                                 Text(
                                     text = statusLabel,
                                     fontSize = 11.sp,
-                                    color = Color(0xFF94A3B8)
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -366,7 +378,7 @@ fun TerminalScreen(
                             Icon(
                                 imageVector = Icons.Default.History,
                                 contentDescription = "Command run history",
-                                tint = Color(0xFF94A3B8),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -374,13 +386,16 @@ fun TerminalScreen(
                             IconButton(
                                 onClick = { showOverflowMenu = true },
                                 modifier = Modifier
-                                    .size(32.dp)
+                                    // 48dp, not the 32dp this used to be: Material's own minimum
+                                    // touch target, in a header where every neighbour competes for
+                                    // the same thumb. The icon keeps its visual size.
+                                    .size(48.dp)
                                     .testTag("btn_terminal_overflow")
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.MoreVert,
                                     contentDescription = "More terminal actions",
-                                    tint = Color(0xFF94A3B8),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -412,14 +427,13 @@ fun TerminalScreen(
                                     modifier = Modifier.testTag("btn_files_overflow")
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("Explain evidence with AI") },
+                                    text = { Text("Ask Verb about this session") },
                                     leadingIcon = {
                                         Icon(imageVector = Icons.Default.Psychology, contentDescription = null)
                                     },
-                                    enabled = !isAiExplaining,
                                     onClick = {
                                         showOverflowMenu = false
-                                        onExplainOutput()
+                                        onOpenAssistant()
                                     },
                                     modifier = Modifier.testTag("btn_ai_explain_overflow")
                                 )
@@ -431,7 +445,11 @@ fun TerminalScreen(
                                     enabled = terminalRuntime != null,
                                     onClick = {
                                         showOverflowMenu = false
-                                        terminalRuntime?.restartSession()
+                                        if (sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING) {
+                                            confirmRestart = true
+                                        } else {
+                                            terminalRuntime?.restartSession()
+                                        }
                                     },
                                     modifier = Modifier.testTag("btn_restart_overflow")
                                 )
@@ -500,16 +518,33 @@ fun TerminalScreen(
         // The workspace's single first action, when there is one. Placed after the setup cards on
         // purpose: while the userland is still installing, "start an agent" is not yet true, and a
         // suggestion that cannot work is worse than none.
-        if (bootstrapState == TermuxBootstrapInstaller.State.Ready) {
+        //
+        // Suppressed while the IME is up: with the keyboard open the terminal canvas is the
+        // scarcest pixel row on a phone, and a suggestion the person cannot act on until they are
+        // done typing is only space taken from it. It returns the moment the keyboard closes.
+        // The exit animates because it fires on the very frame the keyboard *starts* moving --
+        // a snap here is what made the whole dock feel like it was being yanked upward.
+        AnimatedVisibility(
+            visible = bootstrapState == TermuxBootstrapInstaller.State.Ready && !isKeyboardVisible,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
             verbFirstAction?.invoke()
         }
 
         // Stopped-session guidance: typing a command now auto-restarts the session, so tell the
-        // user instead of leaving them staring at a dead terminal.
+        // user instead of leaving them staring at a dead terminal. Hidden while the IME is up --
+        // the person is already doing the one thing this banner asks for -- with an animated
+        // exit, matching the first action above.
         val bootstrapReady = bootstrapState is TermuxBootstrapInstaller.State.Ready ||
             bootstrapState is TermuxBootstrapInstaller.State.NotStarted
-        if (bootstrapReady && (sessionState == com.example.verb.terminal.TerminalSessionState.EXITED ||
-                sessionState == com.example.verb.terminal.TerminalSessionState.FAILED)
+        AnimatedVisibility(
+            visible = bootstrapReady && !isKeyboardVisible && (
+                sessionState == com.example.verb.terminal.TerminalSessionState.EXITED ||
+                    sessionState == com.example.verb.terminal.TerminalSessionState.FAILED
+                ),
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
         ) {
             Surface(
                 modifier = Modifier
@@ -517,7 +552,7 @@ fun TerminalScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
                     .testTag("session_stopped_banner"),
                 shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF2A1A1C)
+                color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -530,15 +565,20 @@ fun TerminalScreen(
                             "Session stopped. Type a command below to start a new one."
                         },
                         fontSize = 12.sp,
-                        color = Color(0xFFFCA5A5)
+                        color = MaterialTheme.colorScheme.error
                     )
                 }
             }
         }
 
-        // First-run hint so the empty canvas is obviously a terminal you type into.
-        if (bootstrapReady && terminalOutput.isBlank() &&
-            sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING
+        // First-run hint so the empty canvas is obviously a terminal you type into. Also hidden
+        // behind an open IME for the same reason as the first action above, with the same
+        // animated exit so the dock never snaps.
+        AnimatedVisibility(
+            visible = bootstrapReady && !isKeyboardVisible && terminalOutput.isBlank() &&
+                sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
         ) {
             Surface(
                 modifier = Modifier
@@ -546,7 +586,7 @@ fun TerminalScreen(
                     .padding(horizontal = 12.dp, vertical = 4.dp)
                     .testTag("first_run_terminal_hint"),
                 shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF1A1D27)
+                color = MaterialTheme.colorScheme.surfaceVariant
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -555,7 +595,7 @@ fun TerminalScreen(
                     Text(
                         text = "Type a command below — try \"git --version\"",
                         fontSize = 12.sp,
-                        color = Color(0xFF94A3B8)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -571,7 +611,7 @@ fun TerminalScreen(
         if (pendingEnvironmentChange) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
-                color = Color(0xFF2A2418),
+                color = MaterialTheme.colorScheme.surfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 10.dp, vertical = 4.dp)
@@ -585,12 +625,12 @@ fun TerminalScreen(
                     Text(
                         "Environment updated — restart the session to apply it.",
                         fontSize = 12.sp,
-                        color = Color(0xFFFCD34D),
+                        color = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.weight(1f)
                     )
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFF6366F1),
+                        color = MaterialTheme.colorScheme.primary,
                         onClick = { terminalRuntime?.restartSession() },
                         modifier = Modifier.testTag("apply_environment_restart")
                     ) {
@@ -598,7 +638,7 @@ fun TerminalScreen(
                             "Restart",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onPrimary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
@@ -608,11 +648,20 @@ fun TerminalScreen(
 
         // Real Terminal Canvas View boundary
         if (termuxAdapter != null) {
-            // Touching the output is a request to type into it. The canvas is a View that owns its
-            // own gestures (selection, scrolling), so this watches the initial pass and consumes
-            // nothing -- it only moves focus to the field, which is where keystrokes are composed.
-            // Before this, a person looking at a line they wanted to correct had no way to reach it
-            // except to find the field again by eye.
+            // Touching the output is a request to type into it. The tap that grants that request
+            // is recognised by the Termux view itself -- its recognizer is what already separates
+            // taps from scrolls, flings, pinches and long-press selection, and it is the only
+            // authority here: an interop view that claims the touch stream never offers a
+            // Compose-side watcher the release that would confirm a tap, which is exactly how an
+            // earlier watcher ended up reacting to every Press and opening the IME over the
+            // scrollback a person was trying to read.
+            DisposableEffect(termuxAdapter) {
+                termuxAdapter.onCanvasTap = {
+                    terminalInputFocusRequester.requestFocus()
+                    keyboardController?.show()
+                }
+                onDispose { termuxAdapter.onCanvasTap = null }
+            }
             AndroidView(
                 factory = { ctx ->
                     termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
@@ -622,26 +671,27 @@ fun TerminalScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .heightIn(min = 96.dp)
+                    // The canvas the shell draws into is dark in both themes; the surrounding
+                    // chrome follows VerbTheme. Without this the Termux view's transparent
+                    // background let a light-mode page through under light terminal text.
+                    .background(TerminalCanvas)
                     .padding(12.dp)
-                    .pointerInput(Unit) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent(PointerEventPass.Initial)
-                                if (event.type == PointerEventType.Press) {
-                                    terminalInputFocusRequester.requestFocus()
-                                    keyboardController?.show()
-                                }
-                            }
-                        }
-                    }
                     .testTag("termux_terminal_view")
             )
         } else {
             // Compose selection view fallback for unit tests and headless environments
+            // Auto-scroll to the newest output belongs to this fallback alone: with the real
+            // canvas mounted the Termux view scrolls itself, and an animation restarted on every
+            // throttled output publish only competed with the person's own finger on the screen.
+            LaunchedEffect(terminalOutput) {
+                scrollState.animateScrollTo(scrollState.maxValue)
+            }
             Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .background(TerminalCanvas)
                     .padding(12.dp)
                     .verticalScroll(scrollState)
             ) {
@@ -674,6 +724,33 @@ fun TerminalScreen(
         )
     }
 
+    // Restart confirmation: the one destructive action in the header gets one barrier.
+    if (confirmRestart) {
+        AlertDialog(
+            onDismissRequest = { confirmRestart = false },
+            title = { Text("Restart session?") },
+            text = {
+                Text("The running shell and everything inside it will stop. This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmRestart = false
+                        terminalRuntime?.restartSession()
+                    },
+                    modifier = Modifier.testTag("btn_confirm_restart")
+                ) {
+                    Text("Restart", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRestart = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     // Terminal Session Diagnostics Sheet
     if (showDiagnosticsSheet) {
         TerminalDiagnosticsSheet(
@@ -694,13 +771,12 @@ fun TerminalScreen(
     if (showFileExplorerSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFileExplorerSheet = false },
-            containerColor = Color(0xFF12141C),
-            contentColor = Color(0xFFE2E8F0),
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.testTag("terminal_file_explorer_sheet")
         ) {
             FileExplorerDrawer(
                 terminalRuntime = terminalRuntime,
-                isDark = true,
                 onFileClicked = { path -> clipboardManager.setText(AnnotatedString(path)) }
             )
         }
@@ -719,61 +795,6 @@ fun TerminalScreen(
         )
     }
 
-    // AI Explanation Sheet
-    if (aiExplanation != null || isAiExplaining) {
-        ModalBottomSheet(
-            onDismissRequest = onDismissAiExplanation,
-            containerColor = Color(0xFF12141C),
-            contentColor = Color(0xFFE2E8F0),
-            modifier = Modifier.testTag("terminal_ai_explanation_sheet")
-        ) {
-            Column(modifier = Modifier.padding(20.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Default.Psychology,
-                        contentDescription = null,
-                        tint = Color(0xFF6366F1),
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "Terminal Analysis",
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-                when {
-                    isAiExplaining -> Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = Color(0xFF6366F1)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = "Analyzing structural evidence…",
-                            fontSize = 13.sp,
-                            color = Color(0xFF94A3B8)
-                        )
-                    }
-                    !aiExplanation.isNullOrBlank() -> Text(
-                        text = aiExplanation,
-                        fontSize = 14.sp,
-                        color = Color(0xFFE2E8F0),
-                        modifier = Modifier.padding(bottom = 16.dp)
-                    )
-                    else -> Button(
-                        onClick = onExplainOutput,
-                        modifier = Modifier.testTag("btn_retry_ai_explain")
-                    ) {
-                        Text("Retry")
-                    }
-                }
-            }
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -792,10 +813,18 @@ private fun ProjectSheet(
             name = ""
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Color(0xFF12141C), contentColor = Color(0xFFE2E8F0)) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface
+    ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text("Project", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text("Launches a new terminal session in the selected directory.", fontSize = 12.sp, color = Color(0xFF94A3B8))
+            Text(
+                "Launches a new terminal session in the selected directory.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             OutlinedTextField(
                 value = name,
                 onValueChange = { name = it },
@@ -834,7 +863,7 @@ private fun BootstrapProgressCard(
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag("bootstrap_progress_card"),
         shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF161820)
+        color = MaterialTheme.colorScheme.surface
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -844,14 +873,14 @@ private fun BootstrapProgressCard(
                 CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
-                    color = Color(0xFF6366F1)
+                    color = MaterialTheme.colorScheme.primary
                 )
             } else {
                 LinearProgressIndicator(
                     progress = { progress },
                     modifier = Modifier.width(48.dp),
-                    color = Color(0xFF6366F1),
-                    trackColor = Color(0xFF222630),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
                 )
             }
@@ -861,18 +890,18 @@ private fun BootstrapProgressCard(
                     text = title,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = stepLabel,
                     fontSize = 11.sp,
-                    color = Color(0xFF818CF8)
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = subtitle,
                     fontSize = 12.sp,
-                    color = Color(0xFF94A3B8)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -890,7 +919,7 @@ private fun BootstrapErrorCard(
             .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag("bootstrap_error_card"),
         shape = RoundedCornerShape(12.dp),
-        color = Color(0xFF2A1A1C)
+        color = MaterialTheme.colorScheme.surfaceVariant
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
@@ -901,19 +930,19 @@ private fun BootstrapErrorCard(
                     text = "Verb CLI userland install failed",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFFFCA5A5)
+                    color = MaterialTheme.colorScheme.error
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = message,
                     fontSize = 12.sp,
-                    color = Color(0xFFE2E8F0)
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "Check your internet connection and storage, then try again.",
                     fontSize = 11.sp,
-                    color = Color(0xFF94A3B8)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Spacer(modifier = Modifier.width(12.dp))
