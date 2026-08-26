@@ -1,16 +1,25 @@
 package com.example.verb.ui
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onRoot
 import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.ui.theme.VerbTheme
+import com.github.takahirom.roborazzi.captureRoboImage
 import java.nio.file.Path
 import kotlin.io.path.readText
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -59,6 +68,21 @@ class TerminalChromeThemeTest {
         composeTestRule.onAllNodesWithTag(tag).assertCountEquals(2)
     }
 
+    /** The workspace content, shared by the render test and the viewport-colour test. */
+    private fun terminalWorkspace(): @Composable () -> Unit = {
+        TerminalScreen(
+            terminalOutput = "",
+            terminalRuntime = null,
+            onSendCommand = {},
+            onSendKey = {},
+            onSendText = {},
+            onClearTerminal = {},
+            onInspectText = {},
+            onSubmitIntent = {},
+            aiProviderSettings = readyProvider
+        )
+    }
+
     @Test
     fun runsSheetComposesUnderDarkAndLight() {
         bothThemes { RunsSheet(terminalRuntime = null, onDismiss = {}) }
@@ -85,20 +109,63 @@ class TerminalChromeThemeTest {
 
     @Test
     fun terminalWorkspaceComposesUnderDarkAndLight() {
-        bothThemes {
-            TerminalScreen(
-                terminalOutput = "",
-                terminalRuntime = null,
-                onSendCommand = {},
-                onSendKey = {},
-                onSendText = {},
-                onClearTerminal = {},
-                onInspectText = {},
-                onSubmitIntent = {},
-                aiProviderSettings = readyProvider
-            )
-        }
+        bothThemes(content = terminalWorkspace())
         assertRenderedInBothThemes("verb_sheet_trigger")
+    }
+
+    /**
+     * The regression this exists to hold: the Task 1 migration themed the root workspace
+     * background, the Termux canvas is transparent, and light terminal text on a light page was
+     * unreadable -- while all 552 tests stayed green. The viewport must sample identical pixels
+     * under both schemes, and those pixels must be dark in both.
+     *
+     * Compose's own captureToImage cannot produce a frame on Robolectric, so the screenshot comes
+     * from Roborazzi, which renders one through the same native-graphics pipeline.
+     */
+    @Test
+    fun terminalViewportKeepsItsColourAcrossThemes() {
+        composeTestRule.setContent {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(modifier = Modifier.weight(1f)) {
+                    VerbTheme(darkTheme = true) { terminalWorkspace()() }
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    VerbTheme(darkTheme = false) { terminalWorkspace()() }
+                }
+            }
+        }
+
+        val screenshot = java.io.File.createTempFile("terminal-viewport", ".png")
+        screenshot.deleteOnExit()
+        composeTestRule.onRoot().captureRoboImage(screenshot)
+        val bitmap = android.graphics.BitmapFactory.decodeFile(screenshot.absolutePath)
+        assertTrue(
+            "The theme screenshot did not render (${bitmap.width}x${bitmap.height}).",
+            bitmap.width > 0 && bitmap.height > 0
+        )
+
+        fun sample(fractionX: Float, fractionY: Float): Int {
+            val x = (bitmap.width * fractionX).toInt().coerceIn(0, bitmap.width - 1)
+            val y = (bitmap.height * fractionY).toInt().coerceIn(0, bitmap.height - 1)
+            return bitmap.getPixel(x, y)
+        }
+
+        // Middle of each half's viewport band: header above, keyboard dock below.
+        val darkHalf = sample(0.5f, 0.30f)
+        val lightHalf = sample(0.5f, 0.80f)
+
+        assertEquals(
+            "The terminal viewport changed colour between themes " +
+                "(dark=${Integer.toHexString(darkHalf)}, light=${Integer.toHexString(lightHalf)}). " +
+                "The canvas must stay dark in both.",
+            darkHalf,
+            lightHalf
+        )
+        assertTrue(
+            "The terminal viewport is not dark (${Integer.toHexString(darkHalf)}); " +
+                "light terminal text would be unreadable.",
+            Color(darkHalf).luminance() < 0.2f
+        )
     }
 
     /**

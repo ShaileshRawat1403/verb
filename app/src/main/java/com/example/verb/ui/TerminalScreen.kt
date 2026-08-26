@@ -1,6 +1,7 @@
 package com.example.verb.ui
 
 import com.example.verb.model.VerbIntent
+import com.example.verb.ui.theme.TerminalCanvas
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -684,6 +685,10 @@ fun TerminalScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     .heightIn(min = 96.dp)
+                    // The canvas the shell draws into is dark in both themes; the surrounding
+                    // chrome follows VerbTheme. Without this the Termux view's transparent
+                    // background let a light-mode page through under light terminal text.
+                    .background(TerminalCanvas)
                     .padding(12.dp)
                     .testTag("termux_terminal_view")
             )
@@ -699,6 +704,7 @@ fun TerminalScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .background(TerminalCanvas)
                     .padding(12.dp)
                     .verticalScroll(scrollState)
             ) {

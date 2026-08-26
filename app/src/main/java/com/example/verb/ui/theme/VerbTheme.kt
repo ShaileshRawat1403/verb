@@ -10,6 +10,15 @@ import androidx.compose.ui.graphics.Color
 val DarkBackground = Color(0xFF101216)
 val DarkSurface = Color(0xFF181B22)
 val DarkSurfaceVariant = Color(0xFF222630)
+
+/**
+ * The terminal emulator canvas. Deliberately NOT a colorScheme token: a terminal is dark in both
+ * themes, so this must not follow the system setting. The chrome around the terminal follows
+ * `VerbTheme`; the viewport the shell draws into does not. Light text on a themed background was
+ * exactly the light-mode regression this constant exists to prevent.
+ */
+val TerminalCanvas = Color(0xFF0D0E12)
+
 val PrimaryIndigo = Color(0xFF6366F1)
 val SecondaryCyan = Color(0xFF38BDF8)
 val AccentAmber = Color(0xFFF59E0B)
