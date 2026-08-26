@@ -148,16 +148,8 @@ fun TerminalScreen(
      * what the offer is or how it was chosen.
      */
     verbFirstAction: (@Composable () -> Unit)? = null,
-    aiExplanation: String? = null,
-    isAiExplaining: Boolean = false,
-    onExplainOutput: () -> Unit = {},
-    onDismissAiExplanation: () -> Unit = {},
-    terminalAiEvidence: TerminalEvidence? = null,
-    terminalAiThread: List<TerminalAiExchange> = emptyList(),
-    onAskTerminalAi: (String) -> Unit = {},
-    onClearAiThread: () -> Unit = {},
-    aiProviderSettings: com.example.verb.ai.AiProviderSettings = com.example.verb.ai.AiProviderSettings(),
-    onOpenProviderSettings: () -> Unit = {},
+    /** Opens Ask Verb on the assistant stage; the terminal no longer hosts a copy of it. */
+    onOpenAssistant: () -> Unit = {},
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
     onCreateProject: (String) -> Unit = {},
@@ -168,7 +160,6 @@ fun TerminalScreen(
     var showFileExplorerSheet by remember { mutableStateOf(false) }
     var showProjectSheet by remember { mutableStateOf(false) }
     var showRunsSheet by remember { mutableStateOf(false) }
-    var showAiSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     // Restarting a live session kills whatever runs inside it, and on a phone the pill that does
     // it sits in a crowded header where a mis-tap is easy. A live session asks first; restarting
@@ -208,8 +199,7 @@ fun TerminalScreen(
         }
     }
     val anyOverlayOpen = verbSurfaceOpen || showFileExplorerSheet || showProjectSheet ||
-        showDiagnosticsSheet || showRunsSheet || showOverflowMenu ||
-        (aiExplanation != null || isAiExplaining)
+        showDiagnosticsSheet || showRunsSheet || showOverflowMenu
     // Overflow menu is the innermost surface (a DropdownMenu can appear over any sheet's trigger),
     // so it takes priority over every other back handler below.
     BackHandler(enabled = !verbSurfaceOpen && showOverflowMenu) { showOverflowMenu = false }
@@ -225,10 +215,6 @@ fun TerminalScreen(
     ) {
         showRunsSheet = false
     }
-    BackHandler(
-        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
-            !showDiagnosticsSheet && !showRunsSheet && (aiExplanation != null || isAiExplaining)
-    ) { onDismissAiExplanation() }
     BackHandler(enabled = !anyOverlayOpen && isKeyboardVisible) {
         keyboardController?.hide()
         focusManager.clearFocus(force = true)
@@ -446,7 +432,7 @@ fun TerminalScreen(
                                     },
                                     onClick = {
                                         showOverflowMenu = false
-                                        showAiSheet = true
+                                        onOpenAssistant()
                                     },
                                     modifier = Modifier.testTag("btn_ai_explain_overflow")
                                 )
@@ -808,40 +794,6 @@ fun TerminalScreen(
         )
     }
 
-    // Ask Verb: the sheet the user opens to ask about their own work.
-    //
-    // It opens on its own, without spending a provider call first. Requiring a canned analysis
-    // before a person could type a question made the good surface cost something and put the
-    // question box behind an answer nobody asked for.
-    //
-    // Shown only when the user opened it here. It used to appear whenever the shared assistant
-    // state was non-null, which meant asking from the Ask Verb screen made this sheet slide up over
-    // that screen with the same conversation in it -- a surface Verb opened on its own, which
-    // `docs/UX_FOUNDATION.md` allows for exactly one thing, and this is not it.
-    //
-    // The body is `AssistPanel`, shared with the Ask Verb task screen, so the two entry points can
-    // never grow into two assistants that answer the same question differently.
-    if (showAiSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showAiSheet = false; onDismissAiExplanation() },
-            // The sheet must not eat the IME inset: the panel applies it itself so the question box
-            // stays above the keyboard instead of being pushed under it.
-            contentWindowInsets = { WindowInsets(0) },
-            modifier = Modifier.testTag("terminal_ai_explanation_sheet")
-        ) {
-            AssistPanel(
-                aiExplanation = aiExplanation,
-                isAiExplaining = isAiExplaining,
-                evidence = terminalAiEvidence,
-                thread = terminalAiThread,
-                onAsk = onAskTerminalAi,
-                onExplain = onExplainOutput,
-                onClearThread = onClearAiThread,
-                providerSettings = aiProviderSettings,
-                onOpenProviderSettings = onOpenProviderSettings
-            )
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

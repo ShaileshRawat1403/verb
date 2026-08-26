@@ -293,13 +293,13 @@ class RunsSheetTest {
     }
 
     /**
-     * Opening the ask surface must not spend a provider call. The overflow item used to fire the
-     * canned analysis, which meant a person could not reach the question box without first paying
-     * for an answer they had not asked for.
+     * The terminal no longer hosts its own copy of the assistant. In Material3 1.3.0 a
+     * ModalBottomSheet renders in a window that never receives IME insets, so the keyboard covered
+     * the question box; the terminal now sends the person to the host that works.
      */
     @Test
-    fun overflowAskVerbOpensTheSheetWithoutCallingTheProvider() {
-        var explainCount = 0
+    fun overflowAskVerbOpensTheAssistantRatherThanASheet() {
+        var opened = 0
         composeTestRule.setContent {
             TerminalScreen(
                 terminalOutput = "",
@@ -310,44 +310,15 @@ class RunsSheetTest {
                 onClearTerminal = {},
                 onInspectText = {},
                 onSubmitIntent = {},
-                onExplainOutput = { explainCount++ }
+                onOpenAssistant = { opened++ }
             )
         }
 
         composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
         composeTestRule.onNodeWithText("Ask Verb about this session").performClick()
 
-        composeTestRule.onNodeWithTag("terminal_ai_question_field").assertExists()
-        assertEquals(0, explainCount)
-    }
-
-    /** The explain path still exists; it is now a choice inside the sheet rather than the door. */
-    @Test
-    fun theSheetOffersTheUnpromptedExplanationAsAChoice() {
-        var explainCount = 0
-        composeTestRule.setContent {
-            TerminalScreen(
-                terminalOutput = "",
-                terminalRuntime = null,
-                onSendCommand = {},
-                onSendKey = {},
-                onSendText = {},
-                onClearTerminal = {},
-                onInspectText = {},
-                onSubmitIntent = {},
-                onExplainOutput = { explainCount++ },
-                aiProviderSettings = AiProviderSettings(
-                    config = AiProviderConfig(AiProviderId.OPENAI, "test-model", "https://api.openai.com/v1"),
-                    hasApiKey = true
-                )
-            )
-        }
-
-        composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
-        composeTestRule.onNodeWithText("Ask Verb about this session").performClick()
-        composeTestRule.onNodeWithTag("btn_retry_ai_explain").performClick()
-
-        assertEquals(1, explainCount)
+        assertEquals(1, opened)
+        composeTestRule.onNodeWithTag("terminal_ai_explanation_sheet").assertDoesNotExist()
     }
 
     @Test

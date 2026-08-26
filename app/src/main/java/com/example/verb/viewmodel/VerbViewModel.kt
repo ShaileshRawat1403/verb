@@ -36,6 +36,8 @@ import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
 import com.example.verb.terminal.AgentWorkFact
+import com.example.verb.terminal.CommandLifecycleState
+import com.example.verb.terminal.GitDelta
 import com.example.verb.terminal.GitObserver
 import com.example.verb.terminal.GitSnapshot
 import com.example.verb.terminal.TerminalAiExchange
@@ -51,6 +53,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -321,6 +324,19 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _gitSnapshot = MutableStateFlow<GitSnapshot?>(null)
 
+    /**
+     * The tree as it stood *before* the most recent command, which is what the delta measures from.
+     *
+     * Not "the last command that exited 0": the command that changes the tree usually exits 0 too,
+     * so it became its own baseline and every delta came out zero. Held in memory beside the
+     * command history, which is itself non-persistent -- a snapshot outliving the session it
+     * describes would be a claim about a world that has moved on.
+     */
+    private val _previousGitSnapshot = MutableStateFlow<GitSnapshot?>(null)
+
+    /** Guards against a slow proot run overlapping the next command boundary. */
+    private val gitObservationInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** The ask thread: prior exchanges ride the prompt so a follow-up never restates context. */
     private val _terminalAiThread = MutableStateFlow<List<TerminalAiExchange>>(emptyList())
     val terminalAiThread: StateFlow<List<TerminalAiExchange>> = _terminalAiThread.asStateFlow()
@@ -329,6 +345,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     val isTerminalAiExplaining: StateFlow<Boolean> = _isTerminalAiExplaining.asStateFlow()
 
     init {
+        observeCommandBoundaries()
         TerminalSessionLogger.info(
             LogCategory.DIAGNOSTIC,
             "Bundled tools: installed=${bundledTools.installed}, skipped=${bundledTools.skipped.size}"
@@ -860,6 +877,31 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * [fromSheet] records how the user got here so back can retrace it, and nothing else depends on
      * it -- it is navigation history, not product state.
      */
+    /**
+     * Opens Ask Verb on the assistant stage.
+     *
+     * The terminal used to host the assistant in its own bottom sheet. In Material3 1.3.0 that
+     * sheet renders in a `WindowManager` window that never receives IME insets, so the soft
+     * keyboard covered the question box and no amount of padding inside the sheet could move it --
+     * an ask box you cannot see while typing into it. The assistant already has a host that works,
+     * and it is the one a person goes to in order to ask, so the terminal now sends them there
+     * instead of growing a second half-working copy of the same surface.
+     */
+    fun openAssistant() {
+        _assistantStageRequested.value = true
+        openTask(VerbTask.ASK_VERB)
+    }
+
+    private val _assistantStageRequested = MutableStateFlow(false)
+
+    /** True when Ask Verb should open on the assistant rather than on the deterministic actions. */
+    val assistantStageRequested: StateFlow<Boolean> = _assistantStageRequested.asStateFlow()
+
+    /** Consumed once the screen has honoured it, so returning later starts on actions again. */
+    fun assistantStageConsumed() {
+        _assistantStageRequested.value = false
+    }
+
     fun openTask(task: VerbTask, fromSheet: Boolean = false) {
         // Opening anything that displays session recovery re-checks it first: the evidence an agent
         // leaves behind can appear after the coordinator's own bounded retries gave up, and this is
@@ -1097,6 +1139,36 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * the few hundred milliseconds, and stale evidence displayed as current is the one thing this
      * surface promises not to do. A failure leaves the previous snapshot rather than inventing one.
      */
+    /**
+     * Watches command boundaries and reads the tree after each one.
+     *
+     * This is the half of C2 that makes "what did that just do" answerable: a snapshot after every
+     * boundary keeps [_gitSnapshot] current, and the reading it replaces becomes the baseline.
+     *
+     * Overlapping runs are dropped rather than queued. Under proot a status can outlast the next
+     * command, and a backlog of stale observations is worse than a missed one -- the next boundary
+     * will take a fresher reading anyway.
+     */
+    private fun observeCommandBoundaries() {
+        viewModelScope.launch {
+            terminalRuntime.commandHistory
+                .map { it.lastOrNull() }
+                .distinctUntilChanged()
+                .collect { record ->
+                    if (record == null || record.state == CommandLifecycleState.RUNNING) return@collect
+                    if (!gitObservationInFlight.compareAndSet(false, true)) return@collect
+                    try {
+                        // Whatever the tree was before this boundary becomes the baseline, so the
+                        // delta describes what this command did rather than what it inherited.
+                        _previousGitSnapshot.value = _gitSnapshot.value
+                        refreshGitSnapshot()
+                    } finally {
+                        gitObservationInFlight.set(false)
+                    }
+                }
+        }
+    }
+
     private suspend fun refreshGitSnapshot() {
         // hostPath, not guestPath: TerminalWorkingDirectory has already translated it through the
         // bind allowlist, so a cwd Verb cannot legitimately reach resolves to null and is skipped.
@@ -1122,7 +1194,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 agentType = session.agent?.agentType
             )
         },
-        git = _gitSnapshot.value
+        git = _gitSnapshot.value,
+        gitSinceLastCommand = GitDelta.between(_previousGitSnapshot.value, _gitSnapshot.value)
     )
 
     /**

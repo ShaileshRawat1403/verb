@@ -11,6 +11,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,9 +78,21 @@ fun AskVerbScreen(
     onExplainEvidence: () -> Unit = {},
     onClearAiThread: () -> Unit = {},
     isKeyboardVisible: Boolean = false,
+    startOnAssistant: Boolean = false,
+    onAssistantStageConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var stage by rememberSaveable { mutableStateOf(AskVerbStage.ACTIONS) }
+
+    // Opened from the terminal, where the question already occurred to the person: skip the stage
+    // they did not ask for. Consumed immediately so coming back later starts on actions again --
+    // `docs/PRD.md` orders observed fact before interpretation, and that default has to hold.
+    LaunchedEffect(startOnAssistant) {
+        if (startOnAssistant) {
+            stage = AskVerbStage.ASK
+            onAssistantStageConsumed()
+        }
+    }
 
     Column(
         modifier = modifier

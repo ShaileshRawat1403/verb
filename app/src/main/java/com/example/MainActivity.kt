@@ -108,6 +108,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val isTerminalAiExplaining by viewModel.isTerminalAiExplaining.collectAsStateWithLifecycle()
     val terminalAiEvidence by viewModel.terminalAiEvidence.collectAsStateWithLifecycle()
     val terminalAiThread by viewModel.terminalAiThread.collectAsStateWithLifecycle()
+    val assistantStageRequested by viewModel.assistantStageRequested.collectAsStateWithLifecycle()
     val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
@@ -221,16 +222,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 onSubmitIntent = viewModel::submitIntent,
                 onOpenVerb = viewModel::openVerbSheet,
                 verbSurfaceOpen = surface != VerbSurface.None,
-                aiExplanation = terminalAiExplanation,
-                isAiExplaining = isTerminalAiExplaining,
-                onExplainOutput = viewModel::explainTerminalOutput,
-                onDismissAiExplanation = viewModel::dismissTerminalAiExplanation,
-                terminalAiEvidence = terminalAiEvidence,
-                terminalAiThread = terminalAiThread,
-                onAskTerminalAi = viewModel::askTerminalAi,
-                onClearAiThread = viewModel::clearTerminalAiThread,
-                aiProviderSettings = aiProviderSettings,
-                onOpenProviderSettings = { viewModel.openTask(VerbTask.PROVIDER) },
+                onOpenAssistant = viewModel::openAssistant,
                 projects = projects,
                 selectedProject = selectedProject,
                 onCreateProject = viewModel::createProject,
@@ -278,6 +270,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     isTerminalAiExplaining = isTerminalAiExplaining,
                     terminalAiEvidence = terminalAiEvidence,
                     terminalAiThread = terminalAiThread,
+                    assistantStageRequested = assistantStageRequested,
                     isKeyboardVisible = isKeyboardVisible,
                     isSessionActive = isSessionActive,
                     runtimeProfileReports = runtimeProfileReports,
@@ -361,6 +354,7 @@ private fun VerbTaskSurface(
     isTerminalAiExplaining: Boolean,
     terminalAiEvidence: com.example.verb.terminal.TerminalEvidence?,
     terminalAiThread: List<com.example.verb.terminal.TerminalAiExchange>,
+    assistantStageRequested: Boolean,
     isKeyboardVisible: Boolean,
     isSessionActive: Boolean,
     runtimeProfileReports: List<com.example.verb.terminal.RuntimeProfileReport>,
@@ -428,6 +422,8 @@ private fun VerbTaskSurface(
                     onAskVerbAi = viewModel::askTerminalAi,
                     onExplainEvidence = viewModel::explainTerminalOutput,
                     onClearAiThread = viewModel::clearTerminalAiThread,
+                    startOnAssistant = assistantStageRequested,
+                    onAssistantStageConsumed = viewModel::assistantStageConsumed,
                     isKeyboardVisible = isKeyboardVisible
                 )
 

@@ -10,10 +10,10 @@ import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
 import com.example.verb.ai.AiProviderSettings
 import com.example.verb.session.VerbSessionState
+import com.example.verb.terminal.TerminalSessionState
 import com.example.verb.terminal.AgentWorkFact
 import com.example.verb.terminal.TerminalAiExchange
 import com.example.verb.terminal.TerminalEvidence
-import com.example.verb.terminal.TerminalSessionState
 import java.time.Instant
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -25,8 +25,7 @@ import org.robolectric.annotation.Config
 /**
  * The assistant surface itself. `TerminalAiHelperTest` proves what crosses the provider boundary;
  * these prove what the person actually sees, which is where the defects this file was written for
- * lived — a duplicated answer, an evidence panel in the wrong vocabulary, and a sheet that opened
- * itself over another screen.
+ * lived — a duplicated answer and an evidence panel in the wrong vocabulary.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -142,37 +141,5 @@ class AssistSheetTest {
 
         composeTestRule.onNodeWithTag("btn_ask_terminal_ai").performClick()
         assertEquals(0, asked)
-    }
-
-    /**
-     * The terminal's sheet must not open itself. It used to appear whenever the shared assistant
-     * state went non-null, so asking from the Ask Verb screen slid the terminal's sheet up over it
-     * with the same conversation inside — a surface Verb opened on its own.
-     */
-    @Test
-    fun theTerminalSheetDoesNotOpenItselfWhenTheSharedAssistantStateFills() {
-        composeTestRule.setContent {
-            TerminalScreen(
-                terminalOutput = "",
-                terminalRuntime = null,
-                onSendCommand = {},
-                onSendKey = {},
-                onSendText = {},
-                onClearTerminal = {},
-                onInspectText = {},
-                onSubmitIntent = {},
-                aiExplanation = "An answer produced by the other host.",
-                isAiExplaining = false,
-                terminalAiEvidence = evidence,
-                terminalAiThread = listOf(
-                    TerminalAiExchange("Asked elsewhere", "An answer produced by the other host.")
-                ),
-                aiProviderSettings = readyProvider
-            )
-        }
-
-        composeTestRule.onNodeWithTag("terminal_ai_explanation_sheet").assertDoesNotExist()
-        composeTestRule.onAllNodesWithText("An answer produced by the other host.")
-            .assertCountEquals(0)
     }
 }

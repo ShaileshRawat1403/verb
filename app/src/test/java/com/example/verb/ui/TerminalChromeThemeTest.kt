@@ -79,7 +79,6 @@ class TerminalChromeThemeTest {
             onClearTerminal = {},
             onInspectText = {},
             onSubmitIntent = {},
-            aiProviderSettings = readyProvider
         )
     }
 
