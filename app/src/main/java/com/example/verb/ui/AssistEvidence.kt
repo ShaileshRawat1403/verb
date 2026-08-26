@@ -58,6 +58,19 @@ object AssistEvidence {
             }
         }
 
+        // "Not observed" is a different sentence from "no changes", and stays one.
+        val git = evidence.git
+        when {
+            git == null || !git.observed -> add("◌ working tree not observed")
+            !git.insideRepository -> add("· not a git repository")
+            git.changedFiles == 0 -> add("○ working tree clean at ${git.headShort ?: "an unknown commit"}")
+            else -> {
+                val staged = if (git.stagedFiles > 0) ", ${git.stagedFiles} staged" else ""
+                val plural = if (git.changedFiles == 1) "file" else "files"
+                add("● ${git.changedFiles} changed $plural$staged · at ${git.headShort ?: "an unknown commit"}")
+            }
+        }
+
         evidence.agentWork.forEach { fact ->
             val agent = fact.agentType?.let { " ($it)" } ?: ""
             add(

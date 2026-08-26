@@ -4,6 +4,7 @@ import com.example.verb.session.VerbSessionState
 import com.example.verb.terminal.AgentWorkFact
 import com.example.verb.terminal.CommandExecutionRecord
 import com.example.verb.terminal.CommandLifecycleState
+import com.example.verb.terminal.GitSnapshot
 import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalSessionState
@@ -124,6 +125,71 @@ class AssistEvidenceTest {
         assertTrue(lines.any { it.contains("working directory not observed") })
         assertTrue(lines.any { it.contains("does not report command boundaries") })
         assertTrue(lines.any { it.contains("no command boundaries recorded yet") })
+    }
+
+    /**
+     * The working tree is the fact the assistant was missing: without it, "what did the agent
+     * change?" had no evidence at all behind it.
+     */
+    @Test
+    fun `a dirty tree reads as a count in both renderings, and names nothing`() {
+        val dirty = TerminalEvidence(
+            sessionState = TerminalSessionState.RUNNING,
+            workingDirectoryKnown = true,
+            shellIntegrationActive = true,
+            git = GitSnapshot(
+                observed = true,
+                insideRepository = true,
+                onNamedBranch = true,
+                changedFiles = 3,
+                stagedFiles = 1,
+                headShort = "a1b2c3d"
+            )
+        )
+
+        val panel = AssistEvidence.displayLines(dirty, now).joinToString("\n")
+        val envelope = TerminalAiHelper.evidenceLines(dirty, now).joinToString("\n")
+
+        assertTrue(panel.contains("3 changed files"))
+        assertTrue(panel.contains("1 staged"))
+        assertTrue(panel.contains("a1b2c3d"))
+        assertTrue(envelope.contains("3 changed files"))
+        assertTrue(envelope.contains("name withheld"))
+    }
+
+    /** Unknown is not No: a tree Verb could not read must never render as a clean one. */
+    @Test
+    fun `an unobserved tree never reads as clean`() {
+        val unknown = TerminalEvidence(
+            TerminalSessionState.RUNNING, true, true,
+            git = GitSnapshot.unobserved(now)
+        )
+
+        val panel = AssistEvidence.displayLines(unknown, now).joinToString("\n")
+        val envelope = TerminalAiHelper.evidenceLines(unknown, now).joinToString("\n")
+
+        assertTrue(panel.contains("not observed"))
+        assertFalse(panel.contains("clean"))
+        assertTrue(envelope.contains("not observed"))
+        assertFalse(envelope.contains("clean"))
+    }
+
+    @Test
+    fun `a clean tree says so, and says which commit it is clean at`() {
+        val clean = TerminalEvidence(
+            TerminalSessionState.RUNNING, true, true,
+            git = GitSnapshot(observed = true, insideRepository = true, onNamedBranch = true, headShort = "a1b2c3d")
+        )
+
+        assertTrue(AssistEvidence.displayLines(clean, now).any { it.contains("clean at a1b2c3d") })
+    }
+
+    /** No snapshot at all is the same claim as one that failed, and reads the same way. */
+    @Test
+    fun `no snapshot reads as not observed`() {
+        val none = TerminalEvidence(TerminalSessionState.RUNNING, true, true)
+
+        assertTrue(AssistEvidence.displayLines(none, now).any { it.contains("not observed") })
     }
 
     @Test

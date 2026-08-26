@@ -19,7 +19,9 @@ data class TerminalEvidence(
     /** The newest command boundaries last; only lifecycle facts travel, never command text. */
     val commandTail: List<CommandExecutionRecord> = emptyList(),
     /** One entry per agent session Verb holds. */
-    val agentWork: List<AgentWorkFact> = emptyList()
+    val agentWork: List<AgentWorkFact> = emptyList(),
+    /** The working tree as Verb last read it, or null when it has not looked. */
+    val git: GitSnapshot? = null
 )
 
 /**
@@ -117,6 +119,21 @@ object TerminalAiHelper {
                 add(
                     "  ${index + 1}. ${record.state.name}, exit ${record.exitCode ?: "unknown"}, " +
                         "duration ${record.durationMs ?: "unknown"} ms"
+                )
+            }
+        }
+        // Unknown and clean are different claims and are never collapsed into one line.
+        when {
+            evidence.git == null || !evidence.git.observed ->
+                add("Working tree: not observed")
+            !evidence.git.insideRepository ->
+                add("Working tree: not a git repository")
+            else -> {
+                val git = evidence.git
+                add(
+                    "Working tree: ${git.changedFiles} changed files " +
+                        "(${git.stagedFiles} staged), HEAD ${git.headShort ?: "unknown"}, " +
+                        "on a named branch: ${if (git.onNamedBranch) "yes" else "no"} (name withheld)"
                 )
             }
         }

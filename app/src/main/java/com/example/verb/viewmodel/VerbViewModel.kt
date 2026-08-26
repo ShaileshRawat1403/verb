@@ -36,6 +36,8 @@ import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
 import com.example.verb.terminal.AgentWorkFact
+import com.example.verb.terminal.GitObserver
+import com.example.verb.terminal.GitSnapshot
 import com.example.verb.terminal.TerminalAiExchange
 import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalAiHelper
@@ -307,6 +309,17 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      */
     private val _terminalAiEvidence = MutableStateFlow<TerminalEvidence?>(null)
     val terminalAiEvidence: StateFlow<TerminalEvidence?> = _terminalAiEvidence.asStateFlow()
+
+    private val gitObserver = GitObserver(application.applicationContext.filesDir)
+
+    /**
+     * The working tree as Verb last read it.
+     *
+     * Read off the terminal's hot path, never on it: this runs `git` under proot on a phone, and a
+     * session that stutters because Verb wanted a file count is a worse product than one that
+     * answers "not observed". Null until the first observation completes.
+     */
+    private val _gitSnapshot = MutableStateFlow<GitSnapshot?>(null)
 
     /** The ask thread: prior exchanges ride the prompt so a follow-up never restates context. */
     private val _terminalAiThread = MutableStateFlow<List<TerminalAiExchange>>(emptyList())
@@ -1024,11 +1037,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun explainTerminalOutput() {
         if (_isTerminalAiExplaining.value) return
 
-        val evidence = currentEvidence()
-        _terminalAiEvidence.value = evidence
-
         _isTerminalAiExplaining.value = true
         viewModelScope.launch(Dispatchers.IO) {
+            refreshGitSnapshot()
+            val evidence = currentEvidence()
+            _terminalAiEvidence.value = evidence
             _terminalAiExplanation.value = try {
                 TerminalAiHelper.analyze(service = aiAssistantService, evidence = evidence)
             } catch (e: Exception) {
@@ -1048,12 +1061,13 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     fun askTerminalAi(question: String) {
         if (question.isBlank() || _isTerminalAiExplaining.value) return
 
-        val evidence = currentEvidence()
         val priors = _terminalAiThread.value
-        _terminalAiEvidence.value = evidence
 
         _isTerminalAiExplaining.value = true
         viewModelScope.launch(Dispatchers.IO) {
+            refreshGitSnapshot()
+            val evidence = currentEvidence()
+            _terminalAiEvidence.value = evidence
             val answer = try {
                 TerminalAiHelper.ask(
                     service = aiAssistantService,
@@ -1076,6 +1090,25 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * withheld), and the recorded state of every agent session. This is the whole envelope -- the
      * model never receives more than this.
      */
+    /**
+     * Refreshes the working-tree snapshot, off the main thread, before the evidence is assembled.
+     *
+     * Deliberately awaited rather than fired and forgotten: an answer about what changed is worth
+     * the few hundred milliseconds, and stale evidence displayed as current is the one thing this
+     * surface promises not to do. A failure leaves the previous snapshot rather than inventing one.
+     */
+    private suspend fun refreshGitSnapshot() {
+        // hostPath, not guestPath: TerminalWorkingDirectory has already translated it through the
+        // bind allowlist, so a cwd Verb cannot legitimately reach resolves to null and is skipped.
+        val directory = terminalRuntime.currentWorkingDirectory.value?.hostPath
+            ?: _selectedProject.value?.directory
+            ?: return
+        val snapshot = withContext(Dispatchers.IO) {
+            runCatching { gitObserver.observe(directory) }.getOrNull()
+        }
+        if (snapshot != null) _gitSnapshot.value = snapshot
+    }
+
     private fun currentEvidence(): TerminalEvidence = TerminalEvidence(
         sessionState = terminalRuntime.sessionState.value,
         workingDirectoryKnown = terminalRuntime.currentWorkingDirectory.value != null,
@@ -1088,7 +1121,8 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 lastSeenAt = session.lastSeenAt,
                 agentType = session.agent?.agentType
             )
-        }
+        },
+        git = _gitSnapshot.value
     )
 
     /**
