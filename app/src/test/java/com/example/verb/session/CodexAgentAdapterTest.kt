@@ -3,6 +3,7 @@ package com.example.verb.session
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -15,6 +16,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class CodexAgentAdapterTest {
 
     @get:Rule

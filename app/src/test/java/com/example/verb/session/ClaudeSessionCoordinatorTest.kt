@@ -4,6 +4,7 @@ import com.example.verb.project.VerbProject
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -17,6 +18,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.time.Instant
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ClaudeSessionCoordinatorTest {
 
     @get:Rule

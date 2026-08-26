@@ -4,6 +4,7 @@ import com.example.verb.project.VerbProject
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -21,6 +22,7 @@ import java.time.Instant
  * exactly that: session identity, recovery and resume behave identically for a second agent because
  * the lifecycle is shared, and only [CodexAgentAdapter] differs.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class CodexSessionCoordinatorTest {
 
     @get:Rule

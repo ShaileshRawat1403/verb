@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.async
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -24,6 +25,7 @@ import java.io.File
  * database and the test writes a real one with the schema read off the installed build.
  */
 @RunWith(RobolectricTestRunner::class)
+@OptIn(ExperimentalCoroutinesApi::class)
 class OpenCodeAgentAdapterTest {
 
     @get:Rule
