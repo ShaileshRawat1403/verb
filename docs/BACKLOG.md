@@ -3,9 +3,10 @@
 Everything known to be undone, and what it costs to say yes. The current sprint is at the top; the
 rest is a menu, not a plan.
 
-Milestone definitions live in `docs/ROADMAP.md`. M2 remains deliberately undecided. Anything
-proposed here must first pass the admission test in `docs/UX_FOUNDATION.md`: does it make an existing
-development moment easier, clearer or safer, or does it merely add another capability?
+Milestone definitions live in `docs/ROADMAP.md`. M2 is now defined by the evidence-bound assistant
+surface recorded below. Anything proposed beyond it must first pass the admission test in
+`docs/UX_FOUNDATION.md`: does it make an existing development moment easier, clearer or safer, or
+does it merely add another capability?
 
 ---
 
@@ -37,8 +38,11 @@ caught two real desktop defects — `verb continuity export` crashed on legacy e
 millis timestamps, a snake_case `session_id`) and wrote lowercase event states the Android host
 correctly rejects — both fixed with regression tests.
 
-M2 remains frozen during this pass. The optional provider interpretation screen is not the proposed
-evidence-linked M2 layer and makes no execution or terminal-observation claim.
+The optional provider interpretation screen was rejected, and has now been removed rather than
+merely marked so — it shipped for a further pass after this line was written, which is how a doc
+stops being evidence. Ask Verb's second stage is the evidence-linked assistant described in the
+completion pass below, the same one the terminal opens. It makes no execution or
+terminal-observation claim.
 
 ## Completed sprint — Mobile touch and layout
 
@@ -85,6 +89,66 @@ it cannot drift from what was sent.
 The E1 foreground service lowers the probability of a background kill and is not immunity: it owns
 nothing, follows the session (RUNNING holds the claim, a finished session releases it), and a
 force-stop still ends everything — exactly as `docs/DURABLE_SESSION.md` promised.
+
+## M2 beta completion pass — 26 August, third pass
+
+| # | Item | Status |
+| --- | --- | --- |
+| 1 | Enriched structural context: session, shell integration, command-boundary tail and agent facts | Implemented — privacy/unit tests pass |
+| 2 | Bounded follow-up thread: last five exchanges retained, last three sent to the provider | Implemented — unit-tested |
+| 3 | Evidence-linked answer rendering with small markdown support | Implemented — unit-tested |
+| 4 | Provider boundary remains free of command text, paths and PTY output | Implemented — regression-tested |
+| 5 | The panel reads the envelope back in plain language, from the same snapshot | Implemented — unit-tested |
+| 6 | Asking opens without spending a provider call; the thread survives an accidental dismissal | Implemented — Compose-tested |
+| 7 | One assistant: Ask Verb's second stage is the same evidence-bound panel the terminal opens | Implemented — Compose-tested |
+| 8 | Physical-device acceptance of the follow-up flow | Done — Vivo I2202, 26 August |
+
+Review of the first draft of this pass found four defects the unit tests could not see, all fixed
+here and all now covered:
+
+- The envelope labelled the command tail "oldest first" and rendered it newest first. The model was
+  handed a false claim about which command ran last — the exact `Inference ≠ Fact` failure this
+  surface exists to prevent.
+- `TerminalEvidence` accepted pre-formatted agent lines from its caller, which is a free-text hole
+  through the privacy boundary the type exists to be. It now takes `AgentWorkFact` fields.
+- The unprompted-explanation path published no evidence snapshot, so an answer could be displayed
+  beside evidence belonging to an earlier question.
+- The newest answer was drawn twice: once as the thread's tail and once as the standing explanation.
+
+Two UX rules were also being broken by the new surface. The panel showed the contract's vocabulary
+(`RUNNING`, `LIVE`, `FAILED`) directly on screen, against the plain-language rule in
+`docs/UX_FOUNDATION.md`; it now reads back through `VerbStatusVocabulary`. And the only way in was
+an overflow item that fired a canned analysis, so a person could not reach the question box without
+first paying for an answer they had not asked for.
+
+An earlier draft of this section recorded "this shell has no Java runtime or `adb`" as a blocker;
+that was wrong — both exist, off `PATH`. No execution authority or transcript transport was added by
+this pass.
+
+### Physical acceptance, Vivo I2202, 26 August
+
+Asked "Why did my last command fail" after a real `ls /definitely-not-here`. The answer said *exit
+code 2, ran for 35 ms* and the panel beneath it read `✕ failed · exit 2 · 35ms` — the same fact in
+two vocabularies from one snapshot, which is the whole claim this surface makes. The model stated
+plainly that it had not been given the command text. The thread, the follow-up placeholder, `Clear`,
+and the unprompted-explanation path were all exercised in both hosts.
+
+Four further defects surfaced only on the device and are fixed:
+
+- The terminal's sheet opened itself whenever the shared assistant state filled, so asking from Ask
+  Verb slid the terminal sheet up over that screen with the same conversation inside. It is now
+  shown only when the user opened it there.
+- The evidence panel read "Last 1 commands".
+- Ask Verb stated the provider boundary and the panel stated it again underneath.
+- The model answered in the contract's uppercase spellings beside a panel using the plain ones; the
+  system instruction now asks for the plain reading.
+
+**Still open:** in the *terminal's* bottom sheet only, the soft keyboard covers the question box.
+The sheet renders in its own dialog window, which does not inherit the activity's `adjustResize`;
+pinning the input row and applying `imePadding` were not sufficient and a `DialogWindowProvider`
+soft-input override had no effect on this device. The keyboard's own send key does submit, and the
+Ask Verb host — the promoted primary surface — is unaffected and was verified with the keyboard
+open. Worth fixing before the tag, but it does not block the flow.
 
 ## Completed sprint — Mobile reliability
 
