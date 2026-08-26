@@ -49,7 +49,7 @@ private val VerbLightColorScheme = lightColorScheme(
 
 @Composable
 fun VerbTheme(
-    darkTheme: Boolean = true, // Force dark terminal theme for authentic command center feel
+    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
     val colors = if (darkTheme) VerbDarkColorScheme else VerbLightColorScheme
