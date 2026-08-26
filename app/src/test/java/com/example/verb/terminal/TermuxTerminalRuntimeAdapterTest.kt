@@ -2,6 +2,7 @@ package com.example.verb.terminal
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Looper
 import android.view.MotionEvent
 import androidx.test.core.app.ApplicationProvider
 import com.termux.view.TerminalView
@@ -13,6 +14,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import java.io.File
 import androidx.compose.ui.text.TextRange
@@ -78,6 +80,84 @@ class TermuxTerminalRuntimeAdapterTest {
 
         assertTrue(view.isFocusable)
         assertTrue(view.isFocusableInTouchMode)
+    }
+
+    /**
+     * The font size is persisted in **pixels** (vendored `setTextSize(int)` takes px despite its
+     * javadoc), so these tests speak px throughout. Robolectric's default density is 1.0, which
+     * makes the dp clamp boundaries read directly as px.
+     */
+    private fun storedTextSizePx(): Int =
+        context.getSharedPreferences("verb_terminal_display", Context.MODE_PRIVATE)
+            .getInt("text_size_px", -1)
+
+    private fun storeTextSizePx(value: Int) {
+        context.getSharedPreferences("verb_terminal_display", Context.MODE_PRIVATE)
+            .edit().putInt("text_size_px", value).commit()
+    }
+
+    @Test
+    fun `a fresh bind applies the default nine dp size`() {
+        adapter.bindTerminalView(TerminalView(context, null))
+
+        assertEquals(9, adapter.appliedTextSizePx)
+    }
+
+    @Test
+    fun `binding applies the previously persisted pixel size`() {
+        storeTextSizePx(15)
+        val bound = TermuxTerminalRuntimeAdapter(workingDir)
+
+        bound.bindTerminalView(TerminalView(context, null))
+
+        assertEquals(15, bound.appliedTextSizePx)
+    }
+
+    @Test
+    fun `pinch multiplies the base by the accumulated factor and persists the result`() {
+        storeTextSizePx(10)
+        val bound = TermuxTerminalRuntimeAdapter(workingDir)
+        bound.bindTerminalView(TerminalView(context, null))
+
+        val returned = bound.onScale(1.5f)
+
+        assertEquals(15, bound.appliedTextSizePx)
+        assertEquals(1.5f, returned, 0.0001f)
+        shadowOf(Looper.getMainLooper()).runToEndOfTasks()
+        assertEquals(15, storedTextSizePx())
+    }
+
+    @Test
+    fun `pinch is clamped to six through twenty dp`() {
+        adapter.bindTerminalView(TerminalView(context, null))
+
+        adapter.onScale(100f)
+        assertEquals(20, adapter.appliedTextSizePx)
+
+        adapter.onScale(0f)
+        assertEquals(6, adapter.appliedTextSizePx)
+    }
+
+    @Test
+    fun `an unchanged applied size skips the persist write entirely`() {
+        storeTextSizePx(10)
+        val bound = TermuxTerminalRuntimeAdapter(workingDir)
+        bound.bindTerminalView(TerminalView(context, null))
+        bound.onScale(2f)
+        shadowOf(Looper.getMainLooper()).runToEndOfTasks()
+        assertEquals(20, storedTextSizePx())
+
+        // Still clamped to the same applied px: no new write is even scheduled.
+        bound.onScale(2f)
+        shadowOf(Looper.getMainLooper()).runToEndOfTasks()
+        assertEquals(20, bound.appliedTextSizePx)
+        assertEquals(20, storedTextSizePx())
+    }
+
+    @Test
+    fun `scaling before any view is bound passes the factor through untouched`() {
+        assertEquals(1.25f, adapter.onScale(1.25f), 0f)
+        assertNull(adapter.appliedTextSizePx)
     }
 
     /**
