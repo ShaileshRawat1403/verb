@@ -69,6 +69,9 @@ import com.example.verb.model.ActionResult
 import com.example.verb.model.VerbIntent
 import com.example.verb.ui.theme.SecondaryCyan
 
+/** Newest runs kept as individual cards; anything older collapses into a single count line. */
+private const val MAX_VISIBLE_ASK_HISTORY = 10
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AskScreen(
@@ -282,7 +285,13 @@ fun AskScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            historyList.drop(1).forEach { item ->
+            // The whole screen is one scrolling Column, so an unbounded history would compose
+            // every card ever produced this session. Only the newest runs render; the rest are a
+            // single summary line.
+            val visibleRuns = historyList.drop(1).takeLast(MAX_VISIBLE_ASK_HISTORY)
+            val earlierCount = (historyList.size - 1) - visibleRuns.size
+
+            visibleRuns.forEach { item ->
                 val replayIntent = item.originalIntent
                 Card(
                     modifier = Modifier
@@ -325,6 +334,16 @@ fun AskScreen(
                     }
                 }
             }
+
+            if (earlierCount > 0) {
+                Text(
+                    text = "…and $earlierCount earlier run${if (earlierCount == 1) "" else "s"} this session",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, start = 12.dp)
+                )
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
