@@ -131,8 +131,9 @@ fun AssistPanel(
                 modifier = Modifier.padding(bottom = 2.dp)
             )
             Text(
-                text = AssistMarkdown.render(exchange.answer),
+                text = AssistMarkdown.render(exchange.answer, colors.surfaceVariant),
                 fontSize = 14.sp,
+                lineHeight = 21.sp,
                 color = colors.onSurface,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
@@ -144,8 +145,9 @@ fun AssistPanel(
             ?.takeIf { it.isNotBlank() && it != thread.lastOrNull()?.answer }
         if (standaloneAnswer != null) {
             Text(
-                text = AssistMarkdown.render(standaloneAnswer),
+                text = AssistMarkdown.render(standaloneAnswer, colors.surfaceVariant),
                 fontSize = 14.sp,
+                lineHeight = 21.sp,
                 color = colors.onSurface,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
