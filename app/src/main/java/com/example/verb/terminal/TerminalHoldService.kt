@@ -1,15 +1,15 @@
 package com.example.verb.terminal
 
 import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import androidx.core.app.NotificationChannelCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.example.R
@@ -27,18 +27,20 @@ class TerminalHoldService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Channels through the compat API, not the platform one. `NotificationChannel` arrived in API
+     * 26 and `minSdk` is 24, so the platform call was an unguarded crash on Android 7 -- and a lint
+     * error that failed CI. The compat builder is a no-op below 26, which is the correct behaviour:
+     * there are no channels to declare there.
+     */
     override fun onCreate() {
         super.onCreate()
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(
-                CHANNEL_ID,
-                getText(R.string.terminal_hold_notification_title),
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = getText(R.string.terminal_hold_notification_text).toString()
-                setShowBadge(false)
-            }
+        NotificationManagerCompat.from(this).createNotificationChannel(
+            NotificationChannelCompat.Builder(CHANNEL_ID, NotificationManagerCompat.IMPORTANCE_LOW)
+                .setName(getText(R.string.terminal_hold_notification_title))
+                .setDescription(getText(R.string.terminal_hold_notification_text).toString())
+                .setShowBadge(false)
+                .build()
         )
     }
 
@@ -52,14 +54,21 @@ class TerminalHoldService : Service() {
             .setContentText(getText(R.string.terminal_hold_notification_text))
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setContentIntent(
-                PendingIntent.getActivity(
-                    this,
-                    0,
-                    packageManager.getLaunchIntentForPackage(packageName),
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-            )
+            // Only when there is somewhere to go. A launch intent is normally present, but a
+            // PendingIntent wrapping null throws, and a notification that cannot be tapped is a
+            // smaller failure than a service that cannot start.
+            .apply {
+                packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
+                    setContentIntent(
+                        PendingIntent.getActivity(
+                            this@TerminalHoldService,
+                            0,
+                            launch,
+                            PendingIntent.FLAG_IMMUTABLE
+                        )
+                    )
+                }
+            }
             .build()
         ServiceCompat.startForeground(
             this,
