@@ -113,6 +113,26 @@ class TerminalAiHelperTest {
         assertTrue(instruction.contains("not in the uppercase"))
     }
 
+    /**
+     * The model reads the envelope back to a person. A raw instant came back verbatim in answers,
+     * beside a panel that said "4m ago" -- so the envelope carries the readable form.
+     */
+    @Test
+    fun `agent facts travel as an age, not as an ISO instant`() {
+        val seen = Instant.parse("2026-08-26T12:00:00Z")
+        val evidence = TerminalEvidence(
+            sessionState = TerminalSessionState.RUNNING,
+            workingDirectoryKnown = true,
+            shellIntegrationActive = true,
+            agentWork = listOf(AgentWorkFact("Claude Code", VerbSessionState.LIVE, seen, "claude"))
+        )
+
+        val lines = TerminalAiHelper.evidenceLines(evidence, seen.plusSeconds(240))
+
+        assertTrue(lines.any { it.contains("last seen 4m ago") })
+        assertFalse(lines.any { it.contains("2026-08-26T12:00:00Z") })
+    }
+
     @Test
     fun `only the last three exchanges ride the prompt`() = runTest {
         var received: AiAssistantRequest? = null

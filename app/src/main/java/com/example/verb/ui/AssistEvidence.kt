@@ -1,7 +1,7 @@
 package com.example.verb.ui
 
+import com.example.verb.terminal.TerminalAiHelper
 import com.example.verb.terminal.TerminalEvidence
-import java.time.Duration
 import java.time.Instant
 
 /**
@@ -77,16 +77,11 @@ object AssistEvidence {
 
     /**
      * "4m ago" rather than an ISO instant. A timestamp is what the record stores; how long ago it
-     * was is the question a person is actually asking. A future instant reads as "just now" rather
-     * than as a negative age -- clock skew is not evidence of anything.
+     * was is the question a person is actually asking.
+     *
+     * One implementation, in the layer that owns the envelope, so the panel and the provider cannot
+     * describe the same moment differently.
      */
-    internal fun relativeTime(then: Instant, now: Instant): String {
-        val seconds = Duration.between(then, now).seconds
-        return when {
-            seconds < 60 -> "just now"
-            seconds < 3_600 -> "${seconds / 60}m ago"
-            seconds < 86_400 -> "${seconds / 3_600}h ago"
-            else -> "${seconds / 86_400}d ago"
-        }
-    }
+    internal fun relativeTime(then: Instant, now: Instant): String =
+        TerminalAiHelper.relativeAge(then, now)
 }

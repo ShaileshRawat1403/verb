@@ -3,6 +3,7 @@ package com.example.verb.terminal
 import com.example.verb.ai.AiAssistantRequest
 import com.example.verb.ai.AiAssistantService
 import com.example.verb.session.VerbSessionState
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -98,7 +99,7 @@ object TerminalAiHelper {
      * `com.example.verb.ui.AssistEvidence`, from this same snapshot --
      * `docs/UX_FOUNDATION.md`: plain language on screen, exact vocabulary underneath.
      */
-    fun evidenceLines(evidence: TerminalEvidence): List<String> = buildList {
+    fun evidenceLines(evidence: TerminalEvidence, now: Instant = Instant.now()): List<String> = buildList {
         add("Session state: ${evidence.sessionState.name}")
         add("Working directory observed: ${if (evidence.workingDirectoryKnown) "yes" else "no"} (path withheld)")
         add("Shell command boundaries reported: ${if (evidence.shellIntegrationActive) "yes" else "no"}")
@@ -121,7 +122,29 @@ object TerminalAiHelper {
         }
         evidence.agentWork.forEach { fact ->
             val agent = fact.agentType?.let { " ($it)" } ?: ""
-            add("${fact.profileName}: session ${fact.sessionState.name}, last seen ${fact.lastSeenAt}$agent")
+            add(
+                "${fact.profileName}: session ${fact.sessionState.name}, " +
+                    "last seen ${relativeAge(fact.lastSeenAt, now)}$agent"
+            )
+        }
+    }
+
+    /**
+     * How long ago, not when.
+     *
+     * The envelope used to carry a raw `Instant`, and the model read it back verbatim -- answers
+     * quoted "2026-08-26T12:51:17.260Z" beside a panel that said "4m ago". Same defect as the
+     * uppercase state names: the envelope is reasoned over by a model whose output a person reads,
+     * so a fact that has a readable form should travel in it. A future instant reads as "just now";
+     * clock skew is not evidence of anything.
+     */
+    fun relativeAge(then: Instant, now: Instant): String {
+        val seconds = Duration.between(then, now).seconds
+        return when {
+            seconds < 60 -> "just now"
+            seconds < 3_600 -> "${seconds / 60}m ago"
+            seconds < 86_400 -> "${seconds / 3_600}h ago"
+            else -> "${seconds / 86_400}d ago"
         }
     }
 
@@ -130,7 +153,7 @@ object TerminalAiHelper {
         priorExchanges: List<TerminalAiExchange>
     ): String = buildString {
         appendLine("Evidence source: Verb shell integration and session records (structural metadata only).")
-        evidenceLines(evidence).forEach(::appendLine)
+        evidenceLines(evidence, Instant.now()).forEach(::appendLine)
         if (priorExchanges.isNotEmpty()) {
             appendLine()
             appendLine("Earlier in this conversation (oldest first):")
