@@ -70,6 +70,39 @@ name, and a read failure anywhere else aborts the export rather than writing one
 unknown` and the total becomes "at least". Printing `0 B` would be Verb stating a fact it does not
 have.
 
+### The export that its own importer refused
+
+Found on 26 August by running the round-trip this repository had listed as unverified for weeks.
+
+`verb export` wrote an archive, and `verb import` refused it:
+
+```text
+verb: the archive contains a link or special file; restore refused.
+```
+
+Import rejects any tar member that is not a regular file or a directory, and that refusal is right —
+a symlink inside an archive is a path traversal waiting for somewhere to land. The bug was that
+export never checked it satisfied that rule, and two sources of symlinks had appeared since the
+exclusions were written:
+
+* `.codex/tmp/arg0/*` — Codex's arg0 shims. The existing exclusion said `.tmp`; the real directory
+  is `tmp`. One dot, and every archive made by anyone who had run Codex was unrestorable.
+* `node_modules/.bin/*` — npm's executable shims, which arrived under `.config/opencode` when
+  OpenCode was admitted. Nothing about a person's world lives in them.
+
+Both are derived state that the tools regenerate, so excluding them loses nothing. But adding two
+more names to a list is the same fix that failed last time, so export now **verifies** the archive
+against import's own rule before it will write one, and aborts saying so if it ever cannot. An
+export that produces what import refuses is not a backup; it is a file.
+
+The round-trip then completed: export, Save to Downloads, bring back in through the real system
+picker, preview (which listed all ten paths and changed nothing), and `--apply`, which snapshotted
+the existing world to `verb-world-before-import-<timestamp>.tgz` before restoring.
+
+There were no unit tests for `world.sh` at all, which is why this shipped.
+`WorldArchiveInvariantTest` now covers the invariant, the two exclusions by name, and that export
+actually calls the check before encrypting.
+
 ### Schema compatibility
 
 The current writer produces schema v2 and the reader accepts v1–v2. A v1 archive may contain a
