@@ -60,6 +60,15 @@ fun AgentsScreen(
     agentSessions: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.session.VerbSession> = emptyMap(),
     onResumeSession: (com.example.verb.terminal.RuntimeProfileId) -> Unit = {},
     onStartNewSession: (com.example.verb.terminal.RuntimeProfileId) -> Unit = {},
+    // The terminals open in this project. Empty only before the first one exists, which in practice
+    // is never -- the workspace always has one.
+    terminalSessionIds: List<String> = emptyList(),
+    activeTerminalSessionId: String? = null,
+    agentInTerminal: (String) -> String? = { null },
+    canOpenMoreTerminals: Boolean = false,
+    onOpenTerminalSession: () -> Unit = {},
+    onSwitchTerminalSession: (String) -> Unit = {},
+    onCloseTerminalSession: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // Admission is evidence-based, not package-discovery based. Profiles remain available to the
@@ -74,6 +83,21 @@ fun AgentsScreen(
             .padding(16.dp)
             .testTag("agents_screen")
     ) {
+        // Terminals first: "where was I working?" is the question a person arrives with, and the
+        // agents below are a source underneath it rather than the top of the screen.
+        if (terminalSessionIds.isNotEmpty()) {
+            TerminalSessionsCard(
+                sessionIds = terminalSessionIds,
+                activeId = activeTerminalSessionId,
+                agentIn = agentInTerminal,
+                canOpenMore = canOpenMoreTerminals,
+                onOpen = onOpenTerminalSession,
+                onSwitch = onSwitchTerminalSession,
+                onClose = onCloseTerminalSession
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         Text("Agents", style = MaterialTheme.typography.headlineSmall)
         Text(
             "Opening an agent types its command into the terminal, so you can always see and stop what is running.",

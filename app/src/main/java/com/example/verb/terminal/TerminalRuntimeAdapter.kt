@@ -128,4 +128,44 @@ interface TerminalRuntimeAdapter {
 
     /** Destroys active session and cleans up PTY resources */
     fun destroy()
+
+}
+
+/**
+ * What the *app* asks of a terminal, on top of the PTY.
+ *
+ * Separate from [TerminalRuntimeAdapter] because that interface is the PTY layer, and its other
+ * implementers -- the Termux adapter and the test fake -- are delegates *inside* a `TerminalRuntime`
+ * rather than peers of it. They move bytes; they do not know which guest userland was resolved or
+ * that an agent runtime can replace it. Asking them to answer would have been widening an interface
+ * to suit one caller.
+ *
+ * `TerminalRuntime` implements this because it owns the environment, and `SwitchingTerminalRuntime`
+ * implements it because it has to answer for whichever session is in front.
+ */
+interface VerbTerminal : TerminalRuntimeAdapter {
+
+    /**
+     * The guest environment this terminal was actually launched into. Two sessions in one project
+     * can legitimately differ, once one of them has activated an agent runtime.
+     */
+    val environment: TerminalEnvironment
+
+    /** Re-resolves the launch spec, so a runtime change takes effect on the next session. */
+    fun refreshEnvironment()
+
+    /** Points this terminal at an installed agent runtime and re-resolves. */
+    fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime)
+
+    /** Returns this terminal to the bundled userland. Paired with [activateAgentRuntime]. */
+    fun deactivateAgentRuntime()
+
+    /**
+     * Points *this* terminal at a project directory.
+     *
+     * Per terminal, not per app: a project has sessions, and the point of a second session is that
+     * it can be somewhere else — an agent working in the repo root while you read logs in a
+     * subdirectory. Every terminal emulator worth using behaves this way.
+     */
+    fun selectProject(directory: File?)
 }

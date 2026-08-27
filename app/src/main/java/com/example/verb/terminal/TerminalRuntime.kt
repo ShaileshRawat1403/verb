@@ -15,7 +15,7 @@ class TerminalRuntime(
     private val useFakeForTesting: Boolean = false,
     private val bundledBinDir: File? = null,
     initialProjectDirectory: File? = null
-) : TerminalRuntimeAdapter {
+) : VerbTerminal {
 
     /**
      * Everything that decides how a session is launched. Kept as one value so "what the live
@@ -61,7 +61,7 @@ class TerminalRuntime(
      * and map the session that exists, and answering with a configuration that is merely queued
      * would make diagnostics and guest-path translation describe a session that is not running.
      */
-    val environment: TerminalEnvironment get() = applied.environment
+    override val environment: TerminalEnvironment get() = applied.environment
 
     private fun resolveSpec(): LaunchSpec {
         val runtime = activeAgentRuntime
@@ -125,7 +125,7 @@ class TerminalRuntime(
      * - different, with no live session: applied immediately, since there is nothing to preserve;
      * - different, with a live session: recorded as [pendingEnvironmentChange] and left alone.
      */
-    fun refreshEnvironment() {
+    override fun refreshEnvironment() {
         val resolved = resolveSpec()
         if (resolved.environment == applied.environment && resolved.projectDirectory == applied.projectDirectory) {
             pending = null
@@ -160,19 +160,19 @@ class TerminalRuntime(
      * and Verb neither moves it nor pretends it moved: the live working directory keeps reporting
      * whatever the shell's actual cwd is.
      */
-    fun selectProject(directory: File?) {
+    override fun selectProject(directory: File?) {
         projectDirectory = directory
         refreshEnvironment()
     }
 
     /** Switches the **next** session to the separately installed Linux agent rootfs. */
-    fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime) {
+    override fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime) {
         activeAgentRuntime = runtime
         refreshEnvironment()
     }
 
     /** Returns the next session to the normal Verb CLI userland. */
-    fun deactivateAgentRuntime() {
+    override fun deactivateAgentRuntime() {
         activeAgentRuntime = null
         refreshEnvironment()
     }

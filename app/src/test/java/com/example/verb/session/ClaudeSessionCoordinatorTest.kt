@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -191,7 +192,16 @@ class ClaudeSessionCoordinatorTest {
     fun `existing process binding is the only reason persisted LIVE stays LIVE`() = runTest {
         val (filesDir, project, fake) = setUp()
         VerbTerminalSessionHolder.resetForTests()
-        VerbTerminalSessionHolder.claimForeground("claude", emptySet())
+        // A foreground claim belongs to a terminal, so there has to be one. The coordinator reads
+        // its own adapter for session state and the holder only for *which agent holds the front*,
+        // so this session and `fake` are deliberately different objects.
+        VerbTerminalSessionHolder.getOrCreateActive {
+            com.example.verb.terminal.TerminalRuntime(workingDir = filesDir, useFakeForTesting = true)
+        }
+        assertTrue(
+            "the claim must land on a session, not vanish",
+            VerbTerminalSessionHolder.claimForeground("claude", emptySet())
+        )
         val persisted = VerbSession(
             id = "persisted-id",
             projectId = project.id,
