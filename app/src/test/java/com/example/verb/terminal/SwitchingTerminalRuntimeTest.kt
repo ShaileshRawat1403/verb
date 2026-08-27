@@ -111,6 +111,33 @@ class SwitchingTerminalRuntimeTest {
     }
 
     /**
+     * The foreground hold follows *any* session, not the one in front.
+     *
+     * The hold used to read the facade, which answers about the active terminal. So switching to an
+     * idle terminal released the process hold while an agent was still running in the one you had
+     * just left -- handing it to the low-memory killer at exactly the moment the hold exists to
+     * prevent that. The holder exposes every runtime so the ViewModel can ask about all of them.
+     */
+    @Test
+    fun `every open terminal is visible to whoever needs to ask about all of them`() = runTest {
+        VerbTerminalSessionHolder.getOrCreateActive { runtime("front") }
+        val backgroundId = VerbTerminalSessionHolder.open { runtime("background") }!!
+        val frontId = VerbTerminalSessionHolder.sessionIds.value.first()
+
+        assertEquals(2, VerbTerminalSessionHolder.runtimes.value.size)
+
+        VerbTerminalSessionHolder.activate(frontId)
+        assertEquals(
+            "switching must not hide the other terminal from a caller asking about all of them",
+            2,
+            VerbTerminalSessionHolder.runtimes.value.size
+        )
+
+        VerbTerminalSessionHolder.close(backgroundId)
+        assertEquals(1, VerbTerminalSessionHolder.runtimes.value.size)
+    }
+
+    /**
      * With no session at all, reads report the quiet defaults and writes are dropped. A keystroke
      * aimed at a terminal that does not exist has nowhere to be delivered later, so queueing it
      * would only mean surprising someone with it afterwards.

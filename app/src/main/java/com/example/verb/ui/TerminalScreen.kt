@@ -151,6 +151,13 @@ fun TerminalScreen(
     verbFirstAction: (@Composable () -> Unit)? = null,
     /** Opens Ask Verb on the assistant stage; the terminal no longer hosts a copy of it. */
     onOpenAssistant: () -> Unit = {},
+    /** Every open terminal in this project, oldest first. One entry means no switcher is shown. */
+    terminalSessionIds: List<String> = emptyList(),
+    activeTerminalSessionId: String? = null,
+    agentInTerminal: (String) -> String? = { null },
+    onSwitchTerminalSession: (String) -> Unit = {},
+    onOpenTerminalSession: () -> Unit = {},
+    canOpenMoreTerminals: Boolean = false,
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
     onCreateProject: (String) -> Unit = {},
@@ -312,6 +319,87 @@ fun TerminalScreen(
                         // 7dp coloured dot this replaces carried the whole meaning in hue, which
                         // survives neither a colour-blind reader nor a screen reader, and which
                         // `docs/UX_FOUNDATION.md` rules out by name. Colour still reinforces it.
+                        // Which terminal you are in, and a way out of it -- but only once there
+                        // is more than one. With a single terminal this is not a choice a person
+                        // has, so the control is not there to be read past: capability appears when
+                        // the situation calls for it and recedes when it does not
+                        // (`docs/PRODUCT_VISION.md`, "Capability large, surface small").
+                        if (terminalSessionIds.size > 1) {
+                            val index = terminalSessionIds.indexOf(activeTerminalSessionId)
+                            var switcherOpen by remember { mutableStateOf(false) }
+                            Box {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    onClick = { switcherOpen = true },
+                                    modifier = Modifier
+                                        .padding(start = 2.dp)
+                                        .semantics {
+                                            contentDescription =
+                                                "Terminal ${index + 1} of ${terminalSessionIds.size}. " +
+                                                    "Activate to switch terminals."
+                                        }
+                                        .testTag("btn_terminal_switcher")
+                                ) {
+                                    Text(
+                                        text = "⌄ ${index + 1}/${terminalSessionIds.size}",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = switcherOpen,
+                                    onDismissRequest = { switcherOpen = false }
+                                ) {
+                                    terminalSessionIds.forEachIndexed { position, id ->
+                                        val agent = agentInTerminal(id)
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text("Terminal ${position + 1}")
+                                                    Text(
+                                                        // Says what is in it, so switching is a
+                                                        // decision rather than a guess.
+                                                        text = agent?.let { "$it is running here" }
+                                                            ?: "your shell",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Text(
+                                                    text = if (id == activeTerminalSessionId) "●" else "○",
+                                                    fontSize = 12.sp,
+                                                    color = if (id == activeTerminalSessionId) {
+                                                        MaterialTheme.colorScheme.primary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                                    }
+                                                )
+                                            },
+                                            onClick = {
+                                                switcherOpen = false
+                                                if (id != activeTerminalSessionId) onSwitchTerminalSession(id)
+                                            },
+                                            modifier = Modifier.testTag("switch_to_$id")
+                                        )
+                                    }
+                                    if (canOpenMoreTerminals) {
+                                        DropdownMenuItem(
+                                            text = { Text("New terminal") },
+                                            onClick = {
+                                                switcherOpen = false
+                                                onOpenTerminalSession()
+                                            },
+                                            modifier = Modifier.testTag("btn_new_terminal_header")
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         val statusColor = when (sessionState) {
                             com.example.verb.terminal.TerminalSessionState.RUNNING -> VerbStatus.confirmed
                             com.example.verb.terminal.TerminalSessionState.STARTING,

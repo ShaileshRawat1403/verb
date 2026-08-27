@@ -76,6 +76,15 @@ object VerbTerminalSessionHolder {
     /** The active terminal's runtime, for `SwitchingTerminalRuntime` to follow. */
     val activeRuntime: StateFlow<VerbTerminal?> = _activeRuntime.asStateFlow()
 
+    private val _runtimes = MutableStateFlow<List<VerbTerminal>>(emptyList())
+
+    /**
+     * Every open terminal's runtime, so a caller can ask about *all* of them rather than the one in
+     * front. The foreground hold needs exactly this: an agent running in a terminal you are not
+     * looking at is still an agent running.
+     */
+    val runtimes: StateFlow<List<VerbTerminal>> = _runtimes.asStateFlow()
+
     /** True when this Android process already owned a terminal before the caller asked. */
     fun hasAnySession(): Boolean = synchronized(this) { sessions.isNotEmpty() }
 
@@ -107,7 +116,7 @@ object VerbTerminalSessionHolder {
         val id = "terminal-${nextOrdinal.getAndIncrement()}"
         val session = Session(factory())
         sessions[id] = session
-        _sessionIds.value = sessions.keys.toList()
+        publishSessions()
         activate(id)
         return session
     }
@@ -129,11 +138,16 @@ object VerbTerminalSessionHolder {
         if (sessions.size <= 1 || id !in sessions) return false
         val session = sessions.remove(id) ?: return false
         session.runtime.destroy()
-        _sessionIds.value = sessions.keys.toList()
+        publishSessions()
         if (_activeId.value == id) {
             sessions.keys.lastOrNull()?.let(::activate)
         }
         return true
+    }
+
+    private fun publishSessions() {
+        _sessionIds.value = sessions.keys.toList()
+        _runtimes.value = sessions.values.map { it.runtime }
     }
 
     private fun activeSession(): Session? = _activeId.value?.let(sessions::get)
@@ -191,6 +205,7 @@ object VerbTerminalSessionHolder {
     fun resetForTests() = synchronized(this) {
         sessions.clear()
         _sessionIds.value = emptyList()
+        _runtimes.value = emptyList()
         _activeId.value = null
         _activeRuntime.value = null
         nextOrdinal.set(1)

@@ -56,6 +56,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -413,8 +414,13 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // E1: a live session holds the process at foreground priority, so backgrounding Verb stops
         // handing a running command or agent to the low-memory killer. The claim follows the
         // session, not the screen: RUNNING holds it, a finished or failed session releases it.
+        //
+        // *Any* session, not the one in front. This used to read the facade, which answers about
+        // the active terminal -- so switching to an idle terminal released the hold while an agent
+        // was still running in the one you had just left, which is precisely the moment the hold
+        // exists for.
         viewModelScope.launch {
-            terminalRuntime.sessionState.collect { state ->
+            holdWhileAnySessionRuns().collect { state ->
                 val context = getApplication<Application>()
                 when (state) {
                     TerminalSessionState.RUNNING, TerminalSessionState.STARTING ->
@@ -1197,6 +1203,29 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * command, and a backlog of stale observations is worse than a missed one -- the next boundary
      * will take a fresher reading anyway.
      */
+    /**
+     * The strongest state across every open terminal.
+     *
+     * RUNNING if any is running, STARTING if any is starting, and only then the resting states --
+     * so the hold is released exactly when nothing anywhere is live, and not a moment sooner.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun holdWhileAnySessionRuns(): kotlinx.coroutines.flow.Flow<TerminalSessionState> =
+        com.example.verb.session.VerbTerminalSessionHolder.runtimes.flatMapLatest { open ->
+            if (open.isEmpty()) {
+                kotlinx.coroutines.flow.flowOf(TerminalSessionState.EXITED)
+            } else {
+                combine(open.map { it.sessionState }) { states ->
+                    when {
+                        states.any { it == TerminalSessionState.RUNNING } -> TerminalSessionState.RUNNING
+                        states.any { it == TerminalSessionState.STARTING } -> TerminalSessionState.STARTING
+                        states.any { it == TerminalSessionState.FAILED } -> TerminalSessionState.FAILED
+                        else -> TerminalSessionState.EXITED
+                    }
+                }
+            }
+        }
+
     private fun observeCommandBoundaries() {
         viewModelScope.launch {
             terminalRuntime.commandHistory
