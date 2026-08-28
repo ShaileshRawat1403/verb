@@ -5,9 +5,10 @@
 //! most control keys as readline bindings. So Verb claims exactly one chord, and even that one is
 //! configurable and forwardable.
 //!
-//! No production default is bound yet. The default here is **provisional** and says so wherever it
-//! is shown, pending the collision test in `docs/TUI_VISION.md` against bash, zsh, Claude, Codex and
-//! OpenCode.
+//! The default is `Ctrl+Space`, chosen by the collision test recorded in `docs/TUI_VISION.md` --
+//! run against bash, zsh, Claude, Codex and OpenCode, and the only candidate of seven that no
+//! program reacts to. It is a default, not a constitution: `VERB_LEADER` replaces it, and remapping
+//! is a first-class feature because some terminal emulators do not transmit NUL at all.
 
 use std::fmt;
 
@@ -145,12 +146,11 @@ pub enum Outcome {
 /// timeout forwards itself and returns to normal.
 pub struct Leader {
     chord: Chord,
-    provisional: bool,
     pending: bool,
 }
 
 impl Leader {
-    /// Reads `VERB_LEADER`, falling back to the provisional default.
+    /// Reads `VERB_LEADER`, falling back to the tested default.
     pub fn from_environment() -> Self {
         match std::env::var("VERB_LEADER")
             .ok()
@@ -158,35 +158,36 @@ impl Leader {
             .and_then(Chord::parse)
         {
             Some(chord) => Self::configured(chord),
-            None => Self::provisional(),
+            None => Self::default_chord(),
         }
     }
 
     pub fn configured(chord: Chord) -> Self {
         Self {
             chord: chord.normalised(),
-            provisional: false,
             pending: false,
         }
     }
 
-    /// `Ctrl+O` is readline's `operate-and-get-next`, which is rarely used interactively -- the
-    /// least-bad chord *before* evidence, which is exactly why it is marked provisional rather than
-    /// chosen. The collision test decides the real default.
-    pub fn provisional() -> Self {
+    /// `Ctrl+Space`, and the reason is measurement rather than taste.
+    ///
+    /// Seven candidates were sent to bash, zsh, Claude, Codex and OpenCode with text already on the
+    /// line; `Ctrl+Space` is the only one none of them reacts to. Codex repaints its footer on any
+    /// key event, bound or not, so it emits bytes and changes nothing a person could see -- recorded
+    /// as such rather than counted as a collision.
+    ///
+    /// The chord this replaced was `Ctrl+O`, picked before the evidence existed as "least bad". The
+    /// evidence disagreed: `Ctrl+O` is readline's operate-and-get-next in zsh and is bound in both
+    /// Claude and Codex, making it one of the worst of the seven rather than the least bad.
+    pub fn default_chord() -> Self {
         Self {
-            chord: Chord::ctrl('o').normalised(),
-            provisional: true,
+            chord: Chord::ctrl('@').normalised(),
             pending: false,
         }
     }
 
     pub fn chord(&self) -> Chord {
         self.chord
-    }
-
-    pub fn is_provisional(&self) -> bool {
-        self.provisional
     }
 
     pub fn is_pending(&self) -> bool {
@@ -196,11 +197,7 @@ impl Leader {
     /// How the leader should be described on screen. A user must never discover the binding by
     /// having it fire.
     pub fn hint(&self) -> String {
-        if self.provisional {
-            format!("leader {} (provisional)", self.chord)
-        } else {
-            format!("leader {}", self.chord)
-        }
+        format!("leader {}", self.chord)
     }
 
     pub fn key(&mut self, ctrl: bool, key: char) -> Outcome {
@@ -330,12 +327,16 @@ mod tests {
     }
 
     #[test]
-    fn a_provisional_default_says_so_wherever_it_is_shown() {
-        // A user must never discover the binding by having it fire.
-        assert!(Leader::provisional().hint().contains("provisional"));
-        assert!(!Leader::configured(Chord::ctrl('g'))
-            .hint()
-            .contains("provisional"));
+    fn the_binding_is_always_stated_so_it_is_never_discovered_by_firing() {
+        // Shown as the key people press, not as the byte it sends.
+        assert_eq!(Leader::default_chord().hint(), "leader ^Space");
         assert_eq!(Leader::configured(Chord::ctrl('g')).hint(), "leader ^G");
+    }
+
+    /// The result of the collision test in `docs/TUI_VISION.md`, pinned so a future edit to the
+    /// default has to acknowledge the evidence rather than drift past it.
+    #[test]
+    fn the_default_is_the_chord_the_collision_test_chose() {
+        assert_eq!(Leader::default_chord().chord(), Chord::ctrl('@'));
     }
 }

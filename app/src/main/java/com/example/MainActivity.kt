@@ -72,6 +72,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             // The stored choice overrides the device; SYSTEM means keep following it.
             val themeChoice by viewModel.themeChoice.collectAsStateWithLifecycle()
+    val terminalSessionIds by viewModel.terminalSessionIds.collectAsStateWithLifecycle()
+    val activeTerminalSessionId by viewModel.activeTerminalSessionId.collectAsStateWithLifecycle()
             val dark = themeChoice.resolveDark(isSystemInDarkTheme())
 
             // The system bars draw over the app, so their icon colour has to follow the resolved
@@ -131,6 +133,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val terminalAiThread by viewModel.terminalAiThread.collectAsStateWithLifecycle()
     val assistantStageRequested by viewModel.assistantStageRequested.collectAsStateWithLifecycle()
     val themeChoice by viewModel.themeChoice.collectAsStateWithLifecycle()
+    val terminalSessionIds by viewModel.terminalSessionIds.collectAsStateWithLifecycle()
+    val activeTerminalSessionId by viewModel.activeTerminalSessionId.collectAsStateWithLifecycle()
     val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
@@ -245,6 +249,12 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 onOpenVerb = viewModel::openVerbSheet,
                 verbSurfaceOpen = surface != VerbSurface.None,
                 onOpenAssistant = viewModel::openAssistant,
+                terminalSessionIds = terminalSessionIds,
+                activeTerminalSessionId = activeTerminalSessionId,
+                agentInTerminal = viewModel::agentInTerminalSession,
+                onSwitchTerminalSession = viewModel::activateTerminalSession,
+                onOpenTerminalSession = { viewModel.openTerminalSession() },
+                canOpenMoreTerminals = terminalSessionIds.size < com.example.verb.session.VerbTerminalSessionHolder.MAX_SESSIONS,
                 projects = projects,
                 selectedProject = selectedProject,
                 onCreateProject = viewModel::createProject,
@@ -294,6 +304,8 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     terminalAiThread = terminalAiThread,
                     assistantStageRequested = assistantStageRequested,
                     themeChoice = themeChoice,
+                    terminalSessionIds = terminalSessionIds,
+                    activeTerminalSessionId = activeTerminalSessionId,
                     isKeyboardVisible = isKeyboardVisible,
                     isSessionActive = isSessionActive,
                     runtimeProfileReports = runtimeProfileReports,
@@ -379,6 +391,8 @@ private fun VerbTaskSurface(
     terminalAiThread: List<com.example.verb.terminal.TerminalAiExchange>,
     assistantStageRequested: Boolean,
     themeChoice: com.example.verb.ui.theme.VerbThemeChoice,
+    terminalSessionIds: List<String>,
+    activeTerminalSessionId: String?,
     isKeyboardVisible: Boolean,
     isSessionActive: Boolean,
     runtimeProfileReports: List<com.example.verb.terminal.RuntimeProfileReport>,
@@ -464,7 +478,14 @@ private fun VerbTaskSurface(
                     message = runtimeInstallMessage,
                     agentSessions = agentSessions,
                     onResumeSession = viewModel::resumeAgentSession,
-                    onStartNewSession = viewModel::startNewAgentSession
+                    onStartNewSession = viewModel::startNewAgentSession,
+                    terminalSessionIds = terminalSessionIds,
+                    activeTerminalSessionId = activeTerminalSessionId,
+                    agentInTerminal = viewModel::agentInTerminalSession,
+                    canOpenMoreTerminals = terminalSessionIds.size < com.example.verb.session.VerbTerminalSessionHolder.MAX_SESSIONS,
+                    onOpenTerminalSession = { viewModel.openTerminalSession() },
+                    onSwitchTerminalSession = viewModel::activateTerminalSession,
+                    onCloseTerminalSession = { viewModel.closeTerminalSession(it) }
                 )
 
                 VerbTask.APPEARANCE -> AppearanceScreen(

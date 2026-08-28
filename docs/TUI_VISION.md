@@ -108,6 +108,22 @@ version against a declared requirement. **No band appears on inference.**
 ╰──────────────────────────────────────────────────────────╯
 ```
 
+That sketch is a destination, not a checklist, and the rule above decides how much of it can exist
+at any moment. As of 28 August 2026 exactly one of those six ships — **Show changed files**, backed
+by `verb changes` — because the other five have no capability behind them yet:
+
+```text
+Show changed files              ships      verb changes
+Git status                      no         nothing beyond the status line to call
+Explain current branch          no         M2, the assistant
+Compare with last successful    no         M3, correlation
+Create commit                   no         a mutation, and no capability proposes one
+Advanced Git controls           no         not a capability; a name for a drawer
+```
+
+Adding the other five as palette entries first, and the capabilities afterwards, is precisely the
+inversion this section forbids. The list grows when the core does.
+
 ## Ask Verb
 
 Natural language reaches the same capabilities, with the context supplied rather than typed:
@@ -226,14 +242,24 @@ would not work. `VERB_FKEYS=off` disables them entirely.
 Tested the same way the leader was, before being bound (see the collision method below):
 
 ```text
-             bash        zsh         vim          less        Claude
-F1–F4        unbound     unbound     unmapped     unbound     no reaction
-F5–F6        leaks "5~"  leaks "7~"  unmapped     unbound     no reaction
+             bash        zsh         vim          less        Claude      Codex       OpenCode
+F1–F4        unbound     unbound     unmapped     unbound     no reaction repaint     no reaction
+F5–F6        leaks "5~"  leaks "7~"  unmapped     unbound     no reaction repaint     no reaction
 ```
 
 Nothing loses a function to F1–F4, which is why they are the four. F5 and F6 leak characters into a
-readline buffer, so they are not used. Codex and OpenCode still need the same test on the Android
-device; the alternate-screen rule means they keep their own keys regardless.
+readline buffer, so they are not used — that is a shell problem, and it is enough on its own.
+
+Codex and OpenCode were measured with the leader harness (28 August 2026, Codex 0.147.0, OpenCode
+1.18.23). `repaint` means Codex emitted bytes and changed nothing visible, which is what an unbound
+key looks like in a TUI that redraws on every event.
+
+One caveat worth stating rather than rounding off: OpenCode's own tip line advertises **F2 for
+switching models**, yet F2 produced no reaction at its prompt in this test. The binding is therefore
+context-dependent inside OpenCode rather than absent. It costs nothing here, because the
+alternate-screen rule already hands F1–F4 to a full-screen application the moment one is running —
+but "measured no reaction once" is not "unbound", and the difference is the kind of thing this
+document exists to keep honest.
 
 The rules that make a leader safe to live with:
 
@@ -256,10 +282,11 @@ The rules that make a leader safe to live with:
 
 ### Choosing the default
 
-**The default is deliberately not chosen in this document.** It is chosen after collision testing,
-and the result is recorded here.
+**The default is `Ctrl+Space`, and it was chosen by measurement rather than in this document.** The
+test below was run against all five programs on 28 August 2026; the results are recorded here, and
+they are the reason the binding is what it is.
 
-Candidates worth testing, with what is already known against each:
+Candidates tested, with what was already suspected of each:
 
 ```text
 Ctrl+Space   often unbound; sends NUL, which readline treats as set-mark
@@ -270,40 +297,60 @@ Ctrl+A       screen's prefix, and readline beginning-of-line
 Ctrl+K       readline kill-to-end-of-line — rejected above
 ```
 
-### Results so far
-
-Run with the method below. "reacted" means the program emitted something in response — a bell, a
-cursor move, a redraw — with text already typed on the line, because a binding that edits text shows
-nothing on an empty one.
+### Results
 
 ```text
                 bash      zsh       Claude    Codex     OpenCode
-Ctrl+Space      clean     clean     clean     pending   pending
-Ctrl+]          clean     reacted   clean     pending   pending
-Ctrl+^          reacted   reacted   clean     pending   pending
-Ctrl+O          clean     reacted   reacted   pending   pending
-Ctrl+G          reacted   reacted   reacted   pending   pending
-Ctrl+B          reacted   reacted   reacted   pending   pending
-Ctrl+A          reacted   reacted   reacted   pending   pending
+Ctrl+Space      clean     clean     clean     repaint   clean
+Ctrl+]          clean     reacted   clean     repaint   clean
+Ctrl+^          reacted   reacted   clean     repaint   clean
+Ctrl+O          clean     reacted   reacted   reacted   clean
+Ctrl+G          reacted   reacted   reacted   reacted   clean
+Ctrl+B          reacted   reacted   reacted   reacted   reacted
+Ctrl+A          reacted   reacted   reacted   reacted   reacted
 ```
 
-`Ctrl+Space` leads on the evidence available. Two things are known about it that the table does not
-show: it is the NUL byte, so a terminal reports it as either `Ctrl+Space` or `Ctrl+@` and Verb
-normalises the two; and some terminal emulators do not transmit it at all, which would make it
-useless *on that terminal* rather than wrong in general. That is an argument for remapping being
-first-class, which it is.
+Versions: bash 3.2.57, zsh 5.9, Claude Code 2.1.250, Codex 0.147.0, OpenCode 1.18.23, on macOS
+(arm64). Shells were started without user configuration (`bash --norc`, `zsh -f`), because a default
+must be chosen against defaults — a personal `.zshrc` can rebind anything, which is what
+`VERB_LEADER` is for.
 
-Codex and OpenCode are pending because they live on the Android validation device. The default
-settles when their rows are filled in, and the implementation ships a clearly-marked provisional
-binding until then — never a silent one.
+Three verdicts, not two:
+
+```text
+clean      nothing at all came back
+repaint    bytes came back, but the rendered screen and the cursor are identical
+reacted    the screen changed, the cursor moved, a bell rang, or the process exited
+```
+
+`repaint` was added because Codex earns it and the distinction decides the answer. Codex redraws its
+footer on **every** key event, bound or not: `Ctrl+Space` produces 157 bytes that erase four rows and
+put the cursor back exactly where it was. That is a key consumed and unbound, not a key that means
+something — nothing a person could see happens. Collapsing it into `reacted` would have disqualified
+every candidate and made the test useless.
+
+**`Ctrl+Space` is the only candidate no program reacts to**, so it is the default under the
+acceptance rule below. Two things about it the table does not show: it is the NUL byte, so a terminal
+reports it as either `Ctrl+Space` or `Ctrl+@` and Verb normalises the two; and some terminal
+emulators do not transmit it at all, which makes it useless *on that terminal* rather than wrong in
+general. That is an argument for remapping being first-class, which it is.
+
+The chord this replaced was `Ctrl+O`, bound before any evidence existed on the reasoning that
+readline's operate-and-get-next is rarely used interactively. The measurement disagreed: `Ctrl+O`
+moves the cursor in zsh, in Claude and in Codex, which makes it one of the *worst* of the seven
+rather than the least bad. It is the clearest argument in this document for testing rather than
+reasoning about keys.
+
+### The method
 
 The test is the same for each candidate, and it is an observation, not an opinion:
 
 ```text
 For each of: bash, zsh, Claude Code, Codex, OpenCode
-  1. start it inside a Verb PTY session
-  2. send the candidate chord
-  3. record whether anything observably happens — text edited, mode changed,
+  1. start it under a PTY
+  2. type text onto the line, because a binding that edits text shows nothing on an empty one
+  3. send the candidate chord
+  4. record whether anything observably happens — text edited, mode changed,
      screen redrawn, command cancelled, process signalled
 Accept only a candidate with no observable effect in all five.
 ```
@@ -313,12 +360,24 @@ collides only with a documented agent binding, and the collision is written down
 is not an option here: the whole point is that Verb does not claim facts — or keys — it has not
 checked.
 
-Until that test is run and its result recorded here, the implementation treats the leader as
-configuration with a **provisional** default rather than a settled one: `VERB_LEADER` selects it,
-`Leader ?` shows the current binding, and the status line carries the hint, so a user never has to
-remember which chord this install uses and never discovers the binding by having it fire. Provisional
-means the doc says so and the release notes say so — not that it is hidden. A configuration file
-replaces the environment variable when Verb has one; the abstraction does not change when it does.
+Three things a harness must do, each of which produced a **wrong answer** before it was added, and
+each of which is a fact about hosting agent TUIs rather than about this test:
+
+* **Answer the terminal capability queries a TUI sends on startup.** OpenCode waits forever for an
+  XTGETTCAP reply and draws nothing. A blocked program looks perfectly clean on every candidate.
+* **Send a focus-in event (`ESC [ I`).** OpenCode enables focus reporting and ignores every keystroke
+  until it believes the terminal is focused. It draws a complete, correct TUI and answers nothing —
+  indistinguishable from a chord with no binding. (Verb's own hosted terminal was checked against
+  this afterwards and is fine: OpenCode accepts input inside `verb ui` today.)
+* **Verify the typed text actually reached the screen before sending any chord.** Claude sat on its
+  first-run trust dialog and reported `clean` for all seven candidates. Codex has a trust dialog of
+  its own and an update prompt. A run that skips this check produces a full table of confident
+  nonsense.
+
+The binding is stated, never discovered by firing: `VERB_LEADER` selects it, `Leader ?` shows the
+current binding, and the status line carries the hint, so a user never has to remember which chord
+this install uses. A configuration file replaces the environment variable when Verb has one; the
+abstraction does not change when it does.
 
 The leader is one chord and the follow-up keys are ordinary letters, deliberately. A user who
 remaps the leader keeps every Verb command they already know.

@@ -34,9 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Psychology
@@ -61,6 +63,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -87,6 +90,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.view.ViewGroup
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
@@ -95,11 +99,10 @@ import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalAiExchange
 import com.example.verb.terminal.TerminalEvidence
-import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.TerminalSessionState
+import com.example.verb.terminal.VerbTerminal
 import com.example.verb.terminal.TermuxBootstrapInstaller
-import com.example.verb.terminal.TermuxTerminalRuntimeAdapter
 import com.example.verb.project.VerbProject
 import com.termux.view.TerminalView
 import com.example.verb.ui.theme.VerbStatus
@@ -151,6 +154,13 @@ fun TerminalScreen(
     verbFirstAction: (@Composable () -> Unit)? = null,
     /** Opens Ask Verb on the assistant stage; the terminal no longer hosts a copy of it. */
     onOpenAssistant: () -> Unit = {},
+    /** Every open terminal in this project, oldest first. One entry means no switcher is shown. */
+    terminalSessionIds: List<String> = emptyList(),
+    activeTerminalSessionId: String? = null,
+    agentInTerminal: (String) -> String? = { null },
+    onSwitchTerminalSession: (String) -> Unit = {},
+    onOpenTerminalSession: () -> Unit = {},
+    canOpenMoreTerminals: Boolean = false,
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
     onCreateProject: (String) -> Unit = {},
@@ -169,11 +179,15 @@ fun TerminalScreen(
     val scrollState = rememberScrollState()
     val focusManager: FocusManager = LocalFocusManager.current
     val clipboardManager = LocalClipboardManager.current
-    val termuxAdapter = when (terminalRuntime) {
-        is TermuxTerminalRuntimeAdapter -> terminalRuntime
-        is TerminalRuntime -> terminalRuntime.termuxDelegate
-        else -> null
-    }
+    // The canvas to mount, asked of the terminal rather than inferred from its type. A project has
+    // sessions now, so what the workspace holds is a facade for whichever one is in front -- and the
+    // old `is TerminalRuntime` check matched none of them, silently dropping the real Termux view
+    // (and with it pinch zoom, native scroll and selection) in favour of the transcript fallback.
+    // Collected, because switching terminals must swap the canvas as well as the state. The "no
+    // canvas" flow is remembered unconditionally: behind an elvis its slot would come and go with
+    // the nullability of the runtime.
+    val noCanvas = remember { MutableStateFlow(null) }
+    val termuxAdapter by (terminalRuntime?.renderTarget ?: noCanvas).collectAsState()
 
     // A Compose text field on another tab may retain IME focus across navigation. Release it as
     // Terminal opens so the explicit terminal input field can claim text focus when the user taps.
@@ -252,8 +266,16 @@ fun TerminalScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Title and connection indicator
+                    // Title and connection indicator.
+                    //
+                    // Weighted, so this group is bounded by what is left after the trailing
+                    // controls have taken their space. Unbounded, it pushed the overflow button
+                    // clean off the right edge the moment the terminal switcher appeared -- and
+                    // `docs/UX_FOUNDATION.md` is explicit that density degrades in a fixed order
+                    // and never at the cost of control. The project chip is what gives way first;
+                    // it is the one thing here also visible in the prompt and the Verb sheet.
                     Row(
+                        modifier = Modifier.weight(1f, fill = false),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -287,6 +309,11 @@ fun TerminalScreen(
                             shape = RoundedCornerShape(999.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = { showProjectSheet = true },
+                            // The flexible one. When the row runs out of width -- which is exactly
+                            // when a second terminal adds the switcher -- this is what gives way,
+                            // because `docs/UX_FOUNDATION.md` says density degrades in a fixed
+                            // order and never takes the session state with it. Weighting the group
+                            // without this squeezed the status chip until "running" disappeared.
                             modifier = Modifier.testTag("terminal_project_selector")
                         ) {
                             // Capped and ellipsized -- an untruncated long project id (e.g.
@@ -294,16 +321,36 @@ fun TerminalScreen(
                             // over a third of the header's width by itself, leaving no room for
                             // the action row on the right (Runs' and the overflow menu's touch
                             // targets both measured 0x0 before this cap was added).
-                            Text(
-                                text = selectedProject?.id ?: "project",
-                                modifier = Modifier
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                                    .widthIn(max = 56.dp),
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            //
+                            // Once a second terminal adds the switcher there is no longer room for
+                            // the name at all, and squeezing it produced an unreadable sliver --
+                            // worse than dropping it, because a stub still asks to be read. The
+                            // glyph keeps the control and its touch target; the name is a tap away
+                            // in the Verb sheet, and the prompt shows the directory regardless.
+                            // `docs/UX_FOUNDATION.md` puts the path first in the order density
+                            // gives way, and the session state last.
+                            if (terminalSessionIds.size > 1) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderOpen,
+                                    contentDescription = "Project ${selectedProject?.id ?: "none"}. " +
+                                        "Activate to change project.",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                        .size(14.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = selectedProject?.id ?: "project",
+                                    modifier = Modifier
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .widthIn(max = 56.dp),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
 
                         // Active status indicator; tap to restart a stopped/failed session.
@@ -312,6 +359,87 @@ fun TerminalScreen(
                         // 7dp coloured dot this replaces carried the whole meaning in hue, which
                         // survives neither a colour-blind reader nor a screen reader, and which
                         // `docs/UX_FOUNDATION.md` rules out by name. Colour still reinforces it.
+                        // Which terminal you are in, and a way out of it -- but only once there
+                        // is more than one. With a single terminal this is not a choice a person
+                        // has, so the control is not there to be read past: capability appears when
+                        // the situation calls for it and recedes when it does not
+                        // (`docs/PRODUCT_VISION.md`, "Capability large, surface small").
+                        if (terminalSessionIds.size > 1) {
+                            val index = terminalSessionIds.indexOf(activeTerminalSessionId)
+                            var switcherOpen by remember { mutableStateOf(false) }
+                            Box {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    onClick = { switcherOpen = true },
+                                    modifier = Modifier
+                                        .padding(start = 2.dp)
+                                        .semantics {
+                                            contentDescription =
+                                                "Terminal ${index + 1} of ${terminalSessionIds.size}. " +
+                                                    "Activate to switch terminals."
+                                        }
+                                        .testTag("btn_terminal_switcher")
+                                ) {
+                                    Text(
+                                        text = "⌄ ${index + 1}/${terminalSessionIds.size}",
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = switcherOpen,
+                                    onDismissRequest = { switcherOpen = false }
+                                ) {
+                                    terminalSessionIds.forEachIndexed { position, id ->
+                                        val agent = agentInTerminal(id)
+                                        DropdownMenuItem(
+                                            text = {
+                                                Column {
+                                                    Text("Terminal ${position + 1}")
+                                                    Text(
+                                                        // Says what is in it, so switching is a
+                                                        // decision rather than a guess.
+                                                        text = agent?.let { "$it is running here" }
+                                                            ?: "your shell",
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                }
+                                            },
+                                            leadingIcon = {
+                                                Text(
+                                                    text = if (id == activeTerminalSessionId) "●" else "○",
+                                                    fontSize = 12.sp,
+                                                    color = if (id == activeTerminalSessionId) {
+                                                        MaterialTheme.colorScheme.primary
+                                                    } else {
+                                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                                    }
+                                                )
+                                            },
+                                            onClick = {
+                                                switcherOpen = false
+                                                if (id != activeTerminalSessionId) onSwitchTerminalSession(id)
+                                            },
+                                            modifier = Modifier.testTag("switch_to_$id")
+                                        )
+                                    }
+                                    if (canOpenMoreTerminals) {
+                                        DropdownMenuItem(
+                                            text = { Text("New terminal") },
+                                            onClick = {
+                                                switcherOpen = false
+                                                onOpenTerminalSession()
+                                            },
+                                            modifier = Modifier.testTag("btn_new_terminal_header")
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         val statusColor = when (sessionState) {
                             com.example.verb.terminal.TerminalSessionState.RUNNING -> VerbStatus.confirmed
                             com.example.verb.terminal.TerminalSessionState.STARTING,
@@ -334,6 +462,10 @@ fun TerminalScreen(
                             },
                             modifier = Modifier
                                 .padding(start = 2.dp)
+                                // Session truth is the last thing density may take. Keep the pill
+                                // wide enough for its word so Compose cannot turn "running" into a
+                                // vertical stack when the terminal switcher appears.
+                                .widthIn(min = 72.dp)
                                 // On the clickable node itself: a nested merging node does not
                                 // propagate its description outward, so a screen reader would have
                                 // announced the raw glyph instead of the state.
@@ -354,33 +486,37 @@ fun TerminalScreen(
                                 Text(
                                     text = statusLabel,
                                     fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
                     }
 
-                    // Quick Action Buttons. Only Runs stays directly visible alongside the
-                    // overflow menu -- on-device verification found the project-id pill on the
-                    // left already consumes most of this header's width on typical devices, so a
-                    // full row of direct icons is not reliably reachable (see PR discussion). Every
-                    // other action lives in the overflow menu with a text label, not icon-only.
+                    // Quick Action Buttons. Runs stays directly visible while one terminal leaves
+                    // room for it. Once the switcher appears, Runs moves into overflow: physical
+                    // verification on a 360dp-wide Vivo showed the status pill otherwise collapsing
+                    // into a vertical "r u n n i n g" column. Session truth outranks a shortcut;
+                    // the action remains two taps away with a text label.
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = { showRunsSheet = true },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .testTag("btn_terminal_runs")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.History,
-                                contentDescription = "Command run history",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        if (terminalSessionIds.size <= 1) {
+                            IconButton(
+                                onClick = { showRunsSheet = true },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("btn_terminal_runs")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.History,
+                                    contentDescription = "Command run history",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                         Box {
                             IconButton(
@@ -426,6 +562,36 @@ fun TerminalScreen(
                                     },
                                     modifier = Modifier.testTag("btn_files_overflow")
                                 )
+                                // Opening the second terminal has to be reachable from the
+                                // workspace. The header switcher only exists once there are two,
+                                // so without this the only route to a second terminal was the Verb
+                                // sheet -- you cannot switch to a terminal you cannot create.
+                                if (canOpenMoreTerminals) {
+                                    DropdownMenuItem(
+                                        text = { Text("New terminal") },
+                                        leadingIcon = {
+                                            Icon(imageVector = Icons.Default.Add, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            onOpenTerminalSession()
+                                        },
+                                        modifier = Modifier.testTag("btn_new_terminal_overflow")
+                                    )
+                                }
+                                if (terminalSessionIds.size > 1) {
+                                    DropdownMenuItem(
+                                        text = { Text("Command runs") },
+                                        leadingIcon = {
+                                            Icon(imageVector = Icons.Default.History, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            showRunsSheet = true
+                                        },
+                                        modifier = Modifier.testTag("btn_runs_overflow")
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Ask Verb about this session") },
                                     leadingIcon = {
@@ -605,9 +771,14 @@ fun TerminalScreen(
         // the bootstrap or switching the Agent Runtime used to destroy and restart the PTY, which
         // silently ended whatever was running in it. The session is left alone and the user decides
         // when the new environment takes effect.
-        val pendingEnvironmentChange by ((terminalRuntime as? com.example.verb.terminal.TerminalRuntime)
-            ?.pendingEnvironmentChange
-            ?: remember { MutableStateFlow(false) }).collectAsState()
+        // Asked of the terminal, not of its concrete type. This used to narrow with
+        // `as? TerminalRuntime`, which the multi-session facade fails -- so the offer to apply a
+        // queued environment silently stopped appearing at all. Anything that is a VerbTerminal can
+        // answer; a bare PTY adapter has no environment to change and keeps the quiet default.
+        val noPendingChange = remember { MutableStateFlow(false) }
+        val pendingEnvironmentChange by (
+            (terminalRuntime as? VerbTerminal)?.pendingEnvironmentChange ?: noPendingChange
+            ).collectAsState()
         if (pendingEnvironmentChange) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
@@ -647,7 +818,8 @@ fun TerminalScreen(
         }
 
         // Real Terminal Canvas View boundary
-        if (termuxAdapter != null) {
+        val activeCanvas = termuxAdapter
+        if (activeCanvas != null) {
             // Touching the output is a request to type into it. The tap that grants that request
             // is recognised by the Termux view itself -- its recognizer is what already separates
             // taps from scrolls, flings, pinches and long-press selection, and it is the only
@@ -655,30 +827,41 @@ fun TerminalScreen(
             // Compose-side watcher the release that would confirm a tap, which is exactly how an
             // earlier watcher ended up reacting to every Press and opening the IME over the
             // scrollback a person was trying to read.
-            DisposableEffect(termuxAdapter) {
-                termuxAdapter.onCanvasTap = {
+            DisposableEffect(activeCanvas) {
+                activeCanvas.onCanvasTap = {
                     terminalInputFocusRequester.requestFocus()
                     keyboardController?.show()
                 }
-                onDispose { termuxAdapter.onCanvasTap = null }
+                onDispose { activeCanvas.onCanvasTap = null }
             }
-            AndroidView(
-                factory = { ctx ->
-                    termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
-                        termuxAdapter.bindTerminalView(it)
-                    }
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .heightIn(min = 96.dp)
-                    // The canvas the shell draws into is dark in both themes; the surrounding
-                    // chrome follows VerbTheme. Without this the Termux view's transparent
-                    // background let a light-mode page through under light terminal text.
-                    .background(TerminalCanvas)
-                    .padding(12.dp)
-                    .testTag("termux_terminal_view")
-            )
+            // Keyed on the adapter so switching terminals mounts the *other* session's view rather
+            // than leaving this one on screen: `AndroidView` runs its factory once per node, and
+            // each terminal is a separate PTY with its own emulator, scrollback and selection.
+            key(activeCanvas) {
+                AndroidView(
+                    factory = { ctx ->
+                        // Reused whenever it exists, so the emulator state, scroll position and
+                        // pinched font size a session already has survive being switched away from
+                        // and back. A View may have only one parent, and Compose leaves the old
+                        // interop holder holding it, so detach before remounting.
+                        activeCanvas.terminalView?.also { existing ->
+                            (existing.parent as? ViewGroup)?.removeView(existing)
+                        } ?: TerminalView(ctx, null).also {
+                            activeCanvas.bindTerminalView(it)
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp)
+                        // The canvas the shell draws into is dark in both themes; the surrounding
+                        // chrome follows VerbTheme. Without this the Termux view's transparent
+                        // background let a light-mode page through under light terminal text.
+                        .background(TerminalCanvas)
+                        .padding(12.dp)
+                        .testTag("termux_terminal_view")
+                )
+            }
         } else {
             // Compose selection view fallback for unit tests and headless environments
             // Auto-scroll to the newest output belongs to this fallback alone: with the real

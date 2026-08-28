@@ -56,6 +56,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -110,17 +111,50 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * `docs/VERB_SESSION_CONTRACT.md`). A VerbViewModel created because the Activity was recreated
      * for real reattaches to the same TerminalRuntime instead of spawning a duplicate session.
      */
-    /** True only when this Android process already owned the PTY before this ViewModel was built. */
+    /** True only when this Android process already owned a PTY before this ViewModel was built. */
     private val hadExistingTerminalRuntime =
-        com.example.verb.session.VerbTerminalSessionHolder.existing() != null
+        com.example.verb.session.VerbTerminalSessionHolder.hasAnySession()
 
-    val terminalRuntime = com.example.verb.session.VerbTerminalSessionHolder.getOrCreate {
-        TerminalRuntime(
-            workingDir = application.applicationContext.filesDir,
-            bundledBinDir = bundledBinDir,
-            initialProjectDirectory = projectRepository.selected()?.directory
-        )
-    }
+    private fun newTerminalRuntime() = TerminalRuntime(
+        workingDir = getApplication<Application>().applicationContext.filesDir,
+        bundledBinDir = bundledBinDir,
+        initialProjectDirectory = projectRepository.selected()?.directory
+    )
+
+    /**
+     * The terminal in front, as one stable object.
+     *
+     * A project has sessions, but the workspace, the dock and the sheets all still ask about "this
+     * terminal" -- so they are handed a facade that follows whichever session is active. Switching
+     * changes what these flows emit; it does not change who is asking.
+     */
+    val terminalRuntime: com.example.verb.terminal.VerbTerminal =
+        com.example.verb.terminal.SwitchingTerminalRuntime(
+            scope = viewModelScope,
+            active = com.example.verb.session.VerbTerminalSessionHolder.activeRuntime
+        ).also {
+            com.example.verb.session.VerbTerminalSessionHolder.getOrCreateActive(::newTerminalRuntime)
+        }
+
+    /** Every open terminal, oldest first. */
+    val terminalSessionIds = com.example.verb.session.VerbTerminalSessionHolder.sessionIds
+
+    /** Which one is in front. */
+    val activeTerminalSessionId = com.example.verb.session.VerbTerminalSessionHolder.activeId
+
+    /** Opens another terminal in this project, or reports that the ceiling has been reached. */
+    fun openTerminalSession(): Boolean =
+        com.example.verb.session.VerbTerminalSessionHolder.open(::newTerminalRuntime) != null
+
+    fun activateTerminalSession(id: String) =
+        com.example.verb.session.VerbTerminalSessionHolder.activate(id)
+
+    fun closeTerminalSession(id: String): Boolean =
+        com.example.verb.session.VerbTerminalSessionHolder.close(id)
+
+    /** Which agent occupies a given terminal, so the switcher can say where the agent is. */
+    fun agentInTerminalSession(id: String): String? =
+        com.example.verb.session.VerbTerminalSessionHolder.foregroundAgentOf(id)
 
     /**
      * One [com.example.verb.session.AgentSessionCoordinator] per recoverable agent -- see
@@ -380,8 +414,13 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // E1: a live session holds the process at foreground priority, so backgrounding Verb stops
         // handing a running command or agent to the low-memory killer. The claim follows the
         // session, not the screen: RUNNING holds it, a finished or failed session releases it.
+        //
+        // *Any* session, not the one in front. This used to read the facade, which answers about
+        // the active terminal -- so switching to an idle terminal released the hold while an agent
+        // was still running in the one you had just left, which is precisely the moment the hold
+        // exists for.
         viewModelScope.launch {
-            terminalRuntime.sessionState.collect { state ->
+            holdWhileAnySessionRuns().collect { state ->
                 val context = getApplication<Application>()
                 when (state) {
                     TerminalSessionState.RUNNING, TerminalSessionState.STARTING ->
@@ -1164,6 +1203,29 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * command, and a backlog of stale observations is worse than a missed one -- the next boundary
      * will take a fresher reading anyway.
      */
+    /**
+     * The strongest state across every open terminal.
+     *
+     * RUNNING if any is running, STARTING if any is starting, and only then the resting states --
+     * so the hold is released exactly when nothing anywhere is live, and not a moment sooner.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private fun holdWhileAnySessionRuns(): kotlinx.coroutines.flow.Flow<TerminalSessionState> =
+        com.example.verb.session.VerbTerminalSessionHolder.runtimes.flatMapLatest { open ->
+            if (open.isEmpty()) {
+                kotlinx.coroutines.flow.flowOf(TerminalSessionState.EXITED)
+            } else {
+                combine(open.map { it.sessionState }) { states ->
+                    when {
+                        states.any { it == TerminalSessionState.RUNNING } -> TerminalSessionState.RUNNING
+                        states.any { it == TerminalSessionState.STARTING } -> TerminalSessionState.STARTING
+                        states.any { it == TerminalSessionState.FAILED } -> TerminalSessionState.FAILED
+                        else -> TerminalSessionState.EXITED
+                    }
+                }
+            }
+        }
+
     private fun observeCommandBoundaries() {
         viewModelScope.launch {
             terminalRuntime.commandHistory
