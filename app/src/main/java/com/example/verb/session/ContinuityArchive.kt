@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.example.BuildConfig
 import com.example.verb.project.VerbProject
 import org.json.JSONObject
 import java.io.File
@@ -137,7 +138,11 @@ object ContinuityArchive {
                 put("recordType", "origin")
                 put("hostId", hostId(context))
                 put("hostKind", "android")
-                put("verbVersion", "0.1.0-beta.2")
+                // The build's own version, never a literal maintained beside it. A hardcoded
+                // "0.1.0-beta.2" survived the beta.3 release and stamped every exported archive
+                // with a version that had already shipped -- provenance is the one field in this
+                // record that must not be able to drift from the artifact that wrote it.
+                put("verbVersion", BuildConfig.VERSION_NAME)
                 put("exportedAt", timestamp(Instant.now()))
             })
             appendLine(JSONObject().apply {

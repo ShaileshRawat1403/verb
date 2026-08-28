@@ -61,7 +61,16 @@ it true. Automated, emulator and physical-device results remain separate.
 ## Packaging and publication
 
 - [x] Version and release notes describe a developer preview, not a finished product.
-- [ ] Signed Android artifact and checksum are produced by the release workflow.
+- [x] Signed Android artifact and checksum are produced by the release workflow. The beta.3 assets
+  were built and uploaded by `Release Full CLI` run 33043409341 on `389acee`, which decodes the
+  signing keystore from secrets, runs `assembleFullCliRelease`, and self-verifies the checksum with
+  `sha256sum --check`. The published APK's SHA-256 matches its checksum asset, and it is signed by
+  `CN=Shailesh Rawat` rather than a debug key.
+- [ ] The built APK's own manifest states the package, versionName and versionCode the release was
+  asked for. Read from the artifact with `aapt dump badging` after the build and before publication,
+  never from Gradle source. This box exists because beta.3 passed every other gate here and still
+  published an APK reporting `0.1.0-beta.2` / versionCode 1 — a green pipeline is not evidence about
+  the file it uploaded unless something reads that file.
 - [x] Desktop installation is documented; absence of prebuilt desktop binaries is explicit.
 - [x] Return/public archive contains only source, tests and documentation and excludes `.git`, local
   configuration, caches, targets, build output, keystores, agent state and temporary directories.

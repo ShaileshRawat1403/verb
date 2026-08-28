@@ -40,16 +40,92 @@ jobs:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/verb-upload.jks"
 
+      # The version the release is *asked* for, taken from the tag, and the code that
+      # version.properties declares for it. Both are stated here and passed into Gradle
+      # explicitly, so a release never inherits whatever version happened to be committed.
+      - name: Resolve the release version
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG_VERSION="${TAG#v}"
+          FILE_NAME="$(sed -n 's/^versionName=//p' version.properties | tr -d '[:space:]')"
+          FILE_CODE="$(sed -n 's/^versionCode=//p' version.properties | tr -d '[:space:]')"
+
+          if [ -z "$TAG_VERSION" ] || [ -z "$FILE_NAME" ] || [ -z "$FILE_CODE" ]; then
+            echo "::error::could not resolve a version (tag='$TAG' name='$FILE_NAME' code='$FILE_CODE')"
+            exit 1
+          fi
+          # version.properties is the declaration; the tag is the request. If they disagree,
+          # somebody forgot one of them, and guessing which is how beta.3 shipped as beta.2.
+          if [ "$TAG_VERSION" != "$FILE_NAME" ]; then
+            echo "::error::tag $TAG asks for $TAG_VERSION but version.properties declares $FILE_NAME"
+            exit 1
+          fi
+
+          echo "name=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "code=$FILE_CODE" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG_VERSION (versionCode $FILE_CODE)"
+
       - name: Build signed Full CLI APK
         env:
           KEYSTORE_PATH: ${{ runner.temp }}/verb-upload.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew :app:assembleFullCliRelease
+        run: |
+          ./gradlew :app:assembleFullCliRelease \
+            -PverbVersionName="${{ steps.version.outputs.name }}" \
+            -PverbVersionCode="${{ steps.version.outputs.code }}"
+
+      # Gradle source inspection proves nothing about the file that gets uploaded. This reads the
+      # built APK's own manifest, which is the artifact users will install.
+      - name: Verify the built APK identifies itself correctly
+        env:
+          EXPECTED_NAME: ${{ steps.version.outputs.name }}
+          EXPECTED_CODE: ${{ steps.version.outputs.code }}
+          EXPECTED_PACKAGE: com.aistudio.verb.app
+        working-directory: app/build/outputs/apk/fullCli/release
+        run: |
+          set -euo pipefail
+          AAPT="$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -1)"
+          if [ -z "$AAPT" ]; then
+            echo "::error::no aapt in $ANDROID_HOME/build-tools; cannot verify the artifact"
+            exit 1
+          fi
+          BADGING="$("$AAPT" dump badging app-fullCli-release.apk | head -1)"
+          echo "$BADGING"
+
+          # Anchored, and each field read from its own position. A greedy `.*name='` matches
+          # `compileSdkVersionCodename='16'` further along the same line and reports the package as
+          # "16" -- caught by dry-running this gate against a real APK before it ever guarded one.
+          ACTUAL_PACKAGE="$(printf '%s' "$BADGING" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")"
+          ACTUAL_CODE="$(printf '%s' "$BADGING" | sed -n "s/^package:.* versionCode='\([^']*\)'.*/\1/p")"
+          ACTUAL_NAME="$(printf '%s' "$BADGING" | sed -n "s/^package:.* versionName='\([^']*\)'.*/\1/p")"
+
+          fail=0
+          [ "$ACTUAL_PACKAGE" = "$EXPECTED_PACKAGE" ] || { echo "::error::package is $ACTUAL_PACKAGE, expected $EXPECTED_PACKAGE"; fail=1; }
+          [ "$ACTUAL_NAME" = "$EXPECTED_NAME" ] || { echo "::error::versionName is $ACTUAL_NAME, expected $EXPECTED_NAME"; fail=1; }
+          [ "$ACTUAL_CODE" = "$EXPECTED_CODE" ] || { echo "::error::versionCode is $ACTUAL_CODE, expected $EXPECTED_CODE"; fail=1; }
+          # An empty capture means the badging format changed under us. Treat that as a failure
+          # rather than as a match against an empty expectation.
+          for field in "$ACTUAL_PACKAGE" "$ACTUAL_NAME" "$ACTUAL_CODE"; do
+            [ -n "$field" ] || { echo "::error::could not read the APK manifest; aapt output changed"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] || { echo "::error::refusing to publish a mislabelled artifact"; exit 1; }
+
+          echo "APK verified: $ACTUAL_PACKAGE $ACTUAL_NAME ($ACTUAL_CODE)"
+
+      - name: Verify the APK is signed
+        working-directory: app/build/outputs/apk/fullCli/release
+        run: |
+          set -euo pipefail
+          SIGNER="$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)"
+          "$SIGNER" verify --print-certs app-fullCli-release.apk
 
       - name: Generate checksum
         working-directory: app/build/outputs/apk/fullCli/release
         run: |
+          set -euo pipefail
           sha256sum app-fullCli-release.apk > verb-full-cli.apk.sha256
           sha256sum --check verb-full-cli.apk.sha256
 

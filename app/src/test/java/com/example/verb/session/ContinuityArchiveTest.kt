@@ -1,6 +1,7 @@
 package com.example.verb.session
 
 import androidx.test.core.app.ApplicationProvider
+import com.example.BuildConfig
 import com.example.verb.project.VerbProject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -48,6 +49,35 @@ class ContinuityArchiveTest {
         assertFalse(text.contains("processPresent"))
         assertFalse(text.contains("pid"))
         assertTrue(text.contains("\"recordedState\":\"RECOVERABLE\""))
+    }
+
+    /**
+     * Provenance comes from the build, not from a literal maintained beside it.
+     *
+     * A hardcoded "0.1.0-beta.2" outlived the beta.3 release: the published APK reported beta.2,
+     * and so did every archive it exported. The assertion is deliberately against
+     * [BuildConfig.VERSION_NAME] rather than against a spelled-out version -- a test that named the
+     * expected string would be a second literal to forget, which is the failure it exists to stop.
+     */
+    @Test
+    fun `the exported origin record carries the build's own version`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val directory = temporaryFolder.newFolder("provenance-project")
+        val project = VerbProject("provenance-project", directory)
+
+        val bytes = ContinuityArchive.buildForTest(context, project, emptyList())
+        val text = bytes.toString(Charsets.UTF_8)
+
+        assertTrue(
+            "the origin record must state the version of the build that wrote it, got: " +
+                text.lineSequence().first(),
+            text.contains("\"verbVersion\":\"${BuildConfig.VERSION_NAME}\"")
+        )
+        // And nothing may still be carrying the version that shipped mislabelled.
+        assertFalse(
+            "a stale hardcoded version has come back",
+            BuildConfig.VERSION_NAME != "0.1.0-beta.2" && text.contains("0.1.0-beta.2")
+        )
     }
 
     @Test

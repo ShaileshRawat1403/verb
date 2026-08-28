@@ -1,3 +1,28 @@
+# Verb 0.1.0-beta.4 — developer preview
+
+## Use beta.4, not beta.3
+
+**beta.3's published APK is valid and correctly signed, but it reports the wrong version of itself.**
+Android shows it as `0.1.0-beta.2`, with the same version code as beta.1 and beta.2, so nothing on
+the device distinguishes the three. The file is genuine — its checksum matches and its signature is
+the real release key — it is simply mislabelled.
+
+beta.3 stays exactly as published. Its tag, its APK and its checksum are untouched, because a
+released artifact that people may already have installed should keep matching the checksum it was
+released with.
+
+beta.4 reports itself truthfully: `0.1.0-beta.4`, version code 4. Codes 2 and 3 are skipped rather
+than reused, since no published build ever identified itself with them. Installing beta.4 over an
+earlier beta is a normal in-place upgrade and keeps your Working World.
+
+Exported `.vcont` continuity archives now record the version of the build that wrote them. Archives
+written by beta.3 claim to come from beta.2; that is the same mislabelling and it does not affect
+whether they import.
+
+Nothing about how Verb works changed in this release. It fixes what Verb says about itself.
+
+---
+
 # Verb 0.1.0-beta.3 — developer preview
 
 ## Restore notice — read this if you have an archive from beta.1 or beta.2
