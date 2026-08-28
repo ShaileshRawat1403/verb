@@ -66,11 +66,16 @@ it true. Automated, emulator and physical-device results remain separate.
   signing keystore from secrets, runs `assembleFullCliRelease`, and self-verifies the checksum with
   `sha256sum --check`. The published APK's SHA-256 matches its checksum asset, and it is signed by
   `CN=Shailesh Rawat` rather than a debug key.
-- [ ] The built APK's own manifest states the package, versionName and versionCode the release was
+- [x] The built APK's own manifest states the package, versionName and versionCode the release was
   asked for. Read from the artifact with `aapt dump badging` after the build and before publication,
   never from Gradle source. This box exists because beta.3 passed every other gate here and still
   published an APK reporting `0.1.0-beta.2` / versionCode 1 — a green pipeline is not evidence about
   the file it uploaded unless something reads that file.
+  First enforced by `Release Full CLI` run 33161763525 for `v0.1.0-beta.4` at `0d6cbd0`, which
+  reported `APK verified: com.aistudio.verb.app 0.1.0-beta.4 (4)` before publishing. The published
+  asset was then re-checked away from the runner: same package, name and code, SHA-256
+  `7123b66d56dfad84ccb713056c72a14bb4e34f738f0af301d335cdddc059da89` matching its checksum asset,
+  signed by `CN=Shailesh Rawat` (cert SHA-256 `a0b076b0…dd543`, the same certificate as beta.3).
 - [x] Desktop installation is documented; absence of prebuilt desktop binaries is explicit.
 - [x] Return/public archive contains only source, tests and documentation and excludes `.git`, local
   configuration, caches, targets, build output, keystores, agent state and temporary directories.
