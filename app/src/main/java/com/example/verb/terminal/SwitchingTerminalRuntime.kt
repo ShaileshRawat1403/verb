@@ -89,6 +89,28 @@ class SwitchingTerminalRuntime(
         following(null) { it.currentWorkingDirectory }
 
     /**
+     * The active session's own canvas, followed like any other read.
+     *
+     * State is what this facade merges; the view is not. Two terminals are two PTYs and therefore
+     * two `TerminalView`s, each with its own scrollback, selection and emulator, and switching has
+     * to mount the other one rather than repaint this one. So the workspace asks here and gets a
+     * concrete adapter back -- the facade stays the single logical terminal for everyone else, and
+     * the renderer still reaches the real thing.
+     */
+    override val renderTarget: StateFlow<TermuxTerminalRuntimeAdapter?> =
+        following(null) { it.renderTarget }
+
+    /**
+     * Followed, so the banner describes the terminal in front rather than the project.
+     *
+     * A pending change belongs to the session it was made against: selecting a project while
+     * Terminal 1 runs an agent leaves Terminal 2 with nothing pending, and switching between them
+     * must show and hide the offer accordingly.
+     */
+    override val pendingEnvironmentChange: StateFlow<Boolean> =
+        following(false) { it.pendingEnvironmentChange }
+
+    /**
      * Not a flow on the interface, so it is read at call time rather than followed. It changes when
      * the active session changes, which is exactly what a caller asking "where was this launched"
      * about the session in front of them wants.

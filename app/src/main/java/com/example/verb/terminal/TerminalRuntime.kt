@@ -52,7 +52,7 @@ class TerminalRuntime(
      * sessions included. Changing metadata is not a reason to end someone's work; the user is told
      * the next session will differ and decides when that happens.
      */
-    val pendingEnvironmentChange: StateFlow<Boolean> = _pendingEnvironmentChange.asStateFlow()
+    override val pendingEnvironmentChange: StateFlow<Boolean> = _pendingEnvironmentChange.asStateFlow()
 
     /**
      * The environment the live session is running under.
@@ -109,6 +109,13 @@ class TerminalRuntime(
      */
     val termuxDelegate: TermuxTerminalRuntimeAdapter?
         get() = delegate as? TermuxTerminalRuntimeAdapter
+
+    /**
+     * Whatever the delegate says: the real adapter is its own canvas, the fake has none. Forwarded
+     * rather than derived from [termuxDelegate] so there is one place that decides, and it is the
+     * object that actually owns the view.
+     */
+    override val renderTarget: StateFlow<TermuxTerminalRuntimeAdapter?> get() = delegate.renderTarget
 
     /**
      * Re-resolves the launch configuration **without touching a healthy session**.

@@ -1,8 +1,15 @@
 package com.example.verb.terminal
 
 import androidx.compose.ui.text.TextRange
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
+
+/**
+ * The answer given by every terminal that has no real canvas of its own -- the JVM fake, and any
+ * test double. Shared rather than allocated per read, because callers collect it.
+ */
+private val NO_RENDER_TARGET: StateFlow<TermuxTerminalRuntimeAdapter?> = MutableStateFlow(null)
 
 /**
  * Runtime abstraction interface decoupling Verb UI and product logic from Termux PTY / TTY components.
@@ -10,6 +17,21 @@ import java.io.File
 interface TerminalRuntimeAdapter {
     /** State flow reflecting current explicit session lifecycle state */
     val sessionState: StateFlow<TerminalSessionState>
+
+    /**
+     * The adapter whose [com.termux.view.TerminalView] belongs on screen for this terminal, or null
+     * when there is no real canvas and the Compose transcript fallback is the correct renderer.
+     *
+     * A flow, because "which terminal is in front" changes and the canvas has to change with it.
+     *
+     * A terminal names its own render target so that no caller has to ask what *kind* of terminal it
+     * was handed. That question stopped having an answer the moment a project could have several
+     * sessions: the workspace holds a facade for whichever one is active, an `is` check against it
+     * matches nothing, and the workspace quietly fell through to the transcript fallback -- losing
+     * pinch zoom, native scrolling and fling, native selection and the real cursor, every one of
+     * which lives in the view rather than in the text it prints.
+     */
+    val renderTarget: StateFlow<TermuxTerminalRuntimeAdapter?> get() = NO_RENDER_TARGET
 
     /** State flow containing accumulated terminal buffer text */
     val terminalOutput: StateFlow<String>
@@ -153,6 +175,21 @@ interface VerbTerminal : TerminalRuntimeAdapter {
 
     /** Re-resolves the launch spec, so a runtime change takes effect on the next session. */
     fun refreshEnvironment()
+
+    /**
+     * True when the environment has changed underneath a running session and cannot take effect
+     * without a new shell.
+     *
+     * On the interface rather than on the concrete runtime alone, for the same reason as
+     * [renderTarget]: the workspace holds a facade for whichever session is in front, so a question
+     * it has to answer about "this terminal" cannot be one only a concrete type can be asked. The
+     * screen used to recover it with an `as? TerminalRuntime` cast, which the facade fails -- so the
+     * banner that tells someone their next shell will differ never appeared at all.
+     *
+     * Per terminal, not per app: selecting a project or switching an Agent Runtime changes the
+     * terminal it was done to, and the one beside it is entitled to keep saying nothing is pending.
+     */
+    val pendingEnvironmentChange: StateFlow<Boolean>
 
     /** Points this terminal at an installed agent runtime and re-resolves. */
     fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime)

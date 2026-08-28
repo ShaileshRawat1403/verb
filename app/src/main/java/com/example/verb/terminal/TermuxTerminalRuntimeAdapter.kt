@@ -31,6 +31,13 @@ class TermuxTerminalRuntimeAdapter(
     private var session: TerminalSession? = null
     var terminalView: TerminalView? = null
 
+    /**
+     * This adapter is the real canvas, so it is its own render target. Constant: the view it binds
+     * can be recreated, and the session inside it replaced, without the terminal that owns them
+     * changing.
+     */
+    override val renderTarget: StateFlow<TermuxTerminalRuntimeAdapter?> = MutableStateFlow(this)
+
     fun bindTerminalView(view: TerminalView) {
         // TerminalView is a plain Android View, so Compose does not make it focusable for us.
         // These flags keep user-initiated focus requests available to the terminal view.

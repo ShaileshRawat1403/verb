@@ -63,6 +63,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -89,6 +90,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.view.ViewGroup
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
@@ -97,11 +99,10 @@ import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalAiExchange
 import com.example.verb.terminal.TerminalEvidence
-import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.TerminalSessionState
+import com.example.verb.terminal.VerbTerminal
 import com.example.verb.terminal.TermuxBootstrapInstaller
-import com.example.verb.terminal.TermuxTerminalRuntimeAdapter
 import com.example.verb.project.VerbProject
 import com.termux.view.TerminalView
 import com.example.verb.ui.theme.VerbStatus
@@ -178,11 +179,15 @@ fun TerminalScreen(
     val scrollState = rememberScrollState()
     val focusManager: FocusManager = LocalFocusManager.current
     val clipboardManager = LocalClipboardManager.current
-    val termuxAdapter = when (terminalRuntime) {
-        is TermuxTerminalRuntimeAdapter -> terminalRuntime
-        is TerminalRuntime -> terminalRuntime.termuxDelegate
-        else -> null
-    }
+    // The canvas to mount, asked of the terminal rather than inferred from its type. A project has
+    // sessions now, so what the workspace holds is a facade for whichever one is in front -- and the
+    // old `is TerminalRuntime` check matched none of them, silently dropping the real Termux view
+    // (and with it pinch zoom, native scroll and selection) in favour of the transcript fallback.
+    // Collected, because switching terminals must swap the canvas as well as the state. The "no
+    // canvas" flow is remembered unconditionally: behind an elvis its slot would come and go with
+    // the nullability of the runtime.
+    val noCanvas = remember { MutableStateFlow(null) }
+    val termuxAdapter by (terminalRuntime?.renderTarget ?: noCanvas).collectAsState()
 
     // A Compose text field on another tab may retain IME focus across navigation. Release it as
     // Terminal opens so the explicit terminal input field can claim text focus when the user taps.
@@ -766,9 +771,14 @@ fun TerminalScreen(
         // the bootstrap or switching the Agent Runtime used to destroy and restart the PTY, which
         // silently ended whatever was running in it. The session is left alone and the user decides
         // when the new environment takes effect.
-        val pendingEnvironmentChange by ((terminalRuntime as? com.example.verb.terminal.TerminalRuntime)
-            ?.pendingEnvironmentChange
-            ?: remember { MutableStateFlow(false) }).collectAsState()
+        // Asked of the terminal, not of its concrete type. This used to narrow with
+        // `as? TerminalRuntime`, which the multi-session facade fails -- so the offer to apply a
+        // queued environment silently stopped appearing at all. Anything that is a VerbTerminal can
+        // answer; a bare PTY adapter has no environment to change and keeps the quiet default.
+        val noPendingChange = remember { MutableStateFlow(false) }
+        val pendingEnvironmentChange by (
+            (terminalRuntime as? VerbTerminal)?.pendingEnvironmentChange ?: noPendingChange
+            ).collectAsState()
         if (pendingEnvironmentChange) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
@@ -808,7 +818,8 @@ fun TerminalScreen(
         }
 
         // Real Terminal Canvas View boundary
-        if (termuxAdapter != null) {
+        val activeCanvas = termuxAdapter
+        if (activeCanvas != null) {
             // Touching the output is a request to type into it. The tap that grants that request
             // is recognised by the Termux view itself -- its recognizer is what already separates
             // taps from scrolls, flings, pinches and long-press selection, and it is the only
@@ -816,30 +827,41 @@ fun TerminalScreen(
             // Compose-side watcher the release that would confirm a tap, which is exactly how an
             // earlier watcher ended up reacting to every Press and opening the IME over the
             // scrollback a person was trying to read.
-            DisposableEffect(termuxAdapter) {
-                termuxAdapter.onCanvasTap = {
+            DisposableEffect(activeCanvas) {
+                activeCanvas.onCanvasTap = {
                     terminalInputFocusRequester.requestFocus()
                     keyboardController?.show()
                 }
-                onDispose { termuxAdapter.onCanvasTap = null }
+                onDispose { activeCanvas.onCanvasTap = null }
             }
-            AndroidView(
-                factory = { ctx ->
-                    termuxAdapter.terminalView ?: TerminalView(ctx, null).also {
-                        termuxAdapter.bindTerminalView(it)
-                    }
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .heightIn(min = 96.dp)
-                    // The canvas the shell draws into is dark in both themes; the surrounding
-                    // chrome follows VerbTheme. Without this the Termux view's transparent
-                    // background let a light-mode page through under light terminal text.
-                    .background(TerminalCanvas)
-                    .padding(12.dp)
-                    .testTag("termux_terminal_view")
-            )
+            // Keyed on the adapter so switching terminals mounts the *other* session's view rather
+            // than leaving this one on screen: `AndroidView` runs its factory once per node, and
+            // each terminal is a separate PTY with its own emulator, scrollback and selection.
+            key(activeCanvas) {
+                AndroidView(
+                    factory = { ctx ->
+                        // Reused whenever it exists, so the emulator state, scroll position and
+                        // pinched font size a session already has survive being switched away from
+                        // and back. A View may have only one parent, and Compose leaves the old
+                        // interop holder holding it, so detach before remounting.
+                        activeCanvas.terminalView?.also { existing ->
+                            (existing.parent as? ViewGroup)?.removeView(existing)
+                        } ?: TerminalView(ctx, null).also {
+                            activeCanvas.bindTerminalView(it)
+                        }
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp)
+                        // The canvas the shell draws into is dark in both themes; the surrounding
+                        // chrome follows VerbTheme. Without this the Termux view's transparent
+                        // background let a light-mode page through under light terminal text.
+                        .background(TerminalCanvas)
+                        .padding(12.dp)
+                        .testTag("termux_terminal_view")
+                )
+            }
         } else {
             // Compose selection view fallback for unit tests and headless environments
             // Auto-scroll to the newest output belongs to this fallback alone: with the real
