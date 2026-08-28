@@ -39,13 +39,7 @@ pub(super) fn leader_hint(app: &App, available: usize) -> String {
     if long.chars().count() <= available {
         return long;
     }
-    // The short form keeps a marker for a provisional binding: a user must never see a leader
-    // presented as settled when it is not. `Leader ?` spells the asterisk out.
-    let short = if app.leader().is_provisional() {
-        format!("leader {}*", app.leader().chord())
-    } else {
-        format!("leader {}", app.leader().chord())
-    };
+    let short = format!("leader {}", app.leader().chord());
     if short.chars().count() <= available {
         return short;
     }
@@ -142,6 +136,7 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
         ),
         Surface::Help => help(frame, app),
         Surface::Evidence => evidence(frame, app),
+        Surface::Changes => changes(frame, app),
         Surface::Welcome => welcome(frame, app),
         // The scrollback view is drawn as a bar over the terminal rather than a panel in front of
         // it: what is being looked at is the terminal itself.
@@ -833,6 +828,34 @@ fn welcome(frame: &mut Frame, app: &App) {
 }
 
 /// What Verb has observed, rendered from the same assembly `verb context` prints.
+/// What Git reports as changed, and nothing more.
+///
+/// The porcelain code is shown verbatim beside each path. ` M` and `M ` are different facts about
+/// the index, and a screen that printed "modified" for both would be Verb paraphrasing Git into
+/// something Git did not say -- the same rule that keeps a recorded LIVE from being reported as a
+/// running process.
+fn changes(frame: &mut Frame, app: &App) {
+    let changed = crate::changed_files(app.project());
+    let inner = overlay(frame, "Changed files", changed.len().max(1) as u16 + 4);
+    let lines: Vec<Line> = if changed.is_empty() {
+        vec![Line::from(Span::styled(
+            "No changed files.".to_owned(),
+            theme::secondary(),
+        ))]
+    } else {
+        changed
+            .iter()
+            .map(|change| {
+                Line::from(vec![
+                    Span::styled(format!("{:<3}", change.status), theme::secondary()),
+                    Span::raw(change.path.clone()),
+                ])
+            })
+            .collect()
+    };
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
 fn evidence(frame: &mut Frame, app: &App) {
     let built = match crate::context::assemble_for(
         app.project(),
@@ -920,6 +943,10 @@ pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
         Entry {
             label: "What Verb has observed here",
             action: Action::Evidence,
+        },
+        Entry {
+            label: "Show changed files",
+            action: Action::Changes,
         },
         Entry {
             label: "Look back through earlier output",
@@ -1168,15 +1195,13 @@ fn help(frame: &mut Frame, app: &App) {
             theme::secondary(),
         )),
     ];
-    if app.leader().is_provisional() {
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "Provisional (shown as *): collision testing has not settled a default yet. \
-             Set VERB_LEADER to change it."
-                .to_owned(),
-            theme::secondary(),
-        )));
-    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Set VERB_LEADER to rebind the leader, for example VERB_LEADER=ctrl-g. Some terminals do \
+         not transmit Ctrl+Space at all, and that is what rebinding is for."
+            .to_owned(),
+        theme::secondary(),
+    )));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
@@ -1366,6 +1391,22 @@ mod tests {
         assert!(palette_entries("zzz").is_empty());
         // An exact prefix outranks a scattered match.
         assert!(fuzzy_score("New shell session", "new") > fuzzy_score("Quit Verb", "n"));
+    }
+
+    /// `docs/TUI_VISION.md`: every palette action maps to a capability a script can call. This one
+    /// maps to `verb changes`, and both read `crate::changed_files`.
+    #[test]
+    fn changed_files_is_reachable_by_name_from_the_palette() {
+        let entries = palette_entries("changed");
+        assert_eq!(
+            entries.first().map(|entry| entry.label),
+            Some("Show changed files"),
+            "{:?}",
+            entries.iter().map(|entry| entry.label).collect::<Vec<_>>()
+        );
+        assert!(entries
+            .iter()
+            .any(|entry| matches!(entry.action, Action::Changes)));
     }
 
     #[test]

@@ -62,6 +62,8 @@ pub(crate) enum Surface {
     Welcome,
     /// What Verb has observed, as `verb context` assembles it.
     Evidence,
+    /// What Git reports as changed here, as `verb changes` lists it.
+    Changes,
     /// Looking back through output that has scrolled away. A Verb surface rather than a terminal
     /// mode: while it is open the keyboard and the mouse belong to Verb, and `Esc` gives them back.
     Scrollback {
@@ -422,7 +424,10 @@ impl App {
                 self.surface = Surface::None;
             }
             (_, KeyCode::Esc) => self.surface = Surface::None,
-            (Surface::Help, _) | (Surface::Evidence, _) | (Surface::Welcome, _) => {
+            (Surface::Help, _)
+            | (Surface::Evidence, _)
+            | (Surface::Changes, _)
+            | (Surface::Welcome, _) => {
                 self.surface = Surface::None;
                 self.first_run = false;
             }
@@ -686,6 +691,10 @@ impl App {
             Action::Sessions => self.run_command(Command::Sessions),
             Action::Help => self.run_command(Command::Help),
             Action::Evidence => self.run_command(Command::Contextual),
+            Action::Changes => {
+                self.surface = Surface::Changes;
+                Ok(())
+            }
             Action::Scrollback => self.run_command(Command::Scrollback),
             Action::ToggleMouse => self.run_command(Command::ToggleMouse),
             Action::Resume => self.resume_here(),
@@ -838,7 +847,7 @@ impl App {
     pub(super) fn for_tests() -> App {
         App {
             project: PathBuf::from("/tmp/project"),
-            leader: Leader::provisional(),
+            leader: Leader::default_chord(),
             surface: Surface::None,
             context: Context::None,
             hosted: None,
@@ -919,6 +928,7 @@ pub(crate) enum Action {
     Sessions,
     Reconcile,
     Evidence,
+    Changes,
     Scrollback,
     Help,
     ToggleMouse,
@@ -1073,6 +1083,17 @@ mod tests {
     }
 
     #[test]
+    fn choosing_changed_files_opens_its_own_surface() {
+        let mut app = app();
+        app.run_action(Action::Changes).unwrap();
+        assert!(matches!(app.surface, Surface::Changes));
+        // Esc gives the keyboard back to the terminal, like every other Verb surface.
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(app.surface, Surface::None));
+    }
+
+    #[test]
     fn only_one_verb_surface_can_be_open_at_a_time() {
         // The budget in docs/UX_FOUNDATION.md forbids stacking overlays, and the state makes it
         // impossible rather than merely discouraged: asking for a second replaces the first.
@@ -1106,11 +1127,8 @@ mod tests {
     #[test]
     fn the_leader_menu_does_not_close_itself() {
         let mut app = app();
+        // Ctrl+Space is the leader, and it stays pending with no timer to close it.
         app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL))
-            .unwrap();
-        // Ctrl+Space is not this test's leader, so nothing is pending; the provisional leader is
-        // Ctrl+O, and it stays pending with no timer to close it.
-        app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
             .unwrap();
         assert!(app.leader_pending());
 

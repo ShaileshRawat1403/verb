@@ -354,6 +354,7 @@ fn run() -> Result<(), Failure> {
         "status" => print_status(&project, json)?,
         "sessions" => print_sessions(json)?,
         "context" => print_context(&project, json)?,
+        "changes" => print_changes(&project, json)?,
         "continuity" => continuity::command(&project, rest)?,
         #[cfg(unix)]
         "ui" => tui::run(&project)?,
@@ -416,6 +417,7 @@ Usage:
   verb status          Show project, Git, and last session
   verb sessions        List every project Verb has a session for
   verb context         Show everything Verb knows about this project right now
+  verb changes         List the files Git reports as changed here
   verb continuity export PATH
                        Export structural evidence for this project
   verb continuity import PATH [--apply]
@@ -425,7 +427,7 @@ Usage:
   verb claude          Launch Claude in the current project
   verb codex           Launch Codex in the current project
   verb opencode        Launch OpenCode in the current project
-  verb dsh              Launch DeepSeek Harness in the current project
+  verb dsh             Launch DeepSeek Harness in the current project
   verb run CMD ...     Launch any command in the current project
   verb resume          Resume the last known resumable session
 
@@ -695,6 +697,36 @@ fn print_context(project: &Path, json: bool) -> Result<(), String> {
             context.to_text()
         }
     );
+    Ok(())
+}
+
+/// Lists what Git reports as changed here. Read-only, and silent about everything else: this is a
+/// Git fact, not a Verb opinion about it.
+fn print_changes(project: &Path, json: bool) -> Result<(), String> {
+    let changes = changed_files(project);
+    if json {
+        let entries: Vec<String> = changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "{{\"status\":\"{}\",\"path\":\"{}\"}}",
+                    json_escape(&change.status),
+                    json_escape(&change.path)
+                )
+            })
+            .collect();
+        println!("[{}]", entries.join(","));
+        return Ok(());
+    }
+    if changes.is_empty() {
+        // Distinguishes "clean" from "not a repository" no more than Git itself does here, and says
+        // only what it can stand behind.
+        println!("No changed files.");
+        return Ok(());
+    }
+    for change in &changes {
+        println!("{}  {}", change.status, change.path);
+    }
     Ok(())
 }
 
@@ -1030,6 +1062,49 @@ pub(crate) fn git_snapshot(project: &Path) -> GitSnapshot {
         branch,
         changed_files,
     }
+}
+
+/// One changed file, as Git reports it: the two-character porcelain code and the path.
+///
+/// The code is kept verbatim rather than translated into prose. `MM`, ` M` and `M ` mean three
+/// different things about the index, and a "modified" label that flattens them would be Verb
+/// asserting something Git did not say.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ChangedFile {
+    pub status: String,
+    pub path: String,
+}
+
+/// The files Git reports as changed in `project`, or an empty list outside a repository.
+///
+/// [`git_snapshot`] already runs this porcelain and keeps only the count, which is all a status
+/// line needs. The palette needs the list, and the rule in `docs/TUI_VISION.md` is that the
+/// capability lands in the core and is reachable from the CLI before any surface offers it -- so
+/// this is the capability, `verb changes` is the CLI, and the palette entry calls the same function.
+pub(crate) fn changed_files(project: &Path) -> Vec<ChangedFile> {
+    match command_output("git", &["status", "--porcelain"], project) {
+        Some(output) => parse_porcelain(&output),
+        None => Vec::new(),
+    }
+}
+
+/// Split from [`changed_files`] so the parsing is testable without a repository on disk.
+fn parse_porcelain(output: &str) -> Vec<ChangedFile> {
+    output
+        .lines()
+        .filter_map(|line| {
+            // Porcelain v1: two status characters, a space, then the path. A short line is not a
+            // record Verb understands, and inventing a path for it would be worse than skipping it.
+            if line.len() < 4 {
+                return None;
+            }
+            let (status, path) = line.split_at(2);
+            Some(ChangedFile {
+                status: status.to_owned(),
+                path: path.trim_start().to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn command_output(command: &str, args: &[&str], directory: &Path) -> Option<String> {
@@ -1761,5 +1836,59 @@ mod tests {
             "quote\\\" slash\\\\ line\\n"
         );
         assert_eq!(json_escape_bytes(&[0xff, b'a']), "\u{fffd}a");
+    }
+}
+
+#[cfg(test)]
+mod changed_file_tests {
+    use super::*;
+
+    /// The index distinction is the whole reason the code is kept verbatim: ` M` is modified in the
+    /// working tree, `M ` is staged, and `MM` is both. A screen or a script that saw "modified" for
+    /// all three would be reading a paraphrase of Git rather than Git.
+    #[test]
+    fn the_porcelain_code_survives_verbatim() {
+        let parsed = parse_porcelain(" M src/main.rs\nM  README.md\nMM docs/PRD.md\n?? new.txt");
+        assert_eq!(
+            parsed,
+            vec![
+                ChangedFile {
+                    status: " M".to_owned(),
+                    path: "src/main.rs".to_owned()
+                },
+                ChangedFile {
+                    status: "M ".to_owned(),
+                    path: "README.md".to_owned()
+                },
+                ChangedFile {
+                    status: "MM".to_owned(),
+                    path: "docs/PRD.md".to_owned()
+                },
+                ChangedFile {
+                    status: "??".to_owned(),
+                    path: "new.txt".to_owned()
+                },
+            ]
+        );
+    }
+
+    /// A rename arrives as `R  old -> new`. Verb keeps the line as Git wrote it rather than picking
+    /// one of the two paths, because choosing would be asserting which one the user meant.
+    #[test]
+    fn a_rename_keeps_both_paths_as_git_wrote_them() {
+        let parsed = parse_porcelain("R  docs/OLD.md -> docs/NEW.md");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].status, "R ");
+        assert_eq!(parsed[0].path, "docs/OLD.md -> docs/NEW.md");
+    }
+
+    /// Empty output is a clean tree, and a truncated line is not a record: neither may become a
+    /// changed file with an invented path.
+    #[test]
+    fn nothing_is_invented_from_empty_or_truncated_output() {
+        assert!(parse_porcelain("").is_empty());
+        assert!(parse_porcelain("\n\n").is_empty());
+        assert!(parse_porcelain("M").is_empty());
+        assert!(parse_porcelain(" M ").is_empty());
     }
 }
