@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
@@ -5,6 +7,22 @@ plugins {
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
 }
+
+/**
+ * Read once, from `version.properties`, so there is exactly one literal in the repository that
+ * says what this build is. `-PverbVersionName` / `-PverbVersionCode` override it, which is how the
+ * release workflow states the version it was asked for explicitly rather than inheriting whatever
+ * happened to be committed.
+ */
+val verbVersion = Properties().apply {
+  rootProject.file("version.properties").inputStream().use(::load)
+}
+val verbVersionName: String =
+  (project.findProperty("verbVersionName") as String?) ?: verbVersion.getProperty("versionName")
+val verbVersionCode: Int =
+  ((project.findProperty("verbVersionCode") as String?) ?: verbVersion.getProperty("versionCode"))
+    .trim()
+    .toInt()
 
 android {
   namespace = "com.example"
@@ -14,8 +32,8 @@ android {
     applicationId = "com.aistudio.verb.app"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "0.1.0-beta.2"
+    versionCode = verbVersionCode
+    versionName = verbVersionName
 
     ndk {
       abiFilters.add("arm64-v8a")

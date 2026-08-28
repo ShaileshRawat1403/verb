@@ -1,6 +1,11 @@
 # Verb Direct Beta
 
-Verb `v0.1.0-beta.2` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
+Verb `v0.1.0-beta.4` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
+
+> **If you have beta.3 installed:** it reports itself as `0.1.0-beta.2` in Android's app info, and
+> so does beta.2. Neither the name nor the version code distinguishes them. Installing beta.4 over
+> either is a normal in-place upgrade — same signing key, same application id, `adb install -r` —
+> and beta.4 is the first build whose reported version is its real one.
 
 ## Install
 
