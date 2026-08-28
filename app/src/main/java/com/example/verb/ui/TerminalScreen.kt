@@ -34,9 +34,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Psychology
@@ -259,8 +261,16 @@ fun TerminalScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Title and connection indicator
+                    // Title and connection indicator.
+                    //
+                    // Weighted, so this group is bounded by what is left after the trailing
+                    // controls have taken their space. Unbounded, it pushed the overflow button
+                    // clean off the right edge the moment the terminal switcher appeared -- and
+                    // `docs/UX_FOUNDATION.md` is explicit that density degrades in a fixed order
+                    // and never at the cost of control. The project chip is what gives way first;
+                    // it is the one thing here also visible in the prompt and the Verb sheet.
                     Row(
+                        modifier = Modifier.weight(1f, fill = false),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -294,6 +304,11 @@ fun TerminalScreen(
                             shape = RoundedCornerShape(999.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = { showProjectSheet = true },
+                            // The flexible one. When the row runs out of width -- which is exactly
+                            // when a second terminal adds the switcher -- this is what gives way,
+                            // because `docs/UX_FOUNDATION.md` says density degrades in a fixed
+                            // order and never takes the session state with it. Weighting the group
+                            // without this squeezed the status chip until "running" disappeared.
                             modifier = Modifier.testTag("terminal_project_selector")
                         ) {
                             // Capped and ellipsized -- an untruncated long project id (e.g.
@@ -301,16 +316,36 @@ fun TerminalScreen(
                             // over a third of the header's width by itself, leaving no room for
                             // the action row on the right (Runs' and the overflow menu's touch
                             // targets both measured 0x0 before this cap was added).
-                            Text(
-                                text = selectedProject?.id ?: "project",
-                                modifier = Modifier
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                                    .widthIn(max = 56.dp),
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            //
+                            // Once a second terminal adds the switcher there is no longer room for
+                            // the name at all, and squeezing it produced an unreadable sliver --
+                            // worse than dropping it, because a stub still asks to be read. The
+                            // glyph keeps the control and its touch target; the name is a tap away
+                            // in the Verb sheet, and the prompt shows the directory regardless.
+                            // `docs/UX_FOUNDATION.md` puts the path first in the order density
+                            // gives way, and the session state last.
+                            if (terminalSessionIds.size > 1) {
+                                Icon(
+                                    imageVector = Icons.Default.FolderOpen,
+                                    contentDescription = "Project ${selectedProject?.id ?: "none"}. " +
+                                        "Activate to change project.",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .padding(horizontal = 8.dp, vertical = 5.dp)
+                                        .size(14.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = selectedProject?.id ?: "project",
+                                    modifier = Modifier
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                        .widthIn(max = 56.dp),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
 
                         // Active status indicator; tap to restart a stopped/failed session.
@@ -422,6 +457,10 @@ fun TerminalScreen(
                             },
                             modifier = Modifier
                                 .padding(start = 2.dp)
+                                // Session truth is the last thing density may take. Keep the pill
+                                // wide enough for its word so Compose cannot turn "running" into a
+                                // vertical stack when the terminal switcher appears.
+                                .widthIn(min = 72.dp)
                                 // On the clickable node itself: a nested merging node does not
                                 // propagate its description outward, so a screen reader would have
                                 // announced the raw glyph instead of the state.
@@ -442,33 +481,37 @@ fun TerminalScreen(
                                 Text(
                                     text = statusLabel,
                                     fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
                     }
 
-                    // Quick Action Buttons. Only Runs stays directly visible alongside the
-                    // overflow menu -- on-device verification found the project-id pill on the
-                    // left already consumes most of this header's width on typical devices, so a
-                    // full row of direct icons is not reliably reachable (see PR discussion). Every
-                    // other action lives in the overflow menu with a text label, not icon-only.
+                    // Quick Action Buttons. Runs stays directly visible while one terminal leaves
+                    // room for it. Once the switcher appears, Runs moves into overflow: physical
+                    // verification on a 360dp-wide Vivo showed the status pill otherwise collapsing
+                    // into a vertical "r u n n i n g" column. Session truth outranks a shortcut;
+                    // the action remains two taps away with a text label.
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = { showRunsSheet = true },
-                            modifier = Modifier
-                                .size(48.dp)
-                                .testTag("btn_terminal_runs")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.History,
-                                contentDescription = "Command run history",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        if (terminalSessionIds.size <= 1) {
+                            IconButton(
+                                onClick = { showRunsSheet = true },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("btn_terminal_runs")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.History,
+                                    contentDescription = "Command run history",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
                         }
                         Box {
                             IconButton(
@@ -514,6 +557,36 @@ fun TerminalScreen(
                                     },
                                     modifier = Modifier.testTag("btn_files_overflow")
                                 )
+                                // Opening the second terminal has to be reachable from the
+                                // workspace. The header switcher only exists once there are two,
+                                // so without this the only route to a second terminal was the Verb
+                                // sheet -- you cannot switch to a terminal you cannot create.
+                                if (canOpenMoreTerminals) {
+                                    DropdownMenuItem(
+                                        text = { Text("New terminal") },
+                                        leadingIcon = {
+                                            Icon(imageVector = Icons.Default.Add, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            onOpenTerminalSession()
+                                        },
+                                        modifier = Modifier.testTag("btn_new_terminal_overflow")
+                                    )
+                                }
+                                if (terminalSessionIds.size > 1) {
+                                    DropdownMenuItem(
+                                        text = { Text("Command runs") },
+                                        leadingIcon = {
+                                            Icon(imageVector = Icons.Default.History, contentDescription = null)
+                                        },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            showRunsSheet = true
+                                        },
+                                        modifier = Modifier.testTag("btn_runs_overflow")
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Ask Verb about this session") },
                                     leadingIcon = {

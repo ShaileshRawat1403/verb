@@ -1,11 +1,16 @@
 package com.example.verb.ui
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.example.verb.project.VerbProject
+import com.example.verb.terminal.TerminalSessionState
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -32,6 +37,8 @@ class TerminalSwitcherChipTest {
         active: String = "terminal-1",
         agentIn: (String) -> String? = { null },
         canOpenMore: Boolean = true,
+        project: VerbProject? = null,
+        state: TerminalSessionState? = null,
         onSwitch: (String) -> Unit = {},
         onOpen: () -> Unit = {}
     ) {
@@ -50,7 +57,9 @@ class TerminalSwitcherChipTest {
                 agentInTerminal = agentIn,
                 onSwitchTerminalSession = onSwitch,
                 onOpenTerminalSession = onOpen,
-                canOpenMoreTerminals = canOpenMore
+                canOpenMoreTerminals = canOpenMore,
+                selectedProject = project,
+                sessionState = state
             )
         }
     }
@@ -120,5 +129,51 @@ class TerminalSwitcherChipTest {
         composeTestRule.onNodeWithTag("btn_terminal_switcher").performClick()
 
         composeTestRule.onNodeWithTag("btn_new_terminal_header").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("switch_to_terminal-1").performClick()
+
+        composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
+        composeTestRule.onNodeWithTag("btn_new_terminal_overflow").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the first additional terminal can be opened from the workspace overflow`() {
+        var opened = 0
+        screen(
+            ids = listOf("terminal-1"),
+            onOpen = { opened++ }
+        )
+
+        composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
+        composeTestRule.onNodeWithTag("btn_new_terminal_overflow").performClick()
+
+        assertEquals(1, opened)
+    }
+
+    @Test
+    fun `crowded header keeps session state and a tappable project control`() {
+        screen(
+            project = VerbProject("mobile-kit-30603ae7", File("/projects/mobile-kit")),
+            state = TerminalSessionState.RUNNING
+        )
+
+        composeTestRule.onNodeWithText("running").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("terminal_project_selector").assertIsDisplayed()
+        composeTestRule.onNodeWithText("mobile-kit-30603ae7").assertDoesNotExist()
+        val statusBounds = composeTestRule.onNodeWithTag("verb_session_status").getUnclippedBoundsInRoot()
+        assertTrue(
+            "the status pill must remain horizontal when the terminal switcher is present",
+            statusBounds.right - statusBounds.left > statusBounds.bottom - statusBounds.top
+        )
+    }
+
+    @Test
+    fun `runs moves into overflow when the switcher needs the header width`() {
+        screen()
+
+        composeTestRule.onNodeWithTag("btn_terminal_runs").assertDoesNotExist()
+        composeTestRule.onNodeWithTag("btn_terminal_overflow").performClick()
+        composeTestRule.onNodeWithTag("btn_runs_overflow").performClick()
+
+        composeTestRule.onNodeWithTag("terminal_runs_sheet").assertIsDisplayed()
     }
 }

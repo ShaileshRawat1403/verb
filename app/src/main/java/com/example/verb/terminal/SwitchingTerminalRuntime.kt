@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /**
  * One [VerbTerminal]-shaped view of whichever session is currently in front.
@@ -35,6 +36,24 @@ class SwitchingTerminalRuntime(
     private val scope: CoroutineScope,
     private val active: StateFlow<VerbTerminal?>
 ) : VerbTerminal {
+
+    private val selectionListenerLock = Any()
+    private val selectionListeners = LinkedHashSet<SelectionChangeListener>()
+    private var selectionListenerRuntime: VerbTerminal? = null
+
+    init {
+        // Selection callbacks are registrations rather than flows, so flatMapLatest cannot move
+        // them for us. Keep every caller attached to the terminal in front and detach it from the
+        // old one. Without this, switching terminals moved the canvas and all observable state but
+        // left Inspect wired to the PTY that was no longer visible.
+        scope.launch {
+            active.collect { runtime ->
+                synchronized(selectionListenerLock) {
+                    rebindSelectionListeners(runtime)
+                }
+            }
+        }
+    }
 
     private fun <T> following(initial: T, select: (VerbTerminal) -> StateFlow<T>): StateFlow<T> =
         active
@@ -99,12 +118,32 @@ class SwitchingTerminalRuntime(
         active.value?.notifySelectionChanged(selectedRange, selectedText)
     }
 
-    override fun addSelectionChangeListener(listener: SelectionChangeListener) {
-        active.value?.addSelectionChangeListener(listener)
-    }
+    override fun addSelectionChangeListener(listener: SelectionChangeListener) =
+        synchronized(selectionListenerLock) {
+            // The collector starts asynchronously. Reconcile with the current value here so a
+            // listener registered during first composition cannot miss the active terminal.
+            rebindSelectionListeners(active.value)
+            if (selectionListeners.add(listener)) {
+                selectionListenerRuntime?.addSelectionChangeListener(listener)
+            }
+        }
 
-    override fun removeSelectionChangeListener(listener: SelectionChangeListener) {
-        active.value?.removeSelectionChangeListener(listener)
+    override fun removeSelectionChangeListener(listener: SelectionChangeListener) =
+        synchronized(selectionListenerLock) {
+            if (selectionListeners.remove(listener)) {
+                selectionListenerRuntime?.removeSelectionChangeListener(listener)
+            }
+        }
+
+    private fun rebindSelectionListeners(next: VerbTerminal?) {
+        if (next === selectionListenerRuntime) return
+        selectionListenerRuntime?.let { previous ->
+            selectionListeners.forEach(previous::removeSelectionChangeListener)
+        }
+        selectionListenerRuntime = next
+        next?.let { current ->
+            selectionListeners.forEach(current::addSelectionChangeListener)
+        }
     }
 
     /**

@@ -1,6 +1,8 @@
 package com.example.verb.terminal
 
+import androidx.compose.ui.text.TextRange
 import com.example.verb.session.VerbTerminalSessionHolder
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -21,6 +23,7 @@ import org.junit.rules.TemporaryFolder
  * in front. So the property under test is not "it delegates" -- it is that a *switch changes the
  * answer*, because that is what the screens depend on to re-render.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class SwitchingTerminalRuntimeTest {
 
     @get:Rule
@@ -108,6 +111,43 @@ class SwitchingTerminalRuntimeTest {
 
         assertTrue(second.terminalOutput.value.contains("typed-once"))
         assertFalse(first.terminalOutput.value.contains("typed-once"))
+    }
+
+    /**
+     * Selection inspection is callback-based rather than a flow. The facade must therefore move
+     * the registration itself when the active terminal changes; otherwise selecting text in the
+     * newly visible terminal continues notifying the screen through the old PTY.
+     */
+    @Test
+    fun `selection listeners follow the session in front`() = runTest {
+        val facade = SwitchingTerminalRuntime(
+            scope = TestScope(StandardTestDispatcher(testScheduler)),
+            active = VerbTerminalSessionHolder.activeRuntime
+        )
+        val first = VerbTerminalSessionHolder.getOrCreateActive { runtime("selected-first") }
+        val firstId = VerbTerminalSessionHolder.activeId.value!!
+        val secondId = VerbTerminalSessionHolder.open { runtime("selected-second") }!!
+        val second = VerbTerminalSessionHolder.runtimeOf(secondId)!!
+        VerbTerminalSessionHolder.activate(firstId)
+        advanceUntilIdle()
+
+        val selections = mutableListOf<String>()
+        val listener = SelectionChangeListener { _, text -> selections += text }
+        facade.addSelectionChangeListener(listener)
+
+        first.notifySelectionChanged(TextRange(0, 5), "first")
+        assertEquals(listOf("first"), selections)
+
+        VerbTerminalSessionHolder.activate(secondId)
+        advanceUntilIdle()
+
+        first.notifySelectionChanged(TextRange(0, 5), "stale")
+        second.notifySelectionChanged(TextRange(0, 6), "second")
+        assertEquals(listOf("first", "second"), selections)
+
+        facade.removeSelectionChangeListener(listener)
+        second.notifySelectionChanged(TextRange(0, 7), "removed")
+        assertEquals(listOf("first", "second"), selections)
     }
 
     /**
