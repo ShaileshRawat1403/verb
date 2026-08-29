@@ -135,7 +135,7 @@ class RuntimeProfilesTest {
         assertEquals("agy", antigravity.launchCommand)
         assertEquals(ProfileEnvironment.AGENT_RUNTIME, antigravity.environment)
         assertEquals("curl -fsSL https://antigravity.google/cli/install.sh | bash", antigravity.installCommand)
-        assertEquals(listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"))), antigravity.requirements)
+        assertEquals(listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"), probeTimeoutMs = 15_000L)), antigravity.requirements)
         assertTrue(antigravity.signedInMarkers.isEmpty())
         assertEquals(
             listOf(AgentBinaryCandidate("\$HOME/.local/bin/agy", AgentBinaryAbi.DETECT)),

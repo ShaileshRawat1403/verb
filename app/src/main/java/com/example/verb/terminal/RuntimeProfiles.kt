@@ -508,7 +508,7 @@ object RuntimeProfiles {
             RuntimeProfileId.ANTIGRAVITY,
             "Antigravity",
             emptyList(),
-            listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"))),
+            listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"), probeTimeoutMs = 15_000L)),
             installCommandOverride = "curl -fsSL https://antigravity.google/cli/install.sh | bash",
             postInstallHint = "In Terminal, run agy and complete its sign-in flow.",
             launchCommand = "agy",

@@ -126,12 +126,17 @@ class QemuAgentRuntimeEnvironment(
             // The agent launchers are Bun-compiled binaries; their JavaScriptCore JIT crashes under
             // emulation. Node's V8 needs the equivalent, which is a command-line flag rather than an
             // environment variable, so callers that launch Node add `--jitless` themselves.
-            "-E", "JSC_useJIT=false",
-            "-E", "BUN_JSC_useJIT=false",
             // Verb's own Bionic loader settings must not reach the glibc guest.
             "-U", "LD_PRELOAD"
         )
-        args += guestCommand
+        // QEMU user-mode does not perform a PATH search for the binary argument.
+        // Wrapping bare command names with /usr/bin/env ensures PATH resolution inside the guest.
+        val resolvedCommand = if (guestCommand.firstOrNull()?.startsWith("/") == true) {
+            guestCommand
+        } else {
+            listOf("/usr/bin/env") + guestCommand
+        }
+        args += resolvedCommand
 
         return TerminalEnvironment(
             kind = TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND,
