@@ -43,19 +43,42 @@ internal fun findFirstUrl(line: String): String? =
 /**
  * Joins terminal output lines, recognizing lines that wrapped across terminal column bounds.
  *
- * When a line fills the terminal width (column count), it wrapped into the next line without
- * a semantic newline. When a line is shorter than the terminal width, it ended with a newline.
+ * When consecutive lines are part of a URL (or lack internal whitespace/tokens), they are joined
+ * directly without inserting whitespace. Lines with whitespace are separated by spaces.
  */
 internal fun joinWrappedTerminalLines(lines: List<String>, terminalColumns: Int): String {
     if (lines.isEmpty()) return ""
     val builder = StringBuilder()
+    var inUrl = false
+
     for (i in lines.indices) {
-        val line = lines[i]
+        val line = lines[i].trimEnd()
+        if (line.isEmpty()) {
+            inUrl = false
+            if (i < lines.size - 1) builder.append(' ')
+            continue
+        }
+
+        if (line.contains("http://") || line.contains("https://")) {
+            inUrl = true
+        }
+
         builder.append(line)
-        if (line.length < terminalColumns && i < lines.size - 1) {
-            builder.append(' ')
+
+        if (inUrl) {
+            val hasSpaces = line.contains(' ')
+            val isWrappedWidth = line.length >= (terminalColumns - 6)
+            if (hasSpaces || !isWrappedWidth) {
+                inUrl = false
+                if (i < lines.size - 1) builder.append(' ')
+            }
+        } else {
+            if (line.length < terminalColumns && i < lines.size - 1) {
+                builder.append(' ')
+            }
         }
     }
     return builder.toString()
 }
+
 

@@ -557,7 +557,7 @@ class TermuxTerminalRuntimeAdapter(
             val clipData = clipboard.primaryClip
             if (clipData != null && clipData.itemCount > 0) {
                 val text = clipData.getItemAt(0).coerceToText(ctx).toString()
-                s?.emulator?.paste(text)
+                s?.let { writeToSession(it, text) }
             }
         }
     }
@@ -654,23 +654,25 @@ class TermuxTerminalRuntimeAdapter(
         val minRow = -screen.getActiveTranscriptRows()
         val maxRow = emulator.mRows
 
-        fun rawLine(bufferRow: Int): String =
-            runCatching { screen.getSelectedText(0, bufferRow, numCols, bufferRow, false, false) }.getOrDefault("")
+        fun readRowText(r: Int): String =
+            runCatching { screen.getSelectedText(0, r, numCols, r, false, false) }.getOrDefault("").trimEnd()
 
         return runCatching {
             var startRow = row
-            while (startRow > minRow && rawLine(startRow - 1).trim().isNotEmpty() && (row - startRow) < 25) {
+            while (startRow > minRow && readRowText(startRow - 1).isNotBlank() && (row - startRow) < 25) {
                 startRow--
             }
             var endRow = row
-            while (endRow < maxRow - 1 && rawLine(endRow + 1).trim().isNotEmpty() && (endRow - row) < 25) {
+            while (endRow < maxRow - 1 && readRowText(endRow + 1).isNotBlank() && (endRow - row) < 25) {
                 endRow++
             }
 
-            // Join contiguous block with native line wrap awareness
-            val joinedBlock = screen.getSelectedText(0, startRow, numCols, endRow, true, true)
-            val prefixText = if (row > startRow) screen.getSelectedText(0, startRow, numCols, row - 1, true, true) else ""
-            val tappedOffset = prefixText.length + column
+            val rowLines = (startRow..endRow).map { r -> readRowText(r) }
+            val joinedBlock = joinWrappedTerminalLines(rowLines, numCols)
+
+            val prefixLines = if (row > startRow) (startRow until row).map { r -> readRowText(r) } else emptyList()
+            val prefixText = joinWrappedTerminalLines(prefixLines, numCols)
+            val tappedOffset = (if (prefixText.isEmpty()) 0 else prefixText.length + 1) + column
 
             findUrlAt(joinedBlock, tappedOffset) ?: findFirstUrl(joinedBlock)
         }.getOrNull()

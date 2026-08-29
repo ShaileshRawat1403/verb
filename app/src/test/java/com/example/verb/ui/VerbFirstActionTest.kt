@@ -140,12 +140,13 @@ class VerbFirstActionTest {
     }
 
     @Test
-    fun `the admitted set is exactly the three integrations Verb has verified`() {
+    fun `the admitted set is exactly the four integrations Verb has verified`() {
         assertEquals(
             setOf(
                 RuntimeProfileId.CLAUDE_CODE,
                 RuntimeProfileId.CODEX,
-                RuntimeProfileId.OPENCODE
+                RuntimeProfileId.OPENCODE,
+                RuntimeProfileId.ANTIGRAVITY
             ),
             ADMITTED_AGENT_PROFILES
         )
