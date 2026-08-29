@@ -56,4 +56,33 @@ class TerminalUrlMatcherTest {
             findUrlAt(joined, firstRow.length + 4)
         )
     }
+
+    @Test
+    fun `long Google OAuth URL with parameters is fully extracted without truncation`() {
+        val fullUrl = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lc.apps.googleusercontent.com&code_challenge=abc123xyz&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+openid&state=xyz"
+        val line = "Your browser should open automatically. If not:\n" + fullUrl
+        val url = findUrlAt(line, line.indexOf("https://") + 50)
+        assertEquals(fullUrl, url)
+        assertEquals(fullUrl, findFirstUrl(line))
+    }
+
+    @Test
+    fun `joinWrappedTerminalLines reconstructs full URL from wrapped terminal rows`() {
+        val fullUrl = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=1XY5jtNT7iPNdA0vohAktEYM8JGHHbgiyjvnHQCQMes&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+openid&state=UfZKc2TJ18-zDUV3ZMi2Pw"
+        val cols = 80
+        val rows = mutableListOf<String>()
+        rows += "Your browser should open automatically. If not:"
+        var remaining = fullUrl
+        while (remaining.isNotEmpty()) {
+            val chunk = remaining.take(cols)
+            rows += chunk
+            remaining = remaining.drop(cols)
+        }
+        rows += "Copy and paste the URL or click on the link below:"
+        rows += "-> Click here to authenticate"
+
+        val reconstructed = joinWrappedTerminalLines(rows, cols)
+        val extractedUrl = findFirstUrl(reconstructed)
+        assertEquals(fullUrl, extractedUrl)
+    }
 }
