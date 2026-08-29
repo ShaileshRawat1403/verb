@@ -204,6 +204,11 @@ object AgentWrapperBootstrap {
             |    verb_target=${'$'}1
             |    shift
             |    if command -v ${'$'}VERB_QEMU >/dev/null 2>&1; then
+            |        for verb_rootfs in "${VerbGuestPaths.FILES}"/agent-runtime/versions/*/rootfs; do
+            |            if [ -d "${'$'}verb_rootfs" ]; then
+            |                exec ${'$'}VERB_QEMU -L "${'$'}verb_rootfs" "${'$'}verb_target" "${'$'}@"
+            |            fi
+            |        done
             |        exec ${'$'}VERB_QEMU "${'$'}verb_target" "${'$'}@"
             |    fi
             |    printf '%s\n' "verb: $command needs the Agent Emulator (${'$'}VERB_QEMU) to run its statically linked build." >&2
@@ -228,10 +233,10 @@ object AgentWrapperBootstrap {
             |        if head -c 4096 "${'$'}verb_target" 2>/dev/null | grep -q ld-musl-aarch64; then
             |            verb_exec_musl "${'$'}verb_target" "${'$'}@"
             |        fi
-            |        if head -c 4096 "${'$'}verb_target" 2>/dev/null | grep -qE 'ld-android|linker64|ld-linux'; then
+            |        if head -c 4096 "${'$'}verb_target" 2>/dev/null | grep -qE 'ld-android|linker64'; then
             |            verb_exec_native "${'$'}verb_target" "${'$'}@"
             |        fi
-            |        # An ELF naming no interpreter at all is static, and proot will refuse it.
+            |        # An ELF naming no interpreter at all is static, or glibc needing rootfs; qemu runs it.
             |        if head -c 4 "${'$'}verb_target" 2>/dev/null | grep -q 'ELF'; then
             |            verb_exec_static "${'$'}verb_target" "${'$'}@"
             |        fi

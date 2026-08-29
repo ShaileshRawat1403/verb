@@ -512,6 +512,9 @@ object RuntimeProfiles {
             installCommandOverride = "curl -fsSL https://antigravity.google/cli/install.sh | bash",
             postInstallHint = "In Terminal, run agy and complete its sign-in flow.",
             launchCommand = "agy",
+            binaryCandidates = listOf(
+                AgentBinaryCandidate("\$HOME/.local/bin/agy", AgentBinaryAbi.DETECT)
+            ),
             environment = ProfileEnvironment.AGENT_RUNTIME
         ),
         RuntimeProfile(
