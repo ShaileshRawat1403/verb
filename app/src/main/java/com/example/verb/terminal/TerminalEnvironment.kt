@@ -115,7 +115,7 @@ private const val LEGACY_TERMUX_GUEST_ROOT = "/data/data/com.termux"
  * (never -0): apt refuses to run as root, exactly as it does on a real device.
  */
 class TerminalEnvironmentResolver(
-    private val appFilesDir: File,
+    val appFilesDir: File,
     private val systemPath: String = System.getenv("PATH") ?: "/system/bin:/system/xbin",
     private val bundledBinDir: File? = null,
     private val projectDirectory: File? = null

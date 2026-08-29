@@ -154,10 +154,17 @@ class AgentsScreenTest {
         val agents = listOf(
             RuntimeProfiles.forId(RuntimeProfileId.CLAUDE_CODE),
             RuntimeProfiles.forId(RuntimeProfileId.CODEX),
-            RuntimeProfiles.forId(RuntimeProfileId.OPENCODE)
+            RuntimeProfiles.forId(RuntimeProfileId.OPENCODE),
+            RuntimeProfiles.forId(RuntimeProfileId.ANTIGRAVITY)
         )
 
         assert(agents.isNotEmpty())
         agents.forEach { assert(!it.launchCommand.isNullOrBlank()) }
+    }
+
+    @Test
+    fun `antigravity appears as an admitted agent card`() {
+        show(listOf(report(RuntimeProfileId.ANTIGRAVITY)))
+        composeTestRule.onNodeWithTag("agent_antigravity").assertIsDisplayed()
     }
 }

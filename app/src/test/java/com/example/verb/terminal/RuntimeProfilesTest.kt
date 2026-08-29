@@ -129,6 +129,17 @@ class RuntimeProfilesTest {
         val opencode = RuntimeProfiles.forId(RuntimeProfileId.OPENCODE)
         assertTrue(opencode.installCommand.contains("opencode-linux-arm64-musl"))
         assertEquals(listOf(RuntimeProfileId.JAVASCRIPT), opencode.prerequisiteProfiles)
+
+        val antigravity = RuntimeProfiles.forId(RuntimeProfileId.ANTIGRAVITY)
+        assertEquals("Antigravity", antigravity.displayName)
+        assertEquals("agy", antigravity.launchCommand)
+        assertEquals(ProfileEnvironment.AGENT_RUNTIME, antigravity.environment)
+        assertEquals("curl -fsSL https://antigravity.google/cli/install.sh | bash", antigravity.installCommand)
+        assertEquals(listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"))), antigravity.requirements)
+        assertTrue(antigravity.signedInMarkers.isEmpty())
+        assertTrue(antigravity.binaryCandidates.isEmpty())
+        assertTrue(antigravity.isAgent)
+        assertEquals(listOf(RuntimeProfileId.ANTIGRAVITY), RuntimeProfiles.installPlan(RuntimeProfileId.ANTIGRAVITY) { false }.map { it.id })
     }
 
     @Test

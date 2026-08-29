@@ -15,10 +15,17 @@ enum class RuntimeProfileId {
     CLAUDE_CODE,
     GEMINI_CLI,
     OPENCODE,
+    ANTIGRAVITY,
     DEEPSEEK_HARNESS,
     NATIVE,
     REMOTE,
     DATA_MEDIA
+}
+
+/** Execution target where an agent profile is installed, probed and executed. */
+enum class ProfileEnvironment {
+    LOCAL_USERLAND,
+    AGENT_RUNTIME
 }
 
 data class RuntimeRequirement(
@@ -154,7 +161,8 @@ data class RuntimeProfile(
      * than report a sign-in state it cannot support. Add an entry only once the file has been seen
      * on a real device -- a guessed path reporting "signed out" is worse than admitting ignorance.
      */
-    val signedInMarkers: List<String> = emptyList()
+    val signedInMarkers: List<String> = emptyList(),
+    val environment: ProfileEnvironment = ProfileEnvironment.LOCAL_USERLAND
 ) {
     /** True when this profile is something to open, not merely something to install. */
     val isAgent: Boolean get() = launchCommand != null
@@ -497,6 +505,16 @@ object RuntimeProfiles {
             )
         ),
         RuntimeProfile(
+            RuntimeProfileId.ANTIGRAVITY,
+            "Antigravity",
+            emptyList(),
+            listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"))),
+            installCommandOverride = "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+            postInstallHint = "In Terminal, run agy and complete its sign-in flow.",
+            launchCommand = "agy",
+            environment = ProfileEnvironment.AGENT_RUNTIME
+        ),
+        RuntimeProfile(
             RuntimeProfileId.DEEPSEEK_HARNESS,
             "DeepSeek Harness",
             emptyList(),
@@ -622,8 +640,8 @@ class RuntimeCapabilityDetector(
         val timedOutCommands = mutableListOf<String>()
         for (requirement in probedRequirements) {
             val outcome = requirement.probeTimeoutMs
-                ?.let { guestCommandRunner.probe(requirement, timeoutMs = it) }
-                ?: guestCommandRunner.probe(requirement)
+                ?.let { guestCommandRunner.probe(requirement, profile.environment, timeoutMs = it) }
+                ?: guestCommandRunner.probe(requirement, profile.environment)
             when (outcome.outcome) {
                 GuestCommandRunner.Outcome.READY -> Unit
                 GuestCommandRunner.Outcome.TIMEOUT -> timedOutCommands += requirement.command
