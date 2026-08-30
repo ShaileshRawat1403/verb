@@ -146,6 +146,11 @@ jobs:
 
       - name: Cache cargo
         uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
 
       - name: Format
