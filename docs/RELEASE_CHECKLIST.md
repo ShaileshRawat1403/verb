@@ -58,28 +58,26 @@ it true. Automated, emulator and physical-device results remain separate.
 - [x] OpenCode 1.18.21 installs, launches its real TUI and exits to the shell physically; recovery
   is clearly labelled unverified/experimental.
 - [x] Multi-terminal concurrent isolation and reattachment verified on physical Vivo I2202 device:
-  $T_1$ running Antigravity agent CLI, $T_2$ running shell commands, $T_3$ running interactive shell;
-  tab switching causes zero state mutations to $T_1$, background command execution in $T_2$/$T_3$ does
-  not advance or settle $T_1$, and Activity re-creation cleanly reattaches sessions with intact state.
+  $T_1$ running Claude Code v2.1.250, $T_2$ running OpenAI Codex CLI, $T_3$ running interactive shell;
+  tab switching causes zero state mutations to $T_1$ or $T_2$, background command execution in $T_3$ does
+  not mutate agent state, interrupting Codex in $T_2$ via `^C` transitions only $T_2$ while leaving Claude in $T_1$
+  running, and Activity re-creation cleanly reattaches sessions with intact state.
 
 ## Packaging and publication
 
 - [x] Version and release notes describe a developer preview, not a finished product.
-- [x] Signed Android artifact and checksum are produced by the release workflow. The beta.3 assets
-  were built and uploaded by `Release Full CLI` run 33043409341 on `389acee`, which decodes the
+- [x] Signed Android artifact and checksum are produced by the release workflow. The beta.5 assets
+  were built and uploaded by `Release Full CLI` run 33289341030 on `6284bc3`, which decodes the
   signing keystore from secrets, runs `assembleFullCliRelease`, and self-verifies the checksum with
   `sha256sum --check`. The published APK's SHA-256 matches its checksum asset, and it is signed by
   `CN=Shailesh Rawat` rather than a debug key.
 - [x] The built APK's own manifest states the package, versionName and versionCode the release was
   asked for. Read from the artifact with `aapt dump badging` after the build and before publication,
-  never from Gradle source. This box exists because beta.3 passed every other gate here and still
-  published an APK reporting `0.1.0-beta.2` / versionCode 1 — a green pipeline is not evidence about
-  the file it uploaded unless something reads that file.
-  First enforced by `Release Full CLI` run 33161763525 for `v0.1.0-beta.4` at `0d6cbd0`, which
-  reported `APK verified: com.aistudio.verb.app 0.1.0-beta.4 (4)` before publishing. The published
-  asset was then re-checked away from the runner: same package, name and code, SHA-256
-  `7123b66d56dfad84ccb713056c72a14bb4e34f738f0af301d335cdddc059da89` matching its checksum asset,
-  signed by `CN=Shailesh Rawat` (cert SHA-256 `a0b076b0…dd543`, the same certificate as beta.3).
+  never from Gradle source.
+  Enforced by `Release Full CLI` run 33289341030 for `v0.1.0-beta.5` at `6284bc3`, which
+  reported `APK verified: com.aistudio.verb.app 0.1.0-beta.5 (5)` before publishing. SHA-256
+  `7cfda6560e6dba0b9bd35f206bcd56b81ebf7ae3711ccd47ae3db37c401661a9` matching its checksum asset,
+  signed by `CN=Shailesh Rawat`.
 - [x] CI and Release GitHub Actions workflows pinned to immutable full commit SHAs with version comments.
 - [x] Desktop installation is documented; absence of prebuilt desktop binaries is explicit.
 - [x] Return/public archive contains only source, tests and documentation and excludes `.git`, local

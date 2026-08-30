@@ -10,7 +10,21 @@ does it merely add another capability?
 
 ---
 
-## Current beta-closure pass — 24 August
+## Closed sprint — beta.5 Truth & Reliability (30 August)
+
+| # | Gate | Description | Status |
+| --- | --- | --- | --- |
+| 1 | **P1** | Session-bound agent lifecycle: coordinator observers and command dispatch bound directly to `runtimeOf(sessionId)` | Done — validated by construction |
+| 2 | **P2** | Multi-agent restoration identity: Activity/ViewModel recreation resolves coordinators by exact `terminalSessionId` | Done — ambiguous foreground binding refused |
+| 3 | **P3** | Executable regression invariants in `MultiTerminalLifecycleIsolationTest.kt` (session isolation, UI independence, restoration identity) | Done — 647 Android + 123 Rust unit/integration tests green |
+| 4 | **P4** | Physical hardware proof on Vivo I2202: concurrent $T_1$ (Claude Code) + $T_2$ (OpenAI Codex) + $T_3$ (Shell), selective $T_2$ `^C` interrupt leaving $T_1$ live, and orientation recreation | Done — physically accepted on Vivo I2202 |
+| 5 | **P5** | Documentation truth: canonical documents reconciled (`README`, `PRD`, `ROADMAP`, `ARCHITECTURE`, `RELEASE_NOTES`) | Done |
+| 6 | **P6** | Supply-chain hardening: cryptographically pinned GitHub Actions commit SHAs across all workflows and remote CI verified | Done — all CI gates green |
+| 7 | **Release** | `v0.1.0-beta.5` signed release published with badging artifact identity enforcement (`versionName=0.1.0-beta.5`, `versionCode=5`) | Done — published |
+
+---
+
+## Historical beta-closure pass — 24 August
 
 | # | Item | Status |
 | --- | --- | --- |

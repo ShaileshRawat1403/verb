@@ -1,3 +1,25 @@
+# Verb 0.1.0-beta.5 — Truth & Reliability
+
+## What's new in beta.5
+
+- **Session-bound agent lifecycle in multi-terminal workspaces.** Agent processes and lifecycle
+  observers are now bound strictly to their originating concrete PTY session rather than the
+  mutable active UI selection. Switching active terminal tabs or running concurrent shell commands
+  produces zero false lifecycle mutations or misrouted commands.
+- **Ambiguity-free session restoration.** Activity and ViewModel recreation resolves coordinators by
+  exact `terminalSessionId`. Restoring multiple foreground sessions no longer defaults to an arbitrary
+  active session.
+- **Physical multi-agent isolation verification.** Proven concurrently on a physical Vivo I2202
+  (Android 14) across $T_1$ (Claude Code v2.1.250), $T_2$ (OpenAI Codex CLI), and $T_3$ (Interactive Shell),
+  verifying that interrupting Codex in $T_2$ via `^C` leaves Claude in $T_1$ completely active and intact,
+  and Activity recreation cleanly reattaches all sessions.
+- **Supply-chain and release hardening.** All GitHub Actions across CI and release workflows are
+  cryptographically pinned to immutable commit SHAs.
+- **Artifact identity enforcement.** Release workflow verifies package name, `versionName=0.1.0-beta.5`,
+  and `versionCode=5` directly from the built APK's manifest via `aapt dump badging` prior to publication.
+
+---
+
 # Verb 0.1.0-beta.4 — developer preview
 
 ## Use beta.4, not beta.3
