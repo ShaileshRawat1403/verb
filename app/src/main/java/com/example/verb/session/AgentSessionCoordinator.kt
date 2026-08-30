@@ -32,19 +32,42 @@ import java.util.UUID
  */
 class AgentSessionCoordinator(
     private val agentType: String,
-    private val adapterFactory: (projectDirectory: File?) -> AgentAdapter,
-    private val terminalRuntimeAdapter: TerminalRuntimeAdapter,
+    private val adapterFactory: (projectDirectory: File?, runtime: TerminalRuntimeAdapter?) -> AgentAdapter,
+    private val terminalRuntimeProvider: (sessionId: String) -> TerminalRuntimeAdapter?,
     private val coroutineScope: CoroutineScope,
     private val sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
     private val processBindingConfirmed: Boolean = false,
     private val eventLog: VerbEventLog = VerbEventLog.Disabled
 ) {
+    /**
+     * Secondary constructor for tests or single-runtime scenarios where terminal runtime is directly known.
+     */
+    constructor(
+        agentType: String,
+        adapterFactory: (projectDirectory: File?, runtime: TerminalRuntimeAdapter?) -> AgentAdapter,
+        terminalRuntimeAdapter: TerminalRuntimeAdapter,
+        coroutineScope: CoroutineScope,
+        sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
+        processBindingConfirmed: Boolean = false,
+        eventLog: VerbEventLog = VerbEventLog.Disabled
+    ) : this(
+        agentType = agentType,
+        adapterFactory = adapterFactory,
+        terminalRuntimeProvider = { terminalRuntimeAdapter },
+        coroutineScope = coroutineScope,
+        sessionStore = sessionStore,
+        processBindingConfirmed = processBindingConfirmed,
+        eventLog = eventLog
+    )
+
     private val _session = MutableStateFlow<VerbSession?>(null)
     val session: StateFlow<VerbSession?> = _session.asStateFlow()
 
     /** The project the *tracked session* launched under -- never the UI's currently selected one. */
     private var sessionProjectDirectory: File? = null
 
+    private var boundSessionId: String? = null
+    private var boundRuntime: TerminalRuntimeAdapter? = null
     private var watchJob: Job? = null
 
     init {
@@ -61,18 +84,37 @@ class AgentSessionCoordinator(
     }
 
     /**
-     * Call immediately after sending the command that launches the agent, with the command-history
-     * snapshot captured immediately *before* sending it (so the watch below can tell which new
-     * record is the agent's).
+     * Atomically claims the foreground on the specified session, writes the live session state,
+     * dispatches the launch command to the session's concrete runtime, and starts watching for exit.
      *
-     * Always produces a fresh [VerbSession.id]: this is the only place one is minted, whether this
-     * is the very first launch or "Start new" after [VerbSessionState.ENDED].
+     * If dispatch fails, rolls back the foreground claim and marks the session ENDED.
      */
-    fun onLaunched(project: VerbProject?, idsBeforeLaunch: Set<String>) {
+    fun launch(
+        project: VerbProject?,
+        sessionId: String,
+        command: String,
+        runtime: TerminalRuntimeAdapter? = null
+    ): Boolean {
+        val targetRuntime = runtime ?: terminalRuntimeProvider(sessionId) ?: return false
+        val providerRuntime = terminalRuntimeProvider(sessionId)
+        if (runtime != null && providerRuntime != null && providerRuntime != runtime) {
+            throw IllegalArgumentException("Supplied runtime does not match runtime for session $sessionId")
+        }
+
         sessionProjectDirectory = project?.directory
+        val idsBeforeLaunch = targetRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
+
+        val claimed = VerbTerminalSessionHolder.claimForeground(sessionId, agentType, idsBeforeLaunch)
+        if (!claimed) {
+            return false
+        }
+
+        boundSessionId = sessionId
+        boundRuntime = targetRuntime
+
         val agent = AgentRef(agentType = agentType, resumeIdentity = null)
         val now = Instant.now()
-        _session.value = VerbSession(
+        val newSession = VerbSession(
             id = UUID.randomUUID().toString(),
             projectId = project?.id,
             runtime = agentType,
@@ -84,26 +126,86 @@ class AgentSessionCoordinator(
             agent = agent,
             process = LiveAgentBinding
         )
-        sessionStore.save(_session.value!!)
-        eventLog.append(_session.value!!, "SESSION_STARTED")
-        eventLog.append(_session.value!!, "AGENT_STARTED")
-        eventLog.append(_session.value!!, "PROCESS_STARTED")
-        VerbTerminalSessionHolder.claimForeground(agentType, idsBeforeLaunch)
-        watchForExit(idsBeforeLaunch)
+        _session.value = newSession
+        sessionStore.save(newSession)
+        eventLog.append(newSession, "SESSION_STARTED")
+        eventLog.append(newSession, "AGENT_STARTED")
+        eventLog.append(newSession, "PROCESS_STARTED")
+
+        try {
+            targetRuntime.sendCommand(command)
+        } catch (t: Throwable) {
+            VerbTerminalSessionHolder.releaseForeground(sessionId, agentType)
+            boundSessionId = null
+            boundRuntime = null
+            _session.value = newSession.copy(process = null, state = VerbSessionState.ENDED, lastSeenAt = Instant.now())
+            _session.value?.let(sessionStore::save)
+            eventLog.append(newSession, "PROCESS_ENDED", exitCode = -1)
+            eventLog.append(newSession, "AGENT_ENDED")
+            return false
+        }
+
+        watchForExit(idsBeforeLaunch, sessionId, targetRuntime)
+        return true
     }
 
     /**
-     * Resumes the tracked session via the agent's [AgentAdapter] / [VerbSessionResumer]. A no-op
-     * unless the tracked session is [VerbSessionState.RECOVERABLE] -- resume is not a shortcut
-     * around [VerbSessionState.INTERRUPTED] resolving first, and there is nothing to resume from
-     * [VerbSessionState.LIVE] or [VerbSessionState.ENDED].
+     * Call immediately after sending the command that launches the agent, with the command-history
+     * snapshot captured immediately *before* sending it.
      */
-    suspend fun resume() {
+    fun onLaunched(
+        project: VerbProject?,
+        idsBeforeLaunch: Set<String>,
+        sessionId: String? = null,
+        runtime: TerminalRuntimeAdapter? = null
+    ) {
+        val targetSessionId = sessionId ?: VerbTerminalSessionHolder.activeId.value ?: "default"
+        val targetRuntime = runtime ?: (sessionId?.let(terminalRuntimeProvider)) ?: terminalRuntimeProvider(targetSessionId)
+        sessionProjectDirectory = project?.directory
+        val agent = AgentRef(agentType = agentType, resumeIdentity = null)
+        val now = Instant.now()
+        val newSession = VerbSession(
+            id = UUID.randomUUID().toString(),
+            projectId = project?.id,
+            runtime = agentType,
+            createdAt = now,
+            lastSeenAt = now,
+            state = VerbSessionState.LIVE,
+            lastKnownCwd = project?.directory?.absolutePath,
+            lastObservedAt = project?.directory?.let { now },
+            agent = agent,
+            process = LiveAgentBinding
+        )
+        _session.value = newSession
+        sessionStore.save(newSession)
+        eventLog.append(newSession, "SESSION_STARTED")
+        eventLog.append(newSession, "AGENT_STARTED")
+        eventLog.append(newSession, "PROCESS_STARTED")
+        VerbTerminalSessionHolder.claimForeground(targetSessionId, agentType, idsBeforeLaunch)
+        if (targetRuntime != null) {
+            boundSessionId = targetSessionId
+            boundRuntime = targetRuntime
+            watchForExit(idsBeforeLaunch, targetSessionId, targetRuntime)
+        }
+    }
+
+    /**
+     * Resumes the tracked session via the agent's [AgentAdapter] / [VerbSessionResumer].
+     */
+    suspend fun resume(
+        sessionId: String? = null,
+        runtime: TerminalRuntimeAdapter? = null
+    ) {
         val current = _session.value ?: return
         if (current.state != VerbSessionState.RECOVERABLE) return
 
-        val idsBefore = terminalRuntimeAdapter.commandHistory.value.mapTo(mutableSetOf()) { it.id }
-        val resumed = VerbSessionResumer.resume(current, adapter())
+        val targetSessionId = sessionId ?: boundSessionId ?: VerbTerminalSessionHolder.activeId.value ?: "default"
+        val targetRuntime = runtime ?: (sessionId?.let(terminalRuntimeProvider)) ?: boundRuntime ?: terminalRuntimeProvider(targetSessionId)
+            ?: return
+
+        val idsBefore = targetRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
+        val adapter = adapter(targetRuntime)
+        val resumed = VerbSessionResumer.resume(current, adapter)
         _session.value = resumed
         sessionStore.save(resumed)
         if (resumed.state != current.state) {
@@ -112,72 +214,58 @@ class AgentSessionCoordinator(
         if (resumed.state == VerbSessionState.LIVE) {
             eventLog.append(resumed, "PROCESS_STARTED")
             eventLog.append(resumed, "AGENT_STARTED")
-            VerbTerminalSessionHolder.claimForeground(agentType, idsBefore)
-            watchForExit(idsBefore)
+            boundSessionId = targetSessionId
+            boundRuntime = targetRuntime
+            VerbTerminalSessionHolder.claimForeground(targetSessionId, agentType, idsBefore)
+            watchForExit(idsBefore, targetSessionId, targetRuntime)
         }
     }
 
     /**
-     * Re-checks recovery for a session whose process is gone. [VerbSessionState.INTERRUPTED] means
-     * "no answer yet", and the answer can arrive after the bounded retries in [resolveAfterExit]
-     * have run out -- an agent can finish writing its own state late, or (as with Codex) only start
-     * recording once the user has signed in. Without this, a stale INTERRUPTED would sit there
-     * claiming Verb is still checking when nothing is.
-     *
-     * Cheap and idempotent, so callers can drive it from something as ordinary as opening the
-     * Agents screen. A [VerbSessionState.LIVE] session is left alone: its truth is the process
-     * binding, not a disk scan.
+     * Re-checks recovery for a session whose process is gone.
      */
     fun refresh() {
         val current = _session.value ?: return
         if (current.process != null) return
-        coroutineScope.launch { resolveAfterExit() }
+        coroutineScope.launch { resolveAfterExit(boundRuntime) }
     }
 
     /**
-     * Watches for the agent -- not the whole terminal session -- exiting. `commandHistory` is used
-     * rather than `isSessionActive` deliberately: the underlying shell stays alive the whole time
-     * the agent runs as its foreground child, so shell liveness cannot distinguish "the agent is
-     * still running" from "the agent exited and the shell is back at its prompt." See
-     * [AgentResumeLauncher] for the same reasoning applied to resume detection.
+     * Watches for the agent exiting, bound strictly to [runtime] of [sessionId].
      */
-    private fun watchForExit(idsBefore: Set<String>) {
+    private fun watchForExit(
+        idsBefore: Set<String>,
+        sessionId: String,
+        runtime: TerminalRuntimeAdapter
+    ) {
         watchJob?.cancel()
         watchJob = coroutineScope.launch {
-            // Unbounded, deliberately: a genuinely live agent session can run for however long
-            // the user is working, so there is no timeout to wrap this in the way resume() has one.
             var settled: com.example.verb.terminal.CommandExecutionRecord? = null
             while (settled == null) {
-                settled = terminalRuntimeAdapter.commandHistory.value.firstOrNull {
+                settled = runtime.commandHistory.value.firstOrNull {
                     it.id !in idsBefore && it.state != CommandLifecycleState.RUNNING
                 }
                 if (settled == null) delay(EXIT_POLL_INTERVAL_MS)
             }
 
-            VerbTerminalSessionHolder.releaseForeground(agentType)
+            VerbTerminalSessionHolder.releaseForeground(sessionId, agentType)
+            boundSessionId = null
+            boundRuntime = null
             _session.value = _session.value?.copy(process = null, lastSeenAt = Instant.now())
             _session.value?.let(sessionStore::save)
             _session.value?.let { session ->
                 eventLog.append(session, "PROCESS_ENDED", exitCode = settled.exitCode)
                 eventLog.append(session, "AGENT_ENDED")
             }
-            resolveAfterExit()
+            resolveAfterExit(runtime)
         }
     }
 
-    /**
-     * [VerbSessionState.INTERRUPTED] is a waiting state, not a resting one (per
-     * `docs/VERB_SESSION_CONTRACT.md`): an agent's transcript write can lag its exit by a moment,
-     * so an immediate `canResume` check landing on `UNKNOWN` is retried a bounded number of times
-     * before this gives up and leaves the session honestly `INTERRUPTED` rather than guessing
-     * `ENDED`. Each attempt still updates [session] -- that bounded window is exactly the
-     * "Checking recovery status…" moment the UI shows.
-     */
-    private suspend fun resolveAfterExit() {
+    private suspend fun resolveAfterExit(runtime: TerminalRuntimeAdapter? = null) {
         val agent = _session.value?.agent ?: return
         repeat(RESOLVE_ATTEMPTS) { attempt ->
             val current = _session.value ?: return
-            val adapter = adapter()
+            val adapter = adapter(runtime)
             val identity = agent.resumeIdentity ?: adapter.resumeIdentity(agent)
             val resolvedAgent = agent.copy(resumeIdentity = identity)
             val verdict = adapter.canResume(resolvedAgent)
@@ -200,41 +288,46 @@ class AgentSessionCoordinator(
         }
     }
 
-    private fun adapter(): AgentAdapter = adapterFactory(sessionProjectDirectory)
+    private fun adapter(runtime: TerminalRuntimeAdapter? = null): AgentAdapter =
+        adapterFactory(sessionProjectDirectory, runtime)
 
     /**
      * Restores identity after process death, then asks the host whether the old binding is still
-     * attached. A new Android process has no existing [VerbTerminalSessionHolder] binding, even
-     * though it immediately creates a new shell for the UI; that new shell cannot prove the old
-     * agent process survived.
+     * attached.
      */
     private fun restorePersistedSession() {
         val persisted = sessionStore.load() ?: return
         if (persisted.agent?.agentType?.let { it != agentType } == true) return
         sessionProjectDirectory = persisted.lastKnownCwd?.let(::File)
 
-        // A surviving terminal is not evidence that *this* agent survived with it. Two agents with
-        // persisted records would otherwise both restore as LIVE from the same PTY, which is how the
-        // Agents tab came to show Claude and Codex both "Running" while neither process existed.
-        // The marker beside the runtime says which agent actually holds it.
-        val foregroundBinding = VerbTerminalSessionHolder.foregroundBinding()
+        // Exact restoration identity + ambiguity refusal:
+        val bindingEntry = VerbTerminalSessionHolder.foregroundBindingForAgent(agentType)
+        val sessionId = bindingEntry?.first
+        val foregroundBinding = bindingEntry?.second
+        val runtime = sessionId?.let { terminalRuntimeProvider(it) }
+
         val bindingStillAttached = processBindingConfirmed &&
-            terminalRuntimeAdapter.isSessionActive.value &&
-            terminalRuntimeAdapter.sessionState.value == com.example.verb.terminal.TerminalSessionState.RUNNING &&
-            foregroundBinding?.agentType == agentType
+            runtime != null &&
+            runtime.isSessionActive.value &&
+            runtime.sessionState.value == com.example.verb.terminal.TerminalSessionState.RUNNING &&
+            foregroundBinding != null
+
         val restored = if (bindingStillAttached) {
+            boundSessionId = sessionId
+            boundRuntime = runtime
             persisted.copy(
                 state = VerbSessionState.LIVE,
                 process = LiveAgentBinding,
                 lastSeenAt = Instant.now()
             )
         } else {
+            val adapter = adapter(null)
             val agent = persisted.agent?.let { persistedAgent ->
                 val identity = persistedAgent.resumeIdentity
-                    ?: adapter().resumeIdentity(persistedAgent)
+                    ?: adapter.resumeIdentity(persistedAgent)
                 persistedAgent.copy(resumeIdentity = identity)
             }
-            val verdict = agent?.let { adapter().canResume(it) }
+            val verdict = agent?.let { adapter.canResume(it) }
             persisted.copy(
                 state = VerbSessionStateResolver.resolve(
                     processPresent = false,
@@ -256,10 +349,7 @@ class AgentSessionCoordinator(
         }
 
         if (bindingStillAttached && restored.state == VerbSessionState.LIVE) {
-            // Reuse the baseline captured before the agent command was launched. Taking a fresh
-            // snapshot here loses an exit that happened between the old ViewModel disappearing
-            // and this one attaching, leaving a shell prompt incorrectly labelled "Running".
-            watchForExit(foregroundBinding!!.commandIdsBeforeLaunch)
+            watchForExit(foregroundBinding!!.commandIdsBeforeLaunch, sessionId!!, runtime!!)
         }
     }
 

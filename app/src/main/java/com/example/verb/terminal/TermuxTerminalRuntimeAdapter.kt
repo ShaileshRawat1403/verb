@@ -557,7 +557,7 @@ class TermuxTerminalRuntimeAdapter(
             val clipData = clipboard.primaryClip
             if (clipData != null && clipData.itemCount > 0) {
                 val text = clipData.getItemAt(0).coerceToText(ctx).toString()
-                s?.emulator?.paste(text)
+                s?.let { writeToSession(it, text) }
             }
         }
     }
@@ -649,37 +649,33 @@ class TermuxTerminalRuntimeAdapter(
     }
 
     private fun findUrlAtBuffer(emulator: com.termux.terminal.TerminalEmulator, row: Int, column: Int): String? {
-        val lines = mutableMapOf<Int, String>()
+        val screen = emulator.getScreen() ?: return null
+        val numCols = emulator.mColumns
+        val minRow = -screen.getActiveTranscriptRows()
+        val maxRow = emulator.mRows
 
-        fun readLine(bufferRow: Int): String? = lines.getOrPut(bufferRow) {
-            emulator.getScreen().getSelectedText(0, bufferRow, 100_000, bufferRow).trimEnd()
-        }
+        fun readRowText(r: Int): String =
+            runCatching { screen.getSelectedText(0, r, numCols, r, false, false) }.getOrDefault("").trimEnd()
 
-        // Codex and other CLIs often print a URL longer than the terminal width. Search a small
-        // row window with soft-wrapped rows joined, while preserving the tap's offset in that
-        // joined text. Normal line breaks remain boundaries in the single-row fast path below.
-        runCatching {
-            readLine(row)?.let { line ->
-                if (line.isNotBlank()) {
-                    findUrlAt(line, column)?.let { return it }
-                }
+        return runCatching {
+            var startRow = row
+            while (startRow > minRow && readRowText(startRow - 1).isNotBlank() && (row - startRow) < 25) {
+                startRow--
+            }
+            var endRow = row
+            while (endRow < maxRow - 1 && readRowText(endRow + 1).isNotBlank() && (endRow - row) < 25) {
+                endRow++
             }
 
-            val radius = 8
-            for (start in row - radius..row) {
-                val joined = StringBuilder()
-                var tappedOffset = -1
-                for (bufferRow in start..(row + radius)) {
-                    val line = readLine(bufferRow) ?: ""
-                    if (bufferRow == row) tappedOffset = joined.length + column
-                    joined.append(line)
-                }
-                if (tappedOffset >= 0) {
-                    findUrlAt(joined.toString(), tappedOffset)?.let { return it }
-                }
-            }
-        }
-        return null
+            val rowLines = (startRow..endRow).map { r -> readRowText(r) }
+            val joinedBlock = joinWrappedTerminalLines(rowLines, numCols)
+
+            val prefixLines = if (row > startRow) (startRow until row).map { r -> readRowText(r) } else emptyList()
+            val prefixText = joinWrappedTerminalLines(prefixLines, numCols)
+            val tappedOffset = (if (prefixText.isEmpty()) 0 else prefixText.length + 1) + column
+
+            findUrlAt(joinedBlock, tappedOffset) ?: findFirstUrl(joinedBlock)
+        }.getOrNull()
     }
     
     override fun onInspectText(text: String) {

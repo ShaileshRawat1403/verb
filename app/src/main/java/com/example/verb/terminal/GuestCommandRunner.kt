@@ -72,12 +72,29 @@ class GuestCommandRunner(private val resolver: TerminalEnvironmentResolver) {
      * bare command name -- never a resolved host path -- through the guest's `env`, so PATH
      * resolution happens inside the guest exactly as it would for a user typing the command.
      */
-    fun probe(requirement: RuntimeRequirement, timeoutMs: Long = DEFAULT_TIMEOUT_MS): GuestProbeResult {
+    fun probe(
+        requirement: RuntimeRequirement,
+        environment: ProfileEnvironment = ProfileEnvironment.LOCAL_USERLAND,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS
+    ): GuestProbeResult {
         val args = requirement.versionProbeArgs
             ?: return GuestProbeResult(Outcome.REFUSED, null, "no registered probe for '${requirement.command}'")
-        val environment = resolver.resolveGuestCommand(listOf(requirement.command) + args)
-            ?: return GuestProbeResult(Outcome.GUEST_UNAVAILABLE, null, "guest userland is not installed")
-        return execute(environment, timeoutMs.coerceIn(1, MAX_TIMEOUT_MS))
+        val env = when (environment) {
+            ProfileEnvironment.LOCAL_USERLAND -> resolver.resolveGuestCommand(listOf(requirement.command) + args)
+            ProfileEnvironment.AGENT_RUNTIME -> resolveAgentRuntimeGuestCommand(listOf(requirement.command) + args)
+        } ?: return GuestProbeResult(Outcome.GUEST_UNAVAILABLE, null, "guest userland is not installed")
+        return execute(env, timeoutMs.coerceIn(1, MAX_TIMEOUT_MS))
+    }
+
+    private fun resolveAgentRuntimeGuestCommand(guestCommand: List<String>): TerminalEnvironment? {
+        val filesDir = resolver.appFilesDir
+        val active = AgentRuntimeInstaller(filesDir).active() ?: return null
+        if (!QemuAgentRuntimeEnvironment.isEmulatorInstalled(filesDir)) return null
+        val probeWorkspace = File(AgentRuntimePaths(filesDir).root, "compat-probe").apply { mkdirs() }
+        return runCatching {
+            QemuAgentRuntimeEnvironment(filesDir, probeWorkspace, active.manifest)
+                .resolveGuestCommand(active.rootfs, guestCommand)
+        }.getOrNull()
     }
 
     /** Visible to tests so execution mechanics (timeout/bounded output) can be verified against a

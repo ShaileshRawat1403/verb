@@ -27,6 +27,22 @@ current host owns the process. Persisted `LIVE` is historical evidence. Without 
 binding, the host asks the agent adapter and maps `YES → RECOVERABLE`, `UNKNOWN → INTERRUPTED`, and
 `NO → ENDED`.
 
+### Session-Bound Execution & Lifecycle Invariants
+
+In multi-terminal execution contexts, lifecycle observation and command execution obey three
+strict invariants:
+
+1. **Session-Bound Execution**: Once an operation acquires a `terminalSessionId`, all execution
+   and lifecycle operations for that action use the corresponding concrete `TerminalRuntime`.
+   The switching facade (`SwitchingTerminalRuntime`) is strictly for UI presentation and keyboard
+   input routing.
+2. **UI Independence**: Switching the active terminal in the UI updates input focus and terminal
+   rendering, but produces **zero lifecycle mutations** on background or foreground agents.
+3. **Restoration Identity & Ambiguity Refusal**: On Activity or ViewModel recreation, foreground
+   agents are reattached to their exact originating `terminalSessionId`. If multiple sessions claim
+   the same agent type or the binding is absent/ambiguous, Verb refuses to guess and marks recovery
+   unverified rather than guessing incorrectly.
+
 ## Observation and persistence
 
 Both hosts may persist session metadata and allowlist-only structural events: lifecycle boundaries,

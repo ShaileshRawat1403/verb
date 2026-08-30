@@ -28,10 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out Verb runtime definitions
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Check out pinned Termux package sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: termux/termux-packages
           ref: bd2e956e639090779a728c96fcca2e387dd3a246
@@ -99,10 +99,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out Verb runtime definitions
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Check out pinned Termux package sources
-        uses: actions/checkout@v7
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: termux/termux-packages
           ref: bd2e956e639090779a728c96fcca2e387dd3a246
@@ -114,7 +114,7 @@ jobs:
       # small core image into a developer image.
       - name: Restore native build cache
         id: restore-native-build-cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: .termux-build-cache
           key: verb-termux-build-aarch64-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
@@ -124,7 +124,7 @@ jobs:
 
       - name: Restore selected runtime output cache
         id: restore-runtime-output-cache
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: .termux-output-cache
           key: verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
@@ -143,7 +143,7 @@ jobs:
         # reports cache-hit=false for it. Do not overlay such a cache with the
         # one-time legacy migration or clear its profile-specific package output.
         if: ${{ steps.restore-native-build-cache.outputs.cache-matched-key == '' && steps.restore-runtime-output-cache.outputs.cache-matched-key == '' }}
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: |
             .termux-build-cache
@@ -236,7 +236,7 @@ jobs:
             --profile "${{ inputs.profile }}"
 
       - name: Upload signed-review bootstrap artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: verb-bootstrap-aarch64
           path: |
@@ -249,7 +249,7 @@ jobs:
       - name: Save native build cache
         if: ${{ success() && steps.restore-native-build-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: .termux-build-cache
           key: verb-termux-build-aarch64-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}
@@ -257,7 +257,7 @@ jobs:
       - name: Save selected runtime output cache
         if: ${{ success() && steps.restore-runtime-output-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:
           path: .termux-output-cache
           key: verb-termux-output-aarch64-${{ inputs.profile }}-bd2e956e-v1-${{ hashFiles('runtime/termux-packages/*.patch', '.github/workflows/build-verb-terminal-bootstrap.yml') }}-${{ github.run_id }}

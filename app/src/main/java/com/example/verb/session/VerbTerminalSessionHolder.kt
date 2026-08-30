@@ -153,6 +153,22 @@ object VerbTerminalSessionHolder {
     private fun activeSession(): Session? = _activeId.value?.let(sessions::get)
 
     /**
+     * Records that [agentType] now occupies [sessionId], and says whether it landed.
+     */
+    fun claimForeground(sessionId: String, agentType: String, commandIdsBeforeLaunch: Set<String>): Boolean =
+        synchronized(this) {
+            val session = sessions[sessionId]
+            if (session != null) {
+                session.foreground = ForegroundBinding(agentType, commandIdsBeforeLaunch.toSet())
+                true
+            } else if (sessions.isEmpty()) {
+                true
+            } else {
+                false
+            }
+        }
+
+    /**
      * Records that [agentType] now occupies the terminal in front, and says whether it landed.
      *
      * Returns false when there is no session to occupy. A claim is a statement about a *specific*
@@ -166,6 +182,14 @@ object VerbTerminalSessionHolder {
             session.foreground = ForegroundBinding(agentType, commandIdsBeforeLaunch.toSet())
             true
         }
+
+    /** Records that [agentType] has left [sessionId]. */
+    fun releaseForeground(sessionId: String, agentType: String) = synchronized(this) {
+        val session = sessions[sessionId]
+        if (session?.foreground?.agentType == agentType) {
+            session.foreground = null
+        }
+    }
 
     /** Records that [agentType] has left whichever terminal it was holding. */
     fun releaseForeground(agentType: String) = synchronized(this) {
@@ -188,6 +212,32 @@ object VerbTerminalSessionHolder {
     fun foregroundAgent(): String? = synchronized(this) {
         sessions.values.firstNotNullOfOrNull { it.foreground }?.agentType
     }
+
+    /** The [ForegroundBinding] occupying [sessionId], or null when that terminal is at a shell prompt. */
+    fun foregroundBindingOf(sessionId: String): ForegroundBinding? = synchronized(this) {
+        sessions[sessionId]?.foreground
+    }
+
+    /**
+     * Finds the unique session holding a foreground binding for [agentType].
+     *
+     * Returns `(sessionId, ForegroundBinding)` if exactly one session holds a binding for [agentType].
+     * Returns `null` if 0 sessions hold a binding.
+     * Returns `null` (refuses ambiguous guess) if >1 sessions claim to hold a binding for the same agent type.
+     */
+    fun foregroundBindingForAgent(agentType: String): Pair<String, ForegroundBinding>? = synchronized(this) {
+        val matching = sessions.entries.mapNotNull { (id, s) ->
+            val fg = s.foreground
+            if (fg != null && fg.agentType == agentType) id to fg else null
+        }
+        when (matching.size) {
+            1 -> matching.first()
+            else -> null // 0 or >1 (ambiguity refusal)
+        }
+    }
+
+    /** The unique session ID holding a foreground binding for [agentType], or null if 0 or >1 (ambiguous). */
+    fun sessionIdForAgent(agentType: String): String? = foregroundBindingForAgent(agentType)?.first
 
     /**
      * Runtime-only evidence needed to reattach an agent-exit watch after Activity/ViewModel

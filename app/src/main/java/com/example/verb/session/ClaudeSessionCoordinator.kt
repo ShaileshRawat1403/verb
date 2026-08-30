@@ -17,13 +17,30 @@ import java.io.File
 @Suppress("FunctionName")
 fun ClaudeSessionCoordinator(
     filesDir: File,
+    terminalRuntimeProvider: (sessionId: String) -> TerminalRuntimeAdapter?,
+    coroutineScope: CoroutineScope,
+    sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
+    processBindingConfirmed: Boolean = false
+): AgentSessionCoordinator = AgentSessionCoordinator(
+    agentType = CLAUDE_AGENT_TYPE,
+    adapterFactory = { project, runtime -> ClaudeAgentAdapter(filesDir, project, runtime) },
+    terminalRuntimeProvider = terminalRuntimeProvider,
+    coroutineScope = coroutineScope,
+    sessionStore = sessionStore,
+    processBindingConfirmed = processBindingConfirmed,
+    eventLog = VerbEventLog(filesDir)
+)
+
+@Suppress("FunctionName")
+fun ClaudeSessionCoordinator(
+    filesDir: File,
     terminalRuntimeAdapter: TerminalRuntimeAdapter,
     coroutineScope: CoroutineScope,
     sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
     processBindingConfirmed: Boolean = false
 ): AgentSessionCoordinator = AgentSessionCoordinator(
     agentType = CLAUDE_AGENT_TYPE,
-    adapterFactory = { project -> ClaudeAgentAdapter(filesDir, project, terminalRuntimeAdapter) },
+    adapterFactory = { project, runtime -> ClaudeAgentAdapter(filesDir, project, runtime ?: terminalRuntimeAdapter) },
     terminalRuntimeAdapter = terminalRuntimeAdapter,
     coroutineScope = coroutineScope,
     sessionStore = sessionStore,

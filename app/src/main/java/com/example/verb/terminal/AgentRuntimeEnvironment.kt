@@ -46,7 +46,7 @@ class AgentRuntimeEnvironment(
             "-w", "/workspace",
             "/usr/bin/env",
             "HOME=/home/verb",
-            "PATH=/usr/local/bin:/usr/bin:/bin",
+            "PATH=/home/verb/.local/bin:/usr/local/bin:/usr/bin:/bin",
             "TERM=xterm-256color",
             "LANG=C.UTF-8",
             "SHELL=/bin/bash",

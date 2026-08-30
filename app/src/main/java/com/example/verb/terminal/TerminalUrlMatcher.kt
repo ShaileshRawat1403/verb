@@ -39,3 +39,46 @@ internal fun findUrlAt(line: String, tappedColumn: Int): String? {
 /** Returns the URL embedded in a line of terminal output, if any. */
 internal fun findFirstUrl(line: String): String? =
     URL_REGEX.find(line)?.value
+
+/**
+ * Joins terminal output lines, recognizing lines that wrapped across terminal column bounds.
+ *
+ * When consecutive lines are part of a URL (or lack internal whitespace/tokens), they are joined
+ * directly without inserting whitespace. Lines with whitespace are separated by spaces.
+ */
+internal fun joinWrappedTerminalLines(lines: List<String>, terminalColumns: Int): String {
+    if (lines.isEmpty()) return ""
+    val builder = StringBuilder()
+    var inUrl = false
+
+    for (i in lines.indices) {
+        val line = lines[i].trimEnd()
+        if (line.isEmpty()) {
+            inUrl = false
+            if (i < lines.size - 1) builder.append(' ')
+            continue
+        }
+
+        if (line.contains("http://") || line.contains("https://")) {
+            inUrl = true
+        }
+
+        builder.append(line)
+
+        if (inUrl) {
+            val hasSpaces = line.contains(' ')
+            val isWrappedWidth = line.length >= (terminalColumns - 6)
+            if (hasSpaces || !isWrappedWidth) {
+                inUrl = false
+                if (i < lines.size - 1) builder.append(' ')
+            }
+        } else {
+            if (line.length < terminalColumns && i < lines.size - 1) {
+                builder.append(' ')
+            }
+        }
+    }
+    return builder.toString()
+}
+
+

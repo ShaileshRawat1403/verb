@@ -192,7 +192,7 @@ class AgentWrapperBootstrapTest {
 
         assertTrue("a shebang must run as a script", script.contains("head -c 2 \"\$verb_target\" 2>/dev/null | grep -q '#!'"))
         assertTrue("a musl interpreter routes to the loader", script.contains("grep -q ld-musl-aarch64"))
-        assertTrue("a Bionic interpreter execs directly", script.contains("grep -qE 'ld-android|linker64|ld-linux'"))
+        assertTrue("a Bionic interpreter execs directly", script.contains("grep -qE 'ld-android|linker64'"))
         assertTrue("an ELF naming no interpreter is static", script.contains("head -c 4 \"\$verb_target\" 2>/dev/null | grep -q 'ELF'"))
         assertFalse("bytes must never be captured into a variable", script.contains("verb_head="))
     }

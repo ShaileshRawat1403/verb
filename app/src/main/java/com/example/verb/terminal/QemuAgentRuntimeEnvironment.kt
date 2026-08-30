@@ -56,6 +56,30 @@ class QemuAgentRuntimeEnvironment(
         }
         val agentHome = AgentRuntimePaths(filesDir).agentHome("default")
         require(agentHome.mkdirs() || agentHome.isDirectory) { "Could not create Agent Runtime home." }
+        val agentBin = File(agentHome, ".local/bin")
+        if (!agentBin.isDirectory) agentBin.mkdirs()
+        val agentTmp = File(agentHome, ".tmp")
+        if (!agentTmp.isDirectory) agentTmp.mkdirs()
+
+        val hostTmp = File(filesDir, "usr/tmp")
+        if (!hostTmp.isDirectory) hostTmp.mkdirs()
+
+        // Go and glibc networking require localhost resolution via /etc/hosts; external DNS will return NXDOMAIN.
+        val hostsFile = File(rootfs, "etc/hosts")
+        if (!hostsFile.exists() || hostsFile.length() == 0L) {
+            runCatching {
+                hostsFile.parentFile?.mkdirs()
+                hostsFile.writeText("127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n")
+            }
+        }
+
+        val geminiSettings = File(agentHome, ".gemini/antigravity-cli/settings.json")
+        if (!geminiSettings.exists()) {
+            runCatching {
+                geminiSettings.parentFile?.mkdirs()
+                geminiSettings.writeText("{\n  \"modelProvider\": \"gemini\"\n}\n")
+            }
+        }
 
         val appDir = filesDir.parentFile ?: filesDir
         val args = mutableListOf(proot.absolutePath, "-r", rootfs.absolutePath)
@@ -95,19 +119,24 @@ class QemuAgentRuntimeEnvironment(
             "-E", "LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu",
             "-E", "HOME=$GUEST_HOME",
             "-E", "TMPDIR=$GUEST_HOME/.tmp",
-            "-E", "PATH=/usr/local/bin:/usr/bin:/bin",
+            "-E", "PATH=$GUEST_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin",
             "-E", "LANG=C.UTF-8",
             "-E", "TERM=xterm-256color",
             "-E", "SHELL=/bin/bash",
             // The agent launchers are Bun-compiled binaries; their JavaScriptCore JIT crashes under
             // emulation. Node's V8 needs the equivalent, which is a command-line flag rather than an
             // environment variable, so callers that launch Node add `--jitless` themselves.
-            "-E", "JSC_useJIT=false",
-            "-E", "BUN_JSC_useJIT=false",
             // Verb's own Bionic loader settings must not reach the glibc guest.
             "-U", "LD_PRELOAD"
         )
-        args += guestCommand
+        // QEMU user-mode does not perform a PATH search for the binary argument.
+        // Wrapping bare command names with /usr/bin/env ensures PATH resolution inside the guest.
+        val resolvedCommand = if (guestCommand.firstOrNull()?.startsWith("/") == true) {
+            guestCommand
+        } else {
+            listOf("/usr/bin/env") + guestCommand
+        }
+        args += resolvedCommand
 
         return TerminalEnvironment(
             kind = TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND,

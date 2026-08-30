@@ -28,7 +28,8 @@ import com.example.verb.terminal.RuntimeProfileId
 private val VERIFIED_AGENT_PROFILES = setOf(
     RuntimeProfileId.CLAUDE_CODE,
     RuntimeProfileId.CODEX,
-    RuntimeProfileId.OPENCODE
+    RuntimeProfileId.OPENCODE,
+    RuntimeProfileId.ANTIGRAVITY
 )
 
 /**

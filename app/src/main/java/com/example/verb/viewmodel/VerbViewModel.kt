@@ -35,6 +35,7 @@ import com.example.verb.terminal.RuntimeProfile
 import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 import com.example.verb.terminal.RuntimeProfiles
+import com.example.verb.terminal.ProfileEnvironment
 import com.example.verb.terminal.AgentWorkFact
 import com.example.verb.terminal.CommandLifecycleState
 import com.example.verb.terminal.GitDelta
@@ -168,14 +169,14 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         mapOf(
             RuntimeProfileId.CLAUDE_CODE to com.example.verb.session.ClaudeSessionCoordinator(
                 filesDir = application.applicationContext.filesDir,
-                terminalRuntimeAdapter = terminalRuntime,
+                terminalRuntimeProvider = { sessionId -> com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(sessionId) },
                 coroutineScope = viewModelScope,
                 sessionStore = claudeSessionStore,
                 processBindingConfirmed = hadExistingTerminalRuntime
             ),
             RuntimeProfileId.CODEX to com.example.verb.session.CodexSessionCoordinator(
                 filesDir = application.applicationContext.filesDir,
-                terminalRuntimeAdapter = terminalRuntime,
+                terminalRuntimeProvider = { sessionId -> com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(sessionId) },
                 coroutineScope = viewModelScope,
                 sessionStore = codexSessionStore,
                 processBindingConfirmed = hadExistingTerminalRuntime
@@ -185,7 +186,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 // OpenCode's evidence is a live SQLite database, which the adapter copies before
                 // reading; the copy belongs in cache, not in the user's files tree.
                 scratchDir = application.applicationContext.cacheDir,
-                terminalRuntimeAdapter = terminalRuntime,
+                terminalRuntimeProvider = { sessionId -> com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(sessionId) },
                 coroutineScope = viewModelScope,
                 sessionStore = openCodeSessionStore,
                 processBindingConfirmed = hadExistingTerminalRuntime
@@ -683,6 +684,20 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * snapshot the throttled transcript may have coalesced away.
      */
     private suspend fun installOneProfile(profile: RuntimeProfile): String? {
+        if (profile.environment == ProfileEnvironment.AGENT_RUNTIME) {
+            val status = _agentRuntimeStatus.value
+            val runtime = status.runtime
+            if (runtime != null && status.canOpen) {
+                withContext(Dispatchers.Main.immediate) {
+                    runCatching {
+                        terminalRuntime.activateAgentRuntime(runtime)
+                        if (terminalRuntime.pendingEnvironmentChange.value) {
+                            terminalRuntime.restartSession()
+                        }
+                    }
+                }
+            }
+        }
         val marker = "__VERB_PROFILE_${profile.id.name}_${System.currentTimeMillis()}__"
         val command = ProfileInstallProtocol.command(profile.installCommand, marker)
         withContext(Dispatchers.Main.immediate) {
@@ -764,26 +779,55 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * again by hand next time.
      */
     fun launchAgent(command: String) {
+        val profile = RuntimeProfiles.all.firstOrNull { it.launchCommand == command }
+        if (profile?.environment == ProfileEnvironment.AGENT_RUNTIME) {
+            val status = _agentRuntimeStatus.value
+            val runtime = status.runtime
+            if (runtime != null && status.canOpen) {
+                runCatching {
+                    terminalRuntime.activateAgentRuntime(runtime)
+                    if (terminalRuntime.pendingEnvironmentChange.value) {
+                        terminalRuntime.restartSession()
+                    }
+                }
+            }
+        } else if (profile?.environment == ProfileEnvironment.LOCAL_USERLAND) {
+            runCatching {
+                terminalRuntime.deactivateAgentRuntime()
+                if (terminalRuntime.pendingEnvironmentChange.value) {
+                    terminalRuntime.restartSession()
+                }
+            }
+        }
         openTerminal()
+        val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
+        val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
+
         val tracked = TRACKED_AGENT_LAUNCH_COMMANDS.entries.firstOrNull { it.value == command }?.key
         val coordinator = tracked?.let(sessionCoordinators::get)
         if (coordinator == null) {
-            sendTerminalCommand(command)
+            concreteRuntime.sendCommand(command)
             return
         }
-        // Captured before sendTerminalCommand so the coordinator's watch can tell which new
-        // commandHistory record is this agent's, not anything already running.
-        val idsBeforeLaunch = terminalRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
-        sendTerminalCommand(command)
-        coordinator.onLaunched(projectRepository.selected(), idsBeforeLaunch)
+        coordinator.launch(
+            project = projectRepository.selected(),
+            sessionId = activeId,
+            command = command,
+            runtime = concreteRuntime
+        )
     }
 
     /** The Agents screen's Resume action once that agent's session is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
     fun resumeAgentSession(profileId: RuntimeProfileId) {
         val coordinator = sessionCoordinators[profileId] ?: return
+        val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
+        val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
         openTerminal()
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            coordinator.resume()
+            coordinator.resume(
+                sessionId = activeId,
+                runtime = concreteRuntime
+            )
         }
     }
 

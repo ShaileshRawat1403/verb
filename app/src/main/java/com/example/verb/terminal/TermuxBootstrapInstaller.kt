@@ -89,20 +89,25 @@ object TermuxBootstrapInstaller {
     fun ensureGuestDns(context: Context) {
         runCatching {
             val connectivity = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                ?: return
-            val dnsServers = connectivity.activeNetwork
+            val activeDns = connectivity?.activeNetwork
                 ?.let(connectivity::getLinkProperties)
                 ?.dnsServers
                 ?.mapNotNull { it.hostAddress?.substringBefore('%') }
-                ?.distinct()
                 ?.filter { it.isNotBlank() }
                 .orEmpty()
-            if (dnsServers.isEmpty()) return
+            val allDns = (activeDns + listOf("8.8.8.8", "1.1.1.1", "8.8.4.4")).distinct()
+
+            val contents = allDns.joinToString(separator = "", postfix = "\n") { "nameserver $it\n" }
 
             val resolver = File(context.filesDir, "usr/etc/resolv.conf")
-            if (resolver.parentFile?.isDirectory != true) return
-            val contents = dnsServers.joinToString(separator = "", postfix = "\n") { "nameserver $it\n" }
-            if (resolver.readText() != contents) resolver.writeText(contents)
+            if (resolver.parentFile?.isDirectory == true) {
+                if (!resolver.exists() || resolver.readText() != contents) resolver.writeText(contents)
+            }
+
+            val rootfsResolver = File(context.filesDir, "agent-runtime/versions/0.1.0/rootfs/etc/resolv.conf")
+            if (rootfsResolver.parentFile?.isDirectory == true) {
+                if (!rootfsResolver.exists() || rootfsResolver.readText() != contents) rootfsResolver.writeText(contents)
+            }
         }.onFailure {
             TerminalSessionLogger.warn(LogCategory.IO, "Guest DNS sync failed: ${it.message}")
         }

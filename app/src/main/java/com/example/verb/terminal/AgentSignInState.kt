@@ -39,7 +39,10 @@ class AgentSignInDetector(private val filesDir: File) {
 
     fun stateFor(profile: RuntimeProfile): AgentSignInState {
         if (profile.signedInMarkers.isEmpty()) return AgentSignInState.UNKNOWN
-        val home = File(filesDir, "home")
+        val home = when (profile.environment) {
+            ProfileEnvironment.LOCAL_USERLAND -> File(filesDir, "home")
+            ProfileEnvironment.AGENT_RUNTIME -> AgentRuntimePaths(filesDir).agentHome("default")
+        }
         val signedIn = profile.signedInMarkers.any { marker ->
             runCatching { File(home, marker).exists() }.getOrDefault(false)
         }
