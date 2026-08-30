@@ -98,7 +98,7 @@ The developer preview does not yet publish prebuilt desktop binaries.
 
 ## Documentation
 
-Start at [`docs/README.md`](docs/README.md). The four canonical product documents are
+Start at [`docs/README.md`](docs/README.md), or explore the step-by-step **[Understanding Verb Guide](docs/learn/README.md)** for a concept-first explanation of the architecture. The four canonical product documents are
 [`PRODUCT_VISION`](docs/PRODUCT_VISION.md), [`PRD`](docs/PRD.md), [`ROADMAP`](docs/ROADMAP.md) and
 [`TUI_VISION`](docs/TUI_VISION.md); everything else records what was measured and built.
 
