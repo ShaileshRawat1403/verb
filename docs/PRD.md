@@ -145,7 +145,9 @@ directory changes and command boundaries with exit codes — and never records t
 
 **Control.** One session lifecycle for every agent (`AgentSessionCoordinator` on Android, the same
 contract in Rust on desktop): `LIVE → INTERRUPTED → RECOVERABLE → ENDED`, with resume driven by the
-agent's own conversation identity. Verified end to end on a Vivo I2202 for Claude and Codex,
+agent's own conversation identity. Concrete session-bound PTY routing guarantees that UI tab switching,
+concurrent shell commands, and process recreation never trigger cross-session lifecycle mutations.
+Verified end to end on a Vivo I2202 for Claude and Codex concurrently across multiple terminal sessions,
 including force-stop and recovery into the same session id.
 
 **Debugging.** A structural JSONL event log per session, and `--json` output shaped by

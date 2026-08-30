@@ -12,7 +12,7 @@ import java.io.File
 class ClaudeAgentAdapter(
     private val filesDir: File,
     private val projectDirectory: File?,
-    private val terminalRuntimeAdapter: TerminalRuntimeAdapter,
+    private val terminalRuntimeAdapter: TerminalRuntimeAdapter? = null,
     private val resumeSettleMs: Long = DEFAULT_RESUME_SETTLE_MS,
     private val pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
 ) : AgentAdapter {
@@ -130,11 +130,12 @@ class ClaudeAgentAdapter(
      * "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
+        val runtime = terminalRuntimeAdapter ?: return null
         val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity)
             ?.let { "--resume $it" }
             ?: "--continue"
         val stillRunning = AgentResumeLauncher.launch(
-            terminalRuntimeAdapter = terminalRuntimeAdapter,
+            terminalRuntimeAdapter = runtime,
             command = "claude $resumeArgument",
             settleMs = resumeSettleMs,
             pollIntervalMs = pollIntervalMs

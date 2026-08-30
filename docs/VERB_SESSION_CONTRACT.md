@@ -212,12 +212,29 @@ only the "start over from `ENDED`" path that mints a fresh identity, never the r
    or `runtime` (see "`projectId` and `runtime` are fixed at creation", above). (This is
    `docs/DURABLE_SESSION.md`'s row 2, already diagnosed as self-inflicted, not fixed by this contract
    but no longer excusable once it exists.)
+5. **A lifecycle observer must never depend on mutable UI selection.**
+   Every agent coordinator holds an explicit binding to the originating `terminalSessionId` and its
+   concrete `TerminalRuntime`. Events from other terminal tabs can never advance or settle its
+   state machine.
+
+## Multi-Terminal Sessions and Restoration
+
+Verb supports multiple concurrent terminal sessions (e.g. $T_1$ running an interactive agent CLI,
+$T_2$ running another tool, $T_3$ running an interactive shell).
+
+- **Execution isolation**: Agent dispatch transactions resolve the target `terminalSessionId` and
+  concrete runtime upfront, claim foreground ownership atomically, dispatch commands strictly to
+  that runtime, and attach lifecycle observers to that runtime only.
+- **Restoration disambiguation**: On Activity/ViewModel re-creation, `VerbTerminalSessionHolder`
+  inspects registered foreground bindings. If exactly one terminal session owns an agent of type
+  `agentType`, the coordinator rebinds to that exact session. If 0 or multiple sessions claim the
+  same agent, Verb refuses ambiguous restoration rather than guessing.
 
 ## Explicitly out of scope here
 
 Kept out on purpose, per the steer against over-generalizing for hypothetical needs:
 
-- **Multiple agents per session.** One optional `agent` per session matches today's reality (one PTY,
+- **Multiple agents per terminal session.** One optional `agent` per PTY matches today's reality (one PTY,
   one shell, at most one foreground agent). If that stops being true, it's a new field then, not a
   speculative array now.
 - **Transported state.** Cross-host continuity carries read-only evidence in the bounded

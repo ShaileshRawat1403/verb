@@ -169,14 +169,14 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         mapOf(
             RuntimeProfileId.CLAUDE_CODE to com.example.verb.session.ClaudeSessionCoordinator(
                 filesDir = application.applicationContext.filesDir,
-                terminalRuntimeAdapter = terminalRuntime,
+                terminalRuntimeProvider = { sessionId -> com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(sessionId) },
                 coroutineScope = viewModelScope,
                 sessionStore = claudeSessionStore,
                 processBindingConfirmed = hadExistingTerminalRuntime
             ),
             RuntimeProfileId.CODEX to com.example.verb.session.CodexSessionCoordinator(
                 filesDir = application.applicationContext.filesDir,
-                terminalRuntimeAdapter = terminalRuntime,
+                terminalRuntimeProvider = { sessionId -> com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(sessionId) },
                 coroutineScope = viewModelScope,
                 sessionStore = codexSessionStore,
                 processBindingConfirmed = hadExistingTerminalRuntime
@@ -186,7 +186,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 // OpenCode's evidence is a live SQLite database, which the adapter copies before
                 // reading; the copy belongs in cache, not in the user's files tree.
                 scratchDir = application.applicationContext.cacheDir,
-                terminalRuntimeAdapter = terminalRuntime,
+                terminalRuntimeProvider = { sessionId -> com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(sessionId) },
                 coroutineScope = viewModelScope,
                 sessionStore = openCodeSessionStore,
                 processBindingConfirmed = hadExistingTerminalRuntime
@@ -800,25 +800,34 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         openTerminal()
+        val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
+        val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
+
         val tracked = TRACKED_AGENT_LAUNCH_COMMANDS.entries.firstOrNull { it.value == command }?.key
         val coordinator = tracked?.let(sessionCoordinators::get)
         if (coordinator == null) {
-            sendTerminalCommand(command)
+            concreteRuntime.sendCommand(command)
             return
         }
-        // Captured before sendTerminalCommand so the coordinator's watch can tell which new
-        // commandHistory record is this agent's, not anything already running.
-        val idsBeforeLaunch = terminalRuntime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
-        sendTerminalCommand(command)
-        coordinator.onLaunched(projectRepository.selected(), idsBeforeLaunch)
+        coordinator.launch(
+            project = projectRepository.selected(),
+            sessionId = activeId,
+            command = command,
+            runtime = concreteRuntime
+        )
     }
 
     /** The Agents screen's Resume action once that agent's session is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
     fun resumeAgentSession(profileId: RuntimeProfileId) {
         val coordinator = sessionCoordinators[profileId] ?: return
+        val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
+        val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
         openTerminal()
         viewModelScope.launch(Dispatchers.Main.immediate) {
-            coordinator.resume()
+            coordinator.resume(
+                sessionId = activeId,
+                runtime = concreteRuntime
+            )
         }
     }
 

@@ -36,12 +36,16 @@ Implemented and verified:
 
 * One session lifecycle shared by every agent — `AgentSessionCoordinator` on Android, the same
   contract in Rust on desktop. Adding an agent adds an adapter, never a state machine.
+* Concrete session-bound PTY routing: lifecycle observers and command dispatch are bound directly
+  to the originating session, ensuring UI tab switching and concurrent shell commands cause zero
+  cross-session lifecycle mutations.
 * Agent adapters that read each agent's own evidence: Claude's transcripts and session metadata,
   Codex's rollout files, OpenCode's SQLite database. Each was written only after the real format was
   observed on an installed build.
 * Durable records that hold no PID, no process handle, no terminal bytes, no transcripts.
 * Structural event log on desktop, including shell-integration command boundaries and cwd changes.
 * Physical-device proof on a Vivo I2202 (Android 14) for Claude and Codex: real conversation,
+  concurrent multi-terminal execution ($T_1$ Claude + $T_2$ Codex + $T_3$ Shell), selective agent interruption,
   force-stop with every process confirmed gone, relaunch into the same `VerbSession.id`, resume by
   the agent's own conversation identity, prior context restored.
 

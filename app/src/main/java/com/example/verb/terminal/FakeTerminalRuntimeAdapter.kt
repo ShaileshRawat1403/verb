@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Explicit test/headless implementation of [TerminalRuntimeAdapter].
  * Used for fast JVM unit testing, verification, and mock terminal interactions.
  */
-class FakeTerminalRuntimeAdapter(
+open class FakeTerminalRuntimeAdapter(
     val workingDir: File
 ) : TerminalRuntimeAdapter {
 

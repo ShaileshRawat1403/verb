@@ -25,7 +25,7 @@ import java.io.File
 class CodexAgentAdapter(
     private val filesDir: File,
     private val projectDirectory: File?,
-    private val terminalRuntimeAdapter: TerminalRuntimeAdapter,
+    private val terminalRuntimeAdapter: TerminalRuntimeAdapter? = null,
     private val resumeSettleMs: Long = DEFAULT_RESUME_SETTLE_MS,
     private val pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
 ) : AgentAdapter {
@@ -71,12 +71,13 @@ class CodexAgentAdapter(
      * reasoning about why "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
+        val runtime = terminalRuntimeAdapter ?: return null
         val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity) ?: "--last"
         // The same flags a fresh launch uses, so resuming a conversation is not quietly a different
         // Codex from the one that started it.
         val flags = "--disable ${RuntimeProfiles.CODEX_APPS_FEATURE}"
         val stillRunning = AgentResumeLauncher.launch(
-            terminalRuntimeAdapter = terminalRuntimeAdapter,
+            terminalRuntimeAdapter = runtime,
             command = "codex $flags resume $resumeArgument",
             settleMs = resumeSettleMs,
             pollIntervalMs = pollIntervalMs
@@ -182,13 +183,30 @@ class CodexAgentAdapter(
 @Suppress("FunctionName")
 fun CodexSessionCoordinator(
     filesDir: File,
+    terminalRuntimeProvider: (sessionId: String) -> TerminalRuntimeAdapter?,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
+    processBindingConfirmed: Boolean = false
+): AgentSessionCoordinator = AgentSessionCoordinator(
+    agentType = CODEX_AGENT_TYPE,
+    adapterFactory = { project, runtime -> CodexAgentAdapter(filesDir, project, runtime) },
+    terminalRuntimeProvider = terminalRuntimeProvider,
+    coroutineScope = coroutineScope,
+    sessionStore = sessionStore,
+    processBindingConfirmed = processBindingConfirmed,
+    eventLog = VerbEventLog(filesDir)
+)
+
+@Suppress("FunctionName")
+fun CodexSessionCoordinator(
+    filesDir: File,
     terminalRuntimeAdapter: TerminalRuntimeAdapter,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
     sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
     processBindingConfirmed: Boolean = false
 ): AgentSessionCoordinator = AgentSessionCoordinator(
     agentType = CODEX_AGENT_TYPE,
-    adapterFactory = { project -> CodexAgentAdapter(filesDir, project, terminalRuntimeAdapter) },
+    adapterFactory = { project, runtime -> CodexAgentAdapter(filesDir, project, runtime ?: terminalRuntimeAdapter) },
     terminalRuntimeAdapter = terminalRuntimeAdapter,
     coroutineScope = coroutineScope,
     sessionStore = sessionStore,

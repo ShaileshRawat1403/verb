@@ -38,6 +38,10 @@ Verb is terminal-first. It is not an IDE, not a coding agent, and not a model pr
 * **Sessions that survive process death.** A session keeps its identity across an agent exiting, the
   app being force-stopped, and the machine losing the process entirely — then resumes by the agent's
   *own* conversation id. Proven end to end on a physical Android device for Claude and Codex.
+* **Session-bound lifecycle across multi-terminal workspaces.** Agent processes and lifecycle
+  observers are bound strictly to their originating concrete PTY session. Switching active UI
+  selection, running commands in concurrent shell sessions, and Activity/ViewModel recreation produce
+  zero false lifecycle transitions or misrouted commands.
 * **One session lifecycle, three agents.** `LIVE → INTERRUPTED → RECOVERABLE → ENDED`, shared by
   every agent. Each agent contributes only an adapter that reads its own evidence.
 * **Two hosts, one contract.** Android (proot + PTY) and desktop (native Unix PTY) implement the same

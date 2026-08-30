@@ -22,7 +22,7 @@ import java.io.File
 class OpenCodeAgentAdapter(
     private val filesDir: File,
     private val projectDirectory: File?,
-    private val terminalRuntimeAdapter: TerminalRuntimeAdapter,
+    private val terminalRuntimeAdapter: TerminalRuntimeAdapter? = null,
     private val scratchDir: File,
     private val resumeSettleMs: Long = DEFAULT_RESUME_SETTLE_MS,
     private val pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS
@@ -54,11 +54,12 @@ class OpenCodeAgentAdapter(
      * "nothing settled" is the shape of success here.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
+        val runtime = terminalRuntimeAdapter ?: return null
         val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity)
             ?.let { "--session $it" }
             ?: "--continue"
         val stillRunning = AgentResumeLauncher.launch(
-            terminalRuntimeAdapter = terminalRuntimeAdapter,
+            terminalRuntimeAdapter = runtime,
             command = "opencode $resumeArgument",
             settleMs = resumeSettleMs,
             pollIntervalMs = pollIntervalMs
@@ -159,14 +160,34 @@ class OpenCodeAgentAdapter(
 fun OpenCodeSessionCoordinator(
     filesDir: File,
     scratchDir: File,
+    terminalRuntimeProvider: (sessionId: String) -> TerminalRuntimeAdapter?,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+    sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
+    processBindingConfirmed: Boolean = false
+): AgentSessionCoordinator = AgentSessionCoordinator(
+    agentType = OPENCODE_AGENT_TYPE,
+    adapterFactory = { project, runtime ->
+        OpenCodeAgentAdapter(filesDir, project, runtime, scratchDir)
+    },
+    terminalRuntimeProvider = terminalRuntimeProvider,
+    coroutineScope = coroutineScope,
+    sessionStore = sessionStore,
+    processBindingConfirmed = processBindingConfirmed,
+    eventLog = VerbEventLog(filesDir)
+)
+
+@Suppress("FunctionName")
+fun OpenCodeSessionCoordinator(
+    filesDir: File,
+    scratchDir: File,
     terminalRuntimeAdapter: TerminalRuntimeAdapter,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
     sessionStore: VerbSessionStore = InMemoryVerbSessionStore(),
     processBindingConfirmed: Boolean = false
 ): AgentSessionCoordinator = AgentSessionCoordinator(
     agentType = OPENCODE_AGENT_TYPE,
-    adapterFactory = { project ->
-        OpenCodeAgentAdapter(filesDir, project, terminalRuntimeAdapter, scratchDir)
+    adapterFactory = { project, runtime ->
+        OpenCodeAgentAdapter(filesDir, project, runtime ?: terminalRuntimeAdapter, scratchDir)
     },
     terminalRuntimeAdapter = terminalRuntimeAdapter,
     coroutineScope = coroutineScope,

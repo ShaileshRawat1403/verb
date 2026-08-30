@@ -19,11 +19,11 @@ jobs:
       CLAUDE_VERSION: 2.1.233
       OPENCODE_VERSION: 1.18.18
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: docker/setup-qemu-action@49b01bf5cb3392a7fa936011931d0d978aca4bb8 # v3.2.0
         with:
           platforms: arm64
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
       - name: Build pinned ARM64 Linux image
         run: |
           docker buildx build --platform linux/arm64 --load \
@@ -53,7 +53,7 @@ jobs:
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/node'
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/claude'
           tar -tzf out/agent-runtime-rootfs.tar.gz | grep -Fx 'usr/local/bin/opencode'
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
           name: verb-agent-runtime-aarch64-${{ env.RUNTIME_VERSION }}
           path: out/

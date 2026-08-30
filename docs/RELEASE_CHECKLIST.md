@@ -57,6 +57,10 @@ it true. Automated, emulator and physical-device results remain separate.
   ran rather than being asserted.
 - [x] OpenCode 1.18.21 installs, launches its real TUI and exits to the shell physically; recovery
   is clearly labelled unverified/experimental.
+- [x] Multi-terminal concurrent isolation and reattachment verified on physical Vivo I2202 device:
+  $T_1$ running Antigravity agent CLI, $T_2$ running shell commands, $T_3$ running interactive shell;
+  tab switching causes zero state mutations to $T_1$, background command execution in $T_2$/$T_3$ does
+  not advance or settle $T_1$, and Activity re-creation cleanly reattaches sessions with intact state.
 
 ## Packaging and publication
 
@@ -76,6 +80,7 @@ it true. Automated, emulator and physical-device results remain separate.
   asset was then re-checked away from the runner: same package, name and code, SHA-256
   `7123b66d56dfad84ccb713056c72a14bb4e34f738f0af301d335cdddc059da89` matching its checksum asset,
   signed by `CN=Shailesh Rawat` (cert SHA-256 `a0b076b0…dd543`, the same certificate as beta.3).
+- [x] CI and Release GitHub Actions workflows pinned to immutable full commit SHAs with version comments.
 - [x] Desktop installation is documented; absence of prebuilt desktop binaries is explicit.
 - [x] Return/public archive contains only source, tests and documentation and excludes `.git`, local
   configuration, caches, targets, build output, keystores, agent state and temporary directories.
