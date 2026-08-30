@@ -78,7 +78,7 @@ class RuntimeProfilesTest {
         val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
 
         assertEquals(listOf(RuntimeProfileId.TUR), hermes.prerequisiteProfiles)
-        assertEquals(listOf("python3.13"), hermes.packages)
+        assertEquals(listOf("python3.13", "python-cryptography"), hermes.packages)
         assertEquals(
             listOf(RuntimeProfileId.TUR, RuntimeProfileId.HERMES),
             RuntimeProfiles.installPlan(RuntimeProfileId.HERMES) { false }.map { it.id }
@@ -99,7 +99,7 @@ class RuntimeProfilesTest {
     fun `profile exposes an install plan using catalog packages`() {
         val command = RuntimeProfiles.forId(RuntimeProfileId.PYTHON).installCommand
 
-        assertEquals("apt-get update && apt-get install -y --no-install-recommends python", command)
+        assertEquals("apt-get update && apt-get install -y --no-install-recommends python python-pip", command)
     }
 
     @Test

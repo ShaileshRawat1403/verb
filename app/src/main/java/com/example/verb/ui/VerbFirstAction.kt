@@ -30,7 +30,8 @@ internal val ADMITTED_AGENT_PROFILES: Set<RuntimeProfileId> = setOf(
     RuntimeProfileId.CLAUDE_CODE,
     RuntimeProfileId.CODEX,
     RuntimeProfileId.OPENCODE,
-    RuntimeProfileId.ANTIGRAVITY
+    RuntimeProfileId.ANTIGRAVITY,
+    RuntimeProfileId.HERMES
 )
 
 /**

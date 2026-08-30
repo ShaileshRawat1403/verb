@@ -332,7 +332,7 @@ object RuntimeProfiles {
         pipSpec: String
     ): String {
         val venv = "\$HOME/.venvs/$venvName"
-        return "$interpreter -m venv $venv && " +
+        return "$interpreter -m venv --system-site-packages $venv && " +
             "$venv/bin/pip install --upgrade --quiet $pipSpec && " +
             // Skip the venv's own tooling; wrap whatever the package actually installed.
             "for f in $venv/bin/*; do n=\$(basename \"\$f\"); " +
@@ -358,15 +358,15 @@ object RuntimeProfiles {
             "Extra package repository",
             listOf("tur-repo"),
             listOf(RuntimeRequirement("tur-repo", "tur-repo")),
-            // The repository is only useful once its index has been fetched, and its signing key
-            // ships inside the package itself -- so the update must follow the install, in the same
-            // command, or every later resolve still sees the old package list.
+            // tur-repo writes a new sources list; refreshing the apt cache is part of installing it,
+            // otherwise the packages it introduces -- such as versioned Python interpreters -- cannot
+            // be resolved until an install happens to refresh the index by accident.
             installCommandOverride =
                 "apt-get update && apt-get install -y --no-install-recommends tur-repo && apt-get update"
         ),
         RuntimeProfile(
             RuntimeProfileId.AGENT_EMULATOR,
-            "Agent Emulator",
+            "Agent emulator",
             listOf("qemu-user-aarch64"),
             listOf(RuntimeRequirement("qemu-aarch64", "qemu-user-aarch64")),
             postInstallHint =
@@ -376,8 +376,11 @@ object RuntimeProfiles {
         RuntimeProfile(
             RuntimeProfileId.PYTHON,
             "Python",
-            listOf("python"),
-            listOf(RuntimeRequirement("python", "python"))
+            listOf("python", "python-pip"),
+            listOf(
+                RuntimeRequirement("python", "python"),
+                RuntimeRequirement("pip", "python-pip")
+            )
         ),
         RuntimeProfile(
             RuntimeProfileId.HERMES,
@@ -385,8 +388,8 @@ object RuntimeProfiles {
             // Hermes needs an interpreter below 3.14, and the main repository ships only 3.14. The
             // fix is a compatible package rather than a permanent refusal: the Termux User
             // Repository carries versioned interpreters, so Hermes targets python3.13 explicitly
-            // instead of the unversioned `python` whose only candidate it can never use.
-            listOf("python3.13"),
+            // along with prebuilt cryptography binaries to avoid source rust build failures.
+            listOf("python3.13", "python-cryptography"),
             // Ready means the agent runs, not merely that a compatible interpreter exists. The
             // probe executes the console script the package installs.
             listOf(
@@ -395,13 +398,13 @@ object RuntimeProfiles {
             ),
             prerequisiteProfiles = listOf(RuntimeProfileId.TUR),
             installCommandOverride =
-                "apt-get update && apt-get install -y --no-install-recommends python3.13 && " +
+                "apt-get update && apt-get install -y --no-install-recommends python3.13 python-cryptography && " +
                     pythonAgentInstall(
                         interpreter = "python3.13",
                         venvName = "hermes",
                         pipSpec = "hermes-agent"
                     ),
-            postInstallHint = "Hermes runs on python3.13 in its own venv; `python` stays at 3.14.",
+            postInstallHint = "Hermes runs on python3.13 in its own venv with prebuilt cryptography; `python` stays at 3.14.",
             launchCommand = "hermes",
             // The venv's own console script is the authoritative one; the $PREFIX/bin copy is a
             // shell wrapper the install generates, and is only a fallback.
