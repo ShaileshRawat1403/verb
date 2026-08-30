@@ -1,6 +1,6 @@
-# Verb Positioning and Promotion Playbook
+# Verb Positioning
 
-This document defines how Verb is positioned, explained, and promoted across developer communities, social platforms, and creator ecosystems.
+This document defines how Verb is positioned, explained, and communicated across developer communities, social platforms, and creator ecosystems.
 
 ---
 
