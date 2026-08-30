@@ -80,8 +80,17 @@ Users reach a fraction of any tool's functionality. The answer is not to display
 > **Verb can have enormous capability while presenting very little at any one moment.**
 
 Most of the time the screen is a terminal, a single status line, and a way to ask. Capability
-appears when the situation calls for it — a failing test, a dangerous Git operation, an agent that
-stopped, a runtime mismatch — and recedes when it does not.
+appears when the situation calls for it - a failing test, a dangerous Git operation, an agent that
+stopped, a runtime mismatch - and recedes when it does not.
+
+## Software creation for everyone, everywhere
+
+Autonomous coding agents should not be trapped behind complex desktop configurations. Millions of people carry smartphones as their primary computer, and millions subscribe to frontier AI services (like Claude Pro or ChatGPT Plus) without having a background in command-line administration.
+
+Verb removes the hardware and terminal cliff:
+* **No laptop required:** Packages a full Linux userland and genuine PTY engine directly on mobile.
+* **Bring your own subscription:** Connects directly to the AI accounts you already pay for.
+* **Fear-free exploration:** Automatic session recovery, multi-terminal isolation, and plain-English diagnostics ("Ask Verb") ensure that a phone sleep, memory sweep, or unexpected shell error never destroys your work.
 
 ## The constitutional constraint
 

@@ -24,12 +24,12 @@ Users regularly lose track of:
 Existing coding agents solve substantial parts of **creation**. Verb focuses on **understanding and
 controlling the development process around creation**.
 
-## Initial user
+## Initial users
 
-> A developer or AI-assisted builder who works in Git repositories and regularly uses commercial
-> coding agents such as Claude or Codex.
+1. **The Professional Developer:** Works in Git repositories, manages multi-terminal agent workflows, and requires mobile-to-desktop continuity without sacrificing execution truth or data privacy.
+2. **The Mobile-First Creator / Aspiring Builder:** Has an existing subscription to frontier AI tools (such as Claude Pro or ChatGPT Plus) and wants to build real software directly on an Android device without needing a laptop or complex command-line setup.
 
-Deliberately narrow. Other roles get documented when actual usage justifies them, not before.
+Both user profiles share the same fundamental need: an understandable, reliable, and recoverable development environment that never loses their state.
 
 ## Core jobs
 

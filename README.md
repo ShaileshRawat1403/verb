@@ -2,9 +2,9 @@
 
 **Verb makes AI-assisted development easier to understand, control, debug and recover.**
 
-You bring the agents you already use — Claude Code, Codex, OpenCode — and they keep doing the AI
-work. Verb owns the layer around them: what environment you are in, what actually ran, what changed,
-why it failed, and what is safe to do next.
+Whether you are an engineer coordinating autonomous agents across workspaces, or a creator who wants to build real software on your phone using the Claude or ChatGPT subscription you already pay for: Verb gives you a complete, crash-proof development studio in your pocket.
+
+You bring the agents you already use (Claude Code, Codex, OpenCode) and they keep doing the AI work. Verb owns the layer around them: what environment you are in, what actually ran, what changed, why it failed, and what is safe to do next.
 
 ```text
 Claude / Codex / OpenCode / future agents
@@ -19,42 +19,41 @@ Claude / Codex / OpenCode / future agents
      helps the user control it
 ```
 
-Verb is terminal-first. It is not an IDE, not a coding agent, and not a model provider. See
-[`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for why that boundary is the point.
+Verb is terminal-first, but designed for human hands. No laptop required, no fragile command-line configuration, and no fear of losing your work when the phone sleeps. It is not an IDE, not a coding agent, and not a model provider. See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for why that boundary is the point.
 
 > **Release status:** Verb is preparing for its first public developer preview. Desktop and Android
 > automated gates pass. The terminal-first Android workspace, Working World export *and* restore,
-> the Android↔desktop continuity round-trip, Claude/Codex recovery, and OpenCode launch have all
+> the Android/desktop continuity round-trip, Claude/Codex recovery, and OpenCode launch have all
 > been exercised on the primary physical device. **OpenCode recovery remains unverified** and is not
 > advertised as proven.
 >
 > Several defects in this cycle were found only by running the product on a device while the test
-> suite was green — including a Working World export that produced archives its own importer
+> suite was green - including a Working World export that produced archives its own importer
 > refused. Where a capability is listed here, a dated acceptance run is recorded in
 > [`docs/BACKLOG.md`](docs/BACKLOG.md).
 
 ## What works today
 
 * **Sessions that survive process death.** A session keeps its identity across an agent exiting, the
-  app being force-stopped, and the machine losing the process entirely — then resumes by the agent's
+  app being force-stopped, and the machine losing the process entirely - then resumes by the agent's
   *own* conversation id. Proven end to end on a physical Android device for Claude and Codex.
 * **Session-bound lifecycle across multi-terminal workspaces.** Agent processes and lifecycle
   observers are bound strictly to their originating concrete PTY session. Switching active UI
   selection, running commands in concurrent shell sessions, and Activity/ViewModel recreation produce
   zero false lifecycle transitions or misrouted commands.
-* **One session lifecycle, three agents.** `LIVE → INTERRUPTED → RECOVERABLE → ENDED`, shared by
+* **One session lifecycle, three agents.** `LIVE -> INTERRUPTED -> RECOVERABLE -> ENDED`, shared by
   every agent. Each agent contributes only an adapter that reads its own evidence.
 * **Two hosts, one contract.** Android (proot + PTY) and desktop (native Unix PTY) implement the same
   session semantics and the same durable record shape.
 * **Manual, evidence-only continuity.** A checksummed `.vcont` file moves structural session history
-  between Android and desktop. Imported state is dated, read-only evidence—not a live-process or
+  between Android and desktop. Imported state is dated, read-only evidence - not a live-process or
   cross-device resume claim. Physically accepted in both directions on 26 August.
 * **Structural memory, not surveillance.** Durable records hold identity, context and state. Never a
   PID, process handle, command text, terminal bytes, prompts, transcripts or credentials.
 * **Ask about your own work, without explaining it.** One assistant, reachable from Ask Verb and
-  from the terminal. It answers from the evidence Verb observed itself — session lifecycle, the
+  from the terminal. It answers from the evidence Verb observed itself - session lifecycle, the
   shell's command boundaries, your agent sessions, and what the working tree did across the last
-  command — and every answer renders beside the same facts, in plain words, so it can be checked.
+  command - and every answer renders beside the same facts, in plain words, so it can be checked.
   What it cannot receive: command text, terminal output, file contents, transcripts, credentials,
   absolute paths, or even a branch name. A model provider is optional and replaceable; the context
   is the product.
