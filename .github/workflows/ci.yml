@@ -30,7 +30,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@94b5068f57377fb459fa7883523d31278739852a # v4.1.1
+        uses: gradle/actions/setup-gradle@0bdd871935719febd78681f197cd39af5b6e16a6 # v4.2.2
 
       - name: Unit test (${{ matrix.flavor }})
         run: ./gradlew :app:test${{ matrix.flavor }}DebugUnitTest
@@ -72,7 +72,7 @@ jobs:
           java-version: "17"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@94b5068f57377fb459fa7883523d31278739852a # v4.1.1
+        uses: gradle/actions/setup-gradle@0bdd871935719febd78681f197cd39af5b6e16a6 # v4.2.2
 
       - name: Enable KVM
         run: |
@@ -92,7 +92,7 @@ jobs:
 
       - name: Create AVD snapshot for caching
         if: steps.avd-cache.outputs.cache-hit != 'true'
-        uses: reactivecircus/android-emulator-runner@6b026e46950bc4465e90eb85a73e4b7b3b64c8d5 # v2.33.0
+        uses: reactivecircus/android-emulator-runner@62dbb605bba737720e10b196cb4220d374026a6d # v2.33.0
         with:
           api-level: 30
           target: google_apis
@@ -109,7 +109,7 @@ jobs:
       # entirely. The cache still earns its keep: it holds the system image and the AVD, which is
       # the slow part to create.
       - name: Run device-truth tests
-        uses: reactivecircus/android-emulator-runner@6b026e46950bc4465e90eb85a73e4b7b3b64c8d5 # v2.33.0
+        uses: reactivecircus/android-emulator-runner@62dbb605bba737720e10b196cb4220d374026a6d # v2.33.0
         with:
           api-level: 30
           target: google_apis
