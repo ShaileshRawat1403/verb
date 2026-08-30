@@ -1,16 +1,16 @@
-# Module 03: The PTY Engine & Multi-Terminal Isolation
+# Module 03: The PTY Engine and Multi-Terminal Isolation
 
-To build a reliable developer environment on mobile and desktop, Verb cannot rely on simple command execution (like `Runtime.getRuntime().exec("ls")`). Real developer tools—such as `git commit` (which opens an editor), `top`, `vim`, Claude Code, and Codex CLI—require a full interactive **Pseudoterminal (PTY)**.
+To host real developer tools (such as interactive editors like `vim` or `nano`, Git interactive rebasing, or terminal agents like Claude Code), an application cannot rely on basic script execution. It must provide a genuine **Pseudoterminal (PTY)**.
 
-Let's explore how Verb's PTY architecture works across Android and Desktop, and how it solves multi-terminal isolation.
+Let us explore how Verb's PTY engine works across Android and Desktop, and how it achieves bulletproof multi-terminal isolation.
 
 ---
 
-## 1. What is a PTY?
+## 1. What is a Pseudoterminal (PTY)?
 
-A **Pseudoterminal (PTY)** is a pair of virtual devices provided by Unix operating systems:
-1. **The Leader (Master):** Controlled by the application (Verb). Verb reads raw terminal bytes from here and writes user keyboard input to it.
-2. **The Follower (Slave):** Connects to the child process (bash, zsh, node, python). To the child process, it looks and behaves exactly like a real hardware teletype terminal.
+In Unix-like systems (Linux, macOS, BSD), a **Pseudoterminal (PTY)** is a pair of interconnected virtual devices:
+* **The Master (Host):** Controlled by Verb. Verb writes user keystrokes into it and reads raw text and ANSI escape codes (colors, cursor positioning) out of it.
+* **The Slave (Child):** Attached to the child program (bash, zsh, node, python). The child program behaves exactly as if it were plugged into a physical hardware terminal screen.
 
 ```text
 +-----------------------+                    +------------------------+
@@ -29,69 +29,73 @@ A **Pseudoterminal (PTY)** is a pair of virtual devices provided by Unix operati
 
 ---
 
-## 2. The Two Host Implementations
+## 2. How Verb Runs on Android and Desktop
 
-Verb runs on both Android and Desktop, implementing the exact same session contract on both:
+Verb delivers the exact same session guarantees on two distinct environments:
 
-### Android: Proot + Vendored Terminal Engine
-* **The Problem:** Android's stock `/system/bin/sh` shell lacks essential Linux packages (`git`, `node`, `python`, `gcc`, `tar`). Furthermore, Android apps are sandboxed in private data directories (`/data/data/com.aistudio.verb.app/files`).
-* **The Solution:** Verb embeds a Termux-derived PTY engine and a proot-backed Debian/Termux userland. The userland is compiled specifically for Verb's application ID, giving you a real Linux shell and package manager (`pkg`) without requiring root access.
+### Android: PRoot Virtualization + Termux Userland
+* **The Challenge:** Android devices do not come with standard Linux package managers (`apt` or `pkg`), and apps are strictly sandboxed inside private folders (`/data/data/com.aistudio.verb.app/files`).
+* **The Verb Solution:** Verb bundles an open-source, Termux-derived PTY engine alongside a [PRoot](https://proot-me.github.io/) userland compiled specifically for Verb. This provides full Linux tools (`git`, `node`, `python`, `gcc`, `tar`) without needing root privileges on the device.
 
-### Desktop: Native Unix PTY in Rust
-* **The Implementation:** Built in Rust (`desktop/src/pty.rs`), using native POSIX PTY APIs (`openpty`, `forkpty`).
-* **Shell Integration:** Desktop reads the shell's OSC markers (`OSC 7` for working directory changes, `OSC 133` / `OSC 633` for command start/end boundaries) to record structured events without snooping on typed text.
+### Desktop: Native POSIX PTY in Rust
+* **The Implementation:** Written in Rust (`desktop/src/pty.rs`), using standard POSIX PTY system calls (`openpty`, `forkpty`).
+* **Shell Integration:** The desktop host listens to standard [OSC (Operating System Command) Escape Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html):
+  * `OSC 7`: Signals directory changes (`cd /path/to/project`).
+  * `OSC 133` / `OSC 633`: Signals command start and completion boundaries, allowing Verb to record execution timing without logging private keystrokes.
 
 ---
 
 ## 3. Multi-Terminal Session Isolation
 
-In modern workflows, developers frequently use multiple terminal tabs simultaneously:
-* **Terminal 1 ($T_1$):** Running Claude Code refactoring backend code.
-* **Terminal 2 ($T_2$):** Running OpenAI Codex writing unit tests.
-* **Terminal 3 ($T_3$):** An interactive bash shell for running `git status` or `curl`.
-
-### The Bug That Almost Shipped (And How It Was Fixed)
-In early beta designs, lifecycle coordinators listened to the *currently visible* terminal. If you were running Claude in $T_1$, switched your screen to $T_2$, and typed `echo done`, the coordinator in $T_1$ would hear the command completion from $T_2$ and erroneously mark Claude as finished!
-
-In `v0.1.0-beta.5`, this was permanently fixed with **Session-Bound Concrete Runtimes**:
+Developers often work across multiple terminal tabs at the same time:
+* **Terminal 1 ($T_1$):** Claude Code refactoring an authentication service.
+* **Terminal 2 ($T_2$):** OpenAI Codex running unit tests.
+* **Terminal 3 ($T_3$):** A general shell running `git diff` or checking log files.
 
 ```text
-UI Viewport (Switchable)
+UI Viewport (Switchable by user)
   │
   ├── User switches active tab from T1 to T2 to T3
-  │   (Changes ONLY visual rendering and keyboard routing)
+  │   (Changes ONLY visual rendering and keyboard input routing)
   │
   ▼
-Concrete Session Bindings (Immutable per session)
-  ├── Session T1  ──>  PTY 1  ──>  ClaudeSessionCoordinator (strictly watches PTY 1)
-  ├── Session T2  ──>  PTY 2  ──>  CodexSessionCoordinator  (strictly watches PTY 2)
-  └── Session T3  ──>  PTY 3  ──>  Shell Process            (strictly watches PTY 3)
+Concrete Session Bindings (Strictly isolated per session)
+  ├── Session T1  ──>  PTY 1  ──>  ClaudeSessionCoordinator (strictly observes PTY 1)
+  ├── Session T2  ──>  PTY 2  ──>  CodexSessionCoordinator  (strictly observes PTY 2)
+  └── Session T3  ──>  PTY 3  ──>  Shell Process            (strictly observes PTY 3)
 ```
 
-### The Invariant:
-> **Once an agent or command starts in a terminal session, all lifecycle monitoring, event streams, and command dispatches are bound strictly to that session's concrete runtime.**
+### The Isolation Invariant:
+> **Once an agent or command launches in a terminal session, all lifecycle watchers, event listeners, and command dispatches are bound strictly to that session's concrete runtime.**
 
-Switching tabs, rotating your phone, or running commands in other shells produces **zero** state changes in background agents.
+Switching tabs in the UI, rotating the screen, or typing commands into other terminals causes **zero** state changes in background agents.
 
 ---
 
 ## 4. Physical Proof of Isolation
 
-This invariant is verified on physical hardware (Vivo I2202, Android 14):
-1. Launch Claude Code in $T_1$ (`Running`).
-2. Create $T_2$ and launch OpenAI Codex (`Running`).
-3. Create $T_3$ and run shell commands (`echo testing_t3_isolation`).
-4. Switch to $T_2$ and press `^C` to interrupt Codex.
-5. **Result:** $T_2$ transitions to `Session interrupted`, while $T_1$ (Claude) remains `Running` without dropping a single frame.
+This invariant has been verified on physical hardware (Vivo I2202, Android 14):
+1. **$T_1$:** Launched Claude Code (`Running`).
+2. **$T_2$:** Launched OpenAI Codex (`Running`).
+3. **$T_3$:** Created an interactive shell and ran `echo testing_t3_isolation`.
+4. **Action:** Switched to $T_2$ and pressed `^C` to interrupt Codex.
+5. **Observed Outcome:** Only $T_2$ transitioned to `Session interrupted`. Claude in $T_1$ remained `Running` and completely undisturbed.
 
 ---
 
-## 5. Key Takeaways
-
-* **Real PTYs everywhere:** Verb uses genuine POSIX PTYs on desktop and proot-backed PTYs on Android.
-* **Zero cross-talk:** Background terminal sessions run independently; UI tab switching never mutates session lifecycle states.
-* **Hardware-proven reliability:** Multi-agent concurrent execution is tested against real Android lifecycle events.
+## 5. Related Open-Source References
+* [PRoot Userland Virtualization](https://proot-me.github.io/): Allows running Linux distribution userlands inside unprivileged environments.
+* [Termux Packages Project](https://github.com/termux/termux-packages): Open-source build infrastructure for Android terminal environments.
+* [XTerm Control Sequences Documentation](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html): The reference standard for terminal escape codes and OSC markers.
 
 ---
 
-Next: **[Module 04: Agent Adapters & Evidence](04_agent_adapters_and_evidence.md)** explores how Verb extracts facts from different AI tools.
+## 6. Key Takeaways
+
+* **Authentic PTYs everywhere:** Verb uses genuine POSIX PTYs on desktop and PRoot-backed userland PTYs on Android.
+* **Session-bound routing:** Background sessions run independently; UI navigation never mutates background lifecycles.
+* **Device-verified isolation:** Multi-terminal separation is validated under real hardware conditions.
+
+---
+
+Next: **[Module 04: Agent Adapters and Evidence](04_agent_adapters_and_evidence.md)** explores how Verb extracts facts from AI agents without invasive screen scraping.

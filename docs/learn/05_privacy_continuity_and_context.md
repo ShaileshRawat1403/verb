@@ -1,35 +1,35 @@
-# Module 05: Privacy, Continuity & Context
+# Module 05: Privacy, Continuity and Context
 
-Development environments contain your most sensitive data: API keys, source code, private credentials, customer data, and internal paths.
+Software projects contain your most critical and sensitive assets: source code, proprietary algorithms, API tokens, database passwords, and internal paths.
 
-Verb is built on a foundational philosophy: **Structural memory, not surveillance.**
+Verb is designed from the ground up on one principle: **Structural memory, not surveillance.**
 
-Let's look at how Verb handles data privacy, backup archives, cross-device continuity, and the "Ask Verb" assistant.
+Let us look at how Verb handles data privacy, backup archives, cross-device continuity, and the "Ask Verb" assistant.
 
 ---
 
 ## 1. Structural Memory vs. Surveillance
 
-Many developer tools log everything you do into a centralized database or cloud telemetry pipeline.
+Many commercial developer tools log everything you type into a cloud telemetry service.
 
 Verb takes the opposite approach:
 
-| Data Type | Does Verb Persist It in Durable Records? | Why? |
+| Information | Does Verb Persist It in Durable Records? | Reason |
 | :--- | :---: | :--- |
-| **Command Text** | ❌ **No** | Commands may contain inline secrets (`export GITHUB_TOKEN=ghp_...`). |
-| **Terminal Output / PTY Bytes** | ❌ **No** | Output may contain database dumps, API responses, or sensitive code. |
-| **User Prompts & Transcripts** | ❌ **No** | Your conversations remain owned strictly by the agent, not Verb. |
-| **API Keys & Credentials** | ❌ **No** | Stored securely in Android Keystore / OS keychain, never in session files. |
-| **Project Source Code** | ❌ **No** | Kept in Git; Verb never duplicates your repository trees. |
-| **Session UUID & State** | ✅ **Yes** | Required to know if a session is `LIVE`, `INTERRUPTED`, or `RECOVERABLE`. |
-| **Working Directory & Project Name** | ✅ **Yes** | Required to reopen the terminal in the correct project folder. |
-| **Exit Codes & Timestamps** | ✅ **Yes** | Factual metadata required to detect whether a tool succeeded or failed. |
+| **Command Line Text** | **No** | Commands frequently contain passwords or secrets (`export GITHUB_TOKEN=ghp_...`). |
+| **Raw Terminal Output** | **No** | Terminal output can display database queries, API payloads, or private code. |
+| **Prompts and Transcripts** | **No** | Your conversations remain owned strictly by the AI agent, not Verb. |
+| **API Keys and Passwords** | **No** | Stored securely in [Android Keystore](https://developer.android.com/privacy-and-security/keystore) or local secure storage, never in session files. |
+| **Repository Source Code** | **No** | Managed by [Git](https://git-scm.com/); Verb never duplicates your repository trees. |
+| **Session UUID and State** | **Yes** | Necessary to track whether a session is `LIVE`, `INTERRUPTED`, or `RECOVERABLE`. |
+| **Working Directory Name** | **Yes** | Necessary to restore the terminal in the correct project directory. |
+| **Exit Codes and Durations** | **Yes** | Factual metadata required to detect whether a command succeeded or failed. |
 
 ---
 
 ## 2. Working World Archives (`.vbak`)
 
-When you want to back up your Android development setup (e.g., before switching phones), Verb provides **Working World Export/Import**:
+When you want to back up your mobile development environment (for example, when migrating to a new phone), Verb provides **Working World Export and Import**:
 
 ```text
                        verb export ~/my-world.vbak
@@ -39,29 +39,28 @@ When you want to back up your Android development setup (e.g., before switching 
         | Working World Archive (.vbak)                        |
         |                                                      |
         |  [X] Allowlisted CLI tool configs (~/.claude, etc.)  |
-        |  [X] Verb session metadata & history                 |
-        |  [X] Custom packages & shell preferences             |
+        |  [X] Verb session metadata and history               |
+        |  [X] Custom packages and shell configurations        |
         |                                                      |
-        |  [!] EXCLUDES: Project git source trees              |
-        |  [!] EXCLUDES: Symlinks & unsafe socket files        |
-        |  [!] ENCRYPTED: AES-GCM with user-chosen passphrase  |
+        |  [!] EXCLUDES: Project Git source trees              |
+        |  [!] EXCLUDES: Symlinks and unsafe socket files      |
+        |  [!] ENCRYPTED: AES-GCM with user passphrase         |
         +------------------------------------------------------+
 ```
 
-### Safety by Construction:
-* **Symlink Traversal Prevention:** Archives strictly refuse symlinks (such as `node_modules/.bin`) to prevent archive-extraction security vulnerabilities.
-* **Separation from Source:** Source trees are not backed up in `.vbak` files; source code belongs in Git.
+### Safety Features:
+* **Symlink Traversal Protection:** Archives strictly reject symbolic links (such as `node_modules/.bin`) to prevent archive-extraction directory traversal vulnerabilities.
+* **Separation from Source:** Source trees are not backed up inside `.vbak` files; source code is managed via Git remotes.
+* **Authenticated Encryption:** Archives are encrypted using industry-standard [AES-GCM encryption](https://en.wikipedia.org/wiki/Galois/Counter_Mode).
 
 ---
 
 ## 3. Cross-Device Continuity (`.vcont`)
 
-What if you start working on your Android phone during your commute, and want to continue on your desktop when you reach your desk?
-
-Verb uses the **Continuity Envelope (`.vcont`)**:
-* An unencrypted, checksummed, human-readable JSON envelope that transfers structural project history.
-* **Strict Privacy Boundary:** `.vcont` contains only session timestamps, exit codes, and durable state. It **never** carries transcripts, credentials, source files, or live process handles.
-* **Evidence, Not Magic:** When you import a `.vcont` on desktop, Verb marks the imported records as **dated read-only foreign evidence**. It never pretends that a process running on your phone is magically running on your laptop.
+If you begin working on your mobile device during a commute and want to continue on your workstation at your desk, Verb provides **Continuity Envelopes (`.vcont`)**:
+* A checksummed, human-readable JSON envelope that transfers structural project history.
+* **Strict Privacy Boundary:** `.vcont` contains only timestamps, exit codes, and durable state. It **never** carries transcripts, credentials, source files, or live process handles.
+* **Evidence, Not Magic:** When imported on desktop, Verb marks the records as **dated read-only foreign evidence**. It never pretends that a process running on your phone is magically active on your laptop.
 
 ```json
 {
@@ -78,40 +77,47 @@ Verb uses the **Continuity Envelope (`.vcont`)**:
       "created_at": "2026-08-30T01:15:00Z"
     }
   ],
-  "checksum_sha256": "4a71c8..."
+  "checksum_sha256": "4a71c853..."
 }
 ```
 
 ---
 
-## 4. How "Ask Verb" Works Without Leaking Context
+## 4. How "Ask Verb" Works Without Leaking Data
 
-Verb includes a built-in assistant called **Ask Verb**. You can ask:
+Verb includes an assistant called **Ask Verb**. You can ask:
 * *"Why did that command fail?"*
-* *"What is the current git status?"*
+* *"What is the current Git status?"*
 * *"What did the last session do?"*
 
 ### How it protects your privacy:
 When you ask a question, Verb constructs a compact **Structural Context Envelope**:
-1. It includes the exit code (e.g., `exit 127`), elapsed execution time, and Git porcelain status (`M app/build.gradle.kts`).
-2. It **strips** all raw terminal bytes, command strings, source code lines, credentials, and absolute system paths.
-3. The LLM receives only the structural facts, answers your question, and Verb displays the exact facts used in a "Based on" panel beside the answer.
+1. It includes only high-level facts: the exit code (e.g., `exit 127`), elapsed execution time, and Git porcelain status (`M app/build.gradle.kts`).
+2. It **strips** all raw terminal output, command arguments, source code lines, credentials, and absolute system paths.
+3. The AI model receives only the structural facts, formulates an answer, and Verb renders the exact facts used in a "Based on" panel beside the response.
 
 ---
 
-## 5. Summary & Graduation
+## 5. Summary and Conclusion
 
-Congratulations! You now understand the full architectural foundation of Verb:
+You now understand the complete architectural foundation of Verb:
 
 ```mermaid
 graph TD
     A["01. Philosophy: AI sits after evidence"] --> B["02. 4-State Lifecycle survives process death"]
     B --> C["03. PTY Engine provides isolated multi-terminal execution"]
     C --> D["04. Adapters read ground-truth files without screen scraping"]
-    D --> E["05. Zero-surveillance privacy protects your code & credentials"]
+    D --> E["05. Zero-surveillance privacy protects your code and credentials"]
 ```
 
-You are ready to explore the codebase, contribute new adapters, or build on top of Verb's reliable session substrate!
+You are ready to explore the codebase, write new adapters, or build on top of Verb's reliable session foundation.
+
+---
+
+## Related Open-Source References
+* [AES-GCM (Galois/Counter Mode) Authenticated Encryption](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
+* [Android Keystore System](https://developer.android.com/privacy-and-security/keystore)
+* [Git Porcelain Format](https://git-scm.com/docs/git-status#_porcelain_format_version_1)
 
 ---
 

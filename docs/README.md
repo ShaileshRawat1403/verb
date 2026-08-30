@@ -2,11 +2,11 @@
 
 Two kinds of document live here, and they answer to each other in one direction only.
 
-## Learn & Understand Verb
+## Learn and Understand Verb
 
 If you want a step-by-step, conceptual walkthrough of Verb's architecture, lifecycle state machine, and technical building blocks for any proficiency level:
 
-👉 **[Understanding Verb: Architecture & Concepts Guide](learn/README.md)**
+* **[Understanding Verb: Architecture and Concepts Guide](learn/README.md)**
 
 ## Canonical product documents
 
