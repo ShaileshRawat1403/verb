@@ -19,7 +19,8 @@ answer to implementation documents.
 | [`PRD.md`](PRD.md) | What problem is being solved, for whom, and what is deliberately not built. |
 | [`ROADMAP.md`](ROADMAP.md) | Which capability arrives when, and what "finished" means for each. |
 | [`UX_FOUNDATION.md`](UX_FOUNDATION.md) | How Verb should feel, and the rules that keep it feeling that way. Host-agnostic. |
-| [`TUI_VISION.md`](TUI_VISION.md) | How the desktop experience works, down to the mockups — the current implementation of the foundation. |
+| [`TUI_VISION.md`](TUI_VISION.md) | How the desktop experience works, down to the mockups -- the current implementation of the foundation. |
+| [`POSITIONING_AND_PROMOTION.md`](POSITIONING_AND_PROMOTION.md) | How Verb is positioned, its unique selling propositions, and copy templates for promotion. |
 | [`BACKLOG.md`](BACKLOG.md) | What is undone, what it costs, and the current sprint. |
 
 **Current scope: the M1 desktop workspace is built and frozen for dogfooding.** Reliability fixes
