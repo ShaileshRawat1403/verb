@@ -41,8 +41,9 @@ Verb is terminal-first, but designed for human hands. No laptop required, no fra
   observers are bound strictly to their originating concrete PTY session. Switching active UI
   selection, running commands in concurrent shell sessions, and Activity/ViewModel recreation produce
   zero false lifecycle transitions or misrouted commands.
-* **One session lifecycle, three agents.** `LIVE -> INTERRUPTED -> RECOVERABLE -> ENDED`, shared by
-  every agent. Each agent contributes only an adapter that reads its own evidence.
+* **One session lifecycle, three recovery-capable agents.** `LIVE -> INTERRUPTED -> RECOVERABLE ->
+  ENDED` is implemented for Claude Code, Codex CLI and OpenCode. Each contributes only an adapter
+  that reads its own evidence; Hermes and Antigravity currently have verified launch support.
 * **Two hosts, one contract.** Android (proot + PTY) and desktop (native Unix PTY) implement the same
   session semantics and the same durable record shape.
 * **Manual, evidence-only continuity.** A checksummed `.vcont` file moves structural session history

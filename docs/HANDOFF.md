@@ -26,7 +26,7 @@ and `docs/NEXT_SPRINT.md` (carried-over blockers).
 | OpenCode | Runs (`1.18.18`). Sign-in state unknown to Verb. |
 | DeepSeek Harness (`dsh`) | ~~Runs (`0.1.0-rc.7`)~~ — **disproved 2026-08-21.** `dsh --version` answers while `require("koffi")` throws; the native module has no Android build and cannot compile there. Verb now reports it as unavailable with the reason. |
 | Gemini CLI | Not installed. |
-| Hermes | Blocked on building `cryptography`. |
+| Hermes | Runs (`0.15.2`). Installed in isolated venv with native cryptography and ARM64 toolchain. |
 | DAX | Blocked on `@opentui/solid/bun-plugin`. |
 
 Plus: PTY terminal with truthful cwd, projects, file browser, diagnostics, package installs that
@@ -114,9 +114,7 @@ compares them and explains why the multiplexer choice should come last.
 3. **Codex/OpenCode/dsh sign-in markers.** Only Claude and Codex have observed credential paths.
    OpenCode and `dsh` reference a bare `auth.json` built at runtime; add a marker once either is
    signed into. One-line catalog change.
-4. **Hermes** — `cryptography` has no Android wheel and cargo cannot execute the build scripts it
-   compiles. Blocks every Rust-backed Python package. Cheapest path for Hermes alone is dropping the
-   `PyJWT[crypto]` extra.
+4. **Hermes** — **RESOLVED & VERIFIED ON DEVICE (2026-08-31).** Runs in isolated venv `$HOME/.venvs/hermes` with `--system-site-packages` for `python-cryptography` and `python-psutil`, and builds native ARM64 wheels (`jiter`, `pydantic-core`, `cffi`, `ruamel.yaml.clib`) via Termux clang/cargo toolchain with link flags (`-landroid-support`).
 5. **DAX** — `bun install` succeeds but `@opentui/solid/bun-plugin` does not resolve.
 6. **`bun run` under proot** — `CouldntReadCurrentDirectory`; `bun <file>` works.
 7. **Keystore-backed key injection**, deferred by the user. Keys currently live plaintext in

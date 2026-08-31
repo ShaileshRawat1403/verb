@@ -1,8 +1,8 @@
 # Verb Direct Beta
 
-Verb `v0.1.0-beta.5` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
+Verb `v0.1.0-beta.6` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
 
-> **Upgrading:** Installing beta.5 over earlier beta releases is a normal in-place upgrade — same signing
+> **Upgrading:** Installing beta.6 over earlier beta releases is a normal in-place upgrade — same signing
 > key, same application id (`com.aistudio.verb.app`), `adb install -r` — and preserves your private
 > runtime and Working World.
 
@@ -22,9 +22,10 @@ Verb `v0.1.0-beta.5` is a direct-distribution Android build for arm64 devices. I
 
 ## Agent Tools
 
-Install JavaScript first in System & setup, then install Codex CLI, Claude Code, or OpenCode. Each
-CLI owns and verifies its own sign-in flow. A saved credential file is not proof that its login is
-still valid. Verb never exports its Assistant API key to a terminal CLI.
+Install the prerequisite profile shown in System & setup, then install an agent. Codex CLI, Claude
+Code and OpenCode require JavaScript; Hermes Agent installs its Python/native toolchain; Antigravity
+installs its own CLI. Each CLI owns and verifies its own sign-in flow. A saved credential file is
+not proof that its login is still valid. Verb never exports its Assistant API key to a terminal CLI.
 
 ## AI Assistant
 
@@ -39,6 +40,8 @@ Verb supports user-provided OpenAI, Anthropic, Gemini, and OpenAI-compatible API
   independent backup before uninstalling or clearing Verb.
 - Claude and Codex recovery have physical-device evidence. OpenCode launches physically, but its
   recovery path and Android↔desktop continuity round-trip are not yet accepted end to end.
+- Hermes Agent `0.15.2` and Antigravity (`agy`) have physical install-and-launch evidence. They do
+  not yet participate in Verb's durable session/recovery model.
 
 ## Updates And Support
 

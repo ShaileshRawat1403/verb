@@ -38,8 +38,8 @@ class RuntimeProfilesTest {
 
         assertTrue(status.isFile)
         assertFalse(report.isReady)
-        assertTrue(report.missingPackages.contains("python3.13"))
-        assertTrue(report.missingCommands.contains("python3.13"))
+        assertTrue(report.missingPackages.contains("python-cryptography"))
+        assertTrue(report.missingCommands.contains("hermes"))
         // The unversioned 3.14 interpreter no longer blocks Hermes, so this stays installable.
         assertFalse(report.isUnsatisfiable)
         assertTrue(report.isInstallable)
@@ -47,7 +47,7 @@ class RuntimeProfilesTest {
 
     /**
      * A compatible interpreter is necessary but not sufficient. Hermes reported Ready for months on
-     * the strength of `python3.13` existing while the agent itself was never installed, which is
+     * the strength of `python` existing while the agent itself was never installed, which is
      * exactly the "installed does not mean runnable" failure this catalog is meant to prevent.
      */
     @Test
@@ -56,12 +56,12 @@ class RuntimeProfilesTest {
         File(filesDir, "usr/var/lib/dpkg/status").apply {
             parentFile?.mkdirs()
             writeText("""
-                Package: python3.13
+                Package: python
                 Status: install ok installed
-                Version: 3.13.13
+                Version: 3.14.6
             """.trimIndent())
         }
-        File(filesDir, "usr/bin/python3.13").apply {
+        File(filesDir, "usr/bin/python").apply {
             parentFile?.mkdirs()
             createNewFile()
             setExecutable(true)
@@ -74,15 +74,23 @@ class RuntimeProfilesTest {
     }
 
     @Test
-    fun `Hermes pulls in the extra package repository that carries its interpreter`() {
+    fun `Hermes pulls in native toolchain and cryptography packages`() {
         val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
 
-        assertEquals(listOf(RuntimeProfileId.TUR), hermes.prerequisiteProfiles)
-        assertEquals(listOf("python3.13"), hermes.packages)
+        assertEquals(listOf(RuntimeProfileId.NATIVE), hermes.prerequisiteProfiles)
         assertEquals(
-            listOf(RuntimeProfileId.TUR, RuntimeProfileId.HERMES),
+            listOf("python", "python-pip", "python-cryptography", "python-psutil", "openssl", "libffi"),
+            hermes.packages
+        )
+        assertEquals(
+            listOf(RuntimeProfileId.NATIVE, RuntimeProfileId.HERMES),
             RuntimeProfiles.installPlan(RuntimeProfileId.HERMES) { false }.map { it.id }
         )
+        assertTrue(hermes.installCommand.contains("hermes-agent==0.15.2"))
+        // AgentWrapperBootstrap owns launchers in Verb's private libexec directory. A profile
+        // installer must never overwrite package-manager or user commands in $PREFIX/bin.
+        assertFalse(hermes.installCommand.contains("\$PREFIX/bin/"))
+        assertFalse(hermes.installCommand.contains("chmod +x"))
     }
 
     /** The repository index must be refreshed after the key-bearing package lands, or nothing new resolves. */
@@ -99,7 +107,7 @@ class RuntimeProfilesTest {
     fun `profile exposes an install plan using catalog packages`() {
         val command = RuntimeProfiles.forId(RuntimeProfileId.PYTHON).installCommand
 
-        assertEquals("apt-get update && apt-get install -y --no-install-recommends python", command)
+        assertEquals("apt-get update && apt-get install -y --no-install-recommends python python-pip", command)
     }
 
     @Test

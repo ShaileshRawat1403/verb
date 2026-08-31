@@ -219,9 +219,7 @@ data class RuntimeProfileReport(
      * A version constraint is violated by the version that is *already installed*, and the only way
      * out would be a downgrade -- which Verb does not perform, and which would break every other
      * profile depending on the newer version. Distinguishing this from an ordinary "not installed
-     * yet" state is the difference between a button that will work and a button that never can:
-     * Hermes requires Python below 3.14 while the package repository ships only 3.14, so offering
-     * an install action for it is an invitation to fail.
+     * yet" state is the difference between a button that will work and a button that never can.
      *
      * Deliberately derived rather than stored, so it cannot drift from the report it describes.
      */
@@ -311,34 +309,34 @@ object RuntimeProfiles {
     }
 
     /**
-     * Install command for a Python agent that pins an interpreter older than the default.
+     * Install command for a Python agent running in an isolated virtual environment.
      *
-     * The system `python` is whatever the repository ships -- currently 3.14 -- and Verb will not
-     * downgrade it, because every other Python profile depends on it. An agent declaring
-     * `requires-python < 3.14` therefore cannot be installed globally at all, which is why Hermes
-     * spent so long reported as permanently unavailable.
+     * The agent gets its own virtualenv under `$HOME/.venvs/$venvName` with `--system-site-packages`
+     * to access prebuilt system binary modules (such as `python-cryptography` and `python-psutil`),
+     * while compiling native Rust/C extensions directly on ARM64 Android with appropriate temporary
+     * directory and compiler flags.
      *
-     * A virtual environment on the pinned interpreter resolves that without touching anything else:
-     * the agent gets the version it asks for, `python` stays where it is, and the two never meet.
-     *
-     * Console scripts are discovered rather than declared. After the install, every new executable
-     * in the venv's `bin/` that is not part of the venv's own scaffolding is wrapped onto PATH, so
-     * the catalog does not have to know or maintain a package's entry-point names -- `hermes-agent`
-     * ships three -- and they cannot drift when the package changes them.
+     * Launching remains [AgentWrapperBootstrap]'s responsibility. It owns a stable directory ahead
+     * of package-manager paths and resolves this venv's declared console script at execution time.
+     * The install must never write to `$PREFIX/bin`: that directory belongs to the package manager
+     * and can contain unrelated user commands.
      */
     private fun pythonAgentInstall(
         interpreter: String,
         venvName: String,
-        pipSpec: String
+        pipSpec: String,
+        extraPipFlags: String = ""
     ): String {
         val venv = "\$HOME/.venvs/$venvName"
-        return "$interpreter -m venv $venv && " +
-            "$venv/bin/pip install --upgrade --quiet $pipSpec && " +
-            // Skip the venv's own tooling; wrap whatever the package actually installed.
-            "for f in $venv/bin/*; do n=\$(basename \"\$f\"); " +
-            "case \"\$n\" in python*|pip*|activate*|Activate*|wheel|easy_install*) continue;; esac; " +
-            "printf '%s\\n' '#!/bin/sh' \"exec $venv/bin/\$n \\\"\\\$@\\\"\" > \$PREFIX/bin/\$n; " +
-            "chmod +x \$PREFIX/bin/\$n; done"
+        val flags = if (extraPipFlags.isNotBlank()) " $extraPipFlags" else ""
+        return "$interpreter -m venv --system-site-packages $venv && " +
+            "TMPDIR=\$PREFIX/tmp TEMP=\$PREFIX/tmp TMP=\$PREFIX/tmp " +
+            "SSL_CERT_FILE=\$PREFIX/etc/tls/cert.pem CARGO_HTTP_CAINFO=\$PREFIX/etc/tls/cert.pem " +
+            "CARGO_BUILD_TARGET=aarch64-linux-android ANDROID_API_LEVEL=24 " +
+            "CC=clang CXX=clang++ CC_aarch64_linux_android=clang CXX_aarch64_linux_android=clang++ " +
+            "AR=llvm-ar CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=clang " +
+            "RUSTFLAGS=\"-C link-arg=-landroid-support\" " +
+            "$venv/bin/pip install --upgrade$flags $pipSpec"
     }
 
     val all: List<RuntimeProfile> = listOf(
@@ -358,15 +356,15 @@ object RuntimeProfiles {
             "Extra package repository",
             listOf("tur-repo"),
             listOf(RuntimeRequirement("tur-repo", "tur-repo")),
-            // The repository is only useful once its index has been fetched, and its signing key
-            // ships inside the package itself -- so the update must follow the install, in the same
-            // command, or every later resolve still sees the old package list.
+            // tur-repo writes a new sources list; refreshing the apt cache is part of installing it,
+            // otherwise the packages it introduces -- such as versioned Python interpreters -- cannot
+            // be resolved until an install happens to refresh the index by accident.
             installCommandOverride =
                 "apt-get update && apt-get install -y --no-install-recommends tur-repo && apt-get update"
         ),
         RuntimeProfile(
             RuntimeProfileId.AGENT_EMULATOR,
-            "Agent Emulator",
+            "Agent emulator",
             listOf("qemu-user-aarch64"),
             listOf(RuntimeRequirement("qemu-aarch64", "qemu-user-aarch64")),
             postInstallHint =
@@ -376,35 +374,35 @@ object RuntimeProfiles {
         RuntimeProfile(
             RuntimeProfileId.PYTHON,
             "Python",
-            listOf("python"),
-            listOf(RuntimeRequirement("python", "python"))
+            listOf("python", "python-pip"),
+            listOf(
+                RuntimeRequirement("python", "python"),
+                RuntimeRequirement("pip", "python-pip")
+            )
         ),
         RuntimeProfile(
             RuntimeProfileId.HERMES,
             "Hermes Agent",
-            // Hermes needs an interpreter below 3.14, and the main repository ships only 3.14. The
-            // fix is a compatible package rather than a permanent refusal: the Termux User
-            // Repository carries versioned interpreters, so Hermes targets python3.13 explicitly
-            // instead of the unversioned `python` whose only candidate it can never use.
-            listOf("python3.13"),
-            // Ready means the agent runs, not merely that a compatible interpreter exists. The
-            // probe executes the console script the package installs.
+            listOf("python", "python-pip", "python-cryptography", "python-psutil", "openssl", "libffi"),
             listOf(
-                RuntimeRequirement("python3.13", "python3.13"),
+                RuntimeRequirement("python", "python"),
                 RuntimeRequirement("hermes", "", versionProbeArgs = listOf("--help"))
             ),
-            prerequisiteProfiles = listOf(RuntimeProfileId.TUR),
+            prerequisiteProfiles = listOf(RuntimeProfileId.NATIVE),
             installCommandOverride =
-                "apt-get update && apt-get install -y --no-install-recommends python3.13 && " +
+                "apt-get update && apt-get install -y --no-install-recommends python python-pip python-cryptography python-psutil openssl libffi && " +
                     pythonAgentInstall(
-                        interpreter = "python3.13",
+                        interpreter = "python",
                         venvName = "hermes",
-                        pipSpec = "hermes-agent"
+                        // Hermes 0.15.2 is the exact release physically proven on the validation
+                        // device. Pinning keeps a fresh Verb install repeatable instead of silently
+                        // accepting a future PyPI release with a different native build graph.
+                        pipSpec = "hermes-agent==0.15.2"
                     ),
-            postInstallHint = "Hermes runs on python3.13 in its own venv; `python` stays at 3.14.",
+            postInstallHint = "Hermes Agent 0.15.2 runs in its own venv (\$HOME/.venvs/hermes) with native ARM64 cryptography.",
             launchCommand = "hermes",
-            // The venv's own console script is the authoritative one; the $PREFIX/bin copy is a
-            // shell wrapper the install generates, and is only a fallback.
+            // The venv's own console script is authoritative. AgentWrapperBootstrap resolves it
+            // from Verb's private libexec directory, without writing to $PREFIX/bin.
             binaryCandidates = listOf(
                 AgentBinaryCandidate("\$HOME/.venvs/hermes/bin/hermes", AgentBinaryAbi.NATIVE)
             )

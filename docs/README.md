@@ -27,7 +27,7 @@ answer to implementation documents.
 continue where tests or real use demonstrate defects. Manual cross-host structural continuity is a
 bounded beta capability; it transports evidence, never process authority or transcript content.
 The Android workspace is terminal-first and exposes named tasks through one searchable Verb sheet;
-that workspace and all three admitted agent launch paths have physical-device acceptance. OpenCode
+that workspace and all five admitted agent launch paths have physical-device acceptance. OpenCode
 recovery remains an explicit beta gap. M2 is implemented as a reviewed, provider-neutral,
 evidence-bound assistant with physical-device acceptance; it is one surface, reachable from Ask Verb
 and from the terminal.

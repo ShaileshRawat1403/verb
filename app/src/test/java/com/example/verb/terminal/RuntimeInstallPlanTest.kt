@@ -80,9 +80,9 @@ class RuntimeInstallPlanTest {
 }
 
 /**
- * Hermes needs Python below 3.14 while the package repository ships only 3.14, so it can never be
- * made ready. That is a different fact from "not installed yet", and the difference decides whether
- * an install button should exist at all.
+ * A profile with an incompatible requirement is a different fact from "not installed yet", and the
+ * distinction decides whether an install button should exist at all. Hermes itself is installable:
+ * it now uses the native toolchain and isolated environment proven on the physical device.
  */
 class RuntimeProfileSatisfiabilityTest {
 
@@ -129,7 +129,7 @@ class RuntimeProfileSatisfiabilityTest {
     @Test
     fun `hermes targets a compatible interpreter instead of an unsatisfiable constraint`() {
         val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
-        val interpreter = hermes.requirements.single { it.command == "python3.13" }
+        val interpreter = hermes.requirements.single { it.command == "python" }
 
         assertEquals(null, interpreter.maxVersionExclusive)
         // Readiness also depends on the agent itself, not only on an interpreter existing.

@@ -73,10 +73,10 @@ replace a working base runtime.
 
 Verb owns the profile catalog and preflight reports in `RuntimeProfiles.kt`; apt/dpkg remains the
 low-level package installer inside the guest. This split matters because apt can resolve Debian
-package dependencies, but it cannot validate application metadata such as Python's
-`requires-python` constraint. Hermes is the first example: apt can provide Python 3.14 while the
-Hermes package requires a Python version below 3.14, so the profile must reject that combination
-before installation or provide a compatible Python runtime.
+package dependencies, while application environments (like Python agent venvs) isolate dependencies
+and configure necessary toolchains (such as Rust and C toolchain flags for native ARM64 wheels). Hermes
+serves as the primary Python agent model: installed in an isolated venv with native cryptography and
+a Verb-owned dynamic launcher that resolves its declared entry point without touching package paths.
 
 ## Robustness requirements
 

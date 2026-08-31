@@ -1,3 +1,25 @@
+# Verb 0.1.0-beta.6 — More agents, same truth
+
+## What's new in beta.6
+
+- **Hermes Agent on Android.** Hermes Agent `0.15.2` installs in an isolated Python environment
+  with the native ARM64 toolchain, then launches directly in Verb's terminal. The exact package
+  version is pinned to the physical-device-proven release so new installs are repeatable.
+- **Python includes pip.** The Python runtime profile now installs and verifies `pip`, making its
+  scripting environment useful without a separate terminal repair step.
+- **Antigravity admitted.** The `agy` CLI is available from the Agents surface and launches in the
+  Agent Runtime after its own sign-in flow.
+- **Safer agent installation.** Python-agent installs no longer write launchers into `$PREFIX/bin`.
+  Verb's own wrappers stay in its private, self-healing `libexec` directory, leaving package-manager
+  and user commands untouched.
+
+## Beta limits
+
+Hermes and Antigravity are verified as install-and-launch integrations. They do not yet have the
+durable session and recovery semantics implemented for Claude Code, Codex CLI and OpenCode.
+
+---
+
 # Verb 0.1.0-beta.5 — Truth & Reliability
 
 ## What's new in beta.5

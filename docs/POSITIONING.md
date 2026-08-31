@@ -89,7 +89,7 @@ No laptop required. Just sign in with the subscription you already have.
 4/ Zero-surveillance privacy:
 Verb never stores command text, terminal output, or private code in durable memory. It operates on structured facts, not surveillance.
 
-5/ Download the v0.1.0-beta.5 direct APK on GitHub today:
+5/ Download the v0.1.0-beta.6 direct APK on GitHub today:
 [GitHub Link]
 ```
 
@@ -154,7 +154,7 @@ https://github.com/ShaileshRawat1403/verb
 
 ## 5. Promotion Checklist Before Sharing
 
-- [x] Verify direct APK download link points to the latest verified release tag (`v0.1.0-beta.5`).
+- [x] Verify direct APK download link points to the latest verified release tag (`v0.1.0-beta.6`).
 - [x] Verify SHA-256 checksum is clearly visible for security verification.
 - [x] Link to the `docs/learn/` guide for technical users wanting architectural proof.
 - [x] Highlight that Verb uses the user's existing subscriptions (no hidden costs).

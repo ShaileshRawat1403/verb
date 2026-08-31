@@ -57,14 +57,18 @@ class AgentsScreenTest {
         show(
             listOf(
                 report(RuntimeProfileId.GEMINI_CLI),
-                report(RuntimeProfileId.HERMES),
                 report(RuntimeProfileId.DEEPSEEK_HARNESS)
             )
         )
 
         composeTestRule.onNodeWithTag("agent_gemini_cli").assertDoesNotExist()
-        composeTestRule.onNodeWithTag("agent_hermes").assertDoesNotExist()
         composeTestRule.onNodeWithTag("agent_deepseek_harness").assertDoesNotExist()
+    }
+
+    @Test
+    fun `Hermes Agent appears as verified agent catalog card`() {
+        show(listOf(report(RuntimeProfileId.HERMES)))
+        composeTestRule.onNodeWithTag("agent_hermes").assertIsDisplayed()
     }
 
     /** Toolchains are setup, agents are the product; this surface shows only the latter. */
