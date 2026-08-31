@@ -12,7 +12,7 @@ Vivo I2202 or explicitly marked as unverified.
 
 | Agent | State |
 | --- | --- |
-| Codex CLI | Blocked. Authenticated, but neither installed copy executes — see 4b. |
+| Codex CLI | Runs. Authenticated; session recovery is physically verified. |
 | Claude Code | Runs (`2.1.235`). Authenticated. Launch hardened; see 4. |
 | OpenCode | Launches (`1.18.18`). No authenticated session yet. |
 | DeepSeek Harness (`dsh`) | Launches (`0.1.0-rc.7`). No authenticated session yet. |
@@ -62,8 +62,9 @@ Termux `clang` and `cargo` with:
 - `CC=clang`, `CXX=clang++`, `AR=llvm-ar`, `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=clang`
 - `RUSTFLAGS="-C link-arg=-landroid-support"`
 
-Console scripts are automatically wrapped into `$PREFIX/bin` at install time. Hermes v0.15.2 executes
-natively and launches directly in Verb's terminal.
+Verb's existing launch wrapper resolves Hermes's declared venv executable from its private
+`$PREFIX/libexec/verb/bin` directory. Hermes v0.15.2 executes natively and launches directly in
+Verb's terminal; the installer does not write into `$PREFIX/bin`.
 
 ### 4. Agent wrappers are overwritten and shadowed — FIXED, verified on device
 

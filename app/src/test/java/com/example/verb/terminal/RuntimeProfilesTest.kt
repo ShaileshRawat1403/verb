@@ -86,6 +86,11 @@ class RuntimeProfilesTest {
             listOf(RuntimeProfileId.NATIVE, RuntimeProfileId.HERMES),
             RuntimeProfiles.installPlan(RuntimeProfileId.HERMES) { false }.map { it.id }
         )
+        assertTrue(hermes.installCommand.contains("hermes-agent==0.15.2"))
+        // AgentWrapperBootstrap owns launchers in Verb's private libexec directory. A profile
+        // installer must never overwrite package-manager or user commands in $PREFIX/bin.
+        assertFalse(hermes.installCommand.contains("\$PREFIX/bin/"))
+        assertFalse(hermes.installCommand.contains("chmod +x"))
     }
 
     /** The repository index must be refreshed after the key-bearing package lands, or nothing new resolves. */

@@ -316,10 +316,10 @@ object RuntimeProfiles {
      * while compiling native Rust/C extensions directly on ARM64 Android with appropriate temporary
      * directory and compiler flags.
      *
-     * Console scripts are discovered rather than declared. After the install, every new executable
-     * in the venv's `bin/` that is not part of the venv's own scaffolding is wrapped onto PATH in
-     * `$PREFIX/bin`, so the catalog does not have to hardcode entry-point names and they cannot
-     * drift when the package changes them.
+     * Launching remains [AgentWrapperBootstrap]'s responsibility. It owns a stable directory ahead
+     * of package-manager paths and resolves this venv's declared console script at execution time.
+     * The install must never write to `$PREFIX/bin`: that directory belongs to the package manager
+     * and can contain unrelated user commands.
      */
     private fun pythonAgentInstall(
         interpreter: String,
@@ -336,12 +336,7 @@ object RuntimeProfiles {
             "CC=clang CXX=clang++ CC_aarch64_linux_android=clang CXX_aarch64_linux_android=clang++ " +
             "AR=llvm-ar CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=clang " +
             "RUSTFLAGS=\"-C link-arg=-landroid-support\" " +
-            "$venv/bin/pip install --upgrade$flags $pipSpec && " +
-            // Skip the venv's own tooling; wrap whatever the package actually installed.
-            "for f in $venv/bin/*; do n=\$(basename \"\$f\"); " +
-            "case \"\$n\" in python*|pip*|activate*|Activate*|wheel|easy_install*) continue;; esac; " +
-            "printf '%s\\n' '#!/bin/sh' \"exec $venv/bin/\$n \\\"\\\$@\\\"\" > \$PREFIX/bin/\$n; " +
-            "chmod +x \$PREFIX/bin/\$n; done"
+            "$venv/bin/pip install --upgrade$flags $pipSpec"
     }
 
     val all: List<RuntimeProfile> = listOf(
@@ -399,12 +394,15 @@ object RuntimeProfiles {
                     pythonAgentInstall(
                         interpreter = "python",
                         venvName = "hermes",
-                        pipSpec = "hermes-agent"
+                        // Hermes 0.15.2 is the exact release physically proven on the validation
+                        // device. Pinning keeps a fresh Verb install repeatable instead of silently
+                        // accepting a future PyPI release with a different native build graph.
+                        pipSpec = "hermes-agent==0.15.2"
                     ),
-            postInstallHint = "Hermes Agent runs in its own venv (\$HOME/.venvs/hermes) with native ARM64 cryptography.",
+            postInstallHint = "Hermes Agent 0.15.2 runs in its own venv (\$HOME/.venvs/hermes) with native ARM64 cryptography.",
             launchCommand = "hermes",
-            // The venv's own console script is the authoritative one; the $PREFIX/bin copy is a
-            // shell wrapper the install generates, and is only a fallback.
+            // The venv's own console script is authoritative. AgentWrapperBootstrap resolves it
+            // from Verb's private libexec directory, without writing to $PREFIX/bin.
             binaryCandidates = listOf(
                 AgentBinaryCandidate("\$HOME/.venvs/hermes/bin/hermes", AgentBinaryAbi.NATIVE)
             )

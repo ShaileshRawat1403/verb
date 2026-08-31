@@ -19,7 +19,7 @@ import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 
 /**
- * The three agent integrations Verb has actually implemented and verified.
+ * The admitted agent integrations Verb has actually implemented and verified.
  *
  * Admission is evidence-based, not package-discovery based: a profile the runtime layer knows how to
  * install is not the same claim as an agent Verb supports (`docs/ARCHITECTURE.md`, "Agent

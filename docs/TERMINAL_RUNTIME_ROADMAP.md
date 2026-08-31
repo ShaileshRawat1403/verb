@@ -76,7 +76,7 @@ low-level package installer inside the guest. This split matters because apt can
 package dependencies, while application environments (like Python agent venvs) isolate dependencies
 and configure necessary toolchains (such as Rust and C toolchain flags for native ARM64 wheels). Hermes
 serves as the primary Python agent model: installed in an isolated venv with native cryptography and
-wrapped entry points onto PATH.
+a Verb-owned dynamic launcher that resolves its declared entry point without touching package paths.
 
 ## Robustness requirements
 
