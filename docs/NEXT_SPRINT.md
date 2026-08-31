@@ -18,7 +18,7 @@ Vivo I2202 or explicitly marked as unverified.
 | DeepSeek Harness (`dsh`) | Launches (`0.1.0-rc.7`). No authenticated session yet. |
 | Bun runtime | Runs (`1.3.14`). |
 | DAX | Installs and starts; blocked, see below. |
-| Hermes | Blocked, see below. |
+| Hermes | Runs (`0.15.2`). FIXED & verified on device (2026-08-31) — see 3. |
 
 The rule that decides all of it: **a binary runs on-device when its ELF interpreter exists.** Static
 musl and Bionic builds run as-is; dynamically linked musl builds run once the bundled loader and C++
@@ -50,22 +50,20 @@ bun src/index.ts --help
 DAX workspace rather than a platform limit. DAX's own `bin/dax` honours `DAX_BIN_PATH`, which is
 probably the cleanest way for Verb to launch it once this resolves.
 
-### 3. Hermes cannot build `cryptography`
+### 3. Hermes and native Rust/C Python extensions — FIXED, verified on device (2026-08-31)
 
-`hermes-agent` depends on `cryptography` (transitively, through `PyJWT[crypto]`), which has no
-Android wheel and therefore builds from source. The Rust build fails:
+`hermes-agent` runs in its own virtual environment (`$HOME/.venvs/hermes`) with `--system-site-packages`
+to link prebuilt Termux binary packages (`python-cryptography`, `python-psutil`), and compiles
+native ARM64 extensions (`jiter`, `pydantic-core`, `cffi`, `ruamel.yaml.clib`) directly on-device using
+Termux `clang` and `cargo` with:
+- `TMPDIR=$PREFIX/tmp` (resolving Android's missing `/tmp` directory)
+- `SSL_CERT_FILE=$PREFIX/etc/tls/cert.pem` & `CARGO_HTTP_CAINFO=$PREFIX/etc/tls/cert.pem` (TLS trust)
+- `CARGO_BUILD_TARGET=aarch64-linux-android`, `ANDROID_API_LEVEL=24`
+- `CC=clang`, `CXX=clang++`, `AR=llvm-ar`, `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=clang`
+- `RUSTFLAGS="-C link-arg=-landroid-support"`
 
-```
-could not execute process .../build-script-build (never executed)
-No such file or directory (os error 2)
-```
-
-Cargo compiles a build script and then cannot execute it. The toolchain is present (`cargo 1.97.1`,
-`clang 21.1.8`), and moving the build directory out of the `/tmp` bind changed nothing.
-
-This is worth fixing beyond Hermes: it blocks **every** Rust-backed Python package. The cheapest
-alternative for Hermes specifically is dropping the `[crypto]` extra, since everything else it needs
-is pure Python.
+Console scripts are automatically wrapped into `$PREFIX/bin` at install time. Hermes v0.15.2 executes
+natively and launches directly in Verb's terminal.
 
 ### 4. Agent wrappers are overwritten and shadowed — FIXED, verified on device
 

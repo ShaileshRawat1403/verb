@@ -219,9 +219,7 @@ data class RuntimeProfileReport(
      * A version constraint is violated by the version that is *already installed*, and the only way
      * out would be a downgrade -- which Verb does not perform, and which would break every other
      * profile depending on the newer version. Distinguishing this from an ordinary "not installed
-     * yet" state is the difference between a button that will work and a button that never can:
-     * Hermes requires Python below 3.14 while the package repository ships only 3.14, so offering
-     * an install action for it is an invitation to fail.
+     * yet" state is the difference between a button that will work and a button that never can.
      *
      * Deliberately derived rather than stored, so it cannot drift from the report it describes.
      */
@@ -311,20 +309,17 @@ object RuntimeProfiles {
     }
 
     /**
-     * Install command for a Python agent that pins an interpreter older than the default.
+     * Install command for a Python agent running in an isolated virtual environment.
      *
-     * The system `python` is whatever the repository ships -- currently 3.14 -- and Verb will not
-     * downgrade it, because every other Python profile depends on it. An agent declaring
-     * `requires-python < 3.14` therefore cannot be installed globally at all, which is why Hermes
-     * spent so long reported as permanently unavailable.
-     *
-     * A virtual environment on the pinned interpreter resolves that without touching anything else:
-     * the agent gets the version it asks for, `python` stays where it is, and the two never meet.
+     * The agent gets its own virtualenv under `$HOME/.venvs/$venvName` with `--system-site-packages`
+     * to access prebuilt system binary modules (such as `python-cryptography` and `python-psutil`),
+     * while compiling native Rust/C extensions directly on ARM64 Android with appropriate temporary
+     * directory and compiler flags.
      *
      * Console scripts are discovered rather than declared. After the install, every new executable
-     * in the venv's `bin/` that is not part of the venv's own scaffolding is wrapped onto PATH, so
-     * the catalog does not have to know or maintain a package's entry-point names -- `hermes-agent`
-     * ships three -- and they cannot drift when the package changes them.
+     * in the venv's `bin/` that is not part of the venv's own scaffolding is wrapped onto PATH in
+     * `$PREFIX/bin`, so the catalog does not have to hardcode entry-point names and they cannot
+     * drift when the package changes them.
      */
     private fun pythonAgentInstall(
         interpreter: String,
