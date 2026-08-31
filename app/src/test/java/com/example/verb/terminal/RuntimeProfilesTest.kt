@@ -77,10 +77,10 @@ class RuntimeProfilesTest {
     fun `Hermes pulls in the extra package repository that carries its interpreter`() {
         val hermes = RuntimeProfiles.forId(RuntimeProfileId.HERMES)
 
-        assertEquals(listOf(RuntimeProfileId.TUR), hermes.prerequisiteProfiles)
-        assertEquals(listOf("python3.13", "python-cryptography"), hermes.packages)
+        assertEquals(listOf(RuntimeProfileId.TUR, RuntimeProfileId.NATIVE), hermes.prerequisiteProfiles)
+        assertEquals(listOf("python3.13", "openssl", "libffi"), hermes.packages)
         assertEquals(
-            listOf(RuntimeProfileId.TUR, RuntimeProfileId.HERMES),
+            listOf(RuntimeProfileId.TUR, RuntimeProfileId.NATIVE, RuntimeProfileId.HERMES),
             RuntimeProfiles.installPlan(RuntimeProfileId.HERMES) { false }.map { it.id }
         )
     }

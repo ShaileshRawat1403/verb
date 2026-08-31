@@ -329,11 +329,13 @@ object RuntimeProfiles {
     private fun pythonAgentInstall(
         interpreter: String,
         venvName: String,
-        pipSpec: String
+        pipSpec: String,
+        extraPipFlags: String = ""
     ): String {
         val venv = "\$HOME/.venvs/$venvName"
+        val flags = if (extraPipFlags.isNotBlank()) " $extraPipFlags" else ""
         return "$interpreter -m venv --system-site-packages $venv && " +
-            "$venv/bin/pip install --upgrade --quiet $pipSpec && " +
+            "CARGO_BUILD_TARGET=aarch64-linux-android RUSTFLAGS=\"-C link-arg=-landroid-support\" $venv/bin/pip install --upgrade$flags $pipSpec && " +
             // Skip the venv's own tooling; wrap whatever the package actually installed.
             "for f in $venv/bin/*; do n=\$(basename \"\$f\"); " +
             "case \"\$n\" in python*|pip*|activate*|Activate*|wheel|easy_install*) continue;; esac; " +
@@ -388,23 +390,24 @@ object RuntimeProfiles {
             // Hermes needs an interpreter below 3.14, and the main repository ships only 3.14. The
             // fix is a compatible package rather than a permanent refusal: the Termux User
             // Repository carries versioned interpreters, so Hermes targets python3.13 explicitly
-            // along with prebuilt cryptography binaries to avoid source rust build failures.
-            listOf("python3.13", "python-cryptography"),
+            // along with native build toolchains to compile Rust extensions on Android.
+            listOf("python3.13", "openssl", "libffi"),
             // Ready means the agent runs, not merely that a compatible interpreter exists. The
             // probe executes the console script the package installs.
             listOf(
                 RuntimeRequirement("python3.13", "python3.13"),
                 RuntimeRequirement("hermes", "", versionProbeArgs = listOf("--help"))
             ),
-            prerequisiteProfiles = listOf(RuntimeProfileId.TUR),
+            prerequisiteProfiles = listOf(RuntimeProfileId.TUR, RuntimeProfileId.NATIVE),
             installCommandOverride =
-                "apt-get update && apt-get install -y --no-install-recommends python3.13 python-cryptography && " +
+                "apt-get update && apt-get install -y --no-install-recommends python3.13 openssl libffi && " +
                     pythonAgentInstall(
                         interpreter = "python3.13",
                         venvName = "hermes",
-                        pipSpec = "hermes-agent"
+                        pipSpec = "hermes-agent",
+                        extraPipFlags = "--no-build-isolation"
                     ),
-            postInstallHint = "Hermes runs on python3.13 in its own venv with prebuilt cryptography; `python` stays at 3.14.",
+            postInstallHint = "Hermes runs on python3.13 in its own venv with native toolchains; `python` stays at 3.14.",
             launchCommand = "hermes",
             // The venv's own console script is the authoritative one; the $PREFIX/bin copy is a
             // shell wrapper the install generates, and is only a fallback.
