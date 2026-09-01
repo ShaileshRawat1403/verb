@@ -117,4 +117,27 @@ class TerminalScreenSessionStatusTest {
         assertNull(adapter.currentWorkingDirectory.value)
         assert(!adapter.shellIntegrationActive.value)
     }
+
+    @Test
+    fun `slow agent launch remains visibly explained while its terminal is blank`() {
+        composeTestRule.setContent {
+            TerminalScreen(
+                terminalOutput = "",
+                terminalRuntime = StatusTestRuntimeAdapter(),
+                sessionState = TerminalSessionState.RUNNING,
+                terminalLaunchNotice =
+                    "Starting Antigravity in compatibility mode — its first screen can take about 30 seconds.",
+                onSendCommand = {},
+                onSendKey = {},
+                onSendText = {},
+                onClearTerminal = {},
+                onInspectText = {},
+                onSubmitIntent = {}
+            )
+        }
+
+        composeTestRule.onNodeWithText(
+            "Starting Antigravity in compatibility mode — its first screen can take about 30 seconds."
+        ).assertIsDisplayed()
+    }
 }

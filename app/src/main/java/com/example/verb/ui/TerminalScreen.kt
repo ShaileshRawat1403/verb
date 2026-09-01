@@ -146,6 +146,8 @@ fun TerminalScreen(
      * terminal owns input exactly when nothing of Verb's is deliberately open.
      */
     verbSurfaceOpen: Boolean = false,
+    /** Ephemeral progress for an agent that has taken ownership of the PTY but not drawn yet. */
+    terminalLaunchNotice: String? = null,
     /**
      * An optional compact row under the header, for the workspace's single first action when
      * nothing is hosted. A slot rather than a parameter list, so the terminal does not have to know
@@ -691,11 +693,41 @@ fun TerminalScreen(
         // The exit animates because it fires on the very frame the keyboard *starts* moving --
         // a snap here is what made the whole dock feel like it was being yanked upward.
         AnimatedVisibility(
-            visible = bootstrapState == TermuxBootstrapInstaller.State.Ready && !isKeyboardVisible,
+            visible = bootstrapState == TermuxBootstrapInstaller.State.Ready &&
+                !isKeyboardVisible && terminalLaunchNotice == null,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
             verbFirstAction?.invoke()
+        }
+
+        AnimatedVisibility(
+            visible = terminalLaunchNotice != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("terminal_launch_notice")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Text(
+                        text = terminalLaunchNotice.orEmpty(),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
 
         // Stopped-session guidance: typing a command now auto-restarts the session, so tell the
