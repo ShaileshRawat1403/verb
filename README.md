@@ -21,7 +21,7 @@ Claude / Codex / OpenCode / future agents
 
 Verb is terminal-first, but designed for human hands. No laptop required, no fragile command-line configuration, and no fear of losing your work when the phone sleeps. It is not an IDE, not a coding agent, and not a model provider. See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for why that boundary is the point.
 
-> **Release status:** Verb is preparing for its first public developer preview. Desktop and Android
+> **Release status:** Verb is available as a public Android developer preview. Desktop and Android
 > automated gates pass. The terminal-first Android workspace, Working World export *and* restore,
 > the Android/desktop continuity round-trip, Claude/Codex recovery, and OpenCode launch have all
 > been exercised on the primary physical device. **OpenCode recovery remains unverified** and is not
