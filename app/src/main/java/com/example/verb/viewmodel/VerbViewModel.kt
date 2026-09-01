@@ -50,6 +50,8 @@ import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalSessionLogger
 import com.example.verb.terminal.TermuxBootstrapInstaller
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -58,6 +60,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -268,6 +272,15 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private val _agentRuntimeMessage = MutableStateFlow<String?>(null)
     val agentRuntimeMessage: StateFlow<String?> = _agentRuntimeMessage.asStateFlow()
 
+    /**
+     * Ephemeral launch truth for slow interactive agents. Antigravity's emulated cold start takes
+     * roughly 30 seconds on the validation phone and clears the terminal before drawing its first
+     * screen, which otherwise looks exactly like a broken, flickering terminal.
+     */
+    private val _terminalLaunchNotice = MutableStateFlow<String?>(null)
+    val terminalLaunchNotice: StateFlow<String?> = _terminalLaunchNotice.asStateFlow()
+    private var antigravityLaunchNoticeJob: Job? = null
+
     // The terminal is the workspace and the root. There is no permanent navigation: this holds only
     // what Verb has been asked to put in front of it, and [VerbSurface.None] is the resting state.
     private val _surface = MutableStateFlow<VerbSurface>(VerbSurface.None)
@@ -300,6 +313,7 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         const val PROFILE_INSTALL_TIMEOUT_MS = 15 * 60 * 1000L
+        const val ANTIGRAVITY_FIRST_SCREEN_TIMEOUT_MS = 45_000L
 
         /**
          * [RuntimeProfiles.all]'s own launch commands, not separately hand-typed literals: the two
@@ -802,6 +816,27 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         openTerminal()
         val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
         val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
+
+        if (profile?.id == RuntimeProfileId.ANTIGRAVITY) {
+            antigravityLaunchNoticeJob?.cancel()
+            _terminalLaunchNotice.value =
+                "Starting Antigravity in compatibility mode — its first screen can take about 30 seconds."
+            antigravityLaunchNoticeJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                // Subscribe before the command is written, then wait for a *new* rendered snapshot.
+                // Checking the current transcript could match an older Antigravity run and hide the
+                // notice while this cold start is still blank.
+                withTimeoutOrNull(ANTIGRAVITY_FIRST_SCREEN_TIMEOUT_MS) {
+                    concreteRuntime.terminalOutput.drop(1).first { output ->
+                        output.contains("Antigravity CLI")
+                    }
+                }
+                _terminalLaunchNotice.value = null
+            }
+        } else {
+            antigravityLaunchNoticeJob?.cancel()
+            antigravityLaunchNoticeJob = null
+            _terminalLaunchNotice.value = null
+        }
 
         val tracked = TRACKED_AGENT_LAUNCH_COMMANDS.entries.firstOrNull { it.value == command }?.key
         val coordinator = tracked?.let(sessionCoordinators::get)

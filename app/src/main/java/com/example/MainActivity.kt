@@ -136,6 +136,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val terminalSessionIds by viewModel.terminalSessionIds.collectAsStateWithLifecycle()
     val activeTerminalSessionId by viewModel.activeTerminalSessionId.collectAsStateWithLifecycle()
     val terminalBootstrapState by viewModel.terminalBootstrapState.collectAsStateWithLifecycle()
+    val terminalLaunchNotice by viewModel.terminalLaunchNotice.collectAsStateWithLifecycle()
     val runtimeProfileReports by viewModel.runtimeProfileReports.collectAsStateWithLifecycle()
     val installingRuntimeProfile by viewModel.runtimeInstallingProfile.collectAsStateWithLifecycle()
     val runtimeInstallMessage by viewModel.runtimeInstallMessage.collectAsStateWithLifecycle()
@@ -248,6 +249,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 onSubmitIntent = viewModel::submitIntent,
                 onOpenVerb = viewModel::openVerbSheet,
                 verbSurfaceOpen = surface != VerbSurface.None,
+                terminalLaunchNotice = terminalLaunchNotice,
                 onOpenAssistant = viewModel::openAssistant,
                 terminalSessionIds = terminalSessionIds,
                 activeTerminalSessionId = activeTerminalSessionId,

@@ -1,3 +1,24 @@
+# Verb 0.1.0-beta.7 — Reliable authentication and startup truth
+
+## What's fixed in beta.7
+
+- **Complete authentication-code paste.** Verb now delivers short, single-line clipboard values at
+  normal typing cadence, fixing interactive login fields that accepted only part of an eight-character
+  code. Larger, multiline and Unicode pastes remain atomic and unchanged.
+- **Truthful Antigravity cold starts.** Antigravity can take about 30 seconds to draw its first screen
+  under Android compatibility emulation. Verb now shows bounded launch progress during that blank
+  period and clears it as soon as the real TUI is observed.
+- **Physical Android acceptance.** On the Vivo I2202, `12345678` reached a shell `read` intact through
+  Verb's PASTE key; Antigravity 1.1.22 showed progress during startup, rendered successfully, and
+  remained stable after launch.
+
+## Beta limits
+
+Hermes and Antigravity still do not participate in the durable recovery semantics implemented for
+Claude Code, Codex CLI and OpenCode.
+
+---
+
 # Verb 0.1.0-beta.6 — More agents, same truth
 
 ## What's new in beta.6

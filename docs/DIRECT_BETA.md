@@ -1,8 +1,8 @@
 # Verb Direct Beta
 
-Verb `v0.1.0-beta.6` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
+Verb `v0.1.0-beta.7` is a direct-distribution Android build for arm64 devices. It is not a Google Play build.
 
-> **Upgrading:** Installing beta.6 over earlier beta releases is a normal in-place upgrade — same signing
+> **Upgrading:** Installing beta.7 over earlier beta releases is a normal in-place upgrade — same signing
 > key, same application id (`com.aistudio.verb.app`), `adb install -r` — and preserves your private
 > runtime and Working World.
 
@@ -42,6 +42,8 @@ Verb supports user-provided OpenAI, Anthropic, Gemini, and OpenAI-compatible API
   recovery path and Android↔desktop continuity round-trip are not yet accepted end to end.
 - Hermes Agent `0.15.2` and Antigravity (`agy`) have physical install-and-launch evidence. They do
   not yet participate in Verb's durable session/recovery model.
+- Short authentication codes pasted with Verb's PASTE key are paced for interactive fields. Larger,
+  multiline and Unicode clipboard payloads are still delivered atomically.
 
 ## Updates And Support
 

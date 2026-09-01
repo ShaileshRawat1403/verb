@@ -87,6 +87,7 @@ class TermuxTerminalRuntimeAdapter(
         ).toInt()
 
     private val textSizePersistHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val pasteHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val textSizePersistRunnable = Runnable {
         val size = appliedTextSizePx ?: return@Runnable
         terminalView?.context?.applicationContext
@@ -410,6 +411,9 @@ class TermuxTerminalRuntimeAdapter(
     }
 
     override fun destroy() {
+        // A paced authentication-code paste belongs to one concrete PTY. Never let its remaining
+        // characters leak into a replacement session after a restart or environment switch.
+        pasteHandler.removeCallbacksAndMessages(PASTE_CALLBACK_TOKEN)
         outputHandler.removeCallbacks(publishSnapshotRunnable)
         pendingSnapshotSession = null
         _sessionState.value = TerminalSessionState.STOPPING
@@ -436,6 +440,7 @@ class TermuxTerminalRuntimeAdapter(
         const val TEXT_SIZE_PREFERENCES = "verb_terminal_display"
         const val TEXT_SIZE_PX_KEY = "text_size_px"
         const val TEXT_SIZE_PERSIST_DELAY_MS = 500L
+        val PASTE_CALLBACK_TOKEN = Any()
     }
 
     // TerminalSessionClient callbacks
@@ -557,7 +562,26 @@ class TermuxTerminalRuntimeAdapter(
             val clipData = clipboard.primaryClip
             if (clipData != null && clipData.itemCount > 0) {
                 val text = clipData.getItemAt(0).coerceToText(ctx).toString()
-                s?.let { writeToSession(it, text) }
+                s?.let { target ->
+                    pasteHandler.removeCallbacksAndMessages(PASTE_CALLBACK_TOKEN)
+                    val chunks = TerminalPastePolicy.chunks(text)
+                    if (chunks.size == 1) {
+                        writeToSession(target, text)
+                    } else {
+                        val startedAt = android.os.SystemClock.uptimeMillis()
+                        chunks.forEachIndexed { index, chunk ->
+                            pasteHandler.postAtTime(
+                                {
+                                    if (this.session === target && target.isRunning) {
+                                        writeToSession(target, chunk)
+                                    }
+                                },
+                                PASTE_CALLBACK_TOKEN,
+                                startedAt + index * TerminalPastePolicy.CHARACTER_DELAY_MS
+                            )
+                        }
+                    }
+                }
             }
         }
     }
