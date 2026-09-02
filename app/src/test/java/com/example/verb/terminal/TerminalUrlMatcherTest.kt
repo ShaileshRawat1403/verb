@@ -85,4 +85,59 @@ class TerminalUrlMatcherTest {
         val extractedUrl = findFirstUrl(reconstructed)
         assertEquals(fullUrl, extractedUrl)
     }
+
+    @Test
+    fun `joinWrappedTerminalLines reconstructs URL when first line has prefix text`() {
+        val prefix = "Visit: "
+        val fullUrl = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lc.apps.googleusercontent.com&code_challenge=abc123xyz&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+openid&state=xyz"
+        val cols = 80
+        val rows = mutableListOf<String>()
+        val combined = prefix + fullUrl
+        var remaining = combined
+        while (remaining.isNotEmpty()) {
+            rows += remaining.take(cols)
+            remaining = remaining.drop(cols)
+        }
+        rows += "Copy and paste the URL or click on the link below:"
+
+        val reconstructed = joinWrappedTerminalLines(rows, cols)
+        val extractedUrl = findFirstUrl(reconstructed)
+        assertEquals(fullUrl, extractedUrl)
+    }
+
+    @Test
+    fun `joinWrappedTerminalLines reconstructs URL when first line has leading spaces`() {
+        val fullUrl = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lc.apps.googleusercontent.com&code_challenge=abc123xyz&code_challenge_method=S256&prompt=consent&redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+openid&state=xyz"
+        val cols = 80
+        val rows = mutableListOf<String>()
+        rows += "Your browser should open automatically. If not:"
+        val firstChunk = "  " + fullUrl.take(cols - 2)
+        rows += firstChunk
+        var remaining = fullUrl.drop(cols - 2)
+        while (remaining.isNotEmpty()) {
+            rows += remaining.take(cols)
+            remaining = remaining.drop(cols)
+        }
+
+        val reconstructed = joinWrappedTerminalLines(rows, cols)
+        val extractedUrl = findFirstUrl(reconstructed)
+        assertEquals(fullUrl, extractedUrl)
+    }
+
+    @Test
+    fun `joinWrappedTerminalLines preserves response_type parameter across column widths`() {
+        val fullUrl = "https://accounts.google.com/o/oauth2/auth?access_type=offline&client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&code_challenge=1XY5jtNT7iPNdA0vohAktEYM8JGHHbgiyjvnHQCQMes&code_challenge_method=S256&prompt=consent&redirect_uri=http%3A%2F%2F127.0.0.1%3A40235%2Foauth2callback&response_type=code&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform+openid&state=UfZKc2TJ18-zDUV3ZMi2Pw"
+        for (cols in listOf(60, 70, 75, 80, 100)) {
+            val rows = mutableListOf<String>()
+            rows += "Your browser should open automatically. If not:"
+            var remaining = fullUrl
+            while (remaining.isNotEmpty()) {
+                rows += remaining.take(cols)
+                remaining = remaining.drop(cols)
+            }
+            val reconstructed = joinWrappedTerminalLines(rows, cols)
+            val extractedUrl = findFirstUrl(reconstructed)
+            assertEquals("Failed for cols=$cols", fullUrl, extractedUrl)
+        }
+    }
 }

@@ -2,6 +2,16 @@ package com.example.verb.terminal
 
 private val URL_REGEX = Regex("""https?://[^\s"()<>\\\]^{|}`]+""")
 
+private val TRAILING_PUNCTUATION = charArrayOf('.', ',', ';', '\'', '"', ')', ']', '>')
+
+internal fun sanitizeUrl(url: String): String {
+    var cleaned = url
+    while (cleaned.isNotEmpty() && cleaned.last() in TRAILING_PUNCTUATION) {
+        cleaned = cleaned.dropLast(1)
+    }
+    return cleaned
+}
+
 /**
  * Finds a URL on a terminal output line near the tapped column.
  *
@@ -33,12 +43,12 @@ internal fun findUrlAt(line: String, tappedColumn: Int): String? {
             best = match
         }
     }
-    return best?.value
+    return best?.value?.let { sanitizeUrl(it) }
 }
 
 /** Returns the URL embedded in a line of terminal output, if any. */
 internal fun findFirstUrl(line: String): String? =
-    URL_REGEX.find(line)?.value
+    URL_REGEX.find(line)?.value?.let { sanitizeUrl(it) }
 
 /**
  * Joins terminal output lines, recognizing lines that wrapped across terminal column bounds.
@@ -59,26 +69,39 @@ internal fun joinWrappedTerminalLines(lines: List<String>, terminalColumns: Int)
             continue
         }
 
-        if (line.contains("http://") || line.contains("https://")) {
-            inUrl = true
+        val lastHttpIndex = maxOf(line.lastIndexOf("http://"), line.lastIndexOf("https://"))
+        if (lastHttpIndex != -1) {
+            val textAfterHttp = line.substring(lastHttpIndex)
+            if (!textAfterHttp.contains(' ')) {
+                inUrl = true
+            }
         }
 
         builder.append(line)
 
-        if (inUrl) {
-            val hasSpaces = line.contains(' ')
+        if (i < lines.size - 1) {
+            val nextLine = lines[i + 1].trimEnd()
+            val nextFirstToken = nextLine.trimStart().substringBefore(' ')
+            val nextIsNewHttp = nextFirstToken.startsWith("http://") || nextFirstToken.startsWith("https://")
+            val nextIsPrompt = nextLine.startsWith("~ $") || nextLine.startsWith("$ ") || nextLine.startsWith("-> ")
+
             val isWrappedWidth = line.length >= (terminalColumns - 6)
-            if (hasSpaces || !isWrappedWidth) {
+
+            if (inUrl && isWrappedWidth && !nextIsNewHttp && !nextIsPrompt && nextFirstToken.isNotEmpty()) {
+                // The URL continues onto the next line without an intervening space.
+                if (nextLine.trimStart().contains(' ')) {
+                    inUrl = false
+                }
+            } else {
                 inUrl = false
-                if (i < lines.size - 1) builder.append(' ')
-            }
-        } else {
-            if (line.length < terminalColumns && i < lines.size - 1) {
-                builder.append(' ')
+                if (line.length < terminalColumns) {
+                    builder.append(' ')
+                }
             }
         }
     }
     return builder.toString()
 }
+
 
 

@@ -720,7 +720,21 @@ class TermuxTerminalRuntimeAdapter(
             val prefixText = joinWrappedTerminalLines(prefixLines, numCols)
             val tappedOffset = (if (prefixText.isEmpty()) 0 else prefixText.length + 1) + column
 
-            findUrlAt(joinedBlock, tappedOffset) ?: findFirstUrl(joinedBlock)
+            val joinedUrl = findUrlAt(joinedBlock, tappedOffset) ?: findFirstUrl(joinedBlock)
+
+            // Also check native buffer join with line-wrap awareness to ensure wrapped parameters
+            // (e.g. response_type in OAuth URLs) are never truncated
+            val nativeBlock = runCatching {
+                screen.getSelectedText(0, startRow, numCols, endRow, true, false)
+            }.getOrNull()
+            val nativeUrl = nativeBlock?.let { findUrlAt(it, tappedOffset) ?: findFirstUrl(it) }
+
+            val candidates = listOfNotNull(joinedUrl, nativeUrl)
+            candidates.maxByOrNull { url ->
+                var score = url.length
+                if (url.contains("response_type=")) score += 1000
+                score
+            }
         }.getOrNull()
     }
     
