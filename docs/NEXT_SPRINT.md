@@ -146,8 +146,9 @@ npm skips it here, and `codex.js` then stops with `Missing optional dependency`.
 "cannot launch" would be giving up on something plainly resolvable, so it is resolved: `codex.js`
 falls back to `<package>/vendor/<triple>/bin/codex` when the optional package is absent — read out
 of `codex.js`, not guessed — and Verb's install unpacks the published platform tarball there.
-`npm pack` resolves the tarball location, and the version comes from the launcher actually
-installed, so the two cannot drift.
+`npm pack --force` resolves the tarball location, and the version comes from the launcher actually
+installed, so the two cannot drift. The force flag is intentional: npm 11 otherwise rejects the
+Linux-only platform artifact on Android before Verb can unpack it for qemu.
 
 **proot refuses static binaries — and that is what `e_type: 2` always meant.** The earlier claim in
 this document, that the message came from Codex's own launcher and not from Verb's runtime, was

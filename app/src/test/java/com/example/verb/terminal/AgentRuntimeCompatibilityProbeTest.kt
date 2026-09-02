@@ -67,8 +67,11 @@ class AgentRuntimeCompatibilityProbeTest {
         val sessionArgv = environment.resolve(rootfs).arguments.toList()
 
         // Everything before the guest command is identical: same rootfs, binds, -w and guest env.
-        assertEquals(sessionArgv.dropLast(2), probeArgv.dropLast(2))
-        assertEquals(listOf("/bin/bash", "--login"), sessionArgv.takeLast(2))
+        assertEquals(sessionArgv.dropLast(1), probeArgv.dropLast(2))
+        assertEquals(listOf("/bin/bash"), sessionArgv.takeLast(1))
+        assert(!sessionArgv.contains("--login")) {
+            "interactive shell must preserve the same PATH the probe verified"
+        }
         assert(probeArgv.contains("LD_LIBRARY_PATH=")) { "guest loader isolation must be preserved" }
         assert(probeArgv.contains("LD_PRELOAD=")) { "guest preload isolation must be preserved" }
         assert(probeArgv.contains("/workspace")) { "workspace bind must be present" }
@@ -125,5 +128,30 @@ class AgentRuntimeCompatibilityProbeTest {
 
         val probeWorkspace = File(AgentRuntimePaths(filesDir).root, "compat-probe")
         assert(probeWorkspace.isDirectory) { "probe must use its own app-private workspace" }
+    }
+
+    @Test
+    fun `shell admission probe can succeed without weakening the agent probe contract`() {
+        val filesDir = filesDirWithProot()
+        // The fake proot exits successfully; QEMU still has to exist for the real environment
+        // resolver to admit the invocation.
+        File(filesDir, "usr/bin/proot").apply {
+            writeText("#!/bin/sh\nexit 0\n")
+            setExecutable(true)
+        }
+        File(filesDir, QemuAgentRuntimeEnvironment.QEMU_RELATIVE_PATH).apply {
+            parentFile?.mkdirs()
+            writeText("qemu stand-in")
+            setExecutable(true)
+        }
+        val runtime = AgentRuntimeInstaller.InstalledRuntime(
+            manifest = manifest(),
+            rootfs = temporaryFolder.newFolder("rootfs-shell-admission")
+        )
+
+        assertEquals(
+            AgentCompatibilityState.COMPATIBLE,
+            AgentRuntimeCompatibilityProbe(filesDir).checkShellForProfileInstallation(runtime)
+        )
     }
 }

@@ -162,7 +162,15 @@ data class RuntimeProfile(
      * on a real device -- a guessed path reporting "signed out" is worse than admitting ignorance.
      */
     val signedInMarkers: List<String> = emptyList(),
-    val environment: ProfileEnvironment = ProfileEnvironment.LOCAL_USERLAND
+    /** Where the command is probed and launched. */
+    val environment: ProfileEnvironment = ProfileEnvironment.LOCAL_USERLAND,
+    /**
+     * Where installation utilities execute. Usually identical to [environment]. A profile may
+     * stage a verified artifact from the local userland into an app-owned Agent Runtime home when
+     * the runtime can execute the final agent but Android seccomp rejects its downloader/archive
+     * utilities under emulation.
+     */
+    val installEnvironment: ProfileEnvironment = environment
 ) {
     /** True when this profile is something to open, not merely something to install. */
     val isAgent: Boolean get() = launchCommand != null
@@ -293,7 +301,9 @@ object RuntimeProfiles {
      * from the launcher actually installed, so the two can never drift apart.
      *
      * `npm pack` is used rather than a hand-built registry URL so npm resolves the tarball location
-     * itself.
+     * itself. npm 11 applies the package's `os: ["linux"]` metadata even to `pack` on Android, so
+     * `--force` is required here: Verb deliberately downloads that Linux ARM64 artifact to run it
+     * through qemu rather than asking npm to execute it as an Android-native package.
      */
     private fun codexInstall(): String {
         val pkg = "\$PREFIX/lib/node_modules/@openai/codex"
@@ -301,7 +311,7 @@ object RuntimeProfiles {
         return "npm install -g @openai/codex && " +
             "codex_version=\$(node -p \"require('$pkg/package.json').version\") && " +
             "rm -rf $work && mkdir -p $work && " +
-            "(cd $work && npm pack --silent \"@openai/codex@${'$'}{codex_version}-linux-arm64\") && " +
+            "(cd $work && npm pack --force --silent \"@openai/codex@${'$'}{codex_version}-linux-arm64\") && " +
             "mkdir -p $pkg/vendor && " +
             "tar -xzf $work/*.tgz -C $pkg/vendor --strip-components=2 package/vendor && " +
             "chmod -R +x $pkg/vendor/$CODEX_TARGET_TRIPLE/bin && " +
@@ -507,13 +517,26 @@ object RuntimeProfiles {
             "Antigravity",
             emptyList(),
             listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"), probeTimeoutMs = 15_000L)),
-            installCommandOverride = "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-            postInstallHint = "In Terminal, run agy and complete its sign-in flow.",
+            // Pin the exact official artifact physically accepted on the Vivo. Google's moving
+            // installer switched from 1.1.22 to 1.1.23 after beta.7; the latter dies with SIGSYS in
+            // this Android/QEMU sandbox. A moving installer therefore made yesterday's verified
+            // build irreproducible. Verify Google's archive before extracting one declared file.
+            installCommandOverride =
+                "(agy_archive=\"\${TMPDIR:-/tmp}/verb-agy-$AGY_VERSION.tar.gz\"; " +
+                    "agy_stage=\"\${TMPDIR:-/tmp}/verb-agy-$AGY_VERSION\"; " +
+                    "trap 'rm -rf \"\$agy_archive\" \"\$agy_stage\"' EXIT; " +
+                    "curl -fsSL '$AGY_URL' -o \"\$agy_archive\" && " +
+                    "printf '%s  %s\\n' '$AGY_SHA512' \"\$agy_archive\" | sha512sum -c - && " +
+                    "rm -rf \"\$agy_stage\" && mkdir -p \"\$agy_stage\" '$AGY_INSTALL_BIN' && " +
+                    "tar -xzf \"\$agy_archive\" -C \"\$agy_stage\" antigravity && " +
+                    "install -m 0755 \"\$agy_stage/antigravity\" '$AGY_INSTALL_BIN/agy')",
+            postInstallHint = "Antigravity $AGY_VERSION is pinned to the Android-verified build. Run agy and complete sign-in.",
             launchCommand = "agy",
             binaryCandidates = listOf(
                 AgentBinaryCandidate("\$HOME/.local/bin/agy", AgentBinaryAbi.DETECT)
             ),
-            environment = ProfileEnvironment.AGENT_RUNTIME
+            environment = ProfileEnvironment.AGENT_RUNTIME,
+            installEnvironment = ProfileEnvironment.LOCAL_USERLAND
         ),
         RuntimeProfile(
             RuntimeProfileId.DEEPSEEK_HARNESS,
@@ -565,6 +588,36 @@ object RuntimeProfiles {
             )
         )
     )
+
+    private const val AGY_VERSION = "1.1.22"
+    private const val AGY_URL =
+        "https://storage.googleapis.com/antigravity-public/antigravity-cli/" +
+            "1.1.22-5711547746615296/linux-arm/cli_linux_arm64.tar.gz"
+    private const val AGY_SHA512 =
+        "b37a718330eb5e270e1ca70135bf964a407ba626fbff7537ac58e094ea31bc623" +
+            "e6d216ef197188fe8b5c46e6f57aee64a3b7c9e23fc855cefee43fe434179d3"
+    /**
+     * Placeholder for the app-owned Agent Runtime home, substituted just before the install
+     * command is typed into the terminal.
+     *
+     * It cannot be a compile-time absolute path. The debug build type carries a `.debug`
+     * application-id suffix and the Play flavour carries `.play`, so a literal
+     * `/data/data/com.aistudio.verb.app/...` names a *different package's* private directory on two
+     * of the three variants: unwritable on a normal device, and on a rooted one, worse than
+     * unwritable. Only the running app knows its own `filesDir`, so only the running app can
+     * resolve this.
+     */
+    const val AGENT_RUNTIME_HOME_TOKEN = "@VERB_AGENT_RUNTIME_HOME@"
+
+    /**
+     * Any placeholder of this shape that survives substitution is a catalog entry naming something
+     * the app did not resolve. Refusing the install is the correct outcome: an unsubstituted token
+     * reaching a shell would create a directory literally named after the placeholder and then
+     * report success.
+     */
+    val UNRESOLVED_PLACEHOLDER = Regex("@VERB_[A-Z_]+@")
+
+    private const val AGY_INSTALL_BIN = "$AGENT_RUNTIME_HOME_TOKEN/.local/bin"
 
     fun forId(id: RuntimeProfileId): RuntimeProfile = all.first { it.id == id }
 

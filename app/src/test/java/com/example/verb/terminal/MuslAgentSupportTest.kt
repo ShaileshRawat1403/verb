@@ -138,7 +138,14 @@ class MuslAgentSupportTest {
         val script = AgentWrapperBootstrap.wrapperScript(RuntimeProfiles.forId(RuntimeProfileId.CODEX))
 
         assertTrue(command.startsWith("npm install -g @openai/codex"))
-        assertTrue("codex must not be forced past npm's libc check", !command.contains("--force"))
+        assertTrue(
+            "codex's launcher install must not be forced past npm's libc check",
+            !command.startsWith("npm install -g --force")
+        )
+        assertTrue(
+            "only the intentional Linux ARM64 artifact download needs npm's platform override",
+            command.contains("npm pack --force --silent")
+        )
         assertTrue("codex's own build must not go through the loader", !script.contains("verb_exec_musl \"\$verb_bin\""))
     }
 }

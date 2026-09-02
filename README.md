@@ -1,10 +1,8 @@
 <img src="assets/brand/verb-wordmark.svg" alt="Verb" width="240">
 
-**Verb makes AI-assisted development easier to understand, control, debug and recover.**
+**Verb is the control layer around coding agents. The agents generate. Verb owns the environment they run in, the record of what actually happened, and the way back when something breaks.**
 
-Whether you are an engineer coordinating autonomous agents across workspaces, or a creator who wants to build real software on your phone using the Claude or ChatGPT subscription you already pay for: Verb gives you a complete, crash-proof development studio in your pocket.
-
-You bring the agents you already use (Claude Code, Codex, OpenCode) and they keep doing the AI work. Verb owns the layer around them: what environment you are in, what actually ran, what changed, why it failed, and what is safe to do next.
+You bring the agents you already use, and the subscription you already pay for. Claude Code, Codex and OpenCode keep doing the AI work. Verb answers the questions they cannot answer about themselves: which environment am I in, what actually ran, what changed on disk, why did it fail, and what is safe to do next.
 
 ```text
 Claude / Codex / OpenCode / future agents
@@ -19,7 +17,9 @@ Claude / Codex / OpenCode / future agents
      helps the user control it
 ```
 
-Verb is terminal-first, but designed for human hands. No laptop required, no fragile command-line configuration, and no fear of losing your work when the phone sleeps. It is not an IDE, not a coding agent, and not a model provider. See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for why that boundary is the point.
+Verb runs on Android first, and that is a claim about difficulty rather than a claim about phones. The phone is the most hostile host an agent can be given: the OS kills long-running processes without asking, an uninstall destroys everything the app owns, and there is no second window to check state in. A control layer that keeps sessions, credentials and evidence intact there is credible anywhere, which is why the desktop host implements the same contract rather than a looser one. That it also lets people build software without a laptop is a real consequence, and not the reason the product exists.
+
+Verb is terminal-first, but designed for human hands. It is not an IDE, not a coding agent, and not a model provider. See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for why that boundary is the point, and [`docs/POSITIONING.md`](docs/POSITIONING.md) for what Verb is deliberately not.
 
 > **Release status:** Verb is available as a public Android developer preview. Desktop and Android
 > automated gates pass. The terminal-first Android workspace, Working World export *and* restore,

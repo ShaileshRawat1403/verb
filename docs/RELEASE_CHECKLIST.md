@@ -21,8 +21,9 @@ it true. Automated, emulator and physical-device results remain separate.
   (PR #4, run 32732143051).
 - [x] CI's emulator-only `connectedFullCliDebugAndroidTest` passes
   (PR #4, run 32732143051).
-  Never run this task on a phone containing a real Working World: instrumentation deployment may
-  uninstall the target package during cleanup and erase app-private data.
+  Debug instrumentation targets the disposable `com.aistudio.verb.app.debug` package, never the
+  canonical release package containing the user's Working World. The task fails before deployment
+  if ADB reports any physical device.
 - [x] Working World and continuity planted-marker/privacy tests pass.
 
 ## Manual desktop acceptance
@@ -62,6 +63,27 @@ it true. Automated, emulator and physical-device results remain separate.
   tab switching causes zero state mutations to $T_1$ or $T_2$, background command execution in $T_3$ does
   not mutate agent state, interrupting Codex in $T_2$ via `^C` transitions only $T_2$ while leaving Claude in $T_1$
   running, and Activity re-creation cleanly reattaches sessions with intact state.
+
+### beta.8, unaccepted
+
+Every box below is open. `docs/BETA8_HANDOFF.md` carries the procedure for each, including which
+observation would falsify the claim rather than confirm it.
+
+- [ ] The changes compile and the unit suite passes. Nothing in this cycle has been compiled.
+- [ ] `assembleFullCliDevice` installs over the existing app with `adb install -r`, and the working
+  world -- projects, runtime, and the Claude, Codex and Antigravity sign-ins -- is intact afterwards.
+- [ ] System → Device Information reports `0.1.0-beta.8 (8)` and `com.aistudio.verb.app`.
+- [ ] The workspace line names the project and the terminal with two terminals open, where the
+  header chip degrades to a glyph. Switching project and terminal from the workspace sheet both work.
+- [ ] Antigravity installs from the Agents surface onto a build whose application id carries a
+  suffix. This is the defect the install-path change exists for and it can only be shown on a device.
+- [ ] The Antigravity flicker is *measured*, not asserted: PTY geometry-change counts from the
+  Diagnostics sheet, before and after, with the keyboard opening and closing. If the count is zero
+  while it still flickers, the fix in this cycle is not the fix and the release notes must say so.
+- [ ] Antigravity's credential marker is observed on a device and added to the catalog, or the
+  release ships with its sign-in state honestly reported as unknown.
+- [ ] `verb world list` includes the Agent Runtime home, and a schema-v2 export/preview/apply
+  round-trip restores Antigravity's configuration on a disposable emulator.
 
 ## Packaging and publication
 

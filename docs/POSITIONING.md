@@ -4,59 +4,98 @@ This document defines how Verb is positioned, explained, and communicated across
 
 ---
 
-## 1. The Core Hook and Elevator Pitch
+## 1. The claim
 
-### The 10-Second Pitch
-> **"Verb turns the Android phone in your pocket into an autonomous AI development studio. Run Claude Code, OpenAI Codex, and OpenCode with real Git and a full Linux userland. No laptop, no command-line expertise, and no complex setup required. Just bring the subscription you already use."**
+> **Verb is the control layer around coding agents. The agents generate. Verb owns the environment
+> they run in, the record of what actually happened, and the way back when something breaks.**
 
-### The 30-Second Pitch
-> **"Frontier AI coding agents like Anthropic's Claude Code and OpenAI's Codex CLI are incredibly capable, but they are trapped on desktop terminals and require complex developer setups. Verb brings these exact tools to your mobile device. With a full Linux userland, automatic crash recovery, multi-terminal isolation, and plain-English diagnostics, Verb lets anyone -- from seasoned engineers to first-time creators -- build real software from anywhere."**
+You bring Claude Code, Codex or OpenCode, and the subscription you already pay for. They keep doing
+the AI work. Verb answers the questions they cannot answer about themselves: which environment am I
+in, what actually ran, what changed on disk, why did it fail, and what is safe to do next.
 
----
+### Why that is the claim and not "AI coding on your phone"
 
-## 2. The Three Target Audiences and Value Propositions
+Models are converging. A capability that is a differentiator this quarter is a checkbox two
+quarters later, and every agent vendor ships the same features to every other vendor's users. What
+does not converge is the layer underneath: environment identity, session survival, evidence of
+execution, recovery, and the boundary around credentials. That layer is unglamorous, it is where
+real adoption actually fails, and almost nobody is building it as a product.
 
-```text
-+-----------------------------------------------------------------------------+
-|                                    VERB                                     |
-+------------------------------------+----------------------------------------+
-| 1. The Mobile-First Creator        | 2. The Professional Engineer           |
-|    * Has a Claude/ChatGPT sub      |    * Needs mobile-to-desktop continuity|
-|    * May not own a laptop or PC    |    * Runs concurrent background agents |
-|    * Needs fear-free simple setup  |    * Demands zero-surveillance privacy |
-+------------------------------------+----------------------------------------+
-| 3. The Global Student & Learner                                             |
-|    * Mobile is their primary computer                                       |
-|    * Learns software development directly on their phone                    |
-|    * Explains cryptic errors in plain language via Ask Verb                 |
-+-----------------------------------------------------------------------------+
-```
+So Verb is not positioned as a place to run agents. It is positioned as the thing that makes running
+them accountable.
 
-### Audience A: The Non-Developer / Mobile-First Creator
-* **Core Pain Point:** Paying $20/month for Claude Pro or ChatGPT Plus, but unable to use powerful CLI tools because they do not have a developer setup or laptop.
-* **The Solution:** Install Verb APK -> Tap "Start Agent" -> Log in with existing account -> Start building.
-* **Key Message:** *"You already have the AI subscription. Now you have the studio to build with it on your phone."*
+### Where mobile fits
 
-### Audience B: The Professional Engineer / Power User
-* **Core Pain Point:** Losing terminal state when switching apps on mobile, dealing with fragile SSH connections, and needing multi-agent coordination.
-* **The Solution:** True PTY multi-terminal isolation ($T_1$ Claude + $T_2$ Codex + $T_3$ Shell), cross-device `.vcont` continuity, and crash-proof conversation recovery.
-* **Key Message:** *"A mobile terminal that respects your state. Run multi-agent workflows with guaranteed session isolation and zero surveillance."*
+Mobile is the proof, not the pitch.
 
-### Audience C: The Global Student and Aspiring Builder
-* **Core Pain Point:** Expensive hardware barrier to learning modern AI-assisted software engineering.
-* **The Solution:** Turns any budget $100-$200 Android smartphone into a complete Linux workstation with Git, Node, Python, and AI agents.
-* **Key Message:** *"Software creation for the next billion builders. Learn and build on the device you already carry."*
+The phone is the most hostile host an agent can be given. The OS kills long-running processes
+without asking. Uninstalling the app destroys everything it owns. There is no second window to check
+state in, and no laptop to fall back to. A control layer that keeps sessions, credentials and
+evidence intact *there* is trivially credible anywhere else, which is why Verb was built on Android
+first and why the desktop host implements the same contract rather than a looser one.
+
+It also happens to be the only place a large number of people can build software at all. That is a
+real consequence and worth saying. It is not the reason the product exists.
 
 ---
 
-## 3. Key Messaging Pillars and Taglines
+## 2. What Verb is not
 
-| Angle | Primary Tagline | Supporting Copy |
+Stated plainly, because each of these is a comparison a reader will make in the first ten seconds,
+and being the wrong thing badly is worse than being a narrower thing well.
+
+| Verb is not | Because |
+| :--- | :--- |
+| A coding agent | It contains no model and writes no code. It runs the agents you already use. |
+| A model provider | The assistant is optional and replaceable. The context it answers from is the product. |
+| An IDE | There is no editor, no build system and no project model. There is a terminal, and evidence about it. |
+| A mobile terminal emulator | A terminal gives you a shell. Verb gives you session identity, recovery, command boundaries and an archive of the world. Termux is a dependency of Verb, not a competitor to it. |
+| A hosted dev environment | Nothing is executed on someone else's machine. The runtime, the credentials and the record are on the device. |
+
+---
+
+## 3. Who feels this, and what they feel
+
+One product, one claim. These are the three ways the same failure shows up.
+
+### The engineer coordinating agents
+Loses terminal state on app switch, cannot say which of three agents did which thing, and has no
+record of what a background run actually changed. Verb gives session isolation per PTY, a durable
+record keyed by the agent's own conversation id, and command boundaries with exit codes.
+
+*"Multi-agent work you can audit, on a host that keeps its promises."*
+
+### The creator building without a laptop
+Pays for Claude or ChatGPT already, and cannot use the CLI because the setup assumes a developer
+machine. Verb installs, signs in, and survives the phone doing what phones do. Failures are
+explained in plain words rather than a stack trace.
+
+*"You already pay for the agent. This is the studio that keeps its work."*
+
+### The learner whose phone is the computer
+Faces a hardware barrier, not a talent barrier. Verb turns an ordinary Android device into a real
+Linux workspace with Git, Node, Python and the same agents professionals use.
+
+*"Build on the device you already carry."*
+
+---
+
+## 3a. Messaging pillars
+
+| Angle | Line | What it rests on |
 | :--- | :--- | :--- |
-| **Accessibility** | *"Software creation in your pocket."* | Run frontier AI coding agents directly on your phone with zero developer configuration. |
-| **Economics** | *"Bring your own subscription."* | No seat fees, no resale markups. Use the Claude Pro or ChatGPT Plus account you already pay for. |
-| **Reliability** | *"The terminal that remembers."* | Sessions survive app kills, OS memory sweeps, and device reboots without losing conversation state. |
-| **Privacy** | *"Structural memory, not surveillance."* | Your code, credentials, and keystrokes stay private. Verb stores state structure, not your data. |
+| **Governance** | *"Agents generate. Verb governs."* | Session lifecycle, command boundaries, evidence-only answers, mediated recovery. |
+| **Survival** | *"The terminal that remembers."* | Sessions resume by the agent's own conversation id after process death, proven on a physical device. |
+| **Portability of work** | *"Your working world is a file."* | An encrypted, checksummed archive of agent logins and session records that outlives the app. |
+| **Economics** | *"Bring your own subscription."* | No seat fee and no resale markup. Verb never sits between you and your agent provider. |
+| **Privacy** | *"Structural memory, not surveillance."* | Durable records hold identity, context and state. Never a PID, command text, terminal bytes, transcripts or credentials. |
+
+### Language to avoid
+
+* Claims about what an agent can do. That is the agent vendor's sentence, not Verb's.
+* "Autonomous". Verb's entire argument is that autonomy without a record is the problem.
+* Capability claims without a dated device run behind them. `docs/BACKLOG.md` is the standard: if it
+  is not accepted on hardware, it is not advertised.
 
 ---
 

@@ -10,6 +10,47 @@ does it merely add another capability?
 
 ---
 
+## Terminal flicker during keyboard use — measured and fixed (2 September)
+
+Reported as "`agy` starts, then the terminal flickers during use". The hypothesis in
+`docs/BETA8_HANDOFF.md` was that layout height changes above the canvas resize the PTY, and each
+resize is a SIGWINCH that a full-screen agent answers with a complete repaint. It was reached by
+reading code, so it was measured on the Vivo I2202 before anything was claimed.
+
+Method: `top` repainting on the alternate screen (an agent-shaped load without needing an agent
+signed in), `PTY callback rate` read from Terminal -> Diagnostics -> Diagnostic.
+
+```text
+                                      geometry   resizes / window
+keyboard untouched, layout settled     63x30      0            control
+keyboard toggled 3x, beta.8 as handed  63x23      24           ~8 per transition
+keyboard toggled 3x, after the fix     63x8        1           one per transition
+```
+
+The control is what makes the rest meaningful: geometry is stable when nothing moves, so every
+resize was the keyboard, not the agent and not the emulator.
+
+The fades that beta.8 already applied to Verb's own banner rows were necessary but not sufficient.
+The dominant source was `Modifier.imePadding()` on the workspace container in `MainActivity`, which
+follows Android's keyboard slide *frame by frame*; the terminal canvas is inside it, so the PTY row
+count changed on every frame of every open and close. It is now
+`windowInsetsPadding(WindowInsets.imeAnimationTarget)` — the IME's settled height rather than its
+animating one.
+
+One resize per transition is the floor, not a residue: a canvas really does go from 30 rows to 8
+when the keyboard covers it, and the terminal has to be told once.
+
+The cost, stated because it is a real trade: the dock now arrives at its final position instead of
+sliding up with the keyboard. For a surface whose job is hosting a full-screen agent, one honest
+jump beats eight repaints.
+
+**Still unverified.** Reproduced against `top`, not against `agy` — the debug package's userland was
+rebuilt during this session and has no Antigravity signed into it. Whether the flicker also occurs
+with the keyboard closed is therefore still open; if it does, there is a second cause and the
+suspects are in the handoff's decision tree.
+
+---
+
 ## Closed sprint — beta.5 Truth & Reliability (30 August)
 
 | # | Gate | Description | Status |

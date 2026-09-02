@@ -4,10 +4,8 @@ import com.example.verb.model.VerbIntent
 import com.example.verb.ui.theme.TerminalCanvas
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -95,9 +93,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.example.verb.terminal.AlternateScreenState
 import com.example.verb.terminal.MobileTerminalKeyboard
 import com.example.verb.terminal.SelectionChangeListener
 import com.example.verb.terminal.TerminalAiExchange
+import com.example.verb.terminal.TerminalContextState
 import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalRuntimeAdapter
 import com.example.verb.terminal.TerminalSessionState
@@ -162,16 +162,17 @@ fun TerminalScreen(
     agentInTerminal: (String) -> String? = { null },
     onSwitchTerminalSession: (String) -> Unit = {},
     onOpenTerminalSession: () -> Unit = {},
+    onCloseTerminalSession: (String) -> Unit = {},
     canOpenMoreTerminals: Boolean = false,
     projects: List<VerbProject> = emptyList(),
     selectedProject: VerbProject? = null,
-    onCreateProject: (String) -> Unit = {},
+    onCreateProject: (String) -> Boolean = { false },
     onSelectProject: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showDiagnosticsSheet by remember { mutableStateOf(false) }
     var showFileExplorerSheet by remember { mutableStateOf(false) }
-    var showProjectSheet by remember { mutableStateOf(false) }
+    var showWorkspaceSheet by remember { mutableStateOf(false) }
     var showRunsSheet by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     // Restarting a live session kills whatever runs inside it, and on a phone the pill that does
@@ -190,6 +191,18 @@ fun TerminalScreen(
     // the nullability of the runtime.
     val noCanvas = remember { MutableStateFlow(null) }
     val termuxAdapter by (terminalRuntime?.renderTarget ?: noCanvas).collectAsState()
+
+    // Whether a full-screen TUI currently owns the canvas.
+    //
+    // Verb already observes this from the emulator, and it is the fact that decides whether Verb's
+    // own collapsible rows may change the canvas height. A row that expands or collapses above the
+    // terminal changes how many character rows fit, which makes `TerminalView` resize the PTY,
+    // which sends SIGWINCH. A shell absorbs that invisibly. A full-screen agent UI redraws its
+    // entire frame, and a redraw per animation frame is exactly what "the terminal flickers while
+    // using it" looks like.
+    val noContext = remember { MutableStateFlow(TerminalContextState()) }
+    val terminalContext by (terminalRuntime?.terminalContextState ?: noContext).collectAsState()
+    val fullScreenAgentActive = terminalContext.alternateScreenState == AlternateScreenState.ACTIVE
 
     // A Compose text field on another tab may retain IME focus across navigation. Release it as
     // Terminal opens so the explicit terminal input field can claim text focus when the user taps.
@@ -215,19 +228,19 @@ fun TerminalScreen(
             focusManager.clearFocus(force = true)
         }
     }
-    val anyOverlayOpen = verbSurfaceOpen || showFileExplorerSheet || showProjectSheet ||
+    val anyOverlayOpen = verbSurfaceOpen || showFileExplorerSheet || showWorkspaceSheet ||
         showDiagnosticsSheet || showRunsSheet || showOverflowMenu
     // Overflow menu is the innermost surface (a DropdownMenu can appear over any sheet's trigger),
     // so it takes priority over every other back handler below.
     BackHandler(enabled = !verbSurfaceOpen && showOverflowMenu) { showOverflowMenu = false }
     BackHandler(enabled = !verbSurfaceOpen && !showOverflowMenu && showFileExplorerSheet) { showFileExplorerSheet = false }
-    BackHandler(enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && showProjectSheet) { showProjectSheet = false }
+    BackHandler(enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && showWorkspaceSheet) { showWorkspaceSheet = false }
     BackHandler(
-        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
+        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showWorkspaceSheet &&
             showDiagnosticsSheet
     ) { showDiagnosticsSheet = false }
     BackHandler(
-        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showProjectSheet &&
+        enabled = !verbSurfaceOpen && !showOverflowMenu && !showFileExplorerSheet && !showWorkspaceSheet &&
             !showDiagnosticsSheet && showRunsSheet
     ) {
         showRunsSheet = false
@@ -310,7 +323,7 @@ fun TerminalScreen(
                         Surface(
                             shape = RoundedCornerShape(999.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            onClick = { showProjectSheet = true },
+                            onClick = { showWorkspaceSheet = true },
                             // The flexible one. When the row runs out of width -- which is exactly
                             // when a second terminal adds the switcher -- this is what gives way,
                             // because `docs/UX_FOUNDATION.md` says density degrades in a fixed
@@ -639,6 +652,21 @@ fun TerminalScreen(
             }
         }
 
+        // Where you are, always. The header's project chip is the first thing that gives way
+        // under width pressure, and that pressure arrives exactly when a second terminal opens --
+        // so on the screen where orientation matters most, the header stops naming the project and
+        // never named the terminal at all. This line does not compete for that row's width, so the
+        // degrade order above is unchanged and the answer is always on screen.
+        WorkspaceContextBar(
+            projectLabel = selectedProject?.displayName,
+            terminalLabel = terminalSessionIds
+                .indexOf(activeTerminalSessionId)
+                .takeIf { it >= 0 }
+                ?.let { "Terminal ${it + 1}" },
+            occupant = activeTerminalSessionId?.let(agentInTerminal),
+            onClick = { showWorkspaceSheet = true }
+        )
+
         // Verb CLI userland install progress / error card
         when (bootstrapState) {
             TermuxBootstrapInstaller.State.Ready,
@@ -690,21 +718,34 @@ fun TerminalScreen(
         // Suppressed while the IME is up: with the keyboard open the terminal canvas is the
         // scarcest pixel row on a phone, and a suggestion the person cannot act on until they are
         // done typing is only space taken from it. It returns the moment the keyboard closes.
-        // The exit animates because it fires on the very frame the keyboard *starts* moving --
-        // a snap here is what made the whole dock feel like it was being yanked upward.
+        // The exit still animates because it fires on the very frame the keyboard *starts* moving,
+        // and a snap here is what made the whole dock feel like it was being yanked upward. What no
+        // longer animates is the height; see below.
+        //
+        // Also suppressed while a full-screen agent owns the canvas. It is an offer to *start* an
+        // agent, so it has nothing to say once one is running -- and showing it would mean this row
+        // appearing and disappearing with the keyboard, resizing the PTY under a TUI each time.
+        //
+        // The transition fades rather than expanding. Height is animated over many frames, and
+        // every frame that changes the row count is another SIGWINCH; a fade changes the height
+        // once at each end instead of twenty times in between.
         AnimatedVisibility(
             visible = bootstrapState == TermuxBootstrapInstaller.State.Ready &&
-                !isKeyboardVisible && terminalLaunchNotice == null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+                !isKeyboardVisible && terminalLaunchNotice == null && !fullScreenAgentActive,
+            enter = fadeIn(),
+            exit = fadeOut()
         ) {
             verbFirstAction?.invoke()
         }
 
+        // Fade, not expand, for the same reason as the row above: this notice is dismissed at
+        // precisely the moment an agent takes the screen, and animating its height on the way out
+        // resizes the PTY on every frame of that animation -- under a TUI that has just started
+        // drawing.
         AnimatedVisibility(
             visible = terminalLaunchNotice != null,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            enter = fadeIn(),
+            exit = fadeOut()
         ) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
@@ -741,8 +782,11 @@ fun TerminalScreen(
                 sessionState == com.example.verb.terminal.TerminalSessionState.EXITED ||
                     sessionState == com.example.verb.terminal.TerminalSessionState.FAILED
                 ),
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            // Fade only. Every row above the canvas that animates its height changes the
+            // terminal's row count on each frame of that animation, and each change resizes the
+            // PTY. See the first action above.
+            enter = fadeIn(),
+            exit = fadeOut()
         ) {
             Surface(
                 modifier = Modifier
@@ -775,8 +819,11 @@ fun TerminalScreen(
         AnimatedVisibility(
             visible = bootstrapReady && !isKeyboardVisible && terminalOutput.isBlank() &&
                 sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING,
-            enter = fadeIn() + expandVertically(),
-            exit = fadeOut() + shrinkVertically()
+            // Fade only. Every row above the canvas that animates its height changes the
+            // terminal's row count on each frame of that animation, and each change resizes the
+            // PTY. See the first action above.
+            enter = fadeIn(),
+            exit = fadeOut()
         ) {
             Surface(
                 modifier = Modifier
@@ -997,72 +1044,30 @@ fun TerminalScreen(
         }
     }
 
-    if (showProjectSheet) {
-        ProjectSheet(
+    if (showWorkspaceSheet) {
+        WorkspaceSheet(
             projects = projects,
             selectedProject = selectedProject,
-            onDismiss = { showProjectSheet = false },
-            onCreate = { name ->
-                onCreateProject(name)
-                showProjectSheet = false
+            terminalSessionIds = terminalSessionIds,
+            activeTerminalSessionId = activeTerminalSessionId,
+            agentInTerminal = agentInTerminal,
+            canOpenMoreTerminals = canOpenMoreTerminals,
+            onDismiss = { showWorkspaceSheet = false },
+            onCreateProject = { name ->
+                onCreateProject(name).also { created ->
+                    if (created) showWorkspaceSheet = false
+                }
             },
-            onSelect = { id -> onSelectProject(id); showProjectSheet = false }
+            onSelectProject = { id -> onSelectProject(id); showWorkspaceSheet = false },
+            // Switching terminals dismisses, because the thing you switched to is behind the
+            // sheet. Opening and closing do not: those are list edits, and the list is what you
+            // came here to look at.
+            onSwitchTerminal = { id -> onSwitchTerminalSession(id); showWorkspaceSheet = false },
+            onOpenTerminal = onOpenTerminalSession,
+            onCloseTerminal = onCloseTerminalSession
         )
     }
 
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ProjectSheet(
-    projects: List<VerbProject>,
-    selectedProject: VerbProject?,
-    onDismiss: () -> Unit,
-    onCreate: (String) -> Unit,
-    onSelect: (String) -> Unit
-) {
-    var name by remember { mutableStateOf("") }
-    fun createProject() {
-        if (name.isNotBlank()) {
-            onCreate(name)
-            name = ""
-        }
-    }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentColor = MaterialTheme.colorScheme.onSurface
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-            Text("Project", fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text(
-                "Launches a new terminal session in the selected directory.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("New project") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { createProject() })
-            )
-            Button(onClick = ::createProject, enabled = name.isNotBlank(), modifier = Modifier.padding(top = 8.dp)) {
-                Icon(Icons.Default.CreateNewFolder, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Create")
-            }
-            projects.forEach { project ->
-                Text(
-                    text = if (project.id == selectedProject?.id) "${project.id}  active" else project.id,
-                    modifier = Modifier.fillMaxWidth().clickable { onSelect(project.id) }.padding(vertical = 12.dp),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp
-                )
-            }
-        }
-    }
 }
 
 @Composable

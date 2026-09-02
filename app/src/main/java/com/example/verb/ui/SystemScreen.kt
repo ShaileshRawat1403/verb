@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.BuildConfig
 import com.example.verb.ai.AiModelPresets
 import com.example.verb.ai.AiProviderConfig
 import com.example.verb.ai.AiProviderId
@@ -187,6 +188,13 @@ fun SystemScreen(
             title = "Device Information",
             icon = Icons.Default.PhoneAndroid,
             details = listOf(
+                "Verb Version" to "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                // Which installed app this is. Debug and Play builds carry their own application
+                // ids and therefore their own private storage -- their own projects, runtime and
+                // agent logins. Someone who signs in, installs a differently-suffixed build and
+                // finds themselves signed out has not lost anything; they are in a different app,
+                // and this is the line that says so.
+                "Package" to BuildConfig.APPLICATION_ID,
                 "Model" to "${Build.MANUFACTURER.capitalize()} ${Build.MODEL}",
                 "Android Version" to "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
                 "Architecture" to Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),

@@ -15,6 +15,13 @@ on:
         required: true
         default: true
         type: boolean
+      draft:
+        description: >
+          Publish as a draft, so the signed artifact can be installed and accepted on hardware
+          before anyone can download it. The release is published by hand afterwards.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -134,6 +141,11 @@ jobs:
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ inputs.prerelease || contains(inputs.tag, '-') || contains(github.ref_name, '-') }}
+          # A draft carries the real signed artifact but is not downloadable by anyone else, so a
+          # claim that needs hardware can be tested against the exact file that will ship rather
+          # than against a local rebuild of it. Tag-triggered releases stay non-draft: this is a
+          # deliberate, dispatched choice, not the default path.
+          draft: ${{ inputs.draft || false }}
           generate_release_notes: true
           files: |
             app/build/outputs/apk/fullCli/release/app-fullCli-release.apk

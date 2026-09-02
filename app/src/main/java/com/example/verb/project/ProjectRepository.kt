@@ -4,7 +4,24 @@ import android.content.Context
 import java.io.File
 import java.util.UUID
 
-data class VerbProject(val id: String, val directory: File)
+data class VerbProject(val id: String, val directory: File) {
+    /**
+     * The name the person typed, without the suffix Verb appends to keep ids unique.
+     *
+     * Shown wherever a person is choosing between their own projects. A full id
+     * (`mobile-kit-30603ae7`) reads as machine output, and a list of them is genuinely hard to
+     * recognise your own work in -- which is the state the project sheet was in.
+     */
+    val displayName: String
+        get() = id.substringBeforeLast('-', id).ifEmpty { id }
+
+    /**
+     * The disambiguating suffix, kept visible because two projects may share a name and this is
+     * the only thing that separates them. Empty when an id carries no suffix.
+     */
+    val shortId: String
+        get() = id.substringAfterLast('-', "")
+}
 
 /** Owns the app-private project root; arbitrary external paths are never accepted. */
 class ProjectWorkspace(filesDir: File) {
@@ -25,7 +42,11 @@ class ProjectWorkspace(filesDir: File) {
             .takeIf { it.isNotEmpty() } ?: "project"
         val id = "$prefix-${UUID.randomUUID().toString().take(8)}"
         val directory = File(root, id)
-        check(directory.mkdir() && isContained(directory)) { "Could not create project" }
+        // Validate the target before mutating the filesystem. A failed post-mkdir containment
+        // check used to leave an orphan directory while the UI silently closed as if creation had
+        // succeeded.
+        check(isContained(directory)) { "Project path escaped the app-owned root" }
+        check(directory.mkdir()) { "Could not create project" }
         return VerbProject(id, directory)
     }
 

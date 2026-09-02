@@ -33,9 +33,15 @@ class QemuAgentRuntimeEnvironment(
     private val manifest: AgentRuntimeManifest
 ) {
 
-    /** The interactive session: a login shell in the selected project, mounted at [GUEST_WORKSPACE]. */
+    /**
+     * The interactive session in the selected project, mounted at [GUEST_WORKSPACE].
+     *
+     * The PTY makes bash interactive. It must not be a login shell: Debian's `/etc/profile`
+     * replaces the PATH supplied below, otherwise a binary can pass the non-interactive readiness
+     * probe and still be missing when the user opens it.
+     */
     fun resolve(rootfs: File): TerminalEnvironment =
-        resolveGuestCommand(rootfs, listOf("/bin/bash", "--login"))
+        resolveGuestCommand(rootfs, listOf("/bin/bash"))
 
     /**
      * Builds a bounded, non-interactive invocation of [guestCommand] against the same rootfs, binds
@@ -54,7 +60,7 @@ class QemuAgentRuntimeEnvironment(
         require(qemu.isFile && qemu.canExecute()) {
             "The emulator this runtime needs is not installed. Install the Agent Emulator profile."
         }
-        val agentHome = AgentRuntimePaths(filesDir).agentHome("default")
+        val agentHome = AgentRuntimePaths(filesDir).agentHome(AgentRuntimePaths.DEFAULT_AGENT)
         require(agentHome.mkdirs() || agentHome.isDirectory) { "Could not create Agent Runtime home." }
         val agentBin = File(agentHome, ".local/bin")
         if (!agentBin.isDirectory) agentBin.mkdirs()

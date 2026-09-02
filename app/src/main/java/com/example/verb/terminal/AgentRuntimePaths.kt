@@ -15,4 +15,15 @@ class AgentRuntimePaths(filesDir: File) {
     fun versionRootfs(version: String): File = File(version(version), "rootfs")
 
     fun agentHome(agent: String): File = File(homes, agent)
+
+    companion object {
+        /**
+         * The one agent home every Agent Runtime session binds to `/home/verb`.
+         *
+         * Named here because three separate call sites carried the bare string `"default"`, and an
+         * install that writes into a different home than the session later reads is
+         * indistinguishable, from the user's side, from an agent that lost its sign-in.
+         */
+        const val DEFAULT_AGENT = "default"
+    }
 }

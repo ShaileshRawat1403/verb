@@ -37,13 +37,32 @@ class AgentRuntimeCompatibilityProbe(
      * check succeeded, and its answer is "this cannot run here". [AgentCompatibilityState.CHECK_FAILED]
      * is reserved for the case where nothing could be concluded because the probe never ran.
      */
-    fun check(runtime: AgentRuntimeInstaller.InstalledRuntime): AgentCompatibilityState {
+    fun check(runtime: AgentRuntimeInstaller.InstalledRuntime): AgentCompatibilityState =
+        checkCommand(runtime, AGENT_PROBE_COMMAND)
+
+    /**
+     * Narrow admission check used only to enter the runtime long enough to install an agent whose
+     * own catalog probe will then decide whether that agent is usable.
+     *
+     * This deliberately does not change the global Agent Runtime status: a working shell is not
+     * evidence that Claude (or any other agent) works. It only prevents a circular dependency in
+     * which Verb refuses to install `agy` until `agy --version` succeeds, while that command cannot
+     * exist until Verb has entered the runtime and installed it.
+     */
+    fun checkShellForProfileInstallation(
+        runtime: AgentRuntimeInstaller.InstalledRuntime
+    ): AgentCompatibilityState = checkCommand(runtime, SHELL_PROBE_COMMAND)
+
+    private fun checkCommand(
+        runtime: AgentRuntimeInstaller.InstalledRuntime,
+        command: List<String>
+    ): AgentCompatibilityState {
         val workspace = probeWorkspace() ?: return AgentCompatibilityState.CHECK_FAILED
         // Probes the backend the session will actually use, so "compatible" is never claimed on
         // the strength of a different launch path than the one the user gets.
         val environment = runCatching {
             QemuAgentRuntimeEnvironment(filesDir, workspace, runtime.manifest)
-                .resolveGuestCommand(runtime.rootfs, PROBE_COMMAND)
+                .resolveGuestCommand(runtime.rootfs, command)
         }.getOrNull() ?: return AgentCompatibilityState.CHECK_FAILED
 
         val result = BoundedProcessRunner.run(
@@ -96,7 +115,8 @@ class AgentRuntimeCompatibilityProbe(
          * `--version` still starts the real binary and exits on its own, so nothing is authenticated
          * and no network call is required.
          */
-        private val PROBE_COMMAND = listOf("/usr/local/bin/claude", "--version")
+        private val AGENT_PROBE_COMMAND = listOf("/usr/local/bin/claude", "--version")
+        private val SHELL_PROBE_COMMAND = listOf("/bin/bash", "--version")
 
         const val TIMEOUT_MS = 5_000L
     }

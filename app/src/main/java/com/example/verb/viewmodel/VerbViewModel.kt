@@ -25,6 +25,7 @@ import com.example.verb.terminal.AgentRuntimeCompatibilityProbe
 import com.example.verb.terminal.AgentRuntimeInstaller
 import com.example.verb.terminal.AgentRuntimeStatus
 import com.example.verb.terminal.AgentRuntimeManifest
+import com.example.verb.terminal.AgentRuntimePaths
 import com.example.verb.terminal.LogCategory
 import com.example.verb.terminal.MuslLoaderBootstrap
 import com.example.verb.terminal.TerminalHoldService
@@ -46,6 +47,7 @@ import com.example.verb.terminal.GitSnapshot
 import com.example.verb.terminal.TerminalAiExchange
 import com.example.verb.terminal.TerminalEvidence
 import com.example.verb.terminal.TerminalAiHelper
+import com.example.verb.terminal.TerminalEnvironment
 import com.example.verb.terminal.TerminalRuntime
 import com.example.verb.terminal.TerminalSessionLogger
 import com.example.verb.terminal.TermuxBootstrapInstaller
@@ -701,19 +703,58 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         if (profile.environment == ProfileEnvironment.AGENT_RUNTIME) {
             val status = _agentRuntimeStatus.value
             val runtime = status.runtime
-            if (runtime != null && status.canOpen) {
-                withContext(Dispatchers.Main.immediate) {
+                ?: return "${profile.displayName} needs the optional Agent Runtime. Install it in System first."
+            if (profile.installEnvironment == ProfileEnvironment.AGENT_RUNTIME) {
+                // The global check intentionally probes Claude, so it may reject a runtime on which
+                // a different agent works. For installation only, prove the shell backend, enter it,
+                // and let this profile's own post-install probe make the final claim.
+                val canEnterForInstall = status.canOpen ||
+                    agentRuntimeProbe.checkShellForProfileInstallation(runtime) ==
+                    AgentCompatibilityState.COMPATIBLE
+                if (!canEnterForInstall) {
+                    return "${profile.displayName} needs an Agent Runtime whose shell can execute on this device."
+                }
+                val activation = withContext(Dispatchers.Main.immediate) {
                     runCatching {
                         terminalRuntime.activateAgentRuntime(runtime)
                         if (terminalRuntime.pendingEnvironmentChange.value) {
                             terminalRuntime.restartSession()
                         }
+                        check(terminalRuntime.environment.kind == TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND) {
+                            "Agent Runtime did not become the active terminal environment."
+                        }
                     }
+                }
+                activation.exceptionOrNull()?.let { error ->
+                    return "${profile.displayName} was not installed: " +
+                        (error.message ?: "could not open the Agent Runtime.")
+                }
+            } else {
+                // Staging still targets only the app-owned Agent Runtime home. Running the fixed,
+                // catalog-owned downloader in the local userland avoids emulated curl/tar SIGSYS;
+                // the final binary must still pass its own probe in [profile.environment].
+                val activation = withContext(Dispatchers.Main.immediate) {
+                    runCatching {
+                        terminalRuntime.deactivateAgentRuntime()
+                        if (terminalRuntime.pendingEnvironmentChange.value) {
+                            terminalRuntime.restartSession()
+                        }
+                        check(terminalRuntime.environment.kind == TerminalEnvironment.Kind.VERB_LOCAL_USERLAND) {
+                            "Verb CLI userland did not become the installer environment."
+                        }
+                    }
+                }
+                activation.exceptionOrNull()?.let { error ->
+                    return "${profile.displayName} was not installed: " +
+                        (error.message ?: "could not open the installer environment.")
                 }
             }
         }
         val marker = "__VERB_PROFILE_${profile.id.name}_${System.currentTimeMillis()}__"
-        val command = ProfileInstallProtocol.command(profile.installCommand, marker)
+        val installCommand = resolveInstallCommand(profile)
+            ?: return "${profile.displayName} names an install location Verb could not resolve on " +
+                "this device, so nothing was run."
+        val command = ProfileInstallProtocol.command(installCommand, marker)
         withContext(Dispatchers.Main.immediate) {
             terminalRuntime.sendCommand(command)
         }
@@ -738,6 +779,27 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             completed == 0 -> null
             else -> "${profile.displayName} failed; inspect the terminal output."
         }
+    }
+
+    /**
+     * Substitutes the catalog placeholders only the running app can resolve.
+     *
+     * The Agent Runtime home is app-private, and its absolute path contains the application id --
+     * which differs between the release build, the `.play` flavour and the `.debug` build type.
+     * Resolving it here, from this app's own `filesDir`, is the only way a catalog string can name
+     * that directory without asserting which variant is running.
+     *
+     * Returns null when a placeholder survives, so an unresolved token fails visibly instead of
+     * reaching a shell that would cheerfully create a directory named after it and report success.
+     */
+    private fun resolveInstallCommand(profile: RuntimeProfile): String? {
+        val agentHome = AgentRuntimePaths(getApplication<Application>().filesDir)
+            .agentHome(AgentRuntimePaths.DEFAULT_AGENT)
+        val resolved = profile.installCommand.replace(
+            RuntimeProfiles.AGENT_RUNTIME_HOME_TOKEN,
+            agentHome.absolutePath
+        )
+        return resolved.takeUnless { RuntimeProfiles.UNRESOLVED_PLACEHOLDER.containsMatchIn(it) }
     }
 
     /**
@@ -797,13 +859,31 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         if (profile?.environment == ProfileEnvironment.AGENT_RUNTIME) {
             val status = _agentRuntimeStatus.value
             val runtime = status.runtime
-            if (runtime != null && status.canOpen) {
-                runCatching {
-                    terminalRuntime.activateAgentRuntime(runtime)
-                    if (terminalRuntime.pendingEnvironmentChange.value) {
-                        terminalRuntime.restartSession()
-                    }
+            // A profile's own successful bounded probe is stronger evidence for that profile than
+            // the global Claude probe. This matters for Agy: Android may reject Claude's syscall
+            // set while the installed Agy binary is independently proven to run.
+            val profileReady = _runtimeProfileReports.value
+                .firstOrNull { it.profile.id == profile.id }
+                ?.isReady == true
+            if (runtime == null || (!status.canOpen && !profileReady)) {
+                _runtimeInstallMessage.value =
+                    "${profile.displayName} is not verified in the Agent Runtime on this device."
+                return
+            }
+            val activation = runCatching {
+                terminalRuntime.activateAgentRuntime(runtime)
+                if (terminalRuntime.pendingEnvironmentChange.value) {
+                    terminalRuntime.restartSession()
                 }
+                check(terminalRuntime.environment.kind == TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND) {
+                    "Agent Runtime did not become the active terminal environment."
+                }
+            }
+            if (activation.isFailure) {
+                _runtimeInstallMessage.value =
+                    "${profile.displayName} could not open its Agent Runtime: " +
+                        (activation.exceptionOrNull()?.message ?: "unknown launch failure")
+                return
             }
         } else if (profile?.environment == ProfileEnvironment.LOCAL_USERLAND) {
             runCatching {
@@ -1181,12 +1261,14 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         _surface.value = VerbSurface.None
     }
 
-    fun createProject(name: String) {
-        runCatching { projectRepository.create(name) }.getOrNull()?.let { project ->
+    fun createProject(name: String): Boolean {
+        val project = runCatching { projectRepository.create(name) }.getOrNull() ?: return false
+        project.let {
             _projects.value = projectRepository.list()
             _selectedProject.value = project
             terminalRuntime.selectProject(project.directory)
         }
+        return true
     }
 
     fun selectProject(id: String) {

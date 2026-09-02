@@ -79,6 +79,15 @@ WORLD_PATHS=(
   "files/home/.codex"
   "files/home/.config/opencode"
   "files/home/.local/share/opencode"
+  # Agents that run under the Agent Runtime keep their sign-in in the app-owned agent home, not in
+  # the local userland home above. Antigravity is the first of these, and until this line the
+  # archive silently protected two of the three agents a person had signed into -- while the
+  # documentation said it held "agent logins".
+  #
+  # Deliberately the config directory and not the whole agent home: `.local/bin` there holds the
+  # installed agent binary, which is large, reinstallable, and architecture-specific. A backup is
+  # for the things that cannot be fetched again.
+  "files/agent-runtime/homes/default/.gemini"
   "shared_prefs/verb_session.xml"
   "shared_prefs/verb_session_codex.xml"
   "shared_prefs/verb_session_opencode.xml"

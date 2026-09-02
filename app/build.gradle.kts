@@ -97,6 +97,11 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
+      // Instrumentation owns and may uninstall its target package. Keep every debug target under
+      // a disposable identity so `connected*AndroidTest` can never remove the installed release
+      // app — and with it the user's private runtime, projects, agent credentials and sessions.
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
       if (file("${rootDir}/debug.keystore").exists()) {
         signingConfig = signingConfigs.getByName("debugConfig")
       }
@@ -113,7 +118,9 @@ android {
     // Minification stays off: this is a build for using and reporting bugs against, and a
     // stack trace that names real classes is worth more here than a smaller APK.
     create("device") {
-      initWith(getByName("debug"))
+      // Do not init from `debug`: its `.debug` application-id suffix is deliberately disposable.
+      // A device build retains the canonical application id and is installed only with `-r` and
+      // a signing key matching the app already on the phone.
       isDebuggable = false
       isMinifyEnabled = false
       isJniDebuggable = false
@@ -197,4 +204,23 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// A connected instrumentation deployment may uninstall its target package during cleanup. Debug
+// already has a disposable application id, but a real phone is still never an acceptable Gradle
+// test target: it contains work that no test owns. Keep this as an executable invariant instead of
+// relying on a warning in documentation. It is a separate dependency so the check can be exercised
+// without invoking instrumentation at all.
+val enforceEmulatorOnlyConnectedTests = tasks.register<Exec>("enforceEmulatorOnlyConnectedTests") {
+  group = "verification"
+  description = "Refuses connected instrumentation while a physical Android device is attached."
+  commandLine(
+    "sh",
+    rootProject.file("scripts/enforce-emulator-only-connected-tests.sh").absolutePath,
+    androidComponents.sdkComponents.adb.get().asFile.absolutePath
+  )
+}
+
+tasks.matching { it.name.startsWith("connected") && it.name.endsWith("AndroidTest") }.configureEach {
+  dependsOn(enforceEmulatorOnlyConnectedTests)
 }

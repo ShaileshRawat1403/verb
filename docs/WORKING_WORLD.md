@@ -15,9 +15,23 @@ files/home/.claude.json
 files/home/.codex                   Codex's auth and session transcripts
 files/home/.config/opencode
 files/home/.local/share/opencode
+files/agent-runtime/homes/default/.gemini
+                                    Antigravity's configuration and sign-in, which live in the
+                                    app-owned Agent Runtime home rather than the local userland
 shared_prefs/verb_session*.xml      allowlisted Verb session records
 shared_prefs/verb_projects.xml      project metadata, not project contents
 ```
+
+Agents that run under the optional Agent Runtime keep their state in a second home, and until
+`0.1.0-beta.8` this list held only the first one. Someone signed into Claude, Codex *and*
+Antigravity therefore had an archive that restored two of the three, while this page said it held
+"the agents' logins". `WorldCoversSignInTest` now compares the catalog Verb reads sign-in state from
+against the paths this archive copies, so an agent added to one and not the other fails a test
+rather than a restore.
+
+Only the configuration directory is taken from that home, not the whole of it: `.local/bin` there
+holds the installed agent binary, which is large and can simply be fetched again. A backup is for
+what cannot be.
 
 Android deletes all of it on uninstall, on "clear storage", and on any install that has to remove
 the package first. Before this existed, that cost an evening each time.
@@ -115,9 +129,14 @@ member that happened to exist in the older archive.
 
 The archive is the recovery path. Not needing it is better, and that is a packaging property:
 
-* **One signing key.** The `device` build type initialises from `debug` and keeps `debugConfig`, so
-  `adb install -r` upgrades in place across build types instead of forcing an uninstall — which
-  would take the world with it.
+* **Disposable tests have a different identity.** Debug and instrumentation builds use
+  `com.aistudio.verb.app.debug`. Instrumentation cleanup may uninstall that package, but can never
+  remove the canonical `com.aistudio.verb.app` release and its Working World.
+
+* **Signing continuity.** Published upgrades keep the canonical application id and release signing
+  key, and are installed with `adb install -r`. A local `device` build may replace an existing app
+  only when its signing key matches; a signature mismatch is a stop condition, never a reason to
+  uninstall the existing app.
 * **`isDebuggable = false` on the device build.** `run-as` is refused, so a USB connection can no
   longer read the agents' credentials out of app storage. The trade is that `adb exec-out run-as …`
   is no longer a way to fetch an archive either, which is why Save to Downloads exists.

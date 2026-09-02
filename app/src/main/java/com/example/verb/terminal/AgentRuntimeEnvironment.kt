@@ -13,9 +13,16 @@ class AgentRuntimeEnvironment(
     private val projectDirectory: File,
     private val manifest: AgentRuntimeManifest
 ) {
-    /** The interactive session: a login shell in the selected project, mounted at `/workspace`. */
+    /**
+     * The interactive session in the selected project, mounted at `/workspace`.
+     *
+     * Do not make this a login shell. Debian's `/etc/profile` replaces the canonical PATH passed
+     * below, which makes a profile pass its bounded probe and then become "command not found" when
+     * the user opens it. A PTY makes this bash interactive without `--login`, preserving the exact
+     * environment Verb proved.
+     */
     fun resolve(rootfs: File): TerminalEnvironment =
-        resolveGuestCommand(rootfs, listOf("/bin/bash", "--login"))
+        resolveGuestCommand(rootfs, listOf("/bin/bash"))
 
     /**
      * Builds a single bounded, non-interactive invocation of [guestCommand] against the same rootfs,
@@ -33,7 +40,7 @@ class AgentRuntimeEnvironment(
 
         val proot = File(filesDir, "usr/bin/proot")
         require(proot.isFile && proot.canExecute()) { "Verb PRoot is unavailable." }
-        val agentHome = AgentRuntimePaths(filesDir).agentHome("default")
+        val agentHome = AgentRuntimePaths(filesDir).agentHome(AgentRuntimePaths.DEFAULT_AGENT)
         require(agentHome.mkdirs() || agentHome.isDirectory) { "Could not create Agent Runtime home." }
 
         val args = mutableListOf(proot.absolutePath, "--link2symlink", "-r", rootfs.absolutePath)

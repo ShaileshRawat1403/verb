@@ -94,12 +94,32 @@ future-proof: a new tool becomes a new source of evidence or a new safe action, 
 Mapping today's surfaces onto the moments:
 
 ```text
-ORIENT       status line · sessions
+ORIENT       status line · workspace line · workspace sheet
 NOTICE       context band
 UNDERSTAND   evidence view · scrollback
-RECOVER      resume · start new · sessions
+RECOVER      resume · start new · workspace sheet
 ACT          palette · contextual actions
 ```
+
+### The workspace line is the status line Android never had
+
+ORIENT has always been assigned to a status line here, and the desktop workspace has one. Android
+did not. It had a project chip inside the header, and the header degrades under width pressure --
+which arrives at exactly the moment a second terminal opens. So on the one screen where "which
+project, which terminal" is hardest to hold in your head, the chip fell back to a folder glyph and
+nothing named the terminal at all. Two people, including the author, lost track of which project
+they were typing into on a physical Vivo I2202.
+
+The workspace line sits below the header and never competes for its width, so the header's degrade
+order is untouched. It states the project, the terminal, and what is running in it, and one tap
+opens the workspace sheet -- projects and terminals in one list, terminals first because switching
+between the agent's terminal and your own is an hourly move while changing project is a daily one.
+
+This is not a retreat from *the leader is the navigation*. What that rule refuses is **browsing**:
+permanent surfaces organised by what the software can do, which grow a row per destination. A line
+that states where you are does not grow, offers no destinations, and is the same thing the desktop
+status line was always meant to be. A workspace that will not say which directory it is in is not
+minimal; it is withholding.
 
 Two moments are visibly thin today — UNDERSTAND stops at raw evidence, ACT offers only what already
 exists. That is the honest state of the product, and it is what dogfooding is meant to price.

@@ -457,6 +457,7 @@ class TermuxTerminalRuntimeAdapter(
         refreshTerminalContext(changedSession)
         terminalView?.postInvalidateOnAnimation()
         scheduleOutputSnapshot(changedSession)
+        recordGeometryForMetrics(changedSession)
         recordCallbackForMetrics()
     }
 
@@ -472,6 +473,23 @@ class TermuxTerminalRuntimeAdapter(
     private var metricsCallbackCount = 0
     private var metricsPublishCount = 0
 
+    // PTY geometry churn, which is the measurable form of "the terminal flickers while I use it".
+    //
+    // `TerminalView.updateSize()` resizes the session only when the character row or column count
+    // actually changes, and each such change sends SIGWINCH. A shell absorbs that invisibly; a
+    // full-screen agent UI repaints its entire frame. So a flicker complaint is a question with a
+    // number behind it -- how many times did the geometry change in the last window -- and that
+    // number belongs in the Diagnostics sheet next to the callback rate, not in a guess.
+    private var lastGeometry: Pair<Int, Int>? = null
+    private var metricsResizeCount = 0
+
+    private fun recordGeometryForMetrics(changedSession: TerminalSession) {
+        val emulator = changedSession.emulator ?: return
+        val geometry = emulator.mColumns to emulator.mRows
+        if (lastGeometry != null && lastGeometry != geometry) metricsResizeCount++
+        lastGeometry = geometry
+    }
+
     private fun recordCallbackForMetrics() {
         metricsCallbackCount++
         val now = android.os.SystemClock.uptimeMillis()
@@ -480,14 +498,18 @@ class TermuxTerminalRuntimeAdapter(
             val throttleRatio = if (metricsCallbackCount > 0) {
                 100 - (metricsPublishCount * 100 / metricsCallbackCount)
             } else 0
+            val geometry = lastGeometry
+            val geometryText = if (geometry == null) "unknown" else "${geometry.first}x${geometry.second}"
             TerminalSessionLogger.info(
                 LogCategory.DIAGNOSTIC,
                 "PTY callback rate: $metricsCallbackCount onTextChanged / $metricsPublishCount " +
-                    "snapshots published in ${elapsed}ms ($throttleRatio% coalesced by throttle)"
+                    "snapshots published in ${elapsed}ms ($throttleRatio% coalesced by throttle); " +
+                    "geometry $geometryText, $metricsResizeCount resize(s) in window"
             )
             metricsWindowStart = now
             metricsCallbackCount = 0
             metricsPublishCount = 0
+            metricsResizeCount = 0
         }
     }
 

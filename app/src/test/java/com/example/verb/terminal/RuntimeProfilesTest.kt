@@ -142,7 +142,12 @@ class RuntimeProfilesTest {
         assertEquals("Antigravity", antigravity.displayName)
         assertEquals("agy", antigravity.launchCommand)
         assertEquals(ProfileEnvironment.AGENT_RUNTIME, antigravity.environment)
-        assertEquals("curl -fsSL https://antigravity.google/cli/install.sh | bash", antigravity.installCommand)
+        assertEquals(ProfileEnvironment.LOCAL_USERLAND, antigravity.installEnvironment)
+        assertTrue(antigravity.installCommand.contains("1.1.22-5711547746615296"))
+        assertTrue(antigravity.installCommand.contains("sha512sum -c -"))
+        assertTrue(antigravity.installCommand.contains("tar -xzf"))
+        assertTrue(antigravity.installCommand.contains("trap 'rm -rf"))
+        assertFalse(antigravity.installCommand.contains("| bash"))
         assertEquals(listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"), probeTimeoutMs = 15_000L)), antigravity.requirements)
         assertTrue(antigravity.signedInMarkers.isEmpty())
         assertEquals(
@@ -274,5 +279,50 @@ class RuntimeProfilesTest {
             ReadinessStage.RESOLVED_NOT_EXECUTABLE,
             report.stageFor(core.requirements.first { it.command == "bash" })
         )
+    }
+
+    /**
+     * The defect this pins: an install command carrying a build-time absolute path under
+     * `/data/data/<applicationId>/` is wrong on every variant except the one it was typed for.
+     * The debug build type adds `.debug` and the Play flavour adds `.play`, so such a path names a
+     * different package's private directory -- which Android refuses to write to.
+     */
+    @Test
+    fun `no install command hardcodes an app-private absolute path`() {
+        val offenders = RuntimeProfiles.all
+            .filter { it.installCommand.contains("/data/data/") }
+            .map { it.displayName }
+
+        assertEquals(emptyList<String>(), offenders)
+    }
+
+    /**
+     * Antigravity installs into the Agent Runtime home while its downloader runs in the local
+     * userland, so its target cannot come from `$HOME`. It must therefore go through the
+     * placeholder -- the only mechanism that lets the running app supply its own path.
+     */
+    @Test
+    fun `antigravity install targets the agent runtime home through the placeholder`() {
+        val agy = RuntimeProfiles.forId(RuntimeProfileId.ANTIGRAVITY)
+
+        assertTrue(agy.installCommand.contains(RuntimeProfiles.AGENT_RUNTIME_HOME_TOKEN))
+        assertEquals(ProfileEnvironment.AGENT_RUNTIME, agy.environment)
+        assertEquals(ProfileEnvironment.LOCAL_USERLAND, agy.installEnvironment)
+    }
+
+    /**
+     * Substitution is asserted on the same regex the ViewModel refuses on, so a token added to the
+     * catalog without a matching resolver fails here rather than on a user's device.
+     */
+    @Test
+    fun `placeholder detector matches an unresolved token and not a resolved path`() {
+        val unresolved = "install -m 0755 x ${RuntimeProfiles.AGENT_RUNTIME_HOME_TOKEN}/.local/bin/agy"
+        val resolved = unresolved.replace(
+            RuntimeProfiles.AGENT_RUNTIME_HOME_TOKEN,
+            "/data/user/0/com.aistudio.verb.app.debug/files/agent-runtime/homes/default"
+        )
+
+        assertTrue(RuntimeProfiles.UNRESOLVED_PLACEHOLDER.containsMatchIn(unresolved))
+        assertFalse(RuntimeProfiles.UNRESOLVED_PLACEHOLDER.containsMatchIn(resolved))
     }
 }

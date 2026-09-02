@@ -1,3 +1,44 @@
+# Verb 0.1.0-beta.8 — Know where you are, keep what you signed into
+
+*Draft. Every line below is code that is written and unit-tested; the physical-device acceptance
+runs listed in `docs/RELEASE_CHECKLIST.md` are what turn this from a draft into a release.*
+
+## What's fixed in beta.8
+
+- **The workspace says where you are.** A line under the header names the project, the terminal, and
+  what is running in it, and one tap opens a single surface listing projects and terminals together.
+  The header's project chip degrades to a folder glyph as soon as a second terminal claims the row's
+  width, which meant the answer disappeared at exactly the moment it was needed. Projects are shown
+  by the name you typed rather than the generated id.
+- **Antigravity installs onto the right device.** Its install target was a build-time absolute path
+  under `com.aistudio.verb.app`. Debug builds now carry a `.debug` suffix and the Play flavour
+  carries `.play`, so on those variants that path named a different package's private storage.
+  Install locations are resolved by the running app, and a catalog placeholder that survives
+  substitution now refuses the install instead of reaching a shell.
+- **Working World covers every agent it reports on.** The archive protected Claude, Codex and
+  OpenCode credentials but not the Agent Runtime home, where Antigravity keeps its sign-in. Anyone
+  signed into all three held a backup that would restore two. A test now compares the catalog Verb
+  reads sign-in state from against the paths the archive copies, so the two cannot drift again.
+- **Less redraw churn under full-screen agents.** Rows above the terminal no longer animate their
+  height. Height animation changes the terminal's row count on every frame, and every change resizes
+  the PTY, which a full-screen agent UI answers with a full repaint. The "start an agent" offer is
+  also hidden while an agent already owns the screen. Diagnostics now reports PTY geometry and how
+  many times it changed per window, so redraw complaints have a number behind them.
+- **Which app is this.** System → Device Information now shows the version and the application id.
+  A debug build has its own private storage, so signing in there and finding yourself signed out in
+  the release build is two apps, not lost credentials, and the screen now says so.
+
+## Beta limits
+
+Hermes and Antigravity still do not participate in the durable recovery semantics implemented for
+Claude Code, Codex CLI and OpenCode.
+
+Antigravity's credential file has not been observed on a device, so Verb reports its sign-in state
+as unknown rather than guessing a path. The Working World archive copies its whole configuration
+directory, which is the honest way to cover a location whose exact contents are unverified.
+
+---
+
 # Verb 0.1.0-beta.7 — Reliable authentication and startup truth
 
 ## What's fixed in beta.7

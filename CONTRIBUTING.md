@@ -37,10 +37,10 @@ Android, with Java and the Android SDK configured:
 ./gradlew :app:assembleFullCliDebug :app:assemblePlayDebug
 ```
 
-Run `connectedFullCliDebugAndroidTest` only on a disposable emulator. Android instrumentation
-deployment may uninstall the target package when it cleans up, which deletes Verb's app-private
-projects, runtime and agent credentials. Never point that task at a phone containing a real Working
-World.
+Debug builds use the disposable package `com.aistudio.verb.app.debug`. Android instrumentation may
+uninstall that package when it cleans up; it must never target the canonical release package
+`com.aistudio.verb.app`. Connected Gradle tests also refuse to start while a physical device is
+attached; use a disposable emulator.
 
 Add the smallest regression test that reproduces each corrected defect. Clearly separate automated,
 emulator and physical-device evidence in change descriptions.

@@ -17,7 +17,10 @@ import android.app.Activity
 import androidx.core.view.WindowCompat
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.imeAnimationTarget
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -112,6 +115,7 @@ class MainActivity : ComponentActivity() {
  *   hosted session keeps the keyboard whenever nothing is deliberately open in front of it.
  * * Nothing appears here on Verb's initiative. The sheet and every task are the user's move.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun VerbAppContent(viewModel: VerbViewModel) {
     val surface by viewModel.surface.collectAsStateWithLifecycle()
@@ -231,7 +235,19 @@ fun VerbAppContent(viewModel: VerbViewModel) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .imePadding()
+                // The IME's *settled* height, not its animating one.
+                //
+                // `imePadding()` follows the keyboard's slide frame by frame. The terminal canvas is
+                // inside this Box, so every one of those frames changed the PTY's row count, and each
+                // change is a SIGWINCH that a full-screen agent answers with a complete repaint. That
+                // is the flicker: measured on the device at 24 resizes across three keyboard toggles,
+                // against 0 with the keyboard untouched -- roughly eight repaints where one belongs.
+                //
+                // `imeAnimationTarget` reports where the IME will finish, so the workspace resizes
+                // once per toggle instead of once per frame. The cost is that the dock arrives at its
+                // final position rather than sliding up with the keyboard. For a surface whose whole
+                // job is hosting a full-screen agent, one honest jump beats eight repaints.
+                .windowInsetsPadding(WindowInsets.imeAnimationTarget)
         ) {
             // The workspace. Always composed, never replaced -- see this function's own note.
             TerminalScreen(
@@ -256,6 +272,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 agentInTerminal = viewModel::agentInTerminalSession,
                 onSwitchTerminalSession = viewModel::activateTerminalSession,
                 onOpenTerminalSession = { viewModel.openTerminalSession() },
+                onCloseTerminalSession = { viewModel.closeTerminalSession(it) },
                 canOpenMoreTerminals = terminalSessionIds.size < com.example.verb.session.VerbTerminalSessionHolder.MAX_SESSIONS,
                 projects = projects,
                 selectedProject = selectedProject,

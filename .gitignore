@@ -25,3 +25,6 @@ desktop/target/
 
 # Editor swap files, including ones created while testing full-screen apps inside Verb
 .sw?
+
+# Local agent session checkpoints. Machine-specific and not part of the product.
+.claude/
