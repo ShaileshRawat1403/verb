@@ -111,6 +111,7 @@ static int create_subprocess(JNIEnv* env,
             fflush(stderr);
         }
         execvp(cmd, argv);
+        __android_log_print(ANDROID_LOG_ERROR, "VerbJNI", "child pid=%d execvp failed: %s", getpid(), strerror(errno));
         // Show terminal output about failing exec() call:
         char* error_message;
         if (asprintf(&error_message, "exec(\"%s\")", cmd) == -1) error_message = "exec()";
@@ -133,7 +134,6 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
         jint cell_height)
 {
     jsize size = args ? (*env)->GetArrayLength(env, args) : 0;
-    __android_log_print(ANDROID_LOG_INFO, "VerbJNI", "args len=%d envVars len=%d", size, envVars ? (*env)->GetArrayLength(env, envVars) : -1);
     char** argv = NULL;
     if (size > 0) {
         argv = (char**) malloc((size + 1) * sizeof(char*));
@@ -185,6 +185,7 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
     *pProcId = procId;
     (*env)->ReleasePrimitiveArrayCritical(env, processIdArray, pProcId, 0);
 
+    __android_log_print(ANDROID_LOG_INFO, "VerbJNI", "createSubprocess returning ptm=%d, procId=%d", ptm, procId);
     return ptm;
 }
 
@@ -206,14 +207,18 @@ JNIEXPORT void JNICALL Java_com_termux_terminal_JNI_setPtyUTF8Mode(JNIEnv* TERMU
 
 JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitFor(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint pid)
 {
-    int status;
-    waitpid(pid, &status, 0);
+    int status = -1;
+    pid_t res = waitpid(pid, &status, 0);
+    __android_log_print(ANDROID_LOG_INFO, "VerbJNI", "waitpid(%d) returned %d, errno=%d (%s), status=0x%x (WIFEXITED=%d, exitStatus=%d, WIFSIGNALED=%d, sig=%d)",
+        pid, (int) res, errno, strerror(errno), status, WIFEXITED(status), WEXITSTATUS(status), WIFSIGNALED(status), WTERMSIG(status));
+    if (res < 0) {
+        return -1;
+    }
     if (WIFEXITED(status)) {
         return WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
         return -WTERMSIG(status);
     } else {
-        // Should never happen - waitpid(2) says "One of the first three macros will evaluate to a non-zero (true) value".
         return 0;
     }
 }

@@ -339,14 +339,15 @@ object RuntimeProfiles {
     ): String {
         val venv = "\$HOME/.venvs/$venvName"
         val flags = if (extraPipFlags.isNotBlank()) " $extraPipFlags" else ""
-        return "$interpreter -m venv --system-site-packages $venv && " +
-            "TMPDIR=\$PREFIX/tmp TEMP=\$PREFIX/tmp TMP=\$PREFIX/tmp " +
+        val rustEnv = "TMPDIR=\$PREFIX/tmp TEMP=\$PREFIX/tmp TMP=\$PREFIX/tmp " +
             "SSL_CERT_FILE=\$PREFIX/etc/tls/cert.pem CARGO_HTTP_CAINFO=\$PREFIX/etc/tls/cert.pem " +
             "CARGO_BUILD_TARGET=aarch64-linux-android ANDROID_API_LEVEL=24 " +
             "CC=clang CXX=clang++ CC_aarch64_linux_android=clang CXX_aarch64_linux_android=clang++ " +
             "AR=llvm-ar CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=clang " +
-            "RUSTFLAGS=\"-C link-arg=-landroid-support\" " +
-            "$venv/bin/pip install --upgrade$flags $pipSpec"
+            "RUSTFLAGS=\"-C link-arg=-landroid-support\" "
+        return "$interpreter -m venv --system-site-packages $venv && " +
+            "$rustEnv$venv/bin/pip install --upgrade wheel setuptools && " +
+            "$rustEnv$venv/bin/pip install --upgrade$flags $pipSpec"
     }
 
     val all: List<RuntimeProfile> = listOf(

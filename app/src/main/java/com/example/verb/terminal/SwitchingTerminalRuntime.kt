@@ -179,8 +179,11 @@ class SwitchingTerminalRuntime(
 
     override fun refreshEnvironment() { active.value?.refreshEnvironment() }
 
-    override fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime) {
-        active.value?.activateAgentRuntime(runtime)
+    override fun activateAgentRuntime(
+        runtime: AgentRuntimeInstaller.InstalledRuntime,
+        guestCommand: List<String>?
+    ) {
+        active.value?.activateAgentRuntime(runtime, guestCommand)
     }
 
     override fun deactivateAgentRuntime() { active.value?.deactivateAgentRuntime() }

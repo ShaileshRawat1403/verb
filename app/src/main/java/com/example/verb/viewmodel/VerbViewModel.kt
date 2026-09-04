@@ -871,7 +871,20 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 return
             }
             val activation = runCatching {
-                terminalRuntime.activateAgentRuntime(runtime)
+                val guestCmd = if (profile.environment == ProfileEnvironment.AGENT_RUNTIME) {
+                    val candidate = profile.binaryCandidates.firstOrNull()?.path
+                        ?.replace("\$HOME", "/home/verb")
+                    if (candidate != null && candidate.startsWith("/")) {
+                        listOf(candidate)
+                    } else if (command.startsWith("/")) {
+                        listOf(command)
+                    } else {
+                        listOf("/home/verb/.local/bin/$command")
+                    }
+                } else {
+                    listOf(command)
+                }
+                terminalRuntime.activateAgentRuntime(runtime, guestCmd)
                 if (terminalRuntime.pendingEnvironmentChange.value) {
                     terminalRuntime.restartSession()
                 }
@@ -907,11 +920,14 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
                 // notice while this cold start is still blank.
                 withTimeoutOrNull(ANTIGRAVITY_FIRST_SCREEN_TIMEOUT_MS) {
                     concreteRuntime.terminalOutput.drop(1).first { output ->
-                        output.contains("Antigravity CLI")
+                        output.contains("Antigravity CLI") || output.contains("Usage of agy:") || output.contains("antigravity")
                     }
                 }
                 _terminalLaunchNotice.value = null
             }
+            // Antigravity is executed as the guestCommand under QEMU directly to avoid
+            // shell fork+execve SIGSYS under Android seccomp.
+            return
         } else {
             antigravityLaunchNoticeJob?.cancel()
             antigravityLaunchNoticeJob = null

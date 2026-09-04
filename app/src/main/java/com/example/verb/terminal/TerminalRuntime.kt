@@ -30,6 +30,7 @@ class TerminalRuntime(
 
     private var projectDirectory: File? = initialProjectDirectory
     private var activeAgentRuntime: AgentRuntimeInstaller.InstalledRuntime? = null
+    private var activeGuestCommand: List<String>? = null
 
     /** What the **live** session was actually launched with. Never speculative. */
     private var applied: LaunchSpec = resolveSpec()
@@ -66,7 +67,9 @@ class TerminalRuntime(
     private fun resolveSpec(): LaunchSpec {
         val runtime = activeAgentRuntime
         val resolved = if (runtime != null) {
-            QemuAgentRuntimeEnvironment(workingDir, requireProjectDirectory(), runtime.manifest).resolve(runtime.rootfs)
+            val cmd = activeGuestCommand ?: listOf("/bin/bash")
+            QemuAgentRuntimeEnvironment(workingDir, requireProjectDirectory(), runtime.manifest)
+                .resolveGuestCommand(runtime.rootfs, cmd)
         } else {
             TerminalEnvironmentResolver(
                 workingDir,
@@ -173,14 +176,19 @@ class TerminalRuntime(
     }
 
     /** Switches the **next** session to the separately installed Linux agent rootfs. */
-    override fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime) {
+    override fun activateAgentRuntime(
+        runtime: AgentRuntimeInstaller.InstalledRuntime,
+        guestCommand: List<String>?
+    ) {
         activeAgentRuntime = runtime
+        activeGuestCommand = guestCommand
         refreshEnvironment()
     }
 
     /** Returns the next session to the normal Verb CLI userland. */
     override fun deactivateAgentRuntime() {
         activeAgentRuntime = null
+        activeGuestCommand = null
         refreshEnvironment()
     }
 

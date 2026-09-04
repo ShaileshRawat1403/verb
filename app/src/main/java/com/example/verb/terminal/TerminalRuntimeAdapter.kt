@@ -192,7 +192,10 @@ interface VerbTerminal : TerminalRuntimeAdapter {
     val pendingEnvironmentChange: StateFlow<Boolean>
 
     /** Points this terminal at an installed agent runtime and re-resolves. */
-    fun activateAgentRuntime(runtime: AgentRuntimeInstaller.InstalledRuntime)
+    fun activateAgentRuntime(
+        runtime: AgentRuntimeInstaller.InstalledRuntime,
+        guestCommand: List<String>? = null
+    )
 
     /** Returns this terminal to the bundled userland. Paired with [activateAgentRuntime]. */
     fun deactivateAgentRuntime()

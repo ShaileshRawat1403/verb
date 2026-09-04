@@ -80,10 +80,9 @@ class QemuAgentRuntimeEnvironment(
         }
 
         val geminiSettings = File(agentHome, ".gemini/antigravity-cli/settings.json")
-        if (!geminiSettings.exists()) {
-            runCatching {
-                geminiSettings.parentFile?.mkdirs()
-                geminiSettings.writeText("{\n  \"modelProvider\": \"gemini\"\n}\n")
+        runCatching {
+            if (geminiSettings.exists() && geminiSettings.readText().contains("\"modelProvider\": \"gemini\"")) {
+                geminiSettings.delete()
             }
         }
 
@@ -135,6 +134,31 @@ class QemuAgentRuntimeEnvironment(
             // Verb's own Bionic loader settings must not reach the glibc guest.
             "-U", "LD_PRELOAD"
         )
+
+        // Parse API keys and custom variables from ~/.env. These are forwarded through the host
+        // environment array (which QEMU inherits and passes to the guest) rather than QEMU's -E
+        // argv, so they never appear in /proc/<pid>/cmdline or `ps` output.
+        val userEnvVars = mutableListOf<String>()
+        val envFile = File(filesDir, "home/.env")
+        if (envFile.isFile) {
+            runCatching {
+                envFile.readLines()
+                    .map { it.trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+                    .forEach { line ->
+                        val body = line.removePrefix("export ").trim()
+                        val separator = body.indexOf('=')
+                        if (separator > 0) {
+                            val key = body.substring(0, separator).trim()
+                            val value = body.substring(separator + 1).trim().trim('"', '\'')
+                            if (key.isNotEmpty() && value.isNotEmpty()) {
+                                userEnvVars += "$key=$value"
+                            }
+                        }
+                    }
+            }
+        }
+
         // QEMU user-mode does not perform a PATH search for the binary argument.
         // Wrapping bare command names with /usr/bin/env ensures PATH resolution inside the guest.
         val resolvedCommand = if (guestCommand.firstOrNull()?.startsWith("/") == true) {
@@ -151,7 +175,9 @@ class QemuAgentRuntimeEnvironment(
             workingDirectory = projectDirectory,
             // The environment of the PRoot process itself: host paths, so the dynamically linked
             // PRoot and QEMU executables can find their own Bionic libraries.
-            variables = arrayOf(
+            // User-supplied keys from ~/.env are appended here so they propagate through
+            // PRoot → QEMU → guest without appearing on any command line.
+            variables = (listOf(
                 "TERM=xterm-256color",
                 "COLORTERM=truecolor",
                 "HOME=${filesDir.absolutePath}/home",
@@ -162,7 +188,7 @@ class QemuAgentRuntimeEnvironment(
                 // Emulating a CPU the guest binaries were built for; the default model lacks
                 // instructions they use.
                 "QEMU_CPU=$QEMU_CPU_MODEL"
-            ),
+            ) + userEnvVars).toTypedArray(),
             rootfsDir = rootfs,
             prefixDir = File(rootfs, "usr")
         )

@@ -565,8 +565,8 @@ class TermuxTerminalRuntimeAdapter(
         _sessionState.value = if (finishedSession.exitStatus == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
         refreshTerminalContext()
         appendOutput("\n[Session terminated with code ${finishedSession.exitStatus}]\n$ ")
-        TerminalSessionLogger.warn(LogCategory.LIFECYCLE, "Termux PTY session finished with exit code ${finishedSession.exitStatus}")
-        android.util.Log.w(TAG, "Session finished exit=${finishedSession.exitStatus} shell=$shellExecutable")
+        val transcript = runCatching { finishedSession.emulator?.screen?.transcriptText }.getOrNull()
+        android.util.Log.w(TAG, "Session finished exit=${finishedSession.exitStatus} shell=$shellExecutable output=[$transcript]")
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {

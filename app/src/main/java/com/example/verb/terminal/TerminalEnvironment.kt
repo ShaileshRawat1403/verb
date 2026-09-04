@@ -197,7 +197,7 @@ class TerminalEnvironmentResolver(
      * can drift from the real terminal's mounts or environment.
      */
     private fun guestExecArguments(rootfs: String, projectDir: File?, guestCommand: List<String>): Array<String> {
-        val args = mutableListOf(File(File(rootfs, "usr"), "bin/proot").absolutePath, "--link2symlink")
+        val args = mutableListOf(File(File(rootfs, "usr"), "bin/proot").absolutePath)
         for (dir in listOf("/dev", "/proc", "/sys", "/system", "/apex", "/vendor", "/odm", "/product", "/system_ext")) {
             if (File(dir).isDirectory) {
                 args += "-b"
