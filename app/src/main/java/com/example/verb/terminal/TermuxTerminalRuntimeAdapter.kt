@@ -565,8 +565,23 @@ class TermuxTerminalRuntimeAdapter(
         _sessionState.value = if (finishedSession.exitStatus == 0) TerminalSessionState.EXITED else TerminalSessionState.FAILED
         refreshTerminalContext()
         appendOutput("\n[Session terminated with code ${finishedSession.exitStatus}]\n$ ")
-        val transcript = runCatching { finishedSession.emulator?.screen?.transcriptText }.getOrNull()
-        android.util.Log.w(TAG, "Session finished exit=${finishedSession.exitStatus} shell=$shellExecutable output=[$transcript]")
+        // Shape, never content. The transcript is the user's prompts, the model's replies, every
+        // command they ran and anything those commands printed -- including a token echoed by
+        // mistake. `docs/ARCHITECTURE.md` says Verb does not retain raw PTY output, and logcat is
+        // readable over adb by anyone holding the phone, so writing it here would have been the
+        // same disclosure the durable store is forbidden to make.
+        //
+        // The length is the diagnostic that was actually wanted: "the agent exited silently" and
+        // "the agent exited after printing four screens" are different failures, and that question
+        // is answered by a number.
+        val outputLength = runCatching {
+            finishedSession.emulator?.screen?.transcriptText?.length
+        }.getOrNull()
+        android.util.Log.w(
+            TAG,
+            "Session finished exit=${finishedSession.exitStatus} shell=$shellExecutable " +
+                "hadOutput=${(outputLength ?: 0) > 0} outputLength=${outputLength ?: -1}"
+        )
     }
 
     override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
