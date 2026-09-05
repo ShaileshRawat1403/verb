@@ -44,10 +44,10 @@ class AgentRuntimeCompatibilityProbe(
      * Narrow admission check used only to enter the runtime long enough to install an agent whose
      * own catalog probe will then decide whether that agent is usable.
      *
-     * This deliberately does not change the global Agent Runtime status: a working shell is not
-     * evidence that Claude (or any other agent) works. It only prevents a circular dependency in
-     * which Verb refuses to install `agy` until `agy --version` succeeds, while that command cannot
-     * exist until Verb has entered the runtime and installed it.
+     * It exists to break a circular dependency: Verb would otherwise refuse to install `agy` until
+     * `agy --version` succeeds, while that command cannot exist until Verb has entered the runtime
+     * and installed it. A working shell is not evidence that any particular agent works -- that
+     * remains each profile's own probe, reported on its own card.
      */
     fun checkShellForProfileInstallation(
         runtime: AgentRuntimeInstaller.InstalledRuntime
@@ -115,8 +115,29 @@ class AgentRuntimeCompatibilityProbe(
          * `--version` still starts the real binary and exits on its own, so nothing is authenticated
          * and no network call is required.
          */
-        private val AGENT_PROBE_COMMAND = listOf("/usr/local/bin/claude", "--version")
-        private val SHELL_PROBE_COMMAND = listOf("/bin/bash", "--version")
+        /**
+         * The runtime-wide question is "can anything execute in here", so the probe is the
+         * runtime's own shell.
+         *
+         * This constant read `/usr/local/bin/claude --version` until 5 September 2026, which made a
+         * Claude-specific result the whole runtime's verdict. On a Vivo I2202 the card said
+         * "Installed, but incompatible on this device. This Linux runtime cannot execute inside
+         * this Android app sandbox" while Antigravity was running inside that very runtime, one
+         * screen away. Claude Code does not even use the Agent Runtime in the shipping product --
+         * it installs into the local userland -- so the check was gating every agent on an agent
+         * that never runs there.
+         *
+         * Whether a *particular* agent works is that agent's own catalog probe, reported on its own
+         * card. This one answers only whether the sandbox can execute the rootfs at all.
+         */
+        internal val AGENT_PROBE_COMMAND = listOf("/bin/bash", "--version")
+
+        /**
+         * Kept as its own name because it is called at a different moment -- see
+         * [checkShellForProfileInstallation] -- even though it now asks the same question as
+         * [AGENT_PROBE_COMMAND]. They were always meant to be the same check.
+         */
+        internal val SHELL_PROBE_COMMAND = AGENT_PROBE_COMMAND
 
         const val TIMEOUT_MS = 5_000L
     }

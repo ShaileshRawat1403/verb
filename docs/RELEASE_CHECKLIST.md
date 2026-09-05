@@ -166,6 +166,25 @@ build of it. `docs/BETA8_HANDOFF.md` carries the procedure for each.
   closed, and the keyboard is what you need to enter the code with. Open, and Antigravity truncates
   its own pane to "(1-17 of 27 lines)". Only relevant on the paste-the-code fallback path, since the
   browser round-trip now completes on its own.
+- ~~**The Agent Runtime called itself incompatible while Antigravity ran inside it.**~~ **Fixed in
+  beta.11.** The card read "Installed, but incompatible on this device. This Linux runtime cannot
+  execute inside this Android app sandbox" on a device where `agy` was running in that same runtime
+  one screen away. The wording was not the defect:
+  `AgentRuntimeCompatibilityProbe.AGENT_PROBE_COMMAND` ran `/usr/local/bin/claude --version`, so a
+  Claude-specific result became the runtime's whole-device verdict -- and Claude Code does not use
+  the Agent Runtime in the shipping product at all, since it installs into the local userland. The
+  check was gating every agent on one that never runs there.
+  The probe is the runtime's own shell again, which is the only question a runtime-wide verdict can
+  honestly answer; whether a given agent works stays that agent's own catalog probe, on its own card.
+  The message now names the evidence -- "its shell would not start on this device, so nothing in it
+  can run" -- rather than pronouncing on the sandbox, keeping the original rule against naming an
+  Android policy nobody identified.
+  The probe's test was already called "the probe runs bash --version, never a login or interactive
+  shell" but asserted a locally-built argv instead of the constant, so the drift was invisible for
+  as long as it existed. It now asserts the constant, and a second test fails if `claude`, `codex`,
+  `opencode`, `agy` or `hermes` reappears in the runtime-wide probe.
+  **Behaviour change:** `canOpen` becomes true wherever the runtime shell works, so "Open agent
+  terminal" is enabled where it was previously greyed out.
 - ~~**Antigravity's PTY is resized about ten times per keyboard toggle.**~~ **Fixed and measured.**
   A *different* defect from the Codex flicker above, and the opposite shape: Codex churns output
   with no resizes, Antigravity churned resizes. Measured with `agy` at its prompt, three keyboard

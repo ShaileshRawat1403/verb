@@ -593,8 +593,13 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private fun agentRuntimeMessageFor(state: AgentCompatibilityState, version: String): String = when (state) {
         AgentCompatibilityState.COMPATIBLE -> "Agent Runtime $version is ready."
         AgentCompatibilityState.INCOMPATIBLE ->
-            "Installed, but incompatible on this device. This Linux runtime cannot execute inside " +
-                "this Android app sandbox. The normal Verb terminal is unaffected."
+            // Says what was tried and what happened, rather than pronouncing on the runtime in
+            // general. The probe runs the runtime's own shell; if that will not start, nothing in
+            // the runtime will. Naming the evidence is also what keeps this honest now that the
+            // check is runtime-wide again -- it used to run Claude and report the failure as though
+            // the whole runtime were dead, while Antigravity ran in it perfectly.
+            "Installed, but its shell would not start on this device, so nothing in it can run. " +
+                "The normal Verb terminal is unaffected."
         AgentCompatibilityState.CHECK_TIMED_OUT ->
             "Compatibility check timed out. The Agent Runtime is installed but unverified."
         AgentCompatibilityState.CHECK_FAILED ->

@@ -1,6 +1,7 @@
 package com.example.verb.terminal
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -36,6 +37,45 @@ class AgentRuntimeCompatibilityProbeTest {
         File(filesDir, "usr/bin").mkdirs()
         File(filesDir, "usr/bin/proot").apply { writeText("#!/bin/sh\n"); setExecutable(true) }
         return filesDir
+    }
+
+    /**
+     * The constant itself, not a hand-built copy of it.
+     *
+     * The test below asserts the *shape* of the argv by constructing `listOf("/bin/bash",
+     * "--version")` locally, so it kept passing when `AGENT_PROBE_COMMAND` was quietly changed to
+     * `/usr/local/bin/claude --version`. The runtime's whole-device verdict then became a
+     * Claude-specific result: on a Vivo I2202 the card read "Installed, but incompatible on this
+     * device" while Antigravity was running inside that same runtime.
+     *
+     * Claude Code does not use the Agent Runtime in the shipping product at all -- it installs into
+     * the local userland -- so the check was gating every agent on one that never runs there.
+     */
+    @Test
+    fun `the runtime-wide probe is the runtime's own shell, not any one agent`() {
+        assertEquals(
+            listOf("/bin/bash", "--version"),
+            AgentRuntimeCompatibilityProbe.AGENT_PROBE_COMMAND
+        )
+        assertEquals(
+            "the install-admission probe asks the same question",
+            AgentRuntimeCompatibilityProbe.AGENT_PROBE_COMMAND,
+            AgentRuntimeCompatibilityProbe.SHELL_PROBE_COMMAND
+        )
+    }
+
+    /**
+     * Nothing agent-specific may become the runtime's verdict again. Named agents rather than a
+     * generic assertion, so the failure message says which one crept back in.
+     */
+    @Test
+    fun `no agent binary appears in the runtime-wide probe`() {
+        listOf("claude", "codex", "opencode", "agy", "hermes").forEach { agent ->
+            assertFalse(
+                "$agent must not decide whether the whole Agent Runtime works",
+                AgentRuntimeCompatibilityProbe.AGENT_PROBE_COMMAND.any { it.contains(agent) }
+            )
+        }
     }
 
     @Test
