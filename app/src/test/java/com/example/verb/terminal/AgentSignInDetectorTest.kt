@@ -63,6 +63,52 @@ class AgentSignInDetectorTest {
     }
 
     /**
+     * Hermes keeps its credential in the local userland home, like Claude and Codex.
+     *
+     * Observed on the Vivo I2202: `~/.hermes/auth.json`, written the moment a sign-in completed.
+     */
+    @Test
+    fun `Hermes reports signed in from its own home directory`() {
+        val filesDir = filesDir()
+        write(filesDir, ".hermes/auth.json")
+
+        assertEquals(
+            AgentSignInState.SIGNED_IN,
+            AgentSignInDetector(filesDir).stateFor(RuntimeProfiles.forId(RuntimeProfileId.HERMES))
+        )
+    }
+
+    /**
+     * Antigravity's credential is *not* in the local userland home, and putting one there must not
+     * make it look signed in.
+     *
+     * It runs in the Agent Runtime, so `AgentSignInDetector` resolves its marker under
+     * `agent-runtime/homes/default`. Getting this wrong in either direction is a false statement
+     * about someone's login, so both directions are asserted.
+     */
+    @Test
+    fun `Antigravity is read from the Agent Runtime home, not the local one`() {
+        val agy = RuntimeProfiles.forId(RuntimeProfileId.ANTIGRAVITY)
+        val marker = agy.signedInMarkers.single()
+
+        val wrongHome = filesDir()
+        write(wrongHome, marker)
+        assertEquals(
+            "a file in the local userland home must not count for an Agent Runtime agent",
+            AgentSignInState.SIGNED_OUT,
+            AgentSignInDetector(wrongHome).stateFor(agy)
+        )
+
+        val rightHome = filesDir()
+        File(AgentRuntimePaths(rightHome).agentHome(AgentRuntimePaths.DEFAULT_AGENT), marker)
+            .apply { parentFile?.mkdirs(); writeText("{}") }
+        assertEquals(
+            AgentSignInState.SIGNED_IN,
+            AgentSignInDetector(rightHome).stateFor(agy)
+        )
+    }
+
+    /**
      * The important one. Guessing a path and reporting absence from it would invent a fact, which
      * is the same mistake as the reverted `claude install` command. An agent whose credential
      * location has not been observed on a real device must say nothing at all.

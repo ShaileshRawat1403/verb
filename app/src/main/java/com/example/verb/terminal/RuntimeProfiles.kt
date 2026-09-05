@@ -412,6 +412,10 @@ object RuntimeProfiles {
                     ),
             postInstallHint = "Hermes Agent 0.15.2 runs in its own venv (\$HOME/.venvs/hermes) with native ARM64 cryptography.",
             launchCommand = "hermes",
+            // Observed on the Vivo I2202 after a real sign-in: `~/.hermes/auth.json`, alongside
+            // `auth.lock`. A marker enters this catalog only once it has been seen on a device --
+            // guessing one and reporting absence from it would invent a fact.
+            signedInMarkers = listOf(".hermes/auth.json"),
             // The venv's own console script is authoritative. AgentWrapperBootstrap resolves it
             // from Verb's private libexec directory, without writing to $PREFIX/bin.
             binaryCandidates = listOf(
@@ -533,6 +537,12 @@ object RuntimeProfiles {
                     "install -m 0755 \"\$agy_stage/antigravity\" '$AGY_INSTALL_BIN/agy')",
             postInstallHint = "Antigravity $AGY_VERSION is pinned to the Android-verified build. Run agy and complete sign-in.",
             launchCommand = "agy",
+            // Observed on the Vivo I2202 after a completed Google OAuth sign-in:
+            // `.gemini/antigravity-cli/antigravity-oauth-token`. Resolved under the *Agent Runtime*
+            // home rather than the local userland one, because that is where this profile runs --
+            // see `AgentSignInDetector.stateFor`. Until this line Verb could only report Antigravity
+            // as UNKNOWN, which was honest but less than it could observe.
+            signedInMarkers = listOf(".gemini/antigravity-cli/antigravity-oauth-token"),
             binaryCandidates = listOf(
                 AgentBinaryCandidate("\$HOME/.local/bin/agy", AgentBinaryAbi.DETECT)
             ),

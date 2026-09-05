@@ -149,7 +149,14 @@ class RuntimeProfilesTest {
         assertTrue(antigravity.installCommand.contains("trap 'rm -rf"))
         assertFalse(antigravity.installCommand.contains("| bash"))
         assertEquals(listOf(RuntimeRequirement("agy", "", versionProbeArgs = listOf("--version"), probeTimeoutMs = 15_000L)), antigravity.requirements)
-        assertTrue(antigravity.signedInMarkers.isEmpty())
+        // Was `isEmpty()`, pinning "Verb has not seen where Antigravity keeps a credential, so it
+        // says nothing". That has now been seen: after a completed Google OAuth sign-in on the
+        // Vivo I2202, `.gemini/antigravity-cli/antigravity-oauth-token` exists in the Agent Runtime
+        // home. Changing this line is the deliberate act the old assertion existed to force.
+        assertEquals(
+            listOf(".gemini/antigravity-cli/antigravity-oauth-token"),
+            antigravity.signedInMarkers
+        )
         assertEquals(
             listOf(AgentBinaryCandidate("\$HOME/.local/bin/agy", AgentBinaryAbi.DETECT)),
             antigravity.binaryCandidates

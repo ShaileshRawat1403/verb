@@ -122,10 +122,21 @@ build of it. `docs/BETA8_HANDOFF.md` carries the procedure for each.
   So PTY geometry churn is not what people are seeing. The keyboard fix in `7170c94` holds; the
   visible flicker is Codex's own render loop, and the release notes must say so rather than claiming
   a flicker fix.
-- [x] Antigravity's sign-in state ships honestly reported as unknown. It declares no
-  `signedInMarkers`, so `AgentSignInDetector` returns `UNKNOWN` and the card says nothing about
-  login rather than guessing. The marker was not observed, because sign-in cannot be completed --
-  see the Antigravity auth defect below.
+- [x] Antigravity's credential marker is observed on a device and added to the catalog.
+  beta.9 shipped it as `UNKNOWN`, which was the honest half of this box: it declared no
+  `signedInMarkers`, so `AgentSignInDetector` said nothing rather than guessing a path. Once the
+  OAuth fix let a sign-in complete, the marker was read off the Vivo I2202 --
+  `.gemini/antigravity-cli/antigravity-oauth-token`, in the *Agent Runtime* home rather than the
+  local userland one -- and added in beta.10. `RuntimeProfilesTest` had pinned the empty list
+  precisely so that adding it would be a deliberate act with a failing test attached, which is how
+  it went.
+  The same pass found Hermes signed in at `~/.hermes/auth.json` and equally unreported, so its
+  marker went in too. That exposed a second gap: `WORLD_PATHS` did not cover `files/home/.hermes`,
+  so `verb export` would have restored a Hermes that was logged out -- the identical failure the
+  `.gemini` entry had been added to fix one agent earlier. `WorldCoversSignInTest` compares the
+  Kotlin catalog against the shell script and now fails when they drift, and a second test names
+  the four covered agents rather than counting them, because a marker quietly dropped from the
+  catalog would make the first test pass by having nothing to compare.
 - [ ] `verb world list` includes the Agent Runtime home, and a schema-v2 export/preview/apply
   round-trip restores Antigravity's configuration on a disposable emulator. Not attempted.
   `verb export` was run far enough to print its manifest -- `.env`, `.claude`, `.claude.json`,

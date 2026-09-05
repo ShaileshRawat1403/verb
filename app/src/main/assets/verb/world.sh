@@ -91,6 +91,11 @@ WORLD_PATHS=(
   "files/home/.codex"
   "files/home/.config/opencode"
   "files/home/.local/share/opencode"
+  # Hermes keeps its sign-in in its own home directory, not in a venv or a config dir. Added when a
+  # real login was found at `~/.hermes/auth.json` on the validation device while this list still
+  # covered three agents out of four -- the same gap the `.gemini` line below was written to close,
+  # one agent later. `WorldCoversSignInTest` now fails if a catalog marker is not covered here.
+  "files/home/.hermes"
   # Agents that run under the Agent Runtime keep their sign-in in the app-owned agent home, not in
   # the local userland home above. Antigravity is the first of these, and until this line the
   # archive silently protected two of the three agents a person had signed into -- while the

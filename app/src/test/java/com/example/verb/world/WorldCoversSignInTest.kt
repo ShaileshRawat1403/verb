@@ -43,6 +43,26 @@ class WorldCoversSignInTest {
             ProfileEnvironment.AGENT_RUNTIME -> "files/agent-runtime/homes/default/$marker"
         }
 
+    /**
+     * All four admitted agents that keep a credential file are covered, named rather than counted.
+     *
+     * The generic test above passes trivially if a marker is quietly dropped from the catalog: an
+     * agent Verb says nothing about is an agent this comparison has nothing to compare. This one
+     * fails instead, which is the case that actually happened -- Hermes and Antigravity were signed
+     * in on the validation device for two days while Verb reported neither, and `verb export` would
+     * have restored a Hermes that was logged out.
+     */
+    @Test
+    fun `the agents with an observed credential file are the ones Verb reports on`() {
+        assertEquals(
+            listOf("Antigravity", "Claude Code", "Codex CLI", "Hermes Agent"),
+            RuntimeProfiles.all
+                .filter { it.signedInMarkers.isNotEmpty() }
+                .map { it.displayName }
+                .sorted()
+        )
+    }
+
     @Test
     fun `every credential marker Verb reports on is inside the working world`() {
         assumeTrue(script.isFile)
