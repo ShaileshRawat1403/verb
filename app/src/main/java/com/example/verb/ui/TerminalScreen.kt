@@ -202,7 +202,22 @@ fun TerminalScreen(
     // using it" looks like.
     val noContext = remember { MutableStateFlow(TerminalContextState()) }
     val terminalContext by (terminalRuntime?.terminalContextState ?: noContext).collectAsState()
-    val fullScreenAgentActive = terminalContext.alternateScreenState == AlternateScreenState.ACTIVE
+
+    // Does an agent own the canvas right now?
+    //
+    // The alternate screen answers this for Claude Code and Codex CLI, which both switch buffers.
+    // It answered *nothing* for Antigravity, which renders inline and never leaves the primary
+    // buffer -- so on a Vivo I2202 the workspace kept its chrome over a running Antigravity, and the
+    // measurement is unambiguous: three keyboard toggles produced 11 PTY resizes per five-second
+    // window with the row present and 0-1 with it forced off, at 40 `onTextChanged` per window
+    // against 1 in fourteen seconds. Every one of those resizes is a SIGWINCH that Antigravity
+    // answers with a full repaint.
+    //
+    // The occupant is the other half of the answer, and the honest one: it is recorded when Verb
+    // launches an agent into this terminal, whether or not that agent has a session coordinator.
+    // Occupancy is not a recovery claim -- see `VerbTerminalSessionHolder.ANTIGRAVITY_AGENT_TYPE`.
+    val agentOwnsCanvas = terminalContext.alternateScreenState == AlternateScreenState.ACTIVE ||
+        activeTerminalSessionId?.let(agentInTerminal) != null
 
     // A Compose text field on another tab may retain IME focus across navigation. Release it as
     // Terminal opens so the explicit terminal input field can claim text focus when the user taps.
@@ -731,7 +746,7 @@ fun TerminalScreen(
         // once at each end instead of twenty times in between.
         AnimatedVisibility(
             visible = bootstrapState == TermuxBootstrapInstaller.State.Ready &&
-                !isKeyboardVisible && terminalLaunchNotice == null && !fullScreenAgentActive,
+                !isKeyboardVisible && terminalLaunchNotice == null && !agentOwnsCanvas,
             enter = fadeIn(),
             exit = fadeOut()
         ) {
@@ -873,7 +888,13 @@ fun TerminalScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "Environment updated — restart the session to apply it.",
+                        // Says the fact, then the action. "Environment updated" named an internal
+                        // object and left the actual consequence -- that the terminal in front of
+                        // you is not the one the change applied to -- for the reader to infer. On a
+                        // Vivo I2202 the workspace line said `demo` the instant the project was
+                        // created while the prompt was still in the previous directory, and this
+                        // was the only line on screen that could have said so.
+                        "The change applies to the next terminal — this one is unchanged until you restart it.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.weight(1f)

@@ -483,6 +483,22 @@ class TermuxTerminalRuntimeAdapter(
     private var lastGeometry: Pair<Int, Int>? = null
     private var metricsResizeCount = 0
 
+    /**
+     * Which terminal these numbers came from.
+     *
+     * `TerminalSessionLogger` is one process-wide sink, and every open terminal writes its metrics
+     * into it. The Diagnostics sheet names the *active* session at the top, so with Codex running
+     * in a background terminal the sheet showed Terminal 1's directories above a steady stream of
+     * Terminal 2's callback counts, and there was nothing in either line to tell them apart. The
+     * flicker measurement in `docs/RELEASE_CHECKLIST.md` is read off exactly these lines, so an
+     * unattributed number is worse than no number.
+     *
+     * Set by [com.example.verb.session.VerbTerminalSessionHolder] when it opens the terminal, which
+     * is the only place that knows the id. Null until then, and for the one-off adapters tests
+     * build directly.
+     */
+    var diagnosticsLabel: String? = null
+
     private fun recordGeometryForMetrics(changedSession: TerminalSession) {
         val emulator = changedSession.emulator ?: return
         val geometry = emulator.mColumns to emulator.mRows
@@ -500,9 +516,10 @@ class TermuxTerminalRuntimeAdapter(
             } else 0
             val geometry = lastGeometry
             val geometryText = if (geometry == null) "unknown" else "${geometry.first}x${geometry.second}"
+            val who = diagnosticsLabel?.let { "[$it] " } ?: ""
             TerminalSessionLogger.info(
                 LogCategory.DIAGNOSTIC,
-                "PTY callback rate: $metricsCallbackCount onTextChanged / $metricsPublishCount " +
+                "${who}PTY callback rate: $metricsCallbackCount onTextChanged / $metricsPublishCount " +
                     "snapshots published in ${elapsed}ms ($throttleRatio% coalesced by throttle); " +
                     "geometry $geometryText, $metricsResizeCount resize(s) in window"
             )

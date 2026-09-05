@@ -166,6 +166,16 @@ class TerminalRuntime(
     }
 
     /**
+     * Names this terminal in the process-wide diagnostics log.
+     *
+     * Only the session holder knows the id, and it only knows it after the factory that built this
+     * runtime has returned, so the label arrives afterwards rather than through the constructor.
+     */
+    fun setDiagnosticsLabel(label: String) {
+        (delegate as? TermuxTerminalRuntimeAdapter)?.diagnosticsLabel = label
+    }
+
+    /**
      * Selection changes define the **next** launch directory. A running shell is already somewhere,
      * and Verb neither moves it nor pretends it moved: the live working directory keeps reporting
      * whatever the shell's actual cwd is.

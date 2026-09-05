@@ -52,7 +52,12 @@ fun AgentRuntimeCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Text("Agent Runtime", style = MaterialTheme.typography.titleMedium)
             Text(
-                "A separate ARM64 Linux userland for Claude Code and OpenCode. It shares only the selected project and never replaces the normal Verb terminal.",
+                // Names the agent that actually needs it. Antigravity is the only profile declaring
+                // `ProfileEnvironment.AGENT_RUNTIME`; Claude Code and OpenCode were installed and
+                // reported Ready on a Vivo I2202 with this card still saying "Not installed", so
+                // the old sentence sent people to install a 600MB rootfs nothing on screen needed.
+                "A separate ARM64 Linux userland, needed by Antigravity. It shares only the selected " +
+                    "project and never replaces the normal Verb terminal.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)

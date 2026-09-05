@@ -44,6 +44,15 @@ APP_DIR="$(cd "$HOME_DIR/../.." && pwd)"
 #     missed them by a single dot, which is why a Codex user's archive was unrestorable.
 #   * `node_modules/.bin/*` -- npm's executable shims, under `.config/opencode` and anywhere else
 #     a tool vendors its dependencies. Nothing about a user's world lives in them.
+#   * `.gemini/antigravity-cli/log/*` and the `cli.log` symlink that points into it -- Antigravity
+#     writes a timestamped log per run and keeps `cli.log` pointing at the newest. Adding `.gemini`
+#     to WORLD_PATHS is what made this reachable, and it stopped *every* export on a device with
+#     Antigravity installed: one symlink is enough for `assert_payload_restorable` to refuse the
+#     whole archive, which is the right refusal aimed at the wrong file.
+#
+#     The logs go too, not just the link. They are regenerated, they are the largest thing in that
+#     directory, and a CLI log is exactly the kind of file that ends up holding prompts and model
+#     output -- which a backup of *credentials and session records* has no business carrying.
 WORLD_EXCLUDES=(
   "--exclude=*/.tmp"
   "--exclude=*/.tmp/*"
@@ -55,6 +64,9 @@ WORLD_EXCLUDES=(
   "--exclude=.codex/tmp/*"
   "--exclude=*/node_modules/.bin"
   "--exclude=*/node_modules/.bin/*"
+  "--exclude=*/.gemini/antigravity-cli/cli.log"
+  "--exclude=*/.gemini/antigravity-cli/log"
+  "--exclude=*/.gemini/antigravity-cli/log/*"
 )
 
 # What `stage_payload` will accept on the way back in. Kept beside the excludes because the two have

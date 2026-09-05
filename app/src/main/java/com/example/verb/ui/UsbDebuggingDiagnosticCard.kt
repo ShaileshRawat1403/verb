@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -99,7 +100,15 @@ fun UsbDebuggingDiagnosticCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Weighted, and the title ellipsized inside it. Without the weight this Row
+                // measured at its full unconstrained title width and left the Retry button beside
+                // it nothing to lay out in: on a Vivo I2202 the button rendered as a tall empty
+                // purple block with the title running underneath it, and "Retry" was not readable
+                // at all. Same failure, and the same fix, as the header's project chip.
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
                         imageVector = Icons.Default.Usb,
                         contentDescription = "USB Connection Status",
@@ -109,9 +118,12 @@ fun UsbDebuggingDiagnosticCard(
                     Text(
                         text = "USB Debugging Diagnostics",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Button(
                     onClick = { runAdbVerification() },

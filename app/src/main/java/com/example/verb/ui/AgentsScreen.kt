@@ -23,15 +23,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.example.verb.terminal.RuntimeProfileReport
-import com.example.verb.terminal.RuntimeProfileId
-
-private val VERIFIED_AGENT_PROFILES = setOf(
-    RuntimeProfileId.CLAUDE_CODE,
-    RuntimeProfileId.CODEX,
-    RuntimeProfileId.OPENCODE,
-    RuntimeProfileId.ANTIGRAVITY,
-    RuntimeProfileId.HERMES
-)
 
 /**
  * The agents surface: what you open, separated from what you install.
@@ -75,8 +66,16 @@ fun AgentsScreen(
 ) {
     // Admission is evidence-based, not package-discovery based. Profiles remain available to the
     // runtime layer for future validation work, but the product surface shows only integrations
-    // Verb has actually implemented and tested.
-    val agents = reports.filter { it.profile.id in VERIFIED_AGENT_PROFILES }
+    // Verb has actually implemented and tested. The set is declared once, in VerbFirstAction.kt,
+    // so this surface and the workspace's first action cannot offer different agents in different
+    // orders -- which is exactly what two separately-maintained copies of it produced.
+    // Ordered by ADMITTED_AGENTS_IN_ORDER rather than by report order: `reports` mirrors
+    // `RuntimeProfiles.all`, which is ordered by build dependency and put Hermes above Claude Code
+    // at the top of this list. The first card in a list is a recommendation whether or not it was
+    // meant as one.
+    val agents = reports
+        .filter { it.profile.id in ADMITTED_AGENT_PROFILES }
+        .sortedBy { ADMITTED_AGENTS_IN_ORDER.indexOf(it.profile.id) }
 
     Column(
         modifier = modifier

@@ -139,6 +139,62 @@ class VerbFirstActionTest {
         assertEquals(VerbFirstAction.None, verbFirstAction(reports = emptyList(), sessions = emptyMap()))
     }
 
+    /**
+     * Regression for a defect observed on the Vivo I2202 running the beta.8 artifact: a new install
+     * opened onto "Install Hermes Agent" as its single first action.
+     *
+     * Nothing was wrong with the choice logic -- the reports simply arrived in `RuntimeProfiles.all`
+     * order, which is a build-dependency order that puts Hermes near the toolchains it needs and
+     * therefore far above Claude Code. The first thing offered is a recommendation, and that one
+     * recommended the least-verified integration, whose recovery Verb is not allowed to claim.
+     */
+    @Test
+    fun `the install offered first is the most verified agent, not whichever report came first`() {
+        val action = verbFirstAction(
+            // Deliberately in RuntimeProfiles.all order, which is what the workspace really passes.
+            reports = RuntimeProfiles.all
+                .filter { it.id in ADMITTED_AGENT_PROFILES }
+                .map { report(it.id, ready = false) },
+            sessions = emptyMap()
+        )
+        assertEquals(
+            VerbFirstAction.Install(RuntimeProfileId.CLAUDE_CODE, "Claude Code"),
+            action
+        )
+    }
+
+    /** The same ordering rule decides which ready agent is offered to start. */
+    @Test
+    fun `the start offered first is the most verified ready agent`() {
+        val action = verbFirstAction(
+            reports = RuntimeProfiles.all
+                .filter { it.id in ADMITTED_AGENT_PROFILES }
+                .map { report(it.id) },
+            sessions = emptyMap()
+        )
+        assertTrue("expected a Start, got $action", action is VerbFirstAction.Start)
+        assertEquals(RuntimeProfileId.CLAUDE_CODE, (action as VerbFirstAction.Start).profileId)
+    }
+
+    /**
+     * The order is the product decision, so it is asserted rather than left to whoever edits the
+     * list next. Hermes and Antigravity sit last because Verb must not present them as equivalent
+     * to the integrations whose recovery it has actually observed.
+     */
+    @Test
+    fun `admitted agents are declared most-verified first`() {
+        assertEquals(
+            listOf(
+                RuntimeProfileId.CLAUDE_CODE,
+                RuntimeProfileId.CODEX,
+                RuntimeProfileId.OPENCODE,
+                RuntimeProfileId.ANTIGRAVITY,
+                RuntimeProfileId.HERMES
+            ),
+            ADMITTED_AGENTS_IN_ORDER
+        )
+    }
+
     @Test
     fun `the admitted set is exactly the five integrations Verb has verified`() {
         assertEquals(

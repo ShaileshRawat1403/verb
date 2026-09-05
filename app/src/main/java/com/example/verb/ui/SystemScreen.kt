@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
@@ -688,24 +689,35 @@ private fun SystemMetricCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Weighted, with a real spacer between the two columns.
+            //
+            // `SpaceBetween` alone only separates these while the value is short enough to leave
+            // free space in the row. A monospace value like the shell process path wraps, takes
+            // every remaining pixel, and leaves SpaceBetween nothing to distribute -- which on a
+            // Vivo I2202 rendered as "Runtime EnvironmentVerb / Android PTY Adapter" and
+            // "Root AccessNo Root (Unprivileged Safe User)", with four of six rows running their
+            // label straight into their value.
             details.forEach { (label, value) ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(vertical = 4.dp)
                 ) {
                     Text(
                         text = label,
                         fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(0.42f)
                     )
+                    Spacer(modifier = Modifier.width(12.dp))
                     Text(
                         text = value,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.weight(0.58f)
                     )
                 }
             }

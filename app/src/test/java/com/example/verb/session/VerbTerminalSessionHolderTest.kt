@@ -27,6 +27,70 @@ class VerbTerminalSessionHolderTest {
         return TerminalRuntime(workingDir = filesDir, useFakeForTesting = true)
     }
 
+    /**
+     * Antigravity occupies a terminal but is not recoverable, and the two must not be confused.
+     *
+     * Verb has no adapter for it, so nothing can establish that one of its conversations can be
+     * picked back up -- `docs/RELEASE_CHECKLIST.md`: supported execution is not verified recovery.
+     * What Verb *can* observe is that a terminal is busy, and it needs to, because the workspace
+     * otherwise draws a "start an agent" offer over a running one and resizes its PTY doing it.
+     */
+    @Test
+    fun `Antigravity occupies a terminal without becoming a recoverable session`() {
+        val id = VerbTerminalSessionHolder.open { newRuntime() }!!
+
+        val claimed = VerbTerminalSessionHolder.claimForeground(
+            sessionId = id,
+            agentType = VerbTerminalSessionHolder.ANTIGRAVITY_AGENT_TYPE,
+            commandIdsBeforeLaunch = emptySet()
+        )
+
+        assertTrue("Antigravity must be able to claim the terminal it runs in", claimed)
+        assertEquals("agy", VerbTerminalSessionHolder.foregroundAgentOf(id))
+        // The recovery half of the product is the session store and the coordinators, and neither
+        // is touched by a foreground claim. `agentSessionDisplay(null)` is what an agent with no
+        // tracked session shows, and it is null -- no "Session recoverable", no Resume button.
+        assertNull(
+            "occupancy must not produce a session display, which is where Resume comes from",
+            agentSessionDisplay(null)
+        )
+    }
+
+    @Test
+    fun `releasing Antigravity hands the terminal back`() {
+        val id = VerbTerminalSessionHolder.open { newRuntime() }!!
+        VerbTerminalSessionHolder.claimForeground(
+            sessionId = id,
+            agentType = VerbTerminalSessionHolder.ANTIGRAVITY_AGENT_TYPE,
+            commandIdsBeforeLaunch = emptySet()
+        )
+
+        VerbTerminalSessionHolder.releaseForeground(id, VerbTerminalSessionHolder.ANTIGRAVITY_AGENT_TYPE)
+
+        assertNull(
+            "a stale claim would hide the workspace's first action for the rest of the process",
+            VerbTerminalSessionHolder.foregroundAgentOf(id)
+        )
+    }
+
+    /** A claim names one terminal. The other one stays the user's to type in. */
+    @Test
+    fun `Antigravity occupying one terminal leaves the other free`() {
+        val first = VerbTerminalSessionHolder.getOrCreateActive { newRuntime() }
+        val firstId = VerbTerminalSessionHolder.activeId.value!!
+        val secondId = VerbTerminalSessionHolder.open { newRuntime() }!!
+        assertNotSame(first, VerbTerminalSessionHolder.runtimeOf(secondId))
+
+        VerbTerminalSessionHolder.claimForeground(
+            sessionId = firstId,
+            agentType = VerbTerminalSessionHolder.ANTIGRAVITY_AGENT_TYPE,
+            commandIdsBeforeLaunch = emptySet()
+        )
+
+        assertEquals("agy", VerbTerminalSessionHolder.foregroundAgentOf(firstId))
+        assertNull(VerbTerminalSessionHolder.foregroundAgentOf(secondId))
+    }
+
     @Test
     fun `getOrCreateActive returns the same instance on a second call`() {
         val first = VerbTerminalSessionHolder.getOrCreateActive { newRuntime() }

@@ -48,6 +48,18 @@ object VerbTerminalSessionHolder {
      * It belongs to a *session*, not to the process. With one terminal those were the same thing;
      * with several, an agent in session two must not make session one look occupied.
      */
+    /**
+     * The [ForegroundBinding.agentType] for Antigravity.
+     *
+     * Antigravity has no [AgentSessionCoordinator], because Verb has no evidence-based way to
+     * recover one of its conversations. It still *occupies* a terminal, and those are different
+     * claims: occupancy says "something owns this PTY, do not draw over it and do not offer to start
+     * something else here", while recovery says "this conversation can be picked back up". Only the
+     * second needs an adapter. Naming it after the launch command keeps the workspace line reading
+     * the way the others do -- `claude running`, `codex running`, `agy running`.
+     */
+    const val ANTIGRAVITY_AGENT_TYPE: String = "agy"
+
     data class ForegroundBinding(
         val agentType: String,
         val commandIdsBeforeLaunch: Set<String>
@@ -115,6 +127,9 @@ object VerbTerminalSessionHolder {
     private fun openLocked(factory: () -> TerminalRuntime): Session {
         val id = "terminal-${nextOrdinal.getAndIncrement()}"
         val session = Session(factory())
+        // The diagnostics log is one sink shared by every terminal, and until this line nothing in
+        // it said which terminal a measurement came from.
+        session.runtime.setDiagnosticsLabel(id)
         sessions[id] = session
         publishSessions()
         activate(id)

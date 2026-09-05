@@ -82,4 +82,61 @@ class WorldCoversSignInTest {
             worldPaths().any { it.startsWith("files/agent-runtime/homes/default/") }
         )
     }
+
+    /**
+     * Adding a path to the world is not free: whatever lives under it has to be archivable.
+     *
+     * `assert_payload_restorable` refuses an archive containing anything that is not a regular file
+     * or a directory, because import refuses those too and an export that writes what import
+     * rejects is not a backup. One symlink anywhere under a declared path stops the *whole* export.
+     *
+     * beta.8 added `.gemini` to cover Antigravity's sign-in and did not add exclusions with it.
+     * Antigravity keeps `cli.log` as a symlink to its newest log file, so on a device with
+     * Antigravity installed every `verb export` failed -- the backup gap was closed by removing
+     * backups. Found by running an export on hardware, which is the only place it could be found.
+     *
+     * This does not re-run the export; it pins the pairing, so a future path added here without
+     * exclusions being re-derived on a device fails the build instead of failing a user's restore.
+     */
+    @Test
+    fun `every world path that is known to contain links carries exclusions for them`() {
+        val paths = worldPaths()
+        val excludes = script.readText()
+            .substringAfter("WORLD_EXCLUDES=(")
+            .substringBefore(")")
+
+        // path fragment in WORLD_PATHS -> a fragment that must appear in WORLD_EXCLUDES.
+        // Each entry was observed on the validation device, not guessed.
+        val knownLinkSources = mapOf(
+            ".codex" to ".codex/tmp",
+            ".config/opencode" to "node_modules/.bin",
+            ".gemini" to ".gemini/antigravity-cli/log"
+        )
+
+        for ((pathFragment, requiredExclude) in knownLinkSources) {
+            val declared = paths.any { pathFragment in it }
+            if (!declared) continue
+            assertTrue(
+                "world.sh archives a path containing '$pathFragment' but has no exclusion " +
+                    "matching '$requiredExclude'. One symlink under a declared path makes every " +
+                    "export fail, so the pairing is not optional.",
+                requiredExclude in excludes
+            )
+        }
+    }
+
+    /** The refusal these exclusions exist to satisfy must still be in the script. */
+    @Test
+    fun `the export still refuses to write an archive import would reject`() {
+        val text = script.readText()
+        assertTrue(
+            "assert_payload_restorable is gone; exports could start writing unrestorable archives",
+            "assert_payload_restorable" in text
+        )
+        assertTrue(
+            "the restorable check no longer rejects non-file, non-directory members",
+            "tr -d 'd-'" in text
+        )
+    }
+
 }

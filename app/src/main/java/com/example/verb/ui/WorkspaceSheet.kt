@@ -243,7 +243,11 @@ internal fun WorkspaceSheetContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
-            "Switching project starts a fresh terminal in that directory.",
+            // Not "starts a fresh terminal": it does not. `TerminalRuntime.selectProject` defines
+            // the *next* launch directory and deliberately never moves a running shell, so a
+            // terminal that is already open stays where it is until it is restarted. The old
+            // sentence promised the one thing the runtime is written not to do.
+            "Switching project sets where the next terminal starts. Terminals already open stay where they are.",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp)

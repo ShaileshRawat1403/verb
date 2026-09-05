@@ -19,20 +19,34 @@ import com.example.verb.terminal.RuntimeProfileId
 import com.example.verb.terminal.RuntimeProfileReport
 
 /**
- * The admitted agent integrations Verb has actually implemented and verified.
+ * The admitted agent integrations Verb has actually implemented and verified, **in the order the
+ * product offers them**.
  *
  * Admission is evidence-based, not package-discovery based: a profile the runtime layer knows how to
  * install is not the same claim as an agent Verb supports (`docs/ARCHITECTURE.md`, "Agent
  * boundary"). Declared once so the workspace's first action and the agents surface cannot drift
- * into offering different sets.
+ * into offering different sets -- or, as they did until this list existed, different *orders*.
+ *
+ * The order is load-bearing, which is why it is a list rather than a set. Both surfaces used to
+ * take whatever order `RuntimeProfiles.all` happened to declare, and that order is a build-time
+ * dependency graph: Hermes sits near the toolchains it needs, well above Claude Code. So a new
+ * install on a Vivo I2202 opened onto "Install Hermes Agent" as its single first action, and listed
+ * Hermes at the top of the agents surface -- offering the least-verified integration first, and the
+ * one whose recovery Verb must not claim. Ordering is not cosmetic here: the first thing offered is
+ * a recommendation.
+ *
+ * Least-to-most verified is the wrong direction. This list is most-verified first.
  */
-internal val ADMITTED_AGENT_PROFILES: Set<RuntimeProfileId> = setOf(
+internal val ADMITTED_AGENTS_IN_ORDER: List<RuntimeProfileId> = listOf(
     RuntimeProfileId.CLAUDE_CODE,
     RuntimeProfileId.CODEX,
     RuntimeProfileId.OPENCODE,
     RuntimeProfileId.ANTIGRAVITY,
     RuntimeProfileId.HERMES
 )
+
+/** Membership only. [ADMITTED_AGENTS_IN_ORDER] is the answer whenever order matters. */
+internal val ADMITTED_AGENT_PROFILES: Set<RuntimeProfileId> = ADMITTED_AGENTS_IN_ORDER.toSet()
 
 /**
  * What the workspace should offer when the user has nothing running.
@@ -77,7 +91,12 @@ fun verbFirstAction(
     reports: List<RuntimeProfileReport>,
     sessions: Map<RuntimeProfileId, VerbSession>
 ): VerbFirstAction {
-    val admitted = reports.filter { it.profile.id in ADMITTED_AGENT_PROFILES }
+    // Ranked by admission order, never by the order the reports arrived in. `reports` mirrors
+    // `RuntimeProfiles.all`, whose order describes how the runtime is built rather than which agent
+    // a person should be offered first.
+    val admitted = reports
+        .filter { it.profile.id in ADMITTED_AGENT_PROFILES }
+        .sortedBy { ADMITTED_AGENTS_IN_ORDER.indexOf(it.profile.id) }
 
     // Something is hosted right now. The user does not need a suggestion; they need the terminal.
     if (admitted.any { sessions[it.profile.id]?.state == VerbSessionState.LIVE }) {

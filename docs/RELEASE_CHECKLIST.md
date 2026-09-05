@@ -56,34 +56,141 @@ it true. Automated, emulator and physical-device results remain separate.
   Completed 26 August on the Vivo I2202, both directions — see `docs/BACKLOG.md` G2. The round-trip
   found and fixed two desktop defects on the way (`a37bc7c`), which is the evidence that it really
   ran rather than being asserted.
-- [x] OpenCode 1.18.21 installs, launches its real TUI and exits to the shell physically; recovery
-  is clearly labelled unverified/experimental.
+- [x] OpenCode 1.18.21 installs, launches its real TUI and exits to the shell physically.
+  The second half of this line -- "recovery is clearly labelled unverified/experimental" -- was
+  **not true of the shipping UI** and has been struck rather than left standing. No such label
+  exists anywhere in the app: on 5 September the OpenCode card read "Session recoverable" beside a
+  "Resume" button, in the same words and the same weight as Claude Code and Codex CLI.
+  That turns out to be the *correct* behaviour rather than a missing caveat.
+  `agentSessionDisplay` is a pure function of `VerbSession.state` and is shared by every agent on
+  purpose, and `OpenCodeAgentAdapter.canResume` earns `RECOVERABLE` from real local evidence --
+  it copies `~/.local/share/opencode/opencode.db` and returns `YES` only when that project has a
+  session row carrying messages. Adding an "experimental" caveat would contradict the evidence the
+  state was derived from. Hermes and Antigravity, which have no adapter and therefore no session
+  coordinator, never reach this display at all and were observed showing only "Ready" -- so the
+  rule that they must not be promoted to recovery-capable is held by the architecture, not by
+  wording.
 - [x] Multi-terminal concurrent isolation and reattachment verified on physical Vivo I2202 device:
   $T_1$ running Claude Code v2.1.250, $T_2$ running OpenAI Codex CLI, $T_3$ running interactive shell;
   tab switching causes zero state mutations to $T_1$ or $T_2$, background command execution in $T_3$ does
   not mutate agent state, interrupting Codex in $T_2$ via `^C` transitions only $T_2$ while leaving Claude in $T_1$
   running, and Activity re-creation cleanly reattaches sessions with intact state.
 
-### beta.8, unaccepted
+### beta.8 acceptance, and the beta.9 fixes it produced
 
-Every box below is open. `docs/BETA8_HANDOFF.md` carries the procedure for each, including which
-observation would falsify the claim rather than confirm it.
+Every observation below was made against the **published beta.8 artifact**, which is what makes them
+worth recording: they are findings about the thing that shipped, not about a working tree. The
+defects that were fixed are fixed in **beta.9**; the boxes that remain open are still open.
 
-- [ ] The changes compile and the unit suite passes. Nothing in this cycle has been compiled.
-- [ ] `assembleFullCliDevice` installs over the existing app with `adb install -r`, and the working
-  world -- projects, runtime, and the Claude, Codex and Antigravity sign-ins -- is intact afterwards.
-- [ ] System → Device Information reports `0.1.0-beta.8 (8)` and `com.aistudio.verb.app`.
-- [ ] The workspace line names the project and the terminal with two terminals open, where the
-  header chip degrades to a glyph. Switching project and terminal from the workspace sheet both work.
+Exercised on the physical Vivo I2202 on 5 September 2026 against the **published** artifact --
+the installed `com.aistudio.verb.app` base APK hashes to
+`e9272bc85cf3f1784fdc6a1bff336dedde3ca42ba927542514a9dbe4985255c6`, which is the beta.8 release
+asset pinned to `74f0df8`. So these observations are of the thing that would ship, not of a local
+build of it. `docs/BETA8_HANDOFF.md` carries the procedure for each.
+
+- [x] The changes compile and the unit suite passes.
+  `:app:testFullCliDebugUnitTest :app:testPlayDebugUnitTest :app:lintFullCliDebug :app:lintPlayDebug
+  :app:assembleFullCliDebug` all pass locally.
+- [ ] `assembleFullCliDevice` installs over the existing app with `adb install -r`.
+  **Cannot be done on this device, and the box should be rewritten rather than ticked.** The phone
+  carries the release-signed artifact; a local `device` build is signed with `debug.keystore`, so
+  the install is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`. The
+  only way through is an uninstall, which is precisely what destroys the working world this box
+  exists to protect. Local UI changes were verified on the separately-installed
+  `com.aistudio.verb.app.debug` package instead.
+- [x] System -> Device Information reports `0.1.0-beta.8 (8)` and `com.aistudio.verb.app`.
+  Also `Vivo I2202`, `Android 14 (API 34)`, `arm64-v8a`.
+- [x] The workspace line names the project and the terminal with two terminals open, where the
+  header chip degrades to a glyph. Observed with three terminals: the header chip collapsed to the
+  folder glyph and grew a `2/2` switcher while the workspace line kept reading
+  `demo / Terminal 2 · codex running`. Switching terminal from the workspace sheet works.
+  Switching *project* does not move a terminal that is already open -- which is the runtime's
+  documented and correct behaviour, but the sheet claimed the opposite in words. Copy corrected.
 - [ ] Antigravity installs from the Agents surface onto a build whose application id carries a
-  suffix. This is the defect the install-path change exists for and it can only be shown on a device.
-- [ ] The Antigravity flicker is *measured*, not asserted: PTY geometry-change counts from the
-  Diagnostics sheet, before and after, with the keyboard opening and closing. If the count is zero
-  while it still flickers, the fix in this cycle is not the fix and the release notes must say so.
-- [ ] Antigravity's credential marker is observed on a device and added to the catalog, or the
-  release ships with its sign-in state honestly reported as unknown.
+  suffix. **Not shown, and blocked earlier in the chain than this box assumes.** On the release
+  build the Agents surface refuses with "Antigravity needs the optional Agent Runtime. Install it in
+  System first", and System's only route to an Agent Runtime is importing three files from a GitHub
+  Actions artifact that are not on the device. On the `.debug` package -- which does carry a
+  suffixed application id and an already-imported runtime -- Antigravity launched and rendered its
+  real TUI, so the launch path itself is sound.
+- [x] The flicker is *measured*, not asserted -- and the measurement says this cycle's fix is not
+  the fix, exactly as this box anticipated. Read off the Diagnostics sheet with Codex running:
+  * idle, untouched, 25 s: **0 geometry resizes** per 5 s window, against 66 `onTextChanged`
+    callbacks in 5043 ms -- Codex repaints its animated welcome logo about 13 times a second.
+  * five keyboard open/close cycles: **2 resizes** in the window containing a cycle, one per
+    transition, which is the minimum possible.
+  So PTY geometry churn is not what people are seeing. The keyboard fix in `7170c94` holds; the
+  visible flicker is Codex's own render loop, and the release notes must say so rather than claiming
+  a flicker fix.
+- [x] Antigravity's sign-in state ships honestly reported as unknown. It declares no
+  `signedInMarkers`, so `AgentSignInDetector` returns `UNKNOWN` and the card says nothing about
+  login rather than guessing. The marker was not observed, because sign-in cannot be completed --
+  see the Antigravity auth defect below.
 - [ ] `verb world list` includes the Agent Runtime home, and a schema-v2 export/preview/apply
-  round-trip restores Antigravity's configuration on a disposable emulator.
+  round-trip restores Antigravity's configuration on a disposable emulator. Not attempted.
+  `verb export` was run far enough to print its manifest -- `.env`, `.claude`, `.claude.json`,
+  `.codex`, `.config/opencode`, `.local/share/opencode` and three `shared_prefs`, 64 MB total -- and
+  was then aborted at the passphrase prompt rather than encrypting the owner's real credentials
+  under a passphrase chosen by a tool. No `.gemini` entry appeared, consistent with Antigravity not
+  being installed on this device.
+
+### beta.8 defects found on the device, still open
+
+- ~~**Antigravity sign-in cannot be completed.**~~ **Fixed and signed in on the device.** Tapping the
+  printed OAuth URL used to open `accounts.google.com/signin/oauth/error`, whose `authError`
+  base64-decodes to `invalid_request / Required parameter is missing: response_type` and whose echoed
+  `client_id` was `1071006060591-tmh` -- the first wrapped line of the URL and nothing after it.
+  Logging the buffer rows on the device found the cause: `numCols=91` while **every row of the URL
+  came back as one leading space plus 90 characters**. Antigravity draws its sign-in screen inside a
+  one-column inset and wraps the URL itself, so these are not emulator-wrapped rows -- the native
+  join puts real newlines between them. `joinWrappedTerminalLines` appended the rows verbatim, that
+  indent landed inside the URL, and the regex stopped at it.
+  A URL continuation now contributes its content and not its indent. Emulator-wrapped URLs are
+  unaffected, since their continuations start at column zero. `AntigravityOAuthUrlTest` pins the
+  rows exactly as logged, leading spaces included, and also holds the two cases a blanket join would
+  break: prose above the URL, and a short URL above an ordinary sentence.
+  Verified end to end: Chrome opened the full URL, Google accepted it, `agy` reported
+  "Signing in..." and reached its prompt as `Gemini 3.8 Flash · high`.
+- **The authorization-code field is unreachable while typing.** It is only visible with the keyboard
+  closed, and the keyboard is what you need to enter the code with. Open, and Antigravity truncates
+  its own pane to "(1-17 of 27 lines)". Only relevant on the paste-the-code fallback path, since the
+  browser round-trip now completes on its own.
+- ~~**Antigravity's PTY is resized about ten times per keyboard toggle.**~~ **Fixed and measured.**
+  A *different* defect from the Codex flicker above, and the opposite shape: Codex churns output
+  with no resizes, Antigravity churned resizes. Measured with `agy` at its prompt, three keyboard
+  open/close cycles:
+
+  | build | resizes per 5 s window | `onTextChanged` |
+  | --- | --- | --- |
+  | as shipped | **11**, oscillating `91x8` / `91x48` / `91x54` | 40 per 5 s |
+  | fixed | **0 and 1**, `91x21` then `91x67` | 1 in 14 s |
+
+  `TerminalScreen` already meant to keep its chrome off a running agent -- its comment says showing
+  the first-action row "would mean this row appearing and disappearing with the keyboard, resizing
+  the PTY under a TUI each time" -- but the guard was `alternateScreenState == ACTIVE`. Claude Code
+  and Codex CLI switch buffers; Antigravity renders inline and never does, so it was the one agent
+  the guard could not see. The guard now also asks whether an agent *occupies* the terminal.
+  For that to mean anything, Verb had to start recording it: Antigravity has no session coordinator,
+  so nothing claimed the foreground when it launched. `launchAgent` now claims it directly, and
+  releases it when the terminal stops being the Agent Runtime -- not merely when the PTY exits,
+  because restarting the session runs the same guest command again and Antigravity is back a second
+  later.
+
+  **Occupancy is not recovery.** No `VerbSession` is written, no coordinator exists, and
+  `VerbTerminalSessionHolderTest` pins that: Antigravity can hold a terminal while
+  `agentSessionDisplay` still returns null, which is where "Session recoverable" and the Resume
+  button come from. Verified on the device -- the workspace line reads `Terminal 1 · agy running`,
+  it survives a session restart, and the Agents surface still offers Antigravity no Resume.
+- ~~**Resume typed its command into the running agent.**~~ **Fixed.** Found while testing the above:
+  with Antigravity running, tapping Resume on Claude Code put the literal text
+  `claude --resume d4a9f42d-…` into *Antigravity's chat box*. Nothing resumed, and a Claude session
+  id was handed to a different vendor's agent. `launchAgent` had always returned the terminal to the
+  Verb CLI userland first; `resumeAgentSession` never did. It does now, and the round trip was then
+  observed end to end: the shell came back, `claude --resume` ran in it, and the 21 August
+  conversation returned with the workspace line reading `Terminal 1 · claude running`.
+  `RuntimeProfilesTest` pins the assumption underneath it -- Antigravity is the only admitted agent
+  that runs in the Agent Runtime -- so a second one fails there rather than on a device.
+
 
 ## Packaging and publication
 

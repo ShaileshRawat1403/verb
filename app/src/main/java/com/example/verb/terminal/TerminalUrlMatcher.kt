@@ -61,8 +61,24 @@ internal fun joinWrappedTerminalLines(lines: List<String>, terminalColumns: Int)
     val builder = StringBuilder()
     var inUrl = false
 
+    // Set when the previous line ended mid-URL, so this one is a continuation rather than a new
+    // line of output.
+    //
+    // A continuation contributes its *content* and not its indent. Antigravity draws its sign-in
+    // screen inside a one-column inset and wraps the OAuth URL itself, so on a Vivo I2202 every row
+    // of the URL came back as one leading space plus 90 characters in a 91-column terminal.
+    // Appending those rows verbatim put that space back into the middle of the URL, the regex
+    // stopped at it, and Chrome received everything up to `client_id=1071006060591-tmh` -- one
+    // wrapped line -- which Google rejects with "Required parameter is missing: response_type".
+    //
+    // Nothing is lost for URLs the *emulator* wrapped: those continuations begin at column zero, so
+    // trimming their (absent) indent is a no-op.
+    var continuesUrl = false
+
     for (i in lines.indices) {
-        val line = lines[i].trimEnd()
+        val raw = lines[i].trimEnd()
+        val line = if (continuesUrl) raw.trimStart() else raw
+        continuesUrl = false
         if (line.isEmpty()) {
             inUrl = false
             if (i < lines.size - 1) builder.append(' ')
@@ -85,10 +101,15 @@ internal fun joinWrappedTerminalLines(lines: List<String>, terminalColumns: Int)
             val nextIsNewHttp = nextFirstToken.startsWith("http://") || nextFirstToken.startsWith("https://")
             val nextIsPrompt = nextLine.startsWith("~ $") || nextLine.startsWith("$ ") || nextLine.startsWith("-> ")
 
-            val isWrappedWidth = line.length >= (terminalColumns - 6)
+            // Measured on the row as the terminal drew it, indent included: the question is whether
+            // this row filled the width, and a continuation's indent occupies columns just like any
+            // other character. Using the trimmed content here would misjudge any agent that insets
+            // its output by more than a column or two.
+            val isWrappedWidth = raw.length >= (terminalColumns - 6)
 
             if (inUrl && isWrappedWidth && !nextIsNewHttp && !nextIsPrompt && nextFirstToken.isNotEmpty()) {
                 // The URL continues onto the next line without an intervening space.
+                continuesUrl = true
                 if (nextLine.trimStart().contains(' ')) {
                     inUrl = false
                 }

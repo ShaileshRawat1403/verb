@@ -311,6 +311,35 @@ class RuntimeProfilesTest {
     }
 
     /**
+     * Antigravity is the only admitted agent that runs inside the Agent Runtime.
+     *
+     * Two pieces of behaviour rest on this and would go wrong quietly if it changed. Resuming a
+     * local-userland agent first calls `deactivateAgentRuntime()` and restarts, because a resume is
+     * dispatched by typing into whatever the terminal is currently running -- without it,
+     * `claude --resume <id>` was observed being typed into Antigravity's chat box on a Vivo I2202.
+     * And Verb claims the foreground for Antigravity by hand, because it is the one admitted agent
+     * with no session coordinator to do it.
+     *
+     * A second AGENT_RUNTIME agent, or Claude moving into the Agent Runtime, invalidates both. This
+     * is the test that should fail first when that happens.
+     */
+    @Test
+    fun `Antigravity is the only admitted agent that runs in the Agent Runtime`() {
+        val admitted = mapOf(
+            RuntimeProfileId.CLAUDE_CODE to ProfileEnvironment.LOCAL_USERLAND,
+            RuntimeProfileId.CODEX to ProfileEnvironment.LOCAL_USERLAND,
+            RuntimeProfileId.OPENCODE to ProfileEnvironment.LOCAL_USERLAND,
+            RuntimeProfileId.HERMES to ProfileEnvironment.LOCAL_USERLAND,
+            RuntimeProfileId.ANTIGRAVITY to ProfileEnvironment.AGENT_RUNTIME
+        )
+
+        admitted.forEach { (id, expected) ->
+            val profile = RuntimeProfiles.all.first { it.id == id }
+            assertEquals("$id runs in the wrong environment", expected, profile.environment)
+        }
+    }
+
+    /**
      * Substitution is asserted on the same regex the ViewModel refuses on, so a token added to the
      * catalog without a matching resolver fails here rather than on a user's device.
      */

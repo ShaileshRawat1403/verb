@@ -243,6 +243,17 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
     private fun readAgentSignInStates(): Map<RuntimeProfileId, com.example.verb.terminal.AgentSignInState> =
         RuntimeProfiles.all.filter { it.isAgent }.associate { it.id to agentSignInDetector.stateFor(it) }
 
+    /**
+     * Re-reads only the credential markers, without re-probing any runtime.
+     *
+     * Separate from [refreshRuntimeProfiles] because that one spawns a process per profile and is
+     * far too heavy to run whenever a surface opens. This is `File.exists()` per marker and nothing
+     * else, which is the entire contract of [com.example.verb.terminal.AgentSignInDetector].
+     */
+    private fun refreshAgentSignInStates() {
+        _agentSignInStates.value = readAgentSignInStates()
+    }
+
     private val _runtimeInstallingProfile = MutableStateFlow<RuntimeProfileId?>(null)
     val runtimeInstallingProfile: StateFlow<RuntimeProfileId?> = _runtimeInstallingProfile.asStateFlow()
 
@@ -927,6 +938,18 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             }
             // Antigravity is executed as the guestCommand under QEMU directly to avoid
             // shell fork+execve SIGSYS under Android seccomp.
+            //
+            // Record that it *occupies* this terminal. Deliberately a foreground claim and nothing
+            // more: no VerbSession is written, no coordinator exists, and nothing here makes
+            // Antigravity look recoverable -- `docs/RELEASE_CHECKLIST.md` is explicit that supported
+            // execution is not verified recovery.
+            //
+            // Without the claim Verb did not know the terminal was busy, with three visible
+            // consequences on a Vivo I2202: the workspace line read "Terminal 1" with no occupant
+            // while Antigravity was running in it, the workspace offered to resume *Claude* on top
+            // of it, and that offer -- which hides itself when the keyboard opens -- resized the PTY
+            // about ten times per keyboard toggle under a TUI that repaints on every SIGWINCH.
+            claimAntigravityForeground(activeId, concreteRuntime)
             return
         } else {
             antigravityLaunchNoticeJob?.cancel()
@@ -948,17 +971,95 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    private var antigravityForegroundJob: Job? = null
+
+    /**
+     * Claims the foreground for Antigravity on [sessionId], and releases it when Antigravity is
+     * genuinely no longer what that terminal runs.
+     *
+     * Antigravity is launched as the session's own guest command rather than typed at a prompt, so
+     * the thing to track is not "did a command finish" but "is this terminal still configured to be
+     * Antigravity". That distinction is the whole of the loop below.
+     *
+     * A PTY exit alone is not the answer. Restarting the session kills the PTY and then starts the
+     * *same* guest command again -- Antigravity is running once more a second later -- so releasing
+     * on the exit would leave the workspace claiming an empty terminal that is actually busy, and
+     * would put the "start an agent" row back over a running agent, which is the resize churn this
+     * claim exists to stop. What does end it is the environment changing: launching a local-userland
+     * agent calls `deactivateAgentRuntime()`, and the next session is an ordinary shell.
+     *
+     * The other failure -- a claim that never ends -- is worse, because it would hide the
+     * workspace's first action for the rest of the process. Hence the release is driven entirely by
+     * what the runtime reports after each exit, never by an assumption made at launch.
+     */
+    private fun claimAntigravityForeground(
+        sessionId: String,
+        runtime: com.example.verb.terminal.TerminalRuntime
+    ) {
+        val agentType = com.example.verb.session.VerbTerminalSessionHolder.ANTIGRAVITY_AGENT_TYPE
+        val idsBeforeLaunch = runtime.commandHistory.value.mapTo(mutableSetOf()) { it.id }
+        val claimed = com.example.verb.session.VerbTerminalSessionHolder.claimForeground(
+            sessionId = sessionId,
+            agentType = agentType,
+            commandIdsBeforeLaunch = idsBeforeLaunch
+        )
+        if (!claimed) return
+
+        antigravityForegroundJob?.cancel()
+        antigravityForegroundJob = viewModelScope.launch {
+            while (true) {
+                runtime.sessionState
+                    .first { it == TerminalSessionState.EXITED || it == TerminalSessionState.FAILED }
+                if (runtime.environment.kind != TerminalEnvironment.Kind.VERB_AGENT_LINUX_USERLAND) {
+                    com.example.verb.session.VerbTerminalSessionHolder
+                        .releaseForeground(sessionId, agentType)
+                    return@launch
+                }
+                // Still the Agent Runtime, so this exit was a restart and Antigravity is coming
+                // back. Keep the claim and wait for the next one.
+                runtime.sessionState.first { it != TerminalSessionState.EXITED && it != TerminalSessionState.FAILED }
+            }
+        }
+    }
+
     /** The Agents screen's Resume action once that agent's session is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
     fun resumeAgentSession(profileId: RuntimeProfileId) {
         val coordinator = sessionCoordinators[profileId] ?: return
         val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
         val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
         openTerminal()
+        returnTerminalToLocalUserland(profileId)
         viewModelScope.launch(Dispatchers.Main.immediate) {
             coordinator.resume(
                 sessionId = activeId,
                 runtime = concreteRuntime
             )
+        }
+    }
+
+    /**
+     * Puts the terminal back in the Verb CLI userland before a local-userland agent is dispatched
+     * into it.
+     *
+     * A resume sends its command by typing it into whatever the terminal is currently running.
+     * `launchAgent` has always done this first; `resumeAgentSession` did not, and the gap is visible
+     * the moment two agents live in different environments. With Antigravity running as the Agent
+     * Runtime's guest command, tapping Resume on Claude Code put the literal text
+     * `claude --resume d4a9f42d-…` into *Antigravity's chat box* on a Vivo I2202. Nothing resumed,
+     * and the session id was handed to the wrong agent.
+     *
+     * Restarting is what returns the terminal to a shell, and it necessarily stops whatever the
+     * Agent Runtime was running -- which is the honest consequence of asking for a different agent
+     * in this terminal, and the same one `launchAgent` already has.
+     */
+    private fun returnTerminalToLocalUserland(profileId: RuntimeProfileId) {
+        val profile = RuntimeProfiles.all.firstOrNull { it.id == profileId } ?: return
+        if (profile.environment != ProfileEnvironment.LOCAL_USERLAND) return
+        runCatching {
+            terminalRuntime.deactivateAgentRuntime()
+            if (terminalRuntime.pendingEnvironmentChange.value) {
+                terminalRuntime.restartSession()
+            }
         }
     }
 
@@ -1137,6 +1238,13 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
         // the moment the user is about to read that state off a card.
         if (task == VerbTask.AGENTS || task == VerbTask.SESSIONS) {
             sessionCoordinators.values.forEach { it.refresh() }
+            // Same argument, applied to credentials. Sign-in happens *inside* Verb's own terminal,
+            // so the credential file appears while this process is running and long after the reads
+            // at startup and around installs -- which were the only two that existed. On a Vivo
+            // I2202 the Codex card said "No saved login found -- run it once to sign in" while
+            // Codex sat signed in at its own prompt one tab away, and it would have kept saying so
+            // until the process was restarted. Absence asserted from a stale read is still a claim.
+            refreshAgentSignInStates()
         }
         _taskOpenedFromSheet.value = fromSheet
         _surface.value = VerbSurface.Task(task)
