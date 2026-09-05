@@ -142,8 +142,20 @@ class AgentRuntimeRoutingTest {
         File(agentHome, ".gemini/session.json").apply { parentFile?.mkdirs(); createNewFile() }
         assertEquals(AgentSignInState.SIGNED_IN, detector.stateFor(agentRuntimeProfile))
 
-        // When markers are empty, UNKNOWN is reported
-        val noMarkerProfile = RuntimeProfiles.forId(RuntimeProfileId.ANTIGRAVITY)
+        // When markers are empty, UNKNOWN is reported.
+        //
+        // Asserted against a profile built here with no markers, not against whichever shipping
+        // agent happens to lack one. This line used to borrow the real Antigravity profile, and it
+        // broke the day Antigravity's credential path was finally observed on a device and entered
+        // the catalog -- a true improvement failing a test that was only ever about the rule.
+        val noMarkerProfile = RuntimeProfile(
+            id = RuntimeProfileId.DEEPSEEK_HARNESS,
+            displayName = "No markers declared",
+            packages = emptyList(),
+            requirements = emptyList(),
+            signedInMarkers = emptyList(),
+            environment = ProfileEnvironment.AGENT_RUNTIME
+        )
         assertEquals(AgentSignInState.UNKNOWN, detector.stateFor(noMarkerProfile))
     }
 }
