@@ -162,6 +162,29 @@ build of it. `docs/BETA8_HANDOFF.md` carries the procedure for each.
   break: prose above the URL, and a short URL above an ordinary sentence.
   Verified end to end: Chrome opened the full URL, Google accepted it, `agy` reported
   "Signing in..." and reached its prompt as `Gemini 3.8 Flash · high`.
+- **The terminal oscillates between 61 and 54 rows while the extra-keys row is expanded.** Reported
+  as "agy and Codex flicker continuously"; measured on a Vivo I2202 with Antigravity running. One
+  tap on the dock's chevron, then *no further input*, produces a canvas height alternating
+  `1499 -> 1360 -> 1215 -> 1360 -> ...` roughly every 430 ms, indefinitely. Every alternation is a
+  SIGWINCH, and Antigravity and Codex answer each one by repainting their whole frame; Claude Code's
+  redraw is cheap, which is why only those two look broken.
+
+  Ruled out with instrumentation rather than argument:
+  * Verb's chrome flags are constant throughout (`kb=false notice=false ownsCanvas=true
+    occupant=agy`), so no conditional row is appearing and disappearing.
+  * The window-insets listener never fires, so it is not the IME or the system bars.
+  * `MobileTerminalKeyboard` does not recompose during the oscillation at all, so `keysExpanded`,
+    `ctrlActive` and the quick keys are not changing.
+  * `fadingHorizontalEdges` is a draw-only modifier and cannot affect measurement.
+  * With the row collapsed, 20 seconds of idle produce **zero** resizes.
+
+  So it is a layout-only feedback loop that exists only while that row is expanded. Next step: log
+  the measured height of each dock child per layout pass to name the oscillating child. A 48 ms
+  resize-coalescing change in the vendored `TerminalView` was written and then reverted -- these
+  events are 430 ms apart so it cannot help, and deferring the resize risks a stale PTY size when a
+  view is detached during terminal switching.
+
+  **Workaround:** keep the extra-keys row collapsed while running Antigravity or Codex.
 - **The authorization-code field is unreachable while typing.** It is only visible with the keyboard
   closed, and the keyboard is what you need to enter the code with. Open, and Antigravity truncates
   its own pane to "(1-17 of 27 lines)". Only relevant on the paste-the-code fallback path, since the

@@ -131,23 +131,29 @@ fun MobileTerminalKeyboard(
     // editable buffer; submitting only sends a newline because the text is already live.
     fun handleInputChange(new: String) {
         val old = terminalInput
-        when {
-            new.length > old.length && new.startsWith(old) -> {
-                onSendText(new.substring(old.length))
-            }
-            old.length > new.length && old.startsWith(new) -> {
-                repeat(old.length - new.length) { onSendKey("BACKSPACE") }
-            }
-            new.isNotEmpty() -> {
-                // Mid-line edit: clear the echoed line, then re-type it to resync the shell.
-                repeat(old.length) { onSendKey("BACKSPACE") }
-                onSendText(new)
-            }
-            else -> {
-                // Full clear.
-                repeat(old.length) { onSendKey("BACKSPACE") }
-            }
+
+        // Send only what actually changed, measured from the common prefix.
+        //
+        // This used to branch four ways, and one of those branches erased the whole echoed line and
+        // retyped it whenever `new` was not a pure append or a pure truncation of `old`. That is
+        // exactly what a predictive keyboard produces: Gboard rewrites the entire composing word on
+        // most keystrokes, so `old="hel"` becoming `new="hey"` took the resync path and sent three
+        // backspaces followed by three characters. On a Vivo I2202 you could watch the text type
+        // itself, delete itself and retype itself inside Antigravity's composer while the field's
+        // own contents stayed correct the whole time -- the mirror was right, the way it got there
+        // was not.
+        //
+        // A common-prefix diff subsumes all four cases and is minimal in every one of them: a pure
+        // append sends the tail and no backspaces, a pure truncation sends backspaces and no text,
+        // and a mid-word correction now sends one or two of each instead of rewriting the line.
+        // Fewer PTY writes is also less redrawing for whatever owns the line, which is the whole
+        // reason this is visible on a full-screen agent and invisible at a shell prompt.
+        val edit = terminalInputEdit(old, new)
+        repeat(edit.backspaces) { onSendKey("BACKSPACE") }
+        if (edit.textToSend.isNotEmpty()) {
+            onSendText(edit.textToSend)
         }
+
         terminalInput = new
     }
 
@@ -560,3 +566,21 @@ private fun Modifier.fadingHorizontalEdges(edgeWidth: Dp): Modifier =
                 blendMode = BlendMode.DstIn
             )
         }
+
+
+/**
+ * What to send to the PTY so the echoed line becomes [new], given that it currently shows [old].
+ *
+ * Pure, and separate from the composable, because the interesting cases are the ones a predictive
+ * keyboard produces and those are worth asserting rather than eyeballing on a phone.
+ */
+internal data class TerminalInputEdit(val backspaces: Int, val textToSend: String)
+
+/** Minimal edit from [old] to [new], measured from their common prefix. */
+internal fun terminalInputEdit(old: String, new: String): TerminalInputEdit {
+    val shared = old.commonPrefixWith(new).length
+    return TerminalInputEdit(
+        backspaces = old.length - shared,
+        textToSend = new.substring(shared)
+    )
+}
