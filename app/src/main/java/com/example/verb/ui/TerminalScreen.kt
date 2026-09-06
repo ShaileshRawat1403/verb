@@ -831,8 +831,28 @@ fun TerminalScreen(
         // First-run hint so the empty canvas is obviously a terminal you type into. Also hidden
         // behind an open IME for the same reason as the first action above, with the same
         // animated exit so the dock never snaps.
+        // "Nothing has come back yet" -- latched, never re-derived from the current snapshot.
+        //
+        // This used to read `terminalOutput.isBlank()`, and a blank snapshot is not the same claim
+        // as "this session has produced nothing". A full-screen agent repaints by *clearing the
+        // screen*, so the snapshot goes empty for a moment on every redraw. That made this row
+        // appear, and it is 121dp of chrome above a canvas that takes the remaining height: the
+        // terminal lost 145px, the PTY was resized, the agent answered the SIGWINCH with another
+        // full repaint, and the repaint cleared the screen again.
+        //
+        // Measured on a Vivo I2202 with Antigravity: `len=462 -> len=0 -> hint appears -> canvas
+        // 1360 -> 1215 -> len=91 -> len=0 -> ...`, cycling roughly every 430ms indefinitely, from a
+        // single tap. Codex does the same. A shell never blanks its screen, which is exactly why
+        // only the two full-screen agents flickered.
+        //
+        // Latching is also the honest reading of the question this row answers. "Has anything
+        // arrived yet" is a fact about the session's history, and history does not un-happen
+        // because the current frame is mid-redraw.
+        var hasSeenOutput by remember(activeTerminalSessionId) { mutableStateOf(false) }
+        if (terminalOutput.isNotBlank()) hasSeenOutput = true
+
         AnimatedVisibility(
-            visible = bootstrapReady && !isKeyboardVisible && terminalOutput.isBlank() &&
+            visible = bootstrapReady && !isKeyboardVisible && !hasSeenOutput && !agentOwnsCanvas &&
                 sessionState == com.example.verb.terminal.TerminalSessionState.RUNNING,
             // Fade only. Every row above the canvas that animates its height changes the
             // terminal's row count on each frame of that animation, and each change resizes the

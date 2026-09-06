@@ -162,29 +162,9 @@ build of it. `docs/BETA8_HANDOFF.md` carries the procedure for each.
   break: prose above the URL, and a short URL above an ordinary sentence.
   Verified end to end: Chrome opened the full URL, Google accepted it, `agy` reported
   "Signing in..." and reached its prompt as `Gemini 3.8 Flash · high`.
-- **The terminal oscillates between 61 and 54 rows while the extra-keys row is expanded.** Reported
-  as "agy and Codex flicker continuously"; measured on a Vivo I2202 with Antigravity running. One
-  tap on the dock's chevron, then *no further input*, produces a canvas height alternating
-  `1499 -> 1360 -> 1215 -> 1360 -> ...` roughly every 430 ms, indefinitely. Every alternation is a
-  SIGWINCH, and Antigravity and Codex answer each one by repainting their whole frame; Claude Code's
-  redraw is cheap, which is why only those two look broken.
+- ~~**The terminal oscillates between 61 and 54 rows while the extra-keys row is expanded.**~~ **Root-caused and fixed in beta.12.** The cause was the first-run hint being gated on `terminalOutput.isBlank()`. A blank snapshot is not the claim "this session has produced nothing": a full-screen agent repaints by *clearing the screen*, so the snapshot empties on every redraw, the 121dp hint returned above a canvas that takes the remaining height, the PTY was resized, the agent answered the SIGWINCH with another repaint, and the repaint cleared the screen again. Logged on the device as `len=462 -> len=0 -> hint appears -> canvas 1360 -> 1215 -> len=91 -> len=0 -> ...`. A shell never blanks its screen, which is why only Antigravity and Codex flickered. The hint is now latched per terminal session and additionally suppressed while an agent owns the canvas; `TerminalFirstRunHintTest` fails against the old gate. Measured on the same test: **1 resize and 1 PTY callback in 34s**, against ~2.4 resizes per second indefinitely before.
 
-  Ruled out with instrumentation rather than argument:
-  * Verb's chrome flags are constant throughout (`kb=false notice=false ownsCanvas=true
-    occupant=agy`), so no conditional row is appearing and disappearing.
-  * The window-insets listener never fires, so it is not the IME or the system bars.
-  * `MobileTerminalKeyboard` does not recompose during the oscillation at all, so `keysExpanded`,
-    `ctrlActive` and the quick keys are not changing.
-  * `fadingHorizontalEdges` is a draw-only modifier and cannot affect measurement.
-  * With the row collapsed, 20 seconds of idle produce **zero** resizes.
-
-  So it is a layout-only feedback loop that exists only while that row is expanded. Next step: log
-  the measured height of each dock child per layout pass to name the oscillating child. A 48 ms
-  resize-coalescing change in the vendored `TerminalView` was written and then reverted -- these
-  events are 430 ms apart so it cannot help, and deferring the resize risks a stale PTY size when a
-  view is detached during terminal switching.
-
-  **Workaround:** keep the extra-keys row collapsed while running Antigravity or Codex.
+  Superseded notes from the investigation: a 48ms resize-coalescing change in the vendored `TerminalView` was written and reverted once the real cause was found, and an early "11 resizes per 4 toggles" figure was contaminated by fixed-coordinate taps landing on a control that moves.
 - **The authorization-code field is unreachable while typing.** It is only visible with the keyboard
   closed, and the keyboard is what you need to enter the code with. Open, and Antigravity truncates
   its own pane to "(1-17 of 27 lines)". Only relevant on the paste-the-code fallback path, since the
