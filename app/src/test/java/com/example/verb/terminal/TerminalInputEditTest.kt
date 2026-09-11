@@ -17,6 +17,31 @@ class TerminalInputEditTest {
     private fun edit(old: String, new: String) = terminalInputEdit(old, new)
 
     @Test
+    fun `deleting an emoji sends one backspace and preserves the preceding text`() {
+        assertEquals(TerminalInputEdit(1, ""), edit("hello 😀", "hello "))
+    }
+
+    @Test
+    fun `replacing emoji with a shared high surrogate sends the complete replacement`() {
+        assertEquals(TerminalInputEdit(1, "😁"), edit("hello 😀", "hello 😁"))
+    }
+
+    @Test
+    fun `correcting text before an emoji counts the removed tail in code points`() {
+        assertEquals(TerminalInputEdit(3, "y 😀"), edit("hel 😀", "hey 😀"))
+    }
+
+    @Test
+    fun `clearing mixed unicode text sends one backspace per code point`() {
+        assertEquals(TerminalInputEdit(4, ""), edit("a😀文🚀", ""))
+    }
+
+    @Test
+    fun `appending after an emoji leaves the emoji untouched`() {
+        assertEquals(TerminalInputEdit(0, "!"), edit("hello 😀", "hello 😀!"))
+    }
+
+    @Test
     fun `typing a character sends only that character`() {
         assertEquals(TerminalInputEdit(backspaces = 0, textToSend = "o"), edit("hell", "hello"))
     }
