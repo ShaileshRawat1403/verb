@@ -256,7 +256,11 @@ impl Session {
 
         for line in input.lines() {
             let (key, value) = line.split_once('=')?;
-            values.insert(key, value);
+            // A repeated key means the record was written with a value that contained a newline.
+            // Letting the later one win would let that value rewrite other fields.
+            if values.insert(key, value).is_some() {
+                return None;
+            }
         }
 
         let id = values.get("session_id").or_else(|| values.get("id"))?;
@@ -1433,6 +1437,15 @@ pub(crate) fn load_session_by_id(id: &str) -> Result<Option<Session>, String> {
 
 fn save_session(session: &Session) -> Result<(), String> {
     let mut record = session.clone();
+    // The record is one `key=value` per line; a path containing a line break cannot be written
+    // into it faithfully. A working directory is simply not recorded; a project cannot be hosted.
+    let has_control = |path: &Path| path.to_string_lossy().chars().any(char::is_control);
+    if has_control(&record.project_id) {
+        return Err("the project path contains a control character".to_owned());
+    }
+    if record.last_known_cwd.as_deref().is_some_and(has_control) {
+        record.last_known_cwd = None;
+    }
     if record.verb_project_id.is_none() && record.project_id.exists() {
         record.verb_project_id = Some(project::identity(&record.project_id)?.id);
     }

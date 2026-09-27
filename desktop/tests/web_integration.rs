@@ -454,6 +454,34 @@ fn the_desktop_can_take_input_back_and_it_needs_the_token() {
     let path = format!("/api/terminals/{id}/control");
     assert_eq!(server.request("POST", &path, None, false).0, 403);
     let taken = server.json("POST", &path, None);
-    assert!(taken["message"].as_str().unwrap().contains("back with this desktop"));
+    assert!(taken["message"]
+        .as_str()
+        .unwrap()
+        .contains("back with this desktop"));
+    server.json("DELETE", &format!("/api/terminals/{id}"), None);
+}
+
+/// A working directory reported with an encoded newline (OSC 7 `%0a`, which a `cat` of a repository
+/// file can emit) must neither corrupt the session store nor move the session to another project.
+#[test]
+fn a_crafted_working_directory_cannot_corrupt_or_move_a_session() {
+    let server = WebServer::start();
+    let id = start_shell(
+        &server,
+        "printf '\\033]7;file:///tmp%%0aproject_id=/elsewhere\\007crafted\\n'; sleep 20",
+    );
+    wait_for_output(&server, &id, "crafted");
+    std::thread::sleep(Duration::from_millis(200));
+    let listing = Command::new(env!("CARGO_BIN_EXE_verb"))
+        .args(["sessions", "--json"])
+        .current_dir(server.root.join("project"))
+        .env("VERB_STATE_DIR", server.root.join("state"))
+        .env("HOME", server.root.join("home"))
+        .output()
+        .unwrap();
+    assert!(listing.status.success(), "{listing:?}");
+    let text = String::from_utf8_lossy(&listing.stdout);
+    assert!(text.contains(&id), "{text}");
+    assert!(!text.contains("/elsewhere"), "{text}");
     server.json("DELETE", &format!("/api/terminals/{id}"), None);
 }
