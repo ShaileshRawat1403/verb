@@ -472,10 +472,10 @@ impl Drop for LocalServer {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        // Only the socket is ours. The per-user directory is shared by every Verb session on this
+        // account, so removing it here raced another session between its `create_dir_all` and its
+        // `bind`, and that session failed to start its bridge.
         let _ = fs::remove_file(&self.path);
-        if let Some(parent) = self.path.parent() {
-            let _ = fs::remove_dir(parent);
-        }
     }
 }
 

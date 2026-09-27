@@ -253,11 +253,22 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
     let signal_flag = Arc::clone(&running);
     ctrlc::set_handler(move || signal_flag.store(false, Ordering::SeqCst))
         .map_err(|error| format!("could not install shutdown handler: {error}"))?;
-    println!("Verb web UI: {}/#{}", host.origin, token);
-    println!("Local only. Close this process to stop its hosted agent sessions.");
-    std::io::stdout()
-        .flush()
-        .map_err(|error| format!("could not print web URL: {error}"))?;
+    // One write, and nothing else on stdout afterwards: whoever launched us may read the URL line
+    // and close the pipe (`verb web | head -1`, a test harness, a launcher script). A second
+    // `println!` would then panic on EPIPE and take every hosted terminal down with it.
+    {
+        let mut stdout = std::io::stdout().lock();
+        stdout
+            .write_all(
+                format!(
+                    "Verb web UI: {}/#{}\nLocal only. Close this process to stop its hosted agent sessions.\n",
+                    host.origin, token
+                )
+                .as_bytes(),
+            )
+            .and_then(|()| stdout.flush())
+            .map_err(|error| format!("could not print web URL: {error}"))?;
+    }
     while running.load(Ordering::SeqCst) {
         for terminal in host.terminals.values_mut() {
             if let Err(error) = terminal.poll() {

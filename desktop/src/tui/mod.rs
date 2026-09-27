@@ -1211,11 +1211,13 @@ impl App {
                     self.open_workbench_session(index)?;
                 }
             }
-            KeyCode::Enter if self.mode == Mode::Workbench && !self.work.detail => {
-                if self.selected_task().is_some() {
-                    self.work.detail = true;
-                    self.work.scroll = 0;
-                }
+            KeyCode::Enter
+                if self.mode == Mode::Workbench
+                    && !self.work.detail
+                    && self.selected_task().is_some() =>
+            {
+                self.work.detail = true;
+                self.work.scroll = 0;
             }
             KeyCode::Char('c') if self.mode == Mode::Workbench && self.work.detail => {
                 self.task_action(crate::workbench::TaskAction::Claim)?
@@ -1351,10 +1353,10 @@ impl App {
                 let index = *selected;
                 self.forget_selected(index)?;
             }
-            (Surface::ExternalAgent { command, .. }, KeyCode::Char(character)) => {
-                if !character.is_whitespace() && !character.is_control() && command.len() < 256 {
-                    command.push(character);
-                }
+            (Surface::ExternalAgent { command, .. }, KeyCode::Char(character))
+                if !character.is_whitespace() && !character.is_control() && command.len() < 256 =>
+            {
+                command.push(character);
             }
             (Surface::ExternalAgent { command, .. }, KeyCode::Backspace) => {
                 command.pop();
@@ -1539,10 +1541,10 @@ impl App {
             MouseEventKind::Down(_) | MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
         ) {
             self.focus_pane(&id)?;
-        } else if !self
+        } else if self
             .hosted
             .as_ref()
-            .is_some_and(|hosted| hosted.session.id == id)
+            .is_none_or(|hosted| hosted.session.id != id)
         {
             return Ok(());
         }
