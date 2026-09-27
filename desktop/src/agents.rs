@@ -192,7 +192,11 @@ fn opencode_session_ids(project: &Path, home: &Path) -> Option<Vec<String>> {
                    SELECT 1 FROM message m WHERE m.session_id = s.id \
                      AND m.data LIKE '%\"role\":\"user\"%' \
                  ) ORDER BY s.time_updated DESC;";
-    let output = Command::new("sqlite3")
+    // Verb usually runs from inside a project, so a relative PATH entry would let that project pick
+    // the `sqlite3` binary; resolve it the same way the observation modules resolve theirs.
+    let here = std::env::current_dir().ok()?;
+    let sqlite = crate::exec::trusted_program("sqlite3", &here)?;
+    let output = Command::new(sqlite)
         .arg("-readonly")
         .arg("-separator")
         .arg("\u{1f}")

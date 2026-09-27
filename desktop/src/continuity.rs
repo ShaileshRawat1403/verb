@@ -11,7 +11,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Component, Path};
-use std::process::Command;
 
 const VERSION: u8 = 1;
 const KIND: &str = "verb.continuity";
@@ -621,10 +620,13 @@ fn load_or_create_host_id() -> Result<String, String> {
 }
 
 fn project_key(project: &Path) -> String {
-    let output = Command::new("git")
-        .args(["config", "--get", "remote.origin.url"])
-        .current_dir(project)
-        .output();
+    let output = crate::exec::git(project)
+        .ok_or(())
+        .and_then(|mut git| {
+            git.args(["config", "--get", "remote.origin.url"])
+                .output()
+                .map_err(|_| ())
+        });
     let remote = output
         .ok()
         .filter(|output| output.status.success())

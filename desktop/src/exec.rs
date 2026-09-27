@@ -73,6 +73,19 @@ pub(crate) fn git(project: &Path) -> Option<Command> {
     Some(command)
 }
 
+/// `git` for an operation the user asked for (`verb project worktree`): found on a trusted `PATH`
+/// entry, but otherwise Git as the user configured it, so their own filters and hooks behave as they
+/// would from the shell.
+pub(crate) fn user_git(project: &Path) -> Option<Command> {
+    let program = trusted_program("git", project)?;
+    let mut command = Command::new(program);
+    command
+        .current_dir(project)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null());
+    Some(command)
+}
+
 fn base_git(program: &Path, project: &Path) -> Command {
     let mut command = Command::new(program);
     command

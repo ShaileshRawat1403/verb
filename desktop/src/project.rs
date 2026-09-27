@@ -7,7 +7,6 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::{hex_encode, new_id, state_root};
 
@@ -35,9 +34,9 @@ struct Location {
 }
 
 fn git_output(project: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+    let output = crate::exec::git(project)?
         .args(args)
-        .current_dir(project)
+        .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
     if !output.status.success() {
@@ -222,11 +221,11 @@ pub(crate) fn create_isolated_checkout(project: &Path) -> Result<PathBuf, String
     fs::create_dir_all(path.parent().ok_or("invalid worktree path")?)
         .map_err(|error| format!("could not create worktree directory: {error}"))?;
     let branch = format!("verb/{}", &suffix[..12]);
-    let result = Command::new("git")
+    let result = crate::exec::user_git(&location.checkout)
+        .ok_or("git was not found on an absolute PATH entry outside the project")?
         .args(["worktree", "add", "-b", &branch])
         .arg(&path)
         .arg("HEAD")
-        .current_dir(&location.checkout)
         .output()
         .map_err(|error| format!("could not start git worktree: {error}"))?;
     if !result.status.success() {
