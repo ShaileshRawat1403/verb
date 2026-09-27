@@ -231,11 +231,18 @@ pub(crate) struct App {
     /// Observations that run Git or a runtime's `--version`, gathered off the UI thread: in a large
     /// repository or on a network drive they take long enough to freeze typing.
     background: Background,
+    /// The declared-runtime problem last read for each project, `None` when there is none (or the
+    /// read is still running). The band is cleared when a session starts or focus moves; this lets
+    /// the fact come back without probing again.
+    runtime_problems: HashMap<PathBuf, Option<String>>,
 }
 
 /// Results arriving from background observation threads.
 enum Observation {
-    Runtime(Vec<crate::runtime::Fact>),
+    Runtime {
+        project: PathBuf,
+        facts: Vec<crate::runtime::Fact>,
+    },
     Repo(Option<Context>),
     SinceGood {
         generation: u64,
@@ -274,7 +281,10 @@ impl Background {
 
     fn runtime(&self, project: &Path) {
         let project = project.to_path_buf();
-        self.spawn(move || Observation::Runtime(crate::runtime::observe(&project)));
+        self.spawn(move || Observation::Runtime {
+            facts: crate::runtime::observe(&project),
+            project,
+        });
     }
 
     fn repo(&mut self, project: &Path) {
@@ -382,10 +392,10 @@ impl App {
             frame_height: 0,
             frame_width: 0,
             background: Background::new(),
+            runtime_problems: HashMap::new(),
         };
-        app.background.runtime(project);
         // A repository left mid-merge or detached is worth knowing before the first command.
-        app.background.repo(project);
+        app.reobserve();
         app.refresh_workbench()?;
         Ok(app)
     }
@@ -492,22 +502,42 @@ impl App {
         let mut changed = false;
         while let Ok(observation) = self.background.receiver.try_recv() {
             match observation {
-                Observation::Runtime(facts) => {
-                    let problem = facts.iter().find(|fact| {
-                        matches!(
-                            fact.verdict,
-                            crate::runtime::Verdict::Mismatch | crate::runtime::Verdict::Missing
-                        )
-                    });
-                    if let (Some(fact), Context::None) = (problem, &self.context) {
-                        self.context = Context::RuntimeMismatch(fact.to_text());
+                Observation::Runtime { project, facts } => {
+                    let problem = facts
+                        .iter()
+                        .find(|fact| {
+                            matches!(
+                                fact.verdict,
+                                crate::runtime::Verdict::Mismatch
+                                    | crate::runtime::Verdict::Missing
+                            )
+                        })
+                        .map(crate::runtime::Fact::to_text);
+                    if let (Some(text), Context::None, true) =
+                        (&problem, &self.context, project == self.project)
+                    {
+                        self.context = Context::RuntimeMismatch(text.clone());
                         changed = true;
                     }
+                    self.runtime_problems.insert(project, problem);
                 }
                 Observation::Repo(warning) => {
                     self.background.repo_running = false;
-                    if matches!(self.context, Context::None | Context::RepoWarning { .. }) {
-                        let next = warning.unwrap_or(Context::None);
+                    // A repository warning outranks a runtime one: an unfinished merge is the
+                    // more urgent fact. When the repository is fine again, the runtime fact returns.
+                    if matches!(
+                        self.context,
+                        Context::None | Context::RepoWarning { .. } | Context::RuntimeMismatch(_)
+                    ) {
+                        let next = warning
+                            .or_else(|| {
+                                self.runtime_problems
+                                    .get(&self.project)
+                                    .cloned()
+                                    .flatten()
+                                    .map(Context::RuntimeMismatch)
+                            })
+                            .unwrap_or(Context::None);
                         changed |= next != self.context;
                         self.context = next;
                     }
@@ -528,6 +558,24 @@ impl App {
             }
         }
         changed
+    }
+
+    /// Brings the observed facts back after the band was cleared: the cached runtime problem for this
+    /// project at once, a fresh repository read in the background. Probes a project's runtimes the
+    /// first time it is seen.
+    fn reobserve(&mut self) {
+        let project = self.project.clone();
+        match self.runtime_problems.get(&project) {
+            Some(Some(text)) if matches!(self.context, Context::None) => {
+                self.context = Context::RuntimeMismatch(text.clone());
+            }
+            Some(_) => {}
+            None => {
+                self.runtime_problems.insert(project.clone(), None);
+                self.background.runtime(&project);
+            }
+        }
+        self.background.repo(&project);
     }
 
     /// Moves every hosted session forward, including terminals hidden behind the active one.
@@ -580,7 +628,10 @@ impl App {
                 // repository in a risky state (`git switch --detach` exits 0). Only replaces a
                 // quiet band or an older warning.
                 crate::pty::Structural::CommandFinished { .. } => {
-                    if matches!(self.context, Context::None | Context::RepoWarning { .. }) {
+                    if matches!(
+                        self.context,
+                        Context::None | Context::RepoWarning { .. } | Context::RuntimeMismatch(_)
+                    ) {
                         let project = self.project.clone();
                         self.background.repo(&project);
                     }
@@ -909,6 +960,7 @@ impl App {
         self.logical_project_id = identity.id;
         self.refresh_git();
         self.context = Context::None;
+        self.reobserve();
         self.message = None;
         self.refresh_sessions()?;
         Ok(())
@@ -1405,6 +1457,7 @@ impl App {
         self.refresh_git();
         self.mode = Mode::Terminal;
         self.context = Context::None;
+        self.reobserve();
         self.message = None;
         self.refresh_sessions()?;
         Ok(())
@@ -1453,6 +1506,7 @@ impl App {
             frame_height: 24,
             frame_width: 80,
             background: Background::new(),
+            runtime_problems: HashMap::new(),
         }
     }
 
@@ -1582,6 +1636,60 @@ mod tests {
             row,
             modifiers: KeyModifiers::NONE,
         }
+    }
+
+    #[test]
+    fn a_repository_warning_outranks_a_runtime_one_and_hands_back_when_resolved() {
+        let mut app = App::for_tests();
+        let project = app.project.clone();
+        app.runtime_problems.insert(
+            project.clone(),
+            Some("node 18 · .nvmrc wants 20 · mismatch".to_owned()),
+        );
+        let send = |app: &App, observation| app.background.sender.send(observation).unwrap();
+
+        send(
+            &app,
+            Observation::Repo(Some(Context::RepoWarning {
+                fact: "A merge is in progress.".to_owned(),
+                safe_next: "git merge --abort".to_owned(),
+            })),
+        );
+        assert!(app.take_observations());
+        assert!(matches!(app.context, Context::RepoWarning { .. }));
+
+        send(&app, Observation::Repo(None));
+        assert!(app.take_observations());
+        assert!(matches!(app.context, Context::RuntimeMismatch(_)));
+
+        // A failed command is never overwritten by a background answer.
+        app.context = Context::CommandFailed {
+            exit_code: 1,
+            millis: 0,
+            label: None,
+            since_good: None,
+        };
+        send(&app, Observation::Repo(None));
+        app.take_observations();
+        assert!(matches!(app.context, Context::CommandFailed { .. }));
+
+        // A last-known-good answer for an older failure is dropped.
+        let current = app.background.failure_generation;
+        send(
+            &app,
+            Observation::SinceGood {
+                generation: current + 7,
+                text: Some("stale".to_owned()),
+            },
+        );
+        app.take_observations();
+        assert!(matches!(
+            app.context,
+            Context::CommandFailed {
+                since_good: None,
+                ..
+            }
+        ));
     }
 
     #[test]

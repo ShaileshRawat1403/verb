@@ -79,6 +79,12 @@ guarded runner.
 and hooks (`exec::user_git`). The web page's view logic lives in `web/src/view.js` with
 `node --test` tests (`npm test --prefix desktop/web`), run in CI before the asset build.
 
+The TUI was driven in a real PTY (a scripted 120x36 terminal) against repositories in each state.
+That run found one bug the unit tests had not: starting a session clears the band, so a runtime
+mismatch probed at launch never reached the screen. Facts are now re-applied after every reset,
+a repository warning outranks a runtime one, and the runtime fact returns once the repository is
+clean; `git merge --abort`, `git switch --detach` and back each changed the band live.
+
 **Still open.** The same observations on Android. The fingerprint does not cover ignored files or
 submodule working trees. A band that fires *before* a risky Git command runs would need command
 text, which Verb does not keep, so it is not planned. The page's DOM wiring (`app.js`) has no
