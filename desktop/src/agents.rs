@@ -33,21 +33,54 @@ struct Conversation {
 /// Claude records a project's transcripts under a normalized project-path directory.
 /// and (on builds that have one) session metadata under `~/.claude/sessions/*.json`. The metadata
 /// filename is a PID and is never used as identity -- the `sessionId` inside it is.
-/// The directory name written by the installed Claude Code build.
+/// The directory name the installed Claude Code build writes transcripts under.
 ///
 /// This is shared by recovery and live observation because a mismatch is not cosmetic: it turns a
-/// real recoverable conversation into `UNKNOWN`. Slash, dot and underscore normalization are all
-/// covered by local real-session evidence; other characters are preserved until evidence says
-/// Claude treats them differently.
+/// real recoverable conversation into one Verb never finds. The rule is Claude's own, read from the
+/// installed CLI (`qx` in its bundle): every UTF-16 code unit that is not an ASCII letter or digit
+/// becomes `-`, and a result longer than 200 characters is cut to 200 and suffixed with `-` and the
+/// base-36 absolute value of a Java-style string hash of the *original* path. The earlier version
+/// mapped only `/`, `.` and `_`, so any project path with a space, `@`, `+` or a non-ASCII
+/// character was never observed and could never be resumed.
 pub(crate) fn claude_project_dir(project: &Path) -> String {
-    project
-        .to_string_lossy()
-        .chars()
-        .map(|character| match character {
-            '/' | '.' | '_' => '-',
-            other => other,
+    const LIMIT: usize = 200;
+    let original = project.to_string_lossy();
+    let units: Vec<u16> = original.encode_utf16().collect();
+    let replaced: String = units
+        .iter()
+        .map(|unit| match char::from_u32(u32::from(*unit)) {
+            Some(character) if character.is_ascii_alphanumeric() => character,
+            _ => '-',
         })
-        .collect()
+        .collect();
+    if replaced.len() <= LIMIT {
+        return replaced;
+    }
+    let mut hash: i32 = 0;
+    for unit in &units {
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(i32::from(*unit));
+    }
+    format!(
+        "{}-{}",
+        &replaced[..LIMIT],
+        base36(i64::from(hash).unsigned_abs())
+    )
+}
+
+fn base36(mut value: u64) -> String {
+    if value == 0 {
+        return "0".to_owned();
+    }
+    let mut digits = Vec::new();
+    while value > 0 {
+        digits.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(value % 36) as usize]);
+        value /= 36;
+    }
+    digits.reverse();
+    String::from_utf8(digits).expect("ASCII digits")
 }
 
 pub fn claude_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdict {
@@ -58,7 +91,15 @@ pub fn claude_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdic
     if has_extension(&transcript_dir.join(format!("{id}.jsonl")), "jsonl") {
         return ResumeVerdict::Yes;
     }
-    exact_verdict(claude_conversations(project, home), id)
+    // `~/.claude/sessions` lists *running* Claude processes, keyed by PID. Being listed there is
+    // evidence the conversation exists; not being listed only says no process has it open right
+    // now, which is not evidence that it cannot be resumed.
+    match claude_conversations(project, home) {
+        Some(conversations) if conversations.iter().any(|candidate| candidate.id == id) => {
+            ResumeVerdict::Yes
+        }
+        _ => ResumeVerdict::Unknown,
+    }
 }
 
 /// `None` when this Claude build keeps no readable session metadata store.
@@ -346,9 +387,24 @@ mod tests {
 
     #[test]
     fn claude_project_directory_matches_the_installed_normalization() {
+        // Expected values produced by running Claude Code's own function on these inputs.
         assert_eq!(
             claude_project_dir(Path::new("/tmp/Verb_Transfer.v1")),
             "-tmp-Verb-Transfer-v1"
+        );
+        assert_eq!(
+            claude_project_dir(Path::new("/Users/apple/My Project@2+x")),
+            "-Users-apple-My-Project-2-x"
+        );
+        // One dash per UTF-16 code unit: the emoji is two.
+        assert_eq!(
+            claude_project_dir(Path::new("/home/ü/项目/🚀x")),
+            "-home--------x"
+        );
+        let long = format!("/{}/b c", "a".repeat(250));
+        assert_eq!(
+            claude_project_dir(Path::new(&long)),
+            format!("-{}-lv1bdn", "a".repeat(199))
         );
     }
 
@@ -367,9 +423,15 @@ mod tests {
             claude_verdict_for(&project, &home, "claude-conversation"),
             ResumeVerdict::Yes
         );
+        // The PID filename is never an identity.
+        assert_ne!(
+            claude_verdict_for(&project, &home, "4321"),
+            ResumeVerdict::Yes
+        );
+        // Not being in the list of *running* sessions is not evidence the conversation is gone.
         assert_eq!(
             claude_verdict_for(&project, &home, "other"),
-            ResumeVerdict::No
+            ResumeVerdict::Unknown
         );
     }
 

@@ -145,9 +145,18 @@ fn claude_events(line: &str, fallback_at: u128) -> Vec<AgentEvent> {
         events.push(AgentEvent::TurnStarted { at });
         return events;
     }
-    for block in &results {
+    // Claude writes `is_error` *after* `content`, and when `content` is an array of blocks the
+    // slice above ends at the first inner `{"type":` -- before the flag. So outcomes are read from
+    // the parsed line: only `type` and `is_error` of each result are looked at, and nothing is
+    // kept. The slices remain the fallback for a line that does not parse.
+    let outcomes = claude_result_outcomes(line).unwrap_or_else(|| {
+        results
+            .iter()
+            .map(|block| block.contains(r#""is_error":true"#))
+            .collect()
+    });
+    for failed in outcomes {
         // Absent means the tool worked: Claude writes the field only on failure.
-        let failed = block.contains(r#""is_error":true"#);
         events.push(AgentEvent::ToolOutcome {
             at,
             tool: None,
@@ -155,6 +164,18 @@ fn claude_events(line: &str, fallback_at: u128) -> Vec<AgentEvent> {
         });
     }
     events
+}
+
+fn claude_result_outcomes(line: &str) -> Option<Vec<bool>> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let content = value.pointer("/message/content")?.as_array()?;
+    Some(
+        content
+            .iter()
+            .filter(|block| block["type"] == "tool_result")
+            .map(|block| block["is_error"] == true)
+            .collect(),
+    )
 }
 
 /// The slices of `line` that each begin at `marker` and end where the next block begins.
@@ -279,9 +300,14 @@ pub struct RecordTail {
     conversation_id: Option<String>,
     offset: u64,
     /// Kept so a partial final line -- the agent was mid-write -- waits for the rest of itself
-    /// instead of being parsed as a truncated record.
-    partial: String,
+    /// instead of being parsed as a truncated record. Bytes, not text: the write may have stopped
+    /// in the middle of a UTF-8 character.
+    partial: Vec<u8>,
 }
+
+/// At most this much is read per poll; the rest waits for the next one. The offset only ever
+/// advances by what was actually read.
+const MAX_POLL_BYTES: u64 = 4 * 1024 * 1024;
 
 impl RecordTail {
     /// Finds the record an agent has begun writing for work started at `since`, if it has begun one.
@@ -343,7 +369,7 @@ impl RecordTail {
             path,
             conversation_id: None,
             offset: 0,
-            partial: String::new(),
+            partial: Vec::new(),
         })
     }
 
@@ -410,7 +436,7 @@ impl RecordTail {
             path,
             conversation_id: Some(id.to_owned()),
             offset,
-            partial: String::new(),
+            partial: Vec::new(),
         })
     }
 
@@ -429,24 +455,32 @@ impl RecordTail {
             return Vec::new();
         }
 
-        let mut appended = String::new();
-        if file.read_to_string(&mut appended).is_err() {
+        // The file may grow between reading its length and reading its bytes. Advancing the offset
+        // to the old length re-read whatever arrived in between: 200,000 lines produced ~210,000
+        // events under load. The offset moves by exactly the bytes read.
+        let mut appended = Vec::new();
+        let Ok(read) = (&mut file).take(MAX_POLL_BYTES).read_to_end(&mut appended) else {
             return Vec::new();
-        }
-        self.offset = length;
+        };
+        self.offset += read as u64;
 
         let mut buffered = std::mem::take(&mut self.partial);
-        buffered.push_str(&appended);
-        let ends_complete = buffered.ends_with('\n');
-        let mut lines: Vec<&str> = buffered.lines().collect();
-        if !ends_complete {
-            if let Some(last) = lines.pop() {
-                self.partial = last.to_owned();
+        buffered.extend_from_slice(&appended);
+        let complete = match buffered.iter().rposition(|byte| *byte == b'\n') {
+            Some(end) => {
+                self.partial = buffered[end + 1..].to_vec();
+                buffered.truncate(end + 1);
+                buffered
             }
-        }
+            None => {
+                self.partial = buffered;
+                return Vec::new();
+            }
+        };
+        let text = String::from_utf8_lossy(&complete);
 
         let mut events = Vec::new();
-        for line in lines {
+        for line in text.lines() {
             if self.conversation_id.is_none() {
                 self.conversation_id = self.record.conversation_id(line);
             }
@@ -792,7 +826,7 @@ mod tests {
             path: path.clone(),
             conversation_id: None,
             offset: 0,
-            partial: String::new(),
+            partial: Vec::new(),
         };
         assert_eq!(tail.poll(1).len(), 1);
         // Nothing new: silence, not a repeat of what was already reported.
@@ -820,6 +854,65 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_tool_is_seen_when_its_content_is_an_array() {
+        // Claude writes `is_error` after `content`; with array content the flag sits past the first
+        // inner block, where the old slicing stopped reading.
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"boom"}],"is_error":true},{"type":"tool_result","tool_use_id":"t2","content":"fine"}]}}"#;
+        let outcomes: Vec<bool> = claude_events(line, 1)
+            .into_iter()
+            .filter_map(|event| match event {
+                AgentEvent::ToolOutcome { failed, .. } => Some(failed),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outcomes, [true, false]);
+    }
+
+    #[test]
+    fn lines_written_while_reading_are_counted_exactly_once() {
+        use std::io::Write;
+        let directory = std::env::temp_dir().join(format!(
+            "verb-growth-{}-{}",
+            std::process::id(),
+            crate::new_id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("record.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut tail = RecordTail {
+            record: Record::Claude,
+            path: path.clone(),
+            conversation_id: None,
+            offset: 0,
+            partial: Vec::new(),
+        };
+        const LINES: usize = 20_000;
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(writer_path)
+                .unwrap();
+            for _ in 0..LINES {
+                // Written in two pieces so a poll can land in the middle of a line.
+                file.write_all(br#"{"type":"user","message":{"cont"#)
+                    .unwrap();
+                file.write_all(b"ent\":\"hi\"}}\n").unwrap();
+            }
+        });
+        let mut seen = 0;
+        while !writer.is_finished() {
+            seen += tail.poll(1).len();
+        }
+        writer.join().unwrap();
+        for _ in 0..100 {
+            seen += tail.poll(1).len();
+        }
+        assert_eq!(seen, LINES);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
     fn a_half_written_line_waits_for_the_rest_of_itself() {
         // The agent is writing while Verb is reading. A record cut in half must not be parsed as a
         // short record -- it is not one, it is the first half of a longer one.
@@ -833,7 +926,7 @@ mod tests {
             path: path.clone(),
             conversation_id: None,
             offset: 0,
-            partial: String::new(),
+            partial: Vec::new(),
         };
         assert!(tail.poll(1).is_empty(), "a partial line produced an event");
 
