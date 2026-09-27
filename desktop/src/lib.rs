@@ -4,6 +4,7 @@ use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(not(unix))]
 use std::process::Command;
 #[cfg(not(unix))]
 use std::process::Stdio;
@@ -1306,12 +1307,12 @@ fn project_root_or_current() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn git_snapshot(project: &Path) -> GitSnapshot {
-    let root = command_output("git", &["rev-parse", "--show-toplevel"], project)
+    let root = git_output(&["rev-parse", "--show-toplevel"], project)
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty());
-    let branch = command_output("git", &["branch", "--show-current"], project)
-        .filter(|value| !value.is_empty());
-    let changed_files = command_output("git", &["status", "--porcelain"], project)
+    let branch =
+        git_output(&["branch", "--show-current"], project).filter(|value| !value.is_empty());
+    let changed_files = git_output(&["status", "--porcelain"], project)
         .map(|value| value.lines().count())
         .unwrap_or(0);
     GitSnapshot {
@@ -1339,7 +1340,7 @@ pub(crate) struct ChangedFile {
 /// capability lands in the core and is reachable from the CLI before any surface offers it -- so
 /// this is the capability, `verb changes` is the CLI, and the palette entry calls the same function.
 pub(crate) fn changed_files(project: &Path) -> Vec<ChangedFile> {
-    match command_output("git", &["status", "--porcelain"], project) {
+    match git_output(&["status", "--porcelain"], project) {
         Some(output) => parse_porcelain(&output),
         None => Vec::new(),
     }
@@ -1364,16 +1365,18 @@ fn parse_porcelain(output: &str) -> Vec<ChangedFile> {
         .collect()
 }
 
-fn command_output(command: &str, args: &[&str], directory: &Path) -> Option<String> {
-    let output = Command::new(command)
+/// Git reads for the status line and `verb changes`, through the same guarded runner the observation
+/// modules use: no repository-chosen binary, fsmonitor or filter runs because Verb looked.
+fn git_output(args: &[&str], directory: &Path) -> Option<String> {
+    let output = exec::git(directory)?
         .args(args)
-        .current_dir(directory)
+        .stderr(std::process::Stdio::null())
         .output()
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 pub(crate) fn load_session(project: &Path) -> Result<Option<Session>, String> {

@@ -71,9 +71,13 @@ commit no longer claims "no file differs"; "Git could not read this checkout" is
 "not a repository"; requirement text is stripped of control characters; alias names such as `311`
 are not read as versions; and runtime output says it read *Verb's* environment, not the shell's.
 
-**Still open.** The same observations on Android. The pre-existing `git_snapshot` in `lib.rs`
-(status line, `verb status`) still runs plain `git status`; moving it onto `exec::git` is a small,
-separate change. The fingerprint does not cover ignored files or submodule working trees. A band that fires *before* a risky Git command
+The status line, `verb status` and `verb changes` (`git_snapshot`, `changed_files`) use the same
+guarded runner.
+
+**Still open.** The same observations on Android. Other pre-existing Git calls (`project.rs`,
+`continuity.rs`) still run Git directly; they do not use status or diff, so filters do not apply,
+but they could move onto `exec::git` for PATH safety. The fingerprint does not cover ignored files
+or submodule working trees. A band that fires *before* a risky Git command
 runs would need command text, which Verb does not keep, so it is not planned. The web front-end
 logic has API tests but no browser tests.
 
