@@ -10,9 +10,12 @@ use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 mod agents;
+mod checks;
 mod context;
 mod continuity;
 mod fsutil;
+mod gitstate;
+mod good;
 mod integration;
 mod json;
 #[cfg(unix)]
@@ -20,6 +23,7 @@ mod mobile;
 mod observe;
 mod project;
 mod pty;
+mod runtime;
 mod shell;
 #[cfg(unix)]
 mod tui;
@@ -381,7 +385,17 @@ fn run() -> Result<(), Failure> {
     // harness's own `--json` must reach that harness unchanged.
     let json = matches!(
         command.as_str(),
-        "status" | "sessions" | "context" | "changes" | "shared" | "task" | "inbox" | "project"
+        "status"
+            | "sessions"
+            | "context"
+            | "changes"
+            | "shared"
+            | "task"
+            | "inbox"
+            | "project"
+            | "check"
+            | "runtime"
+            | "good"
     ) && take_flag(&mut rest, "--json");
     let project = project_root_or_current()?;
 
@@ -392,6 +406,9 @@ fn run() -> Result<(), Failure> {
         "sessions" => print_sessions(json)?,
         "context" => print_context(&project, json)?,
         "changes" => print_changes(&project, json)?,
+        "check" => checks::command(&project, json)?,
+        "runtime" => checks::runtime_command(&project, json)?,
+        "good" => good::command(&project, &rest, json)?,
         "project" => project::command(&project, &rest, json)?,
         "continuity" => continuity::command(&project, rest)?,
         "memory" => workbench::memory_command(&project, &rest)?,
@@ -513,6 +530,11 @@ Usage:
   verb sessions        List every project Verb has a session for
   verb context         Show everything Verb knows about this project right now
   verb changes         List the files Git reports as changed here
+  verb check           Show observed reasons for care: unfinished Git operations,
+                       conflicts, divergence, runtime mismatches, distance from good
+  verb runtime         Compare runtime versions with what the project declares
+  verb good [mark|forget|files]
+                       Mark a state that works, then see how far the tree has moved
   verb continuity export PATH
                        Export structural evidence for this project
   verb continuity import PATH [--apply]
@@ -1796,7 +1818,7 @@ fn valid_resume_identity(value: &str) -> Option<&str> {
     Some(value)
 }
 
-fn now_millis() -> u128 {
+pub(crate) fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

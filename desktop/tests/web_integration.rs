@@ -295,3 +295,20 @@ fn interrupting_web_host_closes_its_live_session_record() {
         .unwrap();
     assert_eq!(record["state"], "ENDED");
 }
+
+#[test]
+fn checks_are_served_on_request_and_mark_good_needs_the_token() {
+    let server = WebServer::start();
+    assert_eq!(server.request("GET", "/api/checks", None, false).0, 403);
+    assert_eq!(server.request("POST", "/api/good/mark", None, false).0, 403);
+    let report = server.json("GET", "/api/checks", None);
+    assert_eq!(report["schemaVersion"], 1);
+    // The fixture project is a plain directory: no repository, no declared runtime.
+    assert_eq!(report["repository"], Value::Null);
+    assert_eq!(report["runtimes"], json!([]));
+    assert_eq!(report["clear"], true);
+    // Marking needs a Git working tree, and says so rather than recording nothing.
+    let (status, body) = server.request("POST", "/api/good/mark", None, true);
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&body).contains("needs a Git working tree"));
+}

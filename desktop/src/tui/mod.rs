@@ -165,6 +165,9 @@ pub(crate) enum Context {
         /// Volatile: shown, never stored. Absent when the shell reported no command line, and the
         /// band says so rather than inventing one.
         label: Option<String>,
+        /// How far the tree has moved from the user's last-known-good mark, read when the command
+        /// failed. Absent when nothing is marked or Git could not say.
+        since_good: Option<String>,
     },
     /// A tool the agent ran and its own record marked as failed.
     ///
@@ -179,6 +182,16 @@ pub(crate) enum Context {
         exit_code: i32,
     },
     SessionState(SessionState),
+    /// The repository is in a state where the obvious next Git command can lose work or be refused:
+    /// an unfinished rebase or merge, conflicts, a detached HEAD, a diverged upstream. Read from Git
+    /// after a command finished; see `gitstate.rs`.
+    RepoWarning {
+        fact: String,
+        safe_next: String,
+    },
+    /// A runtime the project declares is missing or the wrong version, per `runtime.rs`. Only from a
+    /// declaration in the project's own files; never from a guess about what it wants.
+    RuntimeMismatch(String),
 }
 
 pub(crate) struct App {
@@ -214,6 +227,43 @@ pub(crate) struct App {
     /// where things are, exactly as it already is for how large the session believes it is.
     frame_height: u16,
     frame_width: u16,
+    /// Runtime facts are gathered off the UI thread, because running `node --version` and friends
+    /// can take a noticeable moment. Consumed once, when it arrives.
+    runtime_facts: Option<std::sync::mpsc::Receiver<Vec<crate::runtime::Fact>>>,
+}
+
+/// Starts reading declared runtimes against installed ones in the background.
+fn spawn_runtime_probe(project: &Path) -> std::sync::mpsc::Receiver<Vec<crate::runtime::Fact>> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let project = project.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = sender.send(crate::runtime::observe(&project));
+    });
+    receiver
+}
+
+/// The first repository warning, if the repository has one. Cheap: three Git reads.
+fn repo_warning(project: &Path) -> Option<Context> {
+    let warning = crate::gitstate::observe(project)?
+        .warnings()
+        .into_iter()
+        .next()?;
+    Some(Context::RepoWarning {
+        fact: warning.fact,
+        safe_next: warning.safe_next,
+    })
+}
+
+/// A short "since last known good" line, when the user has marked one. No fingerprint: this runs on
+/// the UI thread at the moment a command fails.
+fn since_good(project: &Path) -> Option<String> {
+    let mark = crate::good::load(project).ok()??;
+    let distance = crate::good::distance(project, &mark, false);
+    Some(format!(
+        "last known good {}: {}",
+        mark.short_head().unwrap_or("(no commit)"),
+        distance.summary()
+    ))
 }
 
 impl App {
@@ -273,7 +323,12 @@ impl App {
             mouse_enabled: true,
             frame_height: 0,
             frame_width: 0,
+            runtime_facts: Some(spawn_runtime_probe(project)),
         };
+        // A repository left mid-merge or detached is worth knowing before the first command.
+        if let Some(warning) = repo_warning(project) {
+            app.context = warning;
+        }
         app.refresh_workbench()?;
         Ok(app)
     }
@@ -374,9 +429,38 @@ impl App {
         Ok(())
     }
 
+    /// Shows a declared-runtime problem once the background probe reports one, if the band is quiet.
+    fn take_runtime_facts(&mut self) -> bool {
+        let Some(receiver) = self.runtime_facts.as_ref() else {
+            return false;
+        };
+        let facts = match receiver.try_recv() {
+            Ok(facts) => facts,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.runtime_facts = None;
+                return false;
+            }
+        };
+        self.runtime_facts = None;
+        let problem = facts.iter().find(|fact| {
+            matches!(
+                fact.verdict,
+                crate::runtime::Verdict::Mismatch | crate::runtime::Verdict::Missing
+            )
+        });
+        match problem {
+            Some(fact) if matches!(self.context, Context::None) => {
+                self.context = Context::RuntimeMismatch(fact.to_text());
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Moves every hosted session forward, including terminals hidden behind the active one.
     fn pump(&mut self) -> Result<bool, String> {
-        let mut changed = false;
+        let mut changed = self.take_runtime_facts();
         let mut index = 0;
         while index < self.parked.len() {
             let (exit, output_changed) = self.parked[index].poll()?;
@@ -416,10 +500,17 @@ impl App {
                         exit_code,
                         millis,
                         label,
+                        since_good: since_good(&self.project),
                     };
                 }
-                // A command that succeeded is not news. The band stays as it was.
-                crate::pty::Structural::CommandFinished { .. } => {}
+                // A command that succeeded is not news in itself, but it may have left the
+                // repository in a risky state (`git switch --detach` exits 0). Only replaces a
+                // quiet band or an older warning.
+                crate::pty::Structural::CommandFinished { .. } => {
+                    if matches!(self.context, Context::None | Context::RepoWarning { .. }) {
+                        self.context = repo_warning(&self.project).unwrap_or(Context::None);
+                    }
+                }
                 // Inside an agent, this is the only kind of failure Verb can see at all, and until
                 // now it could not see even this.
                 crate::pty::Structural::AgentToolFailed { millis, tool } => {
@@ -2176,6 +2267,11 @@ impl App {
 
     /// A plain workspace, for tests in this module and in `render`.
     #[cfg(test)]
+    pub(super) fn set_context_for_tests(&mut self, context: Context) {
+        self.context = context;
+    }
+
+    #[cfg(test)]
     pub(super) fn for_tests() -> App {
         App {
             project: PathBuf::from("/tmp/project"),
@@ -2204,6 +2300,7 @@ impl App {
             mouse_enabled: true,
             frame_height: 24,
             frame_width: 80,
+            runtime_facts: None,
         }
     }
 

@@ -380,6 +380,26 @@ impl WebHost {
         if method == &Method::Get && path == "/api/state" {
             return Ok(Reply::json(200, self.state()?));
         }
+        // Not folded into /api/state: it runs runtime `--version` probes, so the page asks for it on
+        // load and on demand rather than every few seconds.
+        if method == &Method::Get && path == "/api/checks" {
+            let report = crate::checks::assemble(&self.project)?.to_json();
+            let value: Value = serde_json::from_str(&report)
+                .map_err(|error| format!("could not encode checks: {error}"))?;
+            return Ok(Reply::json(200, value));
+        }
+        if method == &Method::Post && path == "/api/good/mark" {
+            let mark = crate::good::mark(&self.project)?;
+            return Ok(Reply::json(
+                200,
+                json!({
+                    "message": format!(
+                        "Marked last-known-good at {}.",
+                        mark.short_head().unwrap_or("this state")
+                    )
+                }),
+            ));
+        }
         if method == &Method::Post && path == "/api/tasks" {
             let input: TaskRequest = read_json(request)?;
             let id = workbench::create_ui_task(&self.project, &input.title, &input.brief)?;

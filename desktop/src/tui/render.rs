@@ -560,6 +560,7 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
             exit_code,
             millis,
             label,
+            since_good,
         } => {
             lines.push(Line::from(vec![
                 Span::styled(
@@ -573,12 +574,40 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
                     duration(*millis)
                 )),
             ]));
+            // Two rows only: the missing-label note is the more important caveat, so the distance
+            // from last-known-good shows when the shell did report what ran.
             if let Some(note) = failure_note(label.as_deref()) {
                 lines.push(Line::from(Span::styled(
                     format!("  {note}"),
                     theme::secondary(),
                 )));
+            } else if let Some(since) = since_good {
+                lines.push(Line::from(Span::styled(
+                    format!("  {since} {} verb good files", glyph::SEPARATOR),
+                    theme::secondary(),
+                )));
             }
+        }
+        // Observed now, from Git's own markers; the safe step is text, and Verb runs nothing.
+        Context::RepoWarning { fact, safe_next } => {
+            lines.push(Line::from(Span::styled(
+                format!("  {} {fact}", glyph::FAILED),
+                theme::danger(),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("  safe next: {safe_next}"),
+                theme::secondary(),
+            )));
+        }
+        Context::RuntimeMismatch(fact) => {
+            lines.push(Line::from(Span::styled(
+                format!("  {} {fact}", glyph::FAILED),
+                theme::danger(),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  declared by the project's own files; verb check shows every runtime".to_owned(),
+                theme::secondary(),
+            )));
         }
         // Worded as reporting, not as witnessing. Verb did not watch this happen: it read the
         // agent's own record afterwards, and the difference between those two is the difference
@@ -1506,6 +1535,74 @@ mod tests {
 
         let quiet = rendered_bar(&app);
         assert!(!quiet.contains("mouse"), "default bar mentioned the mouse");
+    }
+
+    fn rendered_band(app: &App) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 2)).unwrap();
+        terminal
+            .draw(|frame| context_band(frame, app, Rect::new(0, 0, 120, 2)))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..2)
+            .map(|row| {
+                (0..120)
+                    .map(|column| buffer[(column, row)].symbol().to_owned())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_command_says_how_far_the_tree_is_from_last_known_good() {
+        let mut app = App::for_tests();
+        app.set_context_for_tests(Context::CommandFailed {
+            exit_code: 1,
+            millis: 1200,
+            label: Some("npm test".to_owned()),
+            since_good: Some("last known good 1a2b3c: 2 commits, 5 files differ".to_owned()),
+        });
+        let band = rendered_band(&app);
+        assert!(band[0].contains("npm test"), "{band:?}");
+        assert!(band[1].contains("2 commits, 5 files differ"), "{band:?}");
+        assert!(band[1].contains("verb good files"), "{band:?}");
+    }
+
+    #[test]
+    fn the_missing_label_caveat_outranks_the_last_known_good_line() {
+        let mut app = App::for_tests();
+        app.set_context_for_tests(Context::CommandFailed {
+            exit_code: 1,
+            millis: 10,
+            label: None,
+            since_good: Some("last known good 1a2b3c: 1 file differs".to_owned()),
+        });
+        let band = rendered_band(&app);
+        assert!(
+            band[1].contains("did not report what was running"),
+            "{band:?}"
+        );
+    }
+
+    #[test]
+    fn repository_and_runtime_warnings_state_the_fact_and_the_safe_step() {
+        let mut app = App::for_tests();
+        app.set_context_for_tests(Context::RepoWarning {
+            fact: "A rebase is in progress.".to_owned(),
+            safe_next: "git rebase --abort".to_owned(),
+        });
+        let band = rendered_band(&app);
+        assert!(band[0].contains("A rebase is in progress."));
+        assert!(band[1].contains("safe next: git rebase --abort"));
+
+        app.set_context_for_tests(Context::RuntimeMismatch(
+            "node 18.19.0 · .nvmrc wants 20 · mismatch".to_owned(),
+        ));
+        let band = rendered_band(&app);
+        assert!(band[0].contains(".nvmrc wants 20"));
+        assert!(band[1].contains("declared by the project"));
     }
 
     fn rendered_bar(app: &App) -> String {

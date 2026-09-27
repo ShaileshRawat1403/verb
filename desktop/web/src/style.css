@@ -1322,6 +1322,67 @@ body {
   padding: 2px 5px;
   border-radius: 4px;
 }
+.checks-panel {
+  margin-bottom: 17px;
+}
+.checks-actions {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.check-row + .check-row {
+  border-top: 1px solid #ffffff0a;
+}
+.check-mark {
+  flex: 0 0 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  background: #282f3e;
+  color: #949eae;
+}
+.check-row[data-tone="risk"] .check-mark {
+  background: #4a2530;
+  color: #ff9aa9;
+}
+.check-row[data-tone="caution"] .check-mark {
+  background: #47391f;
+  color: #ffcf7a;
+}
+.check-row[data-tone="clear"] .check-mark {
+  background: #1f3d31;
+  color: #8ee0b5;
+}
+.check-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.check-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.check-copy code {
+  color: #949eae;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.check-empty {
+  color: #949eae;
+  font-size: 12px;
+  margin: 0 12px 8px;
+}
 @media (max-width: 1180px) {
   .hero-graphic {
     opacity: 0.55;

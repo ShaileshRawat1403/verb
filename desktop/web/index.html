@@ -158,6 +158,33 @@
                 </div>
               </div>
             </div>
+            <div class="panel checks-panel">
+              <div class="panel-heading">
+                <div>
+                  <span class="section-kicker">OBSERVED NOW</span>
+                  <h2>Reasons for care</h2>
+                </div>
+                <div class="checks-actions">
+                  <button
+                    class="text-button"
+                    type="button"
+                    data-action="refresh-checks"
+                  >
+                    Check again</button
+                  ><button
+                    class="text-button"
+                    type="button"
+                    data-action="mark-good"
+                    title="Record this state as one that works, to compare against later"
+                  >
+                    Mark as good
+                  </button>
+                </div>
+              </div>
+              <div id="checks-list" class="list-stack" aria-live="polite">
+                <p class="check-empty">Reading the repository and runtimes…</p>
+              </div>
+            </div>
             <div class="overview-columns">
               <div class="panel">
                 <div class="panel-heading">
