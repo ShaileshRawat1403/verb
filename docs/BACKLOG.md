@@ -74,12 +74,15 @@ are not read as versions; and runtime output says it read *Verb's* environment, 
 The status line, `verb status` and `verb changes` (`git_snapshot`, `changed_files`) use the same
 guarded runner.
 
-**Still open.** The same observations on Android. Other pre-existing Git calls (`project.rs`,
-`continuity.rs`) still run Git directly; they do not use status or diff, so filters do not apply,
-but they could move onto `exec::git` for PATH safety. The fingerprint does not cover ignored files
-or submodule working trees. A band that fires *before* a risky Git command
-runs would need command text, which Verb does not keep, so it is not planned. The web front-end
-logic has API tests but no browser tests.
+**Follow-up, same day.** The remaining Git spawns (`project.rs`, `continuity.rs`) and OpenCode's
+`sqlite3` read use the trusted PATH lookup; the worktree the user asks for keeps their own filters
+and hooks (`exec::user_git`). The web page's view logic lives in `web/src/view.js` with
+`node --test` tests (`npm test --prefix desktop/web`), run in CI before the asset build.
+
+**Still open.** The same observations on Android. The fingerprint does not cover ignored files or
+submodule working trees. A band that fires *before* a risky Git command runs would need command
+text, which Verb does not keep, so it is not planned. The page's DOM wiring (`app.js`) has no
+browser tests; its logic and the API it calls do.
 
 ---
 

@@ -129,6 +129,7 @@ jobs:
       - name: Build browser assets embedded by Rust
         run: |
           npm ci --prefix web
+          npm test --prefix web
           npm run build --prefix web
           git diff --exit-code -- web/dist
 

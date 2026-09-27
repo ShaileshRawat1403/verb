@@ -2,6 +2,14 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
+import {
+  agentMark,
+  checksHtml,
+  escapeHtml,
+  sessionAction,
+  stateName,
+  taskName,
+} from "./view.js";
 
 const $ = (selector) => document.querySelector(selector);
 const token =
@@ -19,20 +27,6 @@ const ui = {
   refreshing: null,
   toastTimer: null,
 };
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(
-    /[&<>"']/g,
-    (character) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[character],
-  );
-}
 
 function toast(message, tone = "info") {
   const element = $("#toast");
@@ -81,41 +75,6 @@ function showView(view) {
       });
     });
   }
-}
-
-function sessionAction(session) {
-  if (session.hasTerminal) return "Open terminal";
-  if (session.canResume) return "Resume session";
-  return "View inbox";
-}
-
-function stateName(state) {
-  return (
-    {
-      live: "Running",
-      recoverable: "Ready to resume",
-      interrupted: "Recovery unconfirmed",
-      ended: "Ended",
-    }[state] || state
-  );
-}
-
-function taskName(status) {
-  return (
-    {
-      open: "Open",
-      active: "In progress",
-      "needs review": "Needs review",
-      done: "Done",
-    }[status] || status
-  );
-}
-
-function agentMark(agent) {
-  if (/claude/i.test(agent)) return "✳";
-  if (/codex/i.test(agent)) return "✦";
-  if (/opencode/i.test(agent)) return "◇";
-  return "&gt;_";
 }
 
 function sessionItem(session, compact = false) {
@@ -309,102 +268,8 @@ async function refreshState(silent = false) {
   }
 }
 
-// Everything below comes from `verb check`: observed facts with the safe next step beside each.
-// Verb runs none of the steps; they are shown so the person can choose.
-function checkRow(mark, tone, fact, next) {
-  return `<div class="check-row" data-tone="${tone}">
-    <span class="check-mark" aria-hidden="true">${mark}</span>
-    <span class="check-copy"><strong>${escapeHtml(fact)}</strong>${next ? `<code>${escapeHtml(next)}</code>` : ""}</span>
-  </div>`;
-}
-
 function renderChecks(report) {
-  const rows = [];
-  if (report.repository === null) {
-    rows.push(
-      checkRow(
-        "?",
-        "quiet",
-        report.repositoryStatus === "unavailable"
-          ? "Git could not read this checkout here."
-          : "Not a Git repository.",
-        report.repositoryStatus === "unavailable"
-          ? "not installed, or it refused a checkout owned by another account"
-          : "",
-      ),
-    );
-  } else {
-    for (const warning of report.repository) {
-      rows.push(
-        checkRow(
-          "!",
-          warning.level,
-          warning.fact,
-          `safe next: ${warning.safeNext}`,
-        ),
-      );
-    }
-  }
-  for (const fact of report.runtimes) {
-    if (fact.verdict === "satisfied") continue;
-    const found =
-      fact.found ??
-      (fact.probe === "notFound" ? "not installed" : "no version reported");
-    rows.push(
-      checkRow(
-        fact.verdict === "unknown" ? "?" : "!",
-        fact.verdict === "unknown" ? "quiet" : "caution",
-        `${fact.runtime} ${found} · ${fact.source} wants ${fact.wants}`,
-        {
-          unknown: "Verb cannot compare this requirement",
-          mismatch:
-            "Verb's environment runs a different version than the project declares",
-          missing: "declared by the project but not installed here",
-        }[fact.verdict] || "",
-      ),
-    );
-  }
-  const good = report.lastKnownGood;
-  if (good) {
-    const d = good.distance;
-    const parts = [];
-    if (d.markMissing) parts.push("the marked commit is gone");
-    else if (d.identical) parts.push("exactly as marked");
-    else {
-      if (d.commitsSince)
-        parts.push(
-          `${d.commitsSince} commit${d.commitsSince === 1 ? "" : "s"}`,
-        );
-      if (d.commitsDropped) parts.push(`${d.commitsDropped} dropped`);
-      if (d.filesDiffer === null) parts.push("file changes unknown");
-      else if (d.filesDiffer > 0 || !parts.length)
-        parts.push(
-          `${d.filesDiffer} file${d.filesDiffer === 1 ? "" : "s"} differ${d.filesDiffer === 1 ? "s" : ""}`,
-        );
-    }
-    rows.push(
-      checkRow(
-        "◆",
-        "quiet",
-        `Last known good ${(good.mark.head || "").slice(0, 12)}: ${parts.join(", ") || "no change"}`,
-        d.identical ? "" : "verb good files · lists what differs",
-      ),
-    );
-  }
-  const satisfied = report.runtimes.filter((f) => f.verdict === "satisfied");
-  if (report.clear) {
-    rows.unshift(
-      checkRow(
-        "✓",
-        "clear",
-        "Nothing observed calls for care.",
-        satisfied.length
-          ? satisfied.map((f) => `${f.runtime} ${f.found}`).join(" · ")
-          : "",
-      ),
-    );
-  }
-  $("#checks-list").innerHTML = rows.join("");
+  $("#checks-list").innerHTML = checksHtml(report);
 }
 
 async function refreshChecks(silent = true, attempt = 0) {
