@@ -4,6 +4,7 @@
 //! help requests and handoffs remain in its history. Every mutation takes a project file lock and
 //! publishes a complete replacement, so concurrent CLI agents cannot lose each other's updates.
 
+use crate::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1317,36 +1318,6 @@ fn lock_project(root: &Path) -> Result<File, String> {
     lock.lock()
         .map_err(|error| format!("could not lock project work store: {error}"))?;
     Ok(lock)
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().ok_or("invalid work store path")?;
-    fs::create_dir_all(parent).map_err(|error| format!("could not create work store: {error}"))?;
-    let temporary = parent.join(format!(
-        ".{}.{}.tmp",
-        path.file_name().unwrap().to_string_lossy(),
-        new_id()
-    ));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary)
-        .map_err(|error| format!("could not create work record: {error}"))?;
-    file.write_all(bytes)
-        .and_then(|()| file.sync_all())
-        .map_err(|error| format!("could not save work record: {error}"))?;
-    fs::rename(&temporary, path)
-        .map_err(|error| format!("could not publish work record: {error}"))?;
-    #[cfg(unix)]
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("could not sync work store: {error}"))?;
-    Ok(())
 }
 
 fn read_bounded(path: &Path, limit: u64) -> io::Result<String> {

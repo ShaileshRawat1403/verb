@@ -3,12 +3,13 @@
 //! Imported records are deliberately kept outside `sessions/`: a foreign file can contribute
 //! history, never current state or a resume capability.
 
+use crate::fsutil::atomic_write;
 use crate::{event_log_path, iso8601, json_escape, load_sessions_for_project, state_root, Session};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Component, Path};
 use std::process::Command;
 
@@ -745,30 +746,6 @@ fn take_local_flag(args: &mut Vec<String>, flag: &str) -> bool {
         .position(|value| value == flag)
         .map(|index| args.remove(index))
         .is_some()
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or("invalid continuity path")?;
-    let temporary = parent.join(format!(".{name}.tmp"));
-    let mut file = File::create(&temporary)
-        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    file.write_all(bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| format!("could not finish {}: {error}", temporary.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
-            .map_err(|error| error.to_string())?;
-    }
-    fs::rename(&temporary, path)
-        .map_err(|error| format!("could not commit {}: {error}", path.display()))
 }
 
 pub(crate) fn imported_session_json(session: &ImportedSession) -> String {

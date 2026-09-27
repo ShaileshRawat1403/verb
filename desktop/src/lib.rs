@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 mod agents;
 mod context;
 mod continuity;
+mod fsutil;
 mod integration;
 mod json;
 #[cfg(unix)]
