@@ -85,6 +85,28 @@ mismatch probed at launch never reached the screen. Facts are now re-applied aft
 a repository warning outranks a runtime one, and the runtime fact returns once the repository is
 clean; `git merge --abort`, `git switch --detach` and back each changed the band live.
 
+**Second review, older desktop code.** A review of code no one had examined found, and each fix
+now has a test that fails on the old code:
+
+- PTY masters were inherited by every later child: one session could type into another. Now
+  close-on-exec. Closing a session now stops its whole process group, not just the leader.
+- The bash shim read a DEBUG trap back from a predictable file in `/tmp` and eval'd it; another
+  account could plant it. The file now lives in Verb's owner-only shell directory.
+- `verb web` could be frozen or aborted by an unauthenticated request declaring a body it never
+  sent (tiny_http drained it on the terminal-pumping thread). tiny_http is vendored with a patch.
+- The hosted program could pair itself as "the phone" over its own bridge socket. Offer, take and
+  revoke are refused from the hosted session; the web page can take input back.
+- An OSC 7 `%0a` could move a session to another project in its record. Rejected at both ends.
+- Transcript tailing counted appended lines twice; array-content tool failures read as successes;
+  Claude's project directory rule was incomplete, so paths with spaces or non-ASCII never
+  resumed; absence from Claude's running-process list read as "cannot resume".
+- A background process left by an agent kept its finished session LIVE; the host now retires the
+  lock file. Codex checks no longer read every rollout; event logs are 0600; `continuity import`
+  enforces its limit on bytes read; the Android release workflow reads its tag through `env`.
+
+Android's `ClaudeProjectDirectory` has the same incomplete directory rule as the desktop did; it was
+left alone because `app/` is out of scope for this branch.
+
 **Still open.** The same observations on Android. The fingerprint does not cover ignored files or
 submodule working trees. A band that fires *before* a risky Git command runs would need command
 text, which Verb does not keep, so it is not planned. The page's DOM wiring (`app.js`) has no
