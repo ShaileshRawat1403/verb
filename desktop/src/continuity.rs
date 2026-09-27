@@ -401,13 +401,23 @@ fn export_events(project: &Path, session: &Session) -> Result<Vec<EventRecord>, 
 }
 
 fn parse_file(path: &Path) -> Result<ParsedEnvelope, String> {
-    let metadata = fs::metadata(path)
+    // The size is enforced on what is read, not on what metadata claimed a moment earlier: a
+    // device such as /dev/zero reports length 0 and then reads forever, and a file can grow between
+    // the two calls.
+    let file = fs::File::open(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    if metadata.len() > MAX_BYTES {
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err("a continuity file must be a regular file".to_owned());
+    }
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut io::Read::take(file, MAX_BYTES + 1), &mut bytes)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_BYTES {
         return Err("continuity file exceeds the 5 MiB limit".to_owned());
     }
-    let bytes =
-        fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let first_newline = bytes
         .iter()
         .position(|byte| *byte == b'\n')

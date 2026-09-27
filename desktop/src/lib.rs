@@ -1621,6 +1621,15 @@ impl EventLogger {
             .ok_or_else(|| "invalid event log path".to_owned())?;
         fs::create_dir_all(parent)
             .map_err(|error| format!("could not create Verb event directory: {error}"))?;
+        // Event logs carry working-directory paths, tool names and exit codes. Like every other
+        // Verb record they are the owner's alone; they used to be created 0644 in 0755 folders.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for directory in [parent, parent.parent().unwrap_or(parent)] {
+                let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o700));
+            }
+        }
         let next_seq = fs::read_to_string(&path)
             .ok()
             .and_then(|contents| {
@@ -1632,11 +1641,22 @@ impl EventLogger {
             .and_then(|seq| u64::try_from(seq).ok())
             .unwrap_or(0)
             .saturating_add(1);
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
+        let mut options = OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let file = options
             .open(&path)
             .map_err(|error| format!("could not create event log: {error}"))?;
+        // Logs written by earlier versions keep their old mode until tightened here.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+        }
         Ok(Self {
             path,
             file,

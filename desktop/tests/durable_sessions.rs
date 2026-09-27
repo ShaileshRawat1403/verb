@@ -1679,3 +1679,64 @@ fn a_corrupt_session_record_is_reported_instead_of_silently_disappearing() {
     let records: serde_json::Value = serde_json::from_slice(&listing.stdout).unwrap();
     assert_eq!(records.as_array().unwrap().len(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn continuity_import_refuses_a_device_instead_of_reading_it_forever() {
+    let sandbox = Sandbox::new("import-device");
+    let mut child = sandbox
+        .command()
+        .args(["continuity", "import", "/dev/zero"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(!status.success());
+            break;
+        }
+        if started.elapsed() > std::time::Duration::from_secs(5) {
+            let _ = child.kill();
+            panic!("continuity import kept reading /dev/zero");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn event_logs_are_readable_by_their_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new("event-log-mode");
+    let output = sandbox
+        .command()
+        .args(["run", "true"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let events = sandbox.root.join("state/events");
+    assert_eq!(
+        fs::metadata(&events).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let mut logs = 0;
+    for project in fs::read_dir(&events).unwrap().flatten() {
+        assert_eq!(
+            fs::metadata(project.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        for log in fs::read_dir(project.path()).unwrap().flatten() {
+            assert_eq!(
+                fs::metadata(log.path()).unwrap().permissions().mode() & 0o777,
+                0o600,
+                "{}",
+                log.path().display()
+            );
+            logs += 1;
+        }
+    }
+    assert!(logs > 0);
+}
