@@ -411,3 +411,37 @@ fn a_leftover_background_process_does_not_keep_a_finished_session_live() {
         "finished session still live: {text}"
     );
 }
+
+/// An unauthenticated request that declares a body it never sends, or one far too large to hold,
+/// must neither freeze the host (which also pumps every terminal) nor abort it.
+#[test]
+fn an_unread_request_body_cannot_freeze_or_crash_the_host() {
+    let mut server = WebServer::start();
+    let host = format!("127.0.0.1:{}", server.port);
+    let mut withheld = TcpStream::connect(&host).unwrap();
+    write!(
+        withheld,
+        "POST /api/state HTTP/1.1\r\nHost: {host}\r\nContent-Length: 5000\r\n\r\n"
+    )
+    .unwrap();
+    let mut huge = TcpStream::connect(&host).unwrap();
+    write!(
+        huge,
+        "POST /api/state HTTP/1.1\r\nHost: {host}\r\nContent-Length: 1000000000000000\r\n\r\n{}",
+        "x".repeat(2048)
+    )
+    .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    // Both attacking sockets are still open. The host must keep answering.
+    let started = std::time::Instant::now();
+    let state = server.json("GET", "/api/state", None);
+    assert!(state["sessions"].is_array());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert!(
+        server.child.try_wait().unwrap().is_none(),
+        "the web host exited"
+    );
+    drop(withheld);
+    drop(huge);
+}

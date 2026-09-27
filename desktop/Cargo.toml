@@ -20,3 +20,8 @@ sha2 = "0.10"
 tiny_http = "0.12.0"
 base64 = "0.22.1"
 ctrlc = { version = "3.5.2", features = ["termination"] }
+
+# tiny_http with one security patch: an unread request body is no longer drained on the thread that
+# pumps hosted terminals. See vendor/tiny_http/VERB_PATCH.md.
+[patch.crates-io]
+tiny_http = { path = "vendor/tiny_http" }
