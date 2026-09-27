@@ -130,9 +130,14 @@ jobs:
           retention-days: 14
 
   desktop:
-    # The desktop host has 57 unit tests and 6 integration tests that run a real shell on a real
-    # PTY. Until now the only thing running them was whoever happened to be working on the crate.
-    runs-on: ubuntu-latest
+    # Unit tests plus integration tests that run a real shell on a real PTY, a real Git repository
+    # and the local web host. macOS runs too: PTY, process-group and path behaviour differ there,
+    # and it is the platform the desktop host is mostly used on.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: desktop
@@ -167,9 +172,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
 
       - name: Format
+        if: matrix.os == 'ubuntu-latest'
         run: cargo fmt --check
 
       - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test

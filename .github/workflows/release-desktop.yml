@@ -1,0 +1,172 @@
+name: Release Desktop
+
+# Prebuilt `verb` binaries for macOS and Linux (backlog D2).
+#
+# Tags are `desktop-vX.Y.Z`, separate from the Android `vX.Y.Z` tags, because the two hosts version
+# independently. The tag must match `desktop/Cargo.toml`, so a release never ships a binary that
+# reports a different version from the one it is published as.
+#
+# The release is always created as a *draft*: nothing is downloadable until someone has installed
+# a binary from it and published it by hand, the same acceptance rule the Android release follows.
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build, for example desktop-v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-desktop-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve and check the release version
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          case "$TAG" in
+            desktop-v*) ;;
+            *) echo "::error::desktop releases use desktop-vX.Y.Z tags, got $TAG"; exit 1 ;;
+          esac
+          # A dispatched build must name a tag that already exists; `gh release create` would
+          # otherwise invent one from the default branch.
+          git fetch --tags --quiet
+          git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null \
+            || { echo "::error::tag $TAG does not exist"; exit 1; }
+          VERSION="${TAG#desktop-v}"
+          CRATE="$(sed -n 's/^version = "\(.*\)"/\1/p' desktop/Cargo.toml | head -1)"
+          if [ "$VERSION" != "$CRATE" ]; then
+            echo "::error::tag says $VERSION but desktop/Cargo.toml says $CRATE"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists; assets will be replaced."
+            exit 0
+          fi
+          cat > notes.md <<NOTES
+          Verb desktop $VERSION — developer preview.
+
+          Unpack, then run \`./verb help\`. Each archive has a matching \`.sha256\`.
+
+          macOS binaries are not notarized. If you downloaded with a browser, clear the quarantine
+          flag before the first run: \`xattr -d com.apple.quarantine ./verb\`.
+          NOTES
+          gh release create "$TAG" --draft --prerelease --verify-tag \
+            --title "Verb desktop $VERSION" --notes-file notes.md
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            test: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            test: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            test: true
+          # Built on Apple Silicon for Intel Macs; the tests already ran natively above.
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            test: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/web/package-lock.json
+
+      - name: Build browser assets embedded by Rust
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          git diff --exit-code -- web/dist
+
+      - name: Test
+        if: matrix.test
+        run: cargo test --all-targets --target ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          NAME="verb-desktop-$VERSION-${{ matrix.target }}"
+          STAGE="$RUNNER_TEMP/$NAME"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/verb" "$STAGE/verb"
+          cp README.md "$STAGE/README.md"
+          cp ../LICENSE ../THIRD_PARTY_LICENSES.md "$STAGE/"
+          cp web/THIRD_PARTY_LICENSES.md "$STAGE/WEB_THIRD_PARTY_LICENSES.md"
+          # The binary must at least start and report the version it is being released as.
+          if [ "${{ matrix.test }}" = "true" ]; then
+            REPORTED="$("$STAGE/verb" version)"
+            [ "$REPORTED" = "Verb $VERSION" ] \
+              || { echo "::error::binary reports '$REPORTED'"; exit 1; }
+          fi
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/$NAME.tar.gz" "$NAME"
+          cd "$RUNNER_TEMP"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          else
+            shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          fi
+          echo "archive=$RUNNER_TEMP/$NAME.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: gh release upload "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber --repo "$GITHUB_REPOSITORY"
