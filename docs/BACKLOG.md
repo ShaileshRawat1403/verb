@@ -10,6 +10,53 @@ does it merely add another capability?
 
 ---
 
+## Desktop observation and release — 27 September
+
+Desktop only; `app/` was not touched. Everything below passed `cargo fmt --check`,
+`cargo clippy --all-targets -D warnings` and `cargo test --all-targets` on Linux. It has not yet
+run on macOS; CI now does.
+
+**Fixed.**
+
+- `verb web` printed its URL and then a second line. A launcher that read the URL and closed the
+  pipe made the second `println!` panic on EPIPE, taking every hosted terminal with it. This was
+  also why `tests/web_integration.rs` failed under parallel test threads and passed alone.
+- The phone bridge removed the shared `/tmp/verb-mobile-UID` directory on drop, racing another
+  session between its `create_dir_all` and its `bind`.
+- Three copies of `atomic_write` became one (`fsutil.rs`). The continuity copy used a fixed temporary
+  name and wrote the file before restricting it to `0600`.
+- Three clippy findings on current stable.
+
+**C4 — runtime facts (`runtime.rs`).** Declared: `.nvmrc`, `.node-version`, `package.json`
+`engines.node`, `.python-version`, `pyproject.toml` `requires-python`, `rust-toolchain(.toml)`,
+`Cargo.toml` `rust-version`, `go.mod`, `.ruby-version`, `.tool-versions`. Found: the runtime's own
+`--version`, run in the project directory with a 3 s bound and `RUSTUP_AUTO_INSTALL=0`. Verdicts are
+satisfied, mismatch, missing and unknown; `lts/*`, `stable` and `system` are unknown, never
+mismatched. A toolchain file with a `path`, or a `.tool-versions` entry of `path:`/`ref:`, is not
+probed at all, because the version manager would execute a binary the repository chose.
+
+**C5 — risky repository states (`gitstate.rs`).** Read from Git's own markers and `for-each-ref`,
+with no fetch: unfinished rebase, `am`, merge, cherry-pick, revert or bisect; unmerged paths; a
+detached HEAD outside an operation; an upstream that has diverged or is gone "as of the last fetch".
+Each warning carries the safe next step as text. Counts only; no branch or file names.
+
+**C3 — last-known-good (`good.rs`).** Verb never decides what "good" is. `verb good mark` records,
+per checkout: time, HEAD, uncommitted count and a SHA-256 fingerprint over HEAD, porcelain status,
+the diff against HEAD and untracked blob ids. `verb good` reports commits since, commits dropped and
+files differing, read live; `verb good files` prints names on request and stores none. A marked
+commit that no longer exists is reported as unknown, not as zero distance.
+
+**Surfaces.** `verb check [--json]` gathers all three. The TUI band shows a repository warning at
+start and after a command, a declared-runtime problem (probed off the UI thread), and on a failed
+command the distance from last-known-good. The web workbench has a "Reasons for care" panel
+(`GET /api/checks`, `POST /api/good/mark`).
+
+**Still open.** The same observations on Android. A band that fires *before* a risky Git command
+runs would need command text, which Verb does not keep, so it is not planned. The web front-end
+logic has API tests but no browser tests.
+
+---
+
 ## Terminal flicker during keyboard use — measured and fixed (2 September)
 
 Reported as "`agy` starts, then the terminal flickers during use". The hypothesis in
@@ -347,9 +394,9 @@ costume.
 | --- | --- | --- |
 | C1 | ~~Agent sessions emit nothing structural~~ — both hosts now follow the record the agent writes for itself and emit turn/tool/failure events, worded as reported rather than witnessed. OpenCode has no reader yet | done for Claude and Codex |
 | C2 | ~~Git snapshot at command boundaries~~ — the tree is observed and the delta says what the last command did; see the C2 section above | done |
-| C3 | Last-known-good tracking | comparison and recovery |
-| C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |
-| C5 | Richer contextual triggers: risky Git operation, runtime mismatch | two of the four bands in `TUI_VISION.md` |
+| C3 | ~~Last-known-good tracking~~ — desktop: `verb good mark` records a user-declared good state (HEAD, uncommitted count, tree fingerprint; no names); `verb good` and the TUI failure band report the distance. Android not started | done on desktop |
+| C4 | ~~Runtime version facts~~ — desktop: `verb runtime` compares what the project declares with what runs here; see the 27 September section | done on desktop |
+| C5 | ~~Risky Git operation, runtime mismatch triggers~~ — desktop: unfinished rebase/merge/am/cherry-pick/revert/bisect, conflicts, detached HEAD, diverged or gone upstream; TUI band, `verb check`, web panel | done on desktop |
 
 ## C0. Agent compatibility matrix
 
@@ -366,8 +413,11 @@ Gemini CLI       listed already    upstream: yes (@google/gemini-cli 0.56.0)
 Ollama           candidate         shape: remote provider endpoint, not a hosted agent.
                                    The npm package is a client library; the runtime is a Go binary.
                                    Verb would point at a server elsewhere · priority: deferred
-Antigravity      excluded          nothing hostable exists: @google/antigravity is a 404 and the
-                                   unscoped `antigravity` package is a placeholder joke
+Antigravity      Agent Runtime     not an npm package (@google/antigravity is a 404); hosted since
+                                   30 Aug through the Agent Runtime rootfs under qemu. On Verb
+                                   Android: launch and cold start verified (1.1.22, beta.7);
+                                   sign-in state reported as unknown; no durable recovery
+Hermes           Agent Runtime     on Verb Android: launch verified (beta.6); no durable recovery
 dsh              excluded          koffi has no Android build; the card says why
 ```
 
@@ -387,8 +437,8 @@ quietly invent a different shape.
 | # | Item | Size |
 | --- | --- | --- |
 | D1 | Integrate this source-only transfer into the primary repository's full history; do not publish the temporary transfer Git repository | S–M |
-| D2 | Android signed prerelease workflow exists; desktop distribution remains `cargo install`/source build only | partly |
-| D3 | The Rust crate has no library target, so integration tests drive the binary | S |
+| D2 | Android signed prerelease workflow exists; desktop: `release-desktop.yml` builds macOS and Linux binaries into a draft release on `desktop-v*` tags. Not yet run on GitHub; macOS binaries are not notarized | partly |
+| D3 | ~~The Rust crate has no library target~~ — `src/lib.rs` with `verb::main_entry()`; the binary is a shim | done |
 | D4 | ~~Dated snapshots (`HANDOFF.md`, `NEXT_SPRINT.md`, V0 validation) are marked, not rewritten~~ | done |
 | D5 | ~~Add CONTRIBUTING and architecture overview~~ | done |
 

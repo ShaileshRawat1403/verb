@@ -43,7 +43,34 @@ cargo run --manifest-path desktop/Cargo.toml -- memory show
 cargo run --manifest-path desktop/Cargo.toml -- task list
 cargo run --manifest-path desktop/Cargo.toml -- continuity export /tmp/project.vcont
 cargo run --manifest-path desktop/Cargo.toml -- continuity import /tmp/project.vcont
+cargo run --manifest-path desktop/Cargo.toml -- check
+cargo run --manifest-path desktop/Cargo.toml -- runtime --json
+cargo run --manifest-path desktop/Cargo.toml -- good mark
+cargo run --manifest-path desktop/Cargo.toml -- good
+cargo run --manifest-path desktop/Cargo.toml -- good files
 ```
+
+`verb check` gathers what Verb can observe right now that calls for care, each with the safe next
+step as text. It reads three things and runs none of the steps it names:
+
+* **Repository state** from Git's own markers: an unfinished rebase, `am`, merge, cherry-pick,
+  revert or bisect; unresolved conflicts; a detached HEAD; an upstream that has diverged or been
+  deleted as of the last fetch. Verb never fetches.
+* **Runtimes the project declares** (`.nvmrc`, `.node-version`, `package.json` engines,
+  `.python-version`, `pyproject.toml` `requires-python`, `rust-toolchain(.toml)`, `Cargo.toml`
+  `rust-version`, `go.mod`, `.ruby-version`, `.tool-versions`) against the runtime's own
+  `--version`, run in the project directory. A requirement Verb cannot compare (`lts/*`, `stable`)
+  is reported as unknown. A toolchain file that points at a binary inside the project is never run.
+* **Distance from last-known-good**, once `verb good mark` has recorded a state you say works.
+  The mark stores the commit id, an uncommitted count and a fingerprint of the tree; never file or
+  branch names. `verb good files` lists what differs, read live.
+
+`verb check --json` carries counts and versions only, so it is safe to hand to an assistant under the
+same rule as `verb context`. The TUI band and the web workbench's "Reasons for care" panel show the
+same facts.
+
+Prebuilt binaries come from `.github/workflows/release-desktop.yml` on `desktop-vX.Y.Z` tags. The
+macOS builds are not notarized; after a browser download, run `xattr -d com.apple.quarantine verb`.
 
 `verb web` prints a local URL to open in a browser. It binds only to `127.0.0.1` and uses a
 random token for its API. The browser shows the same project sessions, tasks, and memory as the

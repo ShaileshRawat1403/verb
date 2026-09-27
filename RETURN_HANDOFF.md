@@ -1,4 +1,21 @@
-# Verb return handoff — updated 2026-09-26
+# Verb return handoff — updated 2026-09-27
+
+## September 27 desktop addendum
+
+Branch `desktop/gaps-and-observation`, desktop, CI and docs only. The Kotlin Android app (`app/`)
+and `runtime/` are unchanged. The first commit on the branch snapshots the Sep 26 working tree
+exactly as it was. The rest is summarised in `docs/BACKLOG.md` under "Desktop observation and
+release — 27 September":
+
+* fixed: `verb web` dying on a closed stdout (the flaky web tests), a phone-bridge directory race,
+  one owner-only `atomic_write`, clippy on current stable;
+* the crate has a library target (D3);
+* `verb check`, `verb runtime`, `verb good` (C3, C4, C5), with TUI band and web panel;
+* `release-desktop.yml` for draft macOS/Linux binaries (D2), and macOS in the desktop CI job.
+
+Gate passed in a Linux container: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
+`cargo test --all-targets`, `cargo build --release --locked`, and the web asset build with no
+`dist` drift. Not yet run: the macOS test job, the release workflow on GitHub, or the TUI by hand.
 
 ## September 26 final review addendum
 

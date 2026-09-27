@@ -62,6 +62,12 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
   absolute paths, or even a branch name. A model provider is optional and replaceable; the context
   is the product.
 
+* **Reasons for care, observed rather than guessed (desktop).** `verb check` reports an unfinished
+  rebase or merge, conflicts, a detached HEAD, a diverged upstream, and a runtime the project
+  declares (`.nvmrc`, `pyproject.toml`, `rust-toolchain.toml`, `go.mod`, …) that is missing or the
+  wrong version here. `verb good mark` records a state you say works; after that, a failed command
+  says how far the tree has moved from it. Each warning names the safe next step; Verb runs none.
+
 Working World archives protect allowlisted agent state and Verb metadata. They do **not** contain
 project source trees; keep projects in Git or another independent backup. If you made an archive
 with `0.1.0-beta.1` or `0.1.0-beta.2`, see the restore notice in
@@ -99,7 +105,9 @@ cargo install --path desktop              # install from source
 ./desktop/target/release/verb help
 ```
 
-The developer preview does not yet publish prebuilt desktop binaries.
+Prebuilt desktop binaries for macOS and Linux are produced by
+[`release-desktop.yml`](.github/workflows/release-desktop.yml) on `desktop-vX.Y.Z` tags, as a draft
+release that is published by hand after acceptance. None has been published yet.
 The web assets are bundled into the Rust binary. To change them, run `npm ci --prefix desktop/web`
 and `npm run build --prefix desktop/web` before building Rust. See
 [`desktop/README.md`](desktop/README.md) for the browser host's local access and PTY ownership
