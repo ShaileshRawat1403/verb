@@ -148,6 +148,66 @@ struct WebHost {
     token: String,
     origin: String,
     terminals: HashMap<String, WebTerminal>,
+    checks: Arc<std::sync::Mutex<ChecksCache>>,
+}
+
+/// `verb check` runs Git and several `--version` probes, which can take seconds. The web host has one
+/// request loop that also pumps every hosted terminal, so checks are computed on their own thread and
+/// the page is answered from the latest finished report.
+#[derive(Default)]
+struct ChecksCache {
+    report: Option<(Instant, Value)>,
+    running: bool,
+}
+
+/// A report younger than this is served as it is; an older one is served while a new one is read.
+const CHECKS_FRESH: Duration = Duration::from_secs(20);
+
+impl WebHost {
+    fn checks(&self) -> Value {
+        let mut cache = self
+            .checks
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let fresh = cache
+            .report
+            .as_ref()
+            .is_some_and(|(at, _)| at.elapsed() < CHECKS_FRESH);
+        if !fresh && !cache.running {
+            cache.running = true;
+            let shared = Arc::clone(&self.checks);
+            let project = self.project.clone();
+            std::thread::spawn(move || {
+                let report = crate::checks::assemble(&project)
+                    .and_then(|report| {
+                        serde_json::from_str::<Value>(&report.to_json())
+                            .map_err(|error| error.to_string())
+                    })
+                    .unwrap_or_else(|error| json!({"error": error}));
+                let mut cache = shared.lock().unwrap_or_else(|poison| poison.into_inner());
+                cache.report = Some((Instant::now(), report));
+                cache.running = false;
+            });
+        }
+        match &cache.report {
+            Some((_, report)) => {
+                let mut report = report.clone();
+                if let Value::Object(map) = &mut report {
+                    map.insert("refreshing".to_owned(), Value::Bool(cache.running));
+                }
+                report
+            }
+            None => json!({"pending": true}),
+        }
+    }
+
+    fn invalidate_checks(&self) {
+        let mut cache = self
+            .checks
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        cache.report = None;
+    }
 }
 
 #[derive(Deserialize)]
@@ -248,6 +308,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         token: token.clone(),
         origin: format!("http://127.0.0.1:{}", address.port()),
         terminals: HashMap::new(),
+        checks: Arc::default(),
     };
     let running = Arc::new(AtomicBool::new(true));
     let signal_flag = Arc::clone(&running);
@@ -383,13 +444,11 @@ impl WebHost {
         // Not folded into /api/state: it runs runtime `--version` probes, so the page asks for it on
         // load and on demand rather than every few seconds.
         if method == &Method::Get && path == "/api/checks" {
-            let report = crate::checks::assemble(&self.project)?.to_json();
-            let value: Value = serde_json::from_str(&report)
-                .map_err(|error| format!("could not encode checks: {error}"))?;
-            return Ok(Reply::json(200, value));
+            return Ok(Reply::json(200, self.checks()));
         }
         if method == &Method::Post && path == "/api/good/mark" {
             let mark = crate::good::mark(&self.project)?;
+            self.invalidate_checks();
             return Ok(Reply::json(
                 200,
                 json!({

@@ -321,7 +321,18 @@ function checkRow(mark, tone, fact, next) {
 function renderChecks(report) {
   const rows = [];
   if (report.repository === null) {
-    rows.push(checkRow("·", "quiet", "Not a Git repository.", ""));
+    rows.push(
+      checkRow(
+        "?",
+        "quiet",
+        report.repositoryStatus === "unavailable"
+          ? "Git could not read this checkout here."
+          : "Not a Git repository.",
+        report.repositoryStatus === "unavailable"
+          ? "not installed, or it refused a checkout owned by another account"
+          : "",
+      ),
+    );
   } else {
     for (const warning of report.repository) {
       rows.push(
@@ -346,7 +357,8 @@ function renderChecks(report) {
         `${fact.runtime} ${found} · ${fact.source} wants ${fact.wants}`,
         {
           unknown: "Verb cannot compare this requirement",
-          mismatch: "a different version runs here than the project declares",
+          mismatch:
+            "Verb's environment runs a different version than the project declares",
           missing: "declared by the project but not installed here",
         }[fact.verdict] || "",
       ),
@@ -364,7 +376,8 @@ function renderChecks(report) {
           `${d.commitsSince} commit${d.commitsSince === 1 ? "" : "s"}`,
         );
       if (d.commitsDropped) parts.push(`${d.commitsDropped} dropped`);
-      if (d.filesDiffer !== null)
+      if (d.filesDiffer === null) parts.push("file changes unknown");
+      else if (d.filesDiffer > 0 || !parts.length)
         parts.push(
           `${d.filesDiffer} file${d.filesDiffer === 1 ? "" : "s"} differ${d.filesDiffer === 1 ? "s" : ""}`,
         );
@@ -394,9 +407,19 @@ function renderChecks(report) {
   $("#checks-list").innerHTML = rows.join("");
 }
 
-async function refreshChecks(silent = true) {
+async function refreshChecks(silent = true, attempt = 0) {
   try {
-    renderChecks(await api("GET", "/api/checks"));
+    const report = await api("GET", "/api/checks");
+    // The host reads checks on its own thread; until the first report exists it says so.
+    if (report.pending) {
+      if (attempt < 40)
+        setTimeout(() => refreshChecks(silent, attempt + 1), 750);
+      return;
+    }
+    if (report.error) throw new Error(report.error);
+    renderChecks(report);
+    if (report.refreshing && attempt < 40)
+      setTimeout(() => refreshChecks(true, attempt + 1), 1500);
   } catch (error) {
     if (!silent) toast(error.message, "error");
   }

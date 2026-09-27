@@ -605,7 +605,8 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
                 theme::danger(),
             )));
             lines.push(Line::from(Span::styled(
-                "  declared by the project's own files; verb check shows every runtime".to_owned(),
+                "  declared by the project; version read in Verb's environment · verb check"
+                    .to_owned(),
                 theme::secondary(),
             )));
         }

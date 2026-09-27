@@ -23,9 +23,9 @@ use crate::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// Beyond this much diff the fingerprint is skipped rather than holding it all in memory. The
 /// comparison still works from commits and file counts; only "exactly as marked" becomes unknown.
@@ -127,14 +127,27 @@ pub(crate) fn distance(project: &Path, mark: &Mark, with_fingerprint: bool) -> D
     let now_head = head(project);
     let head_moved = now_head != mark.head;
     let Some(marked) = mark.head.as_deref() else {
-        // Marked before the first commit: every tracked or untracked path differs from nothing.
-        return Distance {
-            identical: None,
-            head_moved,
-            commits_since: None,
-            commits_dropped: None,
-            files_differ: porcelain(project).map(|p| p.lines().count()),
-            mark_missing: false,
+        // Marked before the first commit. While there is still no commit, every path in the status
+        // differs from nothing. Once commits exist, the status no longer describes the distance:
+        // count the commits, and say the file distance is unknown rather than zero.
+        return match now_head {
+            None => Distance {
+                identical: None,
+                head_moved,
+                commits_since: None,
+                commits_dropped: None,
+                files_differ: porcelain(project).map(|p| p.lines().count()),
+                mark_missing: false,
+            },
+            Some(_) => Distance {
+                identical: Some(false),
+                head_moved,
+                commits_since: git(project, &["rev-list", "--count", "HEAD"])
+                    .and_then(|value| value.parse().ok()),
+                commits_dropped: Some(0),
+                files_differ: None,
+                mark_missing: false,
+            },
         };
     };
     let exists = git(
@@ -176,10 +189,19 @@ pub(crate) fn distance(project: &Path, mark: &Mark, with_fingerprint: bool) -> D
 /// The paths that differ from the marked commit, read now. Printed by `verb good files`; never
 /// stored and never placed in JSON evidence that could reach a model.
 pub(crate) fn files_differing(project: &Path, marked: &str) -> Option<Vec<String>> {
-    let mut files: Vec<String> = git(project, &["diff", "--name-only", marked])?
-        .lines()
-        .map(str::to_owned)
-        .collect();
+    let mut files: Vec<String> = git(
+        project,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--no-relative",
+            marked,
+        ],
+    )?
+    .lines()
+    .map(str::to_owned)
+    .collect();
     if let Some(untracked) = git(project, &["ls-files", "--others", "--exclude-standard"]) {
         files.extend(untracked.lines().map(str::to_owned));
     }
@@ -417,25 +439,44 @@ fn is_object_id(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Diff and status options that make the fingerprint independent of the user's Git configuration
+/// (prefixes, rename detection, algorithm, relative mode) and keep every configured driver --
+/// external diff, textconv, filters -- from running.
+const STABLE_DIFF: [&str; 9] = [
+    "--binary",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-renames",
+    "--no-relative",
+    "--diff-algorithm=myers",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+];
+
+/// Untracked content larger than this in total is not hashed; the fingerprint becomes unknown.
+const MAX_FINGERPRINT_UNTRACKED_BYTES: u64 = 256 * 1024 * 1024;
+
 fn fingerprint(project: &Path) -> Option<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"verb-lkg-v1\0");
+    hasher.update(b"verb-lkg-v2\0");
     hasher.update(head(project).unwrap_or_default().as_bytes());
     hasher.update(b"\0");
     hasher.update(git_bytes(
         project,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+        ],
     )?);
     hasher.update(b"\0");
     if head(project).is_some() {
-        let diff = git_bytes(
-            project,
-            &["diff", "HEAD", "--binary", "--no-ext-diff", "--no-color"],
-        )?;
-        if diff.len() > MAX_FINGERPRINT_DIFF_BYTES {
-            return None;
-        }
-        hasher.update(&diff);
+        let mut args = vec!["diff", "HEAD"];
+        args.extend(STABLE_DIFF);
+        git_hash_bounded(project, &args, &mut hasher, MAX_FINGERPRINT_DIFF_BYTES)?;
     }
     hasher.update(b"\0");
     let untracked = git_bytes(
@@ -449,21 +490,56 @@ fn fingerprint(project: &Path) -> Option<String> {
     if paths.len() > MAX_FINGERPRINT_UNTRACKED {
         return None;
     }
-    if !paths.is_empty() {
-        // Blob ids of untracked content, computed by Git, so a changed untracked file changes the
-        // fingerprint without Verb reading or keeping it.
-        let mut input = Vec::new();
-        for path in &paths {
-            input.extend_from_slice(path);
-            input.push(b'\n');
+    // Only regular files go to `hash-object`, which follows symlinks and would block forever on a
+    // link to `/dev/zero` or a FIFO. A symlink contributes its target text, as Git itself would store
+    // it; anything else contributes only its kind.
+    let mut regular = Vec::new();
+    let mut total = 0_u64;
+    for path in &paths {
+        let relative = path_from_bytes(path);
+        let Ok(metadata) = fs::symlink_metadata(project.join(&relative)) else {
+            continue;
+        };
+        let kind = metadata.file_type();
+        hasher.update(path);
+        if kind.is_file() {
+            total = total.saturating_add(metadata.len());
+            if total > MAX_FINGERPRINT_UNTRACKED_BYTES {
+                return None;
+            }
+            hasher.update(b"\0f\0");
+            regular.extend_from_slice(path);
+            regular.push(b'\n');
+        } else if kind.is_symlink() {
+            hasher.update(b"\0l\0");
+            if let Ok(target) = fs::read_link(project.join(&relative)) {
+                hasher.update(target.to_string_lossy().as_bytes());
+            }
+        } else {
+            hasher.update(b"\0o\0");
         }
+    }
+    if !regular.is_empty() {
+        // Blob ids of untracked content, computed by Git with no filters, so a changed untracked
+        // file changes the fingerprint without Verb keeping it.
         hasher.update(git_bytes_with_input(
             project,
-            &["hash-object", "--stdin-paths"],
-            &input,
+            &["hash-object", "--no-filters", "--stdin-paths"],
+            &regular,
         )?);
     }
     Some(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(unix)]
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
+}
+
+#[cfg(not(unix))]
+fn path_from_bytes(bytes: &[u8]) -> PathBuf {
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
@@ -471,21 +547,55 @@ fn git(project: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_bytes(project: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
+    let output = crate::exec::git(project)?
         .args(args)
-        .current_dir(project)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
+        .stderr(Stdio::null())
         .output()
         .ok()?;
     output.status.success().then_some(output.stdout)
 }
 
-fn git_bytes_with_input(project: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
-    let mut child = Command::new("git")
+/// Streams a command's output into `hasher`, giving up (and killing Git) past `limit` bytes rather
+/// than holding a large diff in memory.
+fn git_hash_bounded(
+    project: &Path,
+    args: &[&str],
+    hasher: &mut Sha256,
+    limit: usize,
+) -> Option<()> {
+    let mut child = crate::exec::git(project)?
         .args(args)
-        .current_dir(project)
-        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut seen = 0_usize;
+    loop {
+        let count = match stdout.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => count,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        };
+        seen += count;
+        if seen > limit {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    child.wait().ok()?.success().then_some(())
+}
+
+fn git_bytes_with_input(project: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
+    let mut child = crate::exec::git(project)?
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -505,6 +615,7 @@ fn git_bytes_with_input(project: &Path, args: &[&str], input: &[u8]) -> Option<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     struct Scratch {
         root: PathBuf,
@@ -621,6 +732,69 @@ mod tests {
         let distance = distance(&s.repo, &mark, false);
         assert_eq!(distance.commits_dropped, Some(1));
         assert_eq!(distance.summary(), "1 commit dropped, 1 file differs");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_untracked_device_link_or_fifo_cannot_hang_the_fingerprint() {
+        let Some(s) = scratch() else { return };
+        std::os::unix::fs::symlink("/dev/zero", s.repo.join("zero")).unwrap();
+        let fifo = s.repo.join("pipe");
+        let made = Command::new("mkfifo").arg(&fifo).status();
+        let started = std::time::Instant::now();
+        let mark = s.mark();
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(mark.fingerprint.is_some());
+        // Retargeting the link changes the fingerprint, without Verb reading through it.
+        fs::remove_file(s.repo.join("zero")).unwrap();
+        std::os::unix::fs::symlink("/dev/null", s.repo.join("zero")).unwrap();
+        assert_eq!(distance(&s.repo, &mark, true).identical, Some(false));
+        drop(made);
+    }
+
+    #[test]
+    fn a_mark_from_before_the_first_commit_does_not_claim_nothing_changed() {
+        let Some(s) = scratch() else { return };
+        let fresh = s.root.join("fresh");
+        fs::create_dir_all(&fresh).unwrap();
+        run(&fresh, &["init", "-q", "-b", "main"]);
+        let mark = mark_in(&s.dir(), &fresh).unwrap();
+        assert_eq!(mark.head, None);
+        fs::write(fresh.join("a.txt"), "a\n").unwrap();
+        run(&fresh, &["add", "."]);
+        run(&fresh, &["commit", "-q", "-m", "one"]);
+        fs::write(fresh.join("a.txt"), "b\n").unwrap();
+        run(&fresh, &["commit", "-q", "-am", "two"]);
+        let distance = distance(&fresh, &mark, true);
+        assert_eq!(distance.commits_since, Some(2));
+        assert_eq!(distance.files_differ, None);
+        assert_eq!(distance.summary(), "2 commits, file changes unknown");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repository_configured_programs_do_not_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let Some(s) = scratch() else { return };
+        let marker = s.root.join("ran");
+        let hook = s.root.join("hook.sh");
+        fs::write(
+            &hook,
+            format!("#!/bin/sh\ntouch '{}'\ncat\n", marker.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        let hook = hook.display().to_string();
+        run(&s.repo, &["config", "core.fsmonitor", &hook]);
+        run(&s.repo, &["config", "diff.evil.textconv", &hook]);
+        run(&s.repo, &["config", "filter.evil.clean", &hook]);
+        fs::write(s.repo.join(".gitattributes"), "* diff=evil filter=evil\n").unwrap();
+        fs::write(s.repo.join("a.txt"), "changed\n").unwrap();
+        fs::write(s.repo.join("untracked.txt"), "u\n").unwrap();
+        let mark = s.mark();
+        let _ = distance(&s.repo, &mark, true);
+        let _ = crate::gitstate::observe(&s.repo);
+        assert!(!marker.exists(), "a repository-configured program ran");
     }
 
     #[test]

@@ -40,9 +40,12 @@ jobs:
 
       - name: Resolve and check the release version
         id: version
+        env:
+          # Read through the environment, never pasted into the script.
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="$REQUESTED_TAG"
           case "$TAG" in
             desktop-v*) ;;
             *) echo "::error::desktop releases use desktop-vX.Y.Z tags, got $TAG"; exit 1 ;;

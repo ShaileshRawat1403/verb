@@ -14,14 +14,19 @@ use std::path::Path;
 
 pub(crate) struct Report {
     pub assembled_at: u128,
-    /// `None` outside a Git repository.
+    /// `None` when there are no repository warnings to give: see `repository_status` for why.
     pub repository: Option<Vec<Warning>>,
+    pub repository_status: &'static str,
     pub runtimes: Vec<Fact>,
     pub good: Option<(Mark, Distance)>,
 }
 
 pub(crate) fn assemble(project: &Path) -> Result<Report, String> {
-    let repository = gitstate::observe(project).map(|state| state.warnings());
+    let (repository, repository_status) = match gitstate::observe(project) {
+        gitstate::Reading::State(state) => (Some(state.warnings()), "read"),
+        gitstate::Reading::NotRepository => (None, "notRepository"),
+        gitstate::Reading::Unavailable => (None, "unavailable"),
+    };
     let good = match good::load(project)? {
         Some(mark) => {
             let distance = good::distance(project, &mark, true);
@@ -32,6 +37,7 @@ pub(crate) fn assemble(project: &Path) -> Result<Report, String> {
     Ok(Report {
         assembled_at: crate::now_millis(),
         repository,
+        repository_status,
         runtimes: runtime::observe(project),
         good,
     })
@@ -73,9 +79,10 @@ impl Report {
             None => "null".to_owned(),
         };
         format!(
-            "{{\"schemaVersion\":1,\"assembledAt\":\"{}\",\"clear\":{},\"repository\":{},\"runtimes\":[{}],\"lastKnownGood\":{}}}",
+            "{{\"schemaVersion\":1,\"assembledAt\":\"{}\",\"clear\":{},\"repositoryStatus\":\"{}\",\"repository\":{},\"runtimes\":[{}],\"lastKnownGood\":{}}}",
             crate::iso8601(self.assembled_at),
             self.clear(),
+            self.repository_status,
             repository,
             runtimes.join(","),
             good
@@ -90,6 +97,10 @@ impl Report {
 
         lines.push(String::new());
         match &self.repository {
+            None if self.repository_status == "unavailable" => lines.push(
+                "Repository: Git could not read it here (not installed, or it refused this checkout)"
+                    .to_owned(),
+            ),
             None => lines.push("Repository: not a Git repository".to_owned()),
             Some(warnings) if warnings.is_empty() => {
                 lines.push("Repository: nothing unfinished or diverged".to_owned())
@@ -112,7 +123,8 @@ impl Report {
             lines.push("Runtimes: the project declares none Verb reads".to_owned());
         } else {
             lines.push(
-                "Runtimes (declared by the project, compared with what runs here)".to_owned(),
+                "Runtimes (declared by the project, compared with what runs in Verb's environment)"
+                    .to_owned(),
             );
             for fact in &self.runtimes {
                 lines.push(format!("  {}", fact.to_text()));
@@ -180,6 +192,7 @@ mod tests {
         let report = Report {
             assembled_at: 0,
             repository: Some(Vec::new()),
+            repository_status: "read",
             runtimes: Vec::new(),
             good: None,
         };
@@ -202,6 +215,7 @@ mod tests {
         let report = Report {
             assembled_at: 0,
             repository: Some(warnings),
+            repository_status: "read",
             runtimes: Vec::new(),
             good: None,
         };

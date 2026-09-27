@@ -227,24 +227,81 @@ pub(crate) struct App {
     /// where things are, exactly as it already is for how large the session believes it is.
     frame_height: u16,
     frame_width: u16,
-    /// Runtime facts are gathered off the UI thread, because running `node --version` and friends
-    /// can take a noticeable moment. Consumed once, when it arrives.
-    runtime_facts: Option<std::sync::mpsc::Receiver<Vec<crate::runtime::Fact>>>,
+    /// Observations that run Git or a runtime's `--version`, gathered off the UI thread: in a large
+    /// repository or on a network drive they take long enough to freeze typing.
+    background: Background,
 }
 
-/// Starts reading declared runtimes against installed ones in the background.
-fn spawn_runtime_probe(project: &Path) -> std::sync::mpsc::Receiver<Vec<crate::runtime::Fact>> {
-    let (sender, receiver) = std::sync::mpsc::channel();
-    let project = project.to_path_buf();
-    std::thread::spawn(move || {
-        let _ = sender.send(crate::runtime::observe(&project));
-    });
-    receiver
+/// Results arriving from background observation threads.
+enum Observation {
+    Runtime(Vec<crate::runtime::Fact>),
+    Repo(Option<Context>),
+    SinceGood {
+        generation: u64,
+        text: Option<String>,
+    },
 }
 
-/// The first repository warning, if the repository has one. Cheap: three Git reads.
+struct Background {
+    sender: std::sync::mpsc::Sender<Observation>,
+    receiver: std::sync::mpsc::Receiver<Observation>,
+    /// Bumped for every failed command, so a slow answer for an older failure is dropped.
+    failure_generation: u64,
+    repo_running: bool,
+    /// A command finished while a repository read was in flight; read again when it returns.
+    repo_again: bool,
+}
+
+impl Background {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        Self {
+            sender,
+            receiver,
+            failure_generation: 0,
+            repo_running: false,
+            repo_again: false,
+        }
+    }
+
+    fn spawn(&self, work: impl FnOnce() -> Observation + Send + 'static) {
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(work());
+        });
+    }
+
+    fn runtime(&self, project: &Path) {
+        let project = project.to_path_buf();
+        self.spawn(move || Observation::Runtime(crate::runtime::observe(&project)));
+    }
+
+    fn repo(&mut self, project: &Path) {
+        if self.repo_running {
+            self.repo_again = true;
+            return;
+        }
+        self.repo_running = true;
+        let project = project.to_path_buf();
+        self.spawn(move || Observation::Repo(repo_warning(&project)));
+    }
+
+    fn since_good(&mut self, project: &Path) -> u64 {
+        self.failure_generation += 1;
+        let generation = self.failure_generation;
+        let project = project.to_path_buf();
+        self.spawn(move || Observation::SinceGood {
+            generation,
+            text: since_good(&project),
+        });
+        generation
+    }
+}
+
+/// The first repository warning, if the repository has one.
 fn repo_warning(project: &Path) -> Option<Context> {
-    let warning = crate::gitstate::observe(project)?
+    let warning = crate::gitstate::observe(project)
+        .state()?
         .warnings()
         .into_iter()
         .next()?;
@@ -254,8 +311,8 @@ fn repo_warning(project: &Path) -> Option<Context> {
     })
 }
 
-/// A short "since last known good" line, when the user has marked one. No fingerprint: this runs on
-/// the UI thread at the moment a command fails.
+/// A short "since last known good" line, when the user has marked one. No fingerprint, so the answer
+/// arrives while the failure is still on screen.
 fn since_good(project: &Path) -> Option<String> {
     let mark = crate::good::load(project).ok()??;
     let distance = crate::good::distance(project, &mark, false);
@@ -323,12 +380,11 @@ impl App {
             mouse_enabled: true,
             frame_height: 0,
             frame_width: 0,
-            runtime_facts: Some(spawn_runtime_probe(project)),
+            background: Background::new(),
         };
+        app.background.runtime(project);
         // A repository left mid-merge or detached is worth knowing before the first command.
-        if let Some(warning) = repo_warning(project) {
-            app.context = warning;
-        }
+        app.background.repo(project);
         app.refresh_workbench()?;
         Ok(app)
     }
@@ -429,38 +485,53 @@ impl App {
         Ok(())
     }
 
-    /// Shows a declared-runtime problem once the background probe reports one, if the band is quiet.
-    fn take_runtime_facts(&mut self) -> bool {
-        let Some(receiver) = self.runtime_facts.as_ref() else {
-            return false;
-        };
-        let facts = match receiver.try_recv() {
-            Ok(facts) => facts,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.runtime_facts = None;
-                return false;
+    /// Applies whatever the background observers have finished. Each only fills a band that is
+    /// quiet or already showing its own kind of fact: a failed command is never overwritten.
+    fn take_observations(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(observation) = self.background.receiver.try_recv() {
+            match observation {
+                Observation::Runtime(facts) => {
+                    let problem = facts.iter().find(|fact| {
+                        matches!(
+                            fact.verdict,
+                            crate::runtime::Verdict::Mismatch | crate::runtime::Verdict::Missing
+                        )
+                    });
+                    if let (Some(fact), Context::None) = (problem, &self.context) {
+                        self.context = Context::RuntimeMismatch(fact.to_text());
+                        changed = true;
+                    }
+                }
+                Observation::Repo(warning) => {
+                    self.background.repo_running = false;
+                    if matches!(self.context, Context::None | Context::RepoWarning { .. }) {
+                        let next = warning.unwrap_or(Context::None);
+                        changed |= next != self.context;
+                        self.context = next;
+                    }
+                    if std::mem::take(&mut self.background.repo_again) {
+                        let project = self.project.clone();
+                        self.background.repo(&project);
+                    }
+                }
+                Observation::SinceGood { generation, text } => {
+                    if generation != self.background.failure_generation {
+                        continue;
+                    }
+                    if let Context::CommandFailed { since_good, .. } = &mut self.context {
+                        *since_good = text;
+                        changed = true;
+                    }
+                }
             }
-        };
-        self.runtime_facts = None;
-        let problem = facts.iter().find(|fact| {
-            matches!(
-                fact.verdict,
-                crate::runtime::Verdict::Mismatch | crate::runtime::Verdict::Missing
-            )
-        });
-        match problem {
-            Some(fact) if matches!(self.context, Context::None) => {
-                self.context = Context::RuntimeMismatch(fact.to_text());
-                true
-            }
-            _ => false,
         }
+        changed
     }
 
     /// Moves every hosted session forward, including terminals hidden behind the active one.
     fn pump(&mut self) -> Result<bool, String> {
-        let mut changed = self.take_runtime_facts();
+        let mut changed = self.take_observations();
         let mut index = 0;
         while index < self.parked.len() {
             let (exit, output_changed) = self.parked[index].poll()?;
@@ -496,11 +567,12 @@ impl App {
                     millis,
                     label,
                 } if exit_code != 0 => {
+                    self.background.since_good(&self.project);
                     self.context = Context::CommandFailed {
                         exit_code,
                         millis,
                         label,
-                        since_good: since_good(&self.project),
+                        since_good: None,
                     };
                 }
                 // A command that succeeded is not news in itself, but it may have left the
@@ -508,7 +580,8 @@ impl App {
                 // quiet band or an older warning.
                 crate::pty::Structural::CommandFinished { .. } => {
                     if matches!(self.context, Context::None | Context::RepoWarning { .. }) {
-                        self.context = repo_warning(&self.project).unwrap_or(Context::None);
+                        let project = self.project.clone();
+                        self.background.repo(&project);
                     }
                 }
                 // Inside an agent, this is the only kind of failure Verb can see at all, and until
@@ -2300,7 +2373,7 @@ impl App {
             mouse_enabled: true,
             frame_height: 24,
             frame_width: 80,
-            runtime_facts: None,
+            background: Background::new(),
         }
     }
 

@@ -13,6 +13,7 @@ mod agents;
 mod checks;
 mod context;
 mod continuity;
+mod exec;
 mod fsutil;
 mod gitstate;
 mod good;

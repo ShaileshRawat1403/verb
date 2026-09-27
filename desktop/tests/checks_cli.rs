@@ -28,7 +28,7 @@ impl Scratch {
         let scratch = Self { root };
         scratch.git(&["init", "-q", "-b", "feature/acme-login"]);
         fs::write(scratch.repo().join("app.txt"), "one\n").unwrap();
-        fs::write(scratch.repo().join(".nvmrc"), "999\n").unwrap();
+        fs::write(scratch.repo().join(".nvmrc"), "99\n").unwrap();
         scratch.git(&["add", "."]);
         scratch.git(&["commit", "-q", "-m", "one"]);
         Some(scratch)
@@ -101,7 +101,7 @@ fn check_reports_a_declared_runtime_that_does_not_match() {
     let node = &report["runtimes"][0];
     assert_eq!(node["runtime"], "node");
     assert_eq!(node["source"], ".nvmrc");
-    assert_eq!(node["wants"], "999");
+    assert_eq!(node["wants"], "99");
     // Missing when no node is installed, mismatch when one is: never satisfied.
     assert!(
         matches!(node["verdict"].as_str(), Some("mismatch" | "missing")),

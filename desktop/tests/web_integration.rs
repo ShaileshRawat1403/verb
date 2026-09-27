@@ -301,8 +301,17 @@ fn checks_are_served_on_request_and_mark_good_needs_the_token() {
     let server = WebServer::start();
     assert_eq!(server.request("GET", "/api/checks", None, false).0, 403);
     assert_eq!(server.request("POST", "/api/good/mark", None, false).0, 403);
-    let report = server.json("GET", "/api/checks", None);
+    // Checks are read off the request loop; the first answer may be a placeholder.
+    let mut report = server.json("GET", "/api/checks", None);
+    for _ in 0..100 {
+        if report["pending"] != true {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        report = server.json("GET", "/api/checks", None);
+    }
     assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["repositoryStatus"], "notRepository");
     // The fixture project is a plain directory: no repository, no declared runtime.
     assert_eq!(report["repository"], Value::Null);
     assert_eq!(report["runtimes"], json!([]));

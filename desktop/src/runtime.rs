@@ -10,15 +10,20 @@
 //!   `Cargo.toml` `rust-version`, `go.mod`, `.ruby-version`, `.tool-versions`). A runtime nothing
 //!   declares is not reported at all.
 //! * **Found** versions come from running the runtime's own `--version` in the project directory,
-//!   so version managers that honour the directory (nvm shims, pyenv, rustup) answer with what would
-//!   really run here.
+//!   in *Verb's* environment. Version managers that read the directory through shims (pyenv, rbenv,
+//!   asdf, rustup) answer for the project; ones that work by changing the shell (`nvm use`, an
+//!   activated venv, direnv, conda) are not seen, and the output says whose environment it read.
 //!
 //! The comparison has three outcomes and a fourth for absence, following `Unknown ≠ No`: a
 //! requirement Verb cannot parse (`lts/*`, `stable`, `system`) is `Unknown`, never `Mismatch`.
 //!
-//! Two probes are deliberately refused rather than run: a `rust-toolchain.toml` with a `path` key and
-//! a `.tool-versions` entry of the form `path:` or `ref:`. Both make the version manager execute a
-//! binary chosen by the repository, and opening a project in Verb must never do that.
+//! Opening a project in Verb must never run code the project chose, so a runtime is not probed at
+//! all when its declarations could steer the version manager to a binary inside or near the
+//! repository: any mention of `path` in either rust-toolchain file (rustup parses real TOML, so
+//! `toolchain.path` and inline tables count), any `path:`/`ref:` field on a `.tool-versions` line,
+//! and any pin that looks like a filesystem path. Programs themselves are found only on absolute
+//! `PATH` entries outside the project (`exec.rs`), and auto-downloading toolchains are switched off
+//! (`RUSTUP_AUTO_INSTALL=0`, `GOTOOLCHAIN=local`) so a pin is reported as missing, not fetched.
 
 use std::fs;
 use std::io::Read;
@@ -251,16 +256,31 @@ pub(crate) fn declarations(project: &Path) -> Vec<Declaration> {
         });
     }
 
-    for name in ["rust-toolchain.toml", "rust-toolchain"] {
-        if let Some(text) = read(name) {
-            if let Some(declaration) = rust_toolchain(static_name(name), &text) {
-                found.push(declaration);
-            }
-            break;
-        }
+    // rustup reads `rust-toolchain` in preference to `rust-toolchain.toml` when both exist. Both are
+    // inspected for `path` regardless, because either could be the one rustup ends up using.
+    let legacy = read("rust-toolchain");
+    let modern = read("rust-toolchain.toml");
+    let rust_refusal = [legacy.as_deref(), modern.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|text| text.contains("path"))
+        .then_some("a rust-toolchain file names a local toolchain path, which rustup would run");
+    match (&legacy, &modern) {
+        (Some(text), _) => found.extend(rust_toolchain("rust-toolchain", text)),
+        (None, Some(text)) => found.extend(rust_toolchain("rust-toolchain.toml", text)),
+        (None, None) => {}
     }
     if let Some(wants) = read("Cargo.toml").and_then(|text| toml_string(&text, "rust-version")) {
         found.push(minimum(Runtime::Rust, "Cargo.toml", &wants));
+    }
+    if rust_refusal.is_some() && !found.iter().any(|d| d.runtime == Runtime::Rust) {
+        found.push(Declaration {
+            runtime: Runtime::Rust,
+            source: "rust-toolchain",
+            wants: "a toolchain at a local path".to_owned(),
+            spec: None,
+            refuse_probe: None,
+        });
     }
 
     if let Some(wants) = read("go.mod").and_then(|text| go_directive(&text)) {
@@ -274,6 +294,11 @@ pub(crate) fn declarations(project: &Path) -> Vec<Declaration> {
     if let Some(text) = read(".tool-versions") {
         found.extend(tool_versions(&text));
     }
+    for declaration in &mut found {
+        if declaration.runtime == Runtime::Rust && declaration.refuse_probe.is_none() {
+            declaration.refuse_probe = rust_refusal;
+        }
+    }
     found
 }
 
@@ -281,10 +306,55 @@ fn static_name(name: &str) -> &'static str {
     match name {
         ".nvmrc" => ".nvmrc",
         ".node-version" => ".node-version",
-        "rust-toolchain.toml" => "rust-toolchain.toml",
-        "rust-toolchain" => "rust-toolchain",
         _ => "project file",
     }
+}
+
+/// Requirement text is printed to the user's terminal; a repository must not be able to put escape
+/// sequences there (an OSC 52 sequence writes the clipboard).
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { '?' } else { c })
+        .take(120)
+        .collect()
+}
+
+/// A version manager resolves a pin to a directory; a pin shaped like a path could send it out of
+/// its own version store.
+fn path_like(text: &str) -> bool {
+    text.contains("..")
+        || text.starts_with('/')
+        || text.starts_with("./")
+        || text.starts_with('~')
+        || text.contains('\\')
+}
+
+/// Whether a pin reads as a version rather than an alias or environment name: `20`, `3.11`,
+/// `3.12.0rc1`, `3.13t`, `v20.11.1`. `2024-api` and `311` (a pyenv virtualenv or nvm alias) are not
+/// versions, and treating them as one would report a false mismatch.
+fn looks_like_version(text: &str) -> bool {
+    let bare = text.strip_prefix('v').unwrap_or(text);
+    let numeric: String = bare
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if numeric.is_empty() || numeric.ends_with('.') || numeric.contains("..") {
+        return false;
+    }
+    let suffix = &bare[numeric.len()..];
+    let suffix_ok = suffix.is_empty()
+        || [
+            "rc", "a", "b", "alpha", "beta", "dev", "t", "-rc", "-beta", "-alpha",
+        ]
+        .iter()
+        .any(|tag| {
+            suffix
+                .strip_prefix(tag)
+                .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+        });
+    // A lone integer is a major version only while it is plausibly one.
+    let lone_ok = numeric.contains('.') || numeric.parse::<u32>().is_ok_and(|major| major < 100);
+    suffix_ok && lone_ok
 }
 
 fn read_small(path: &Path) -> Option<String> {
@@ -311,9 +381,14 @@ fn pin(runtime: Runtime, source: &'static str, text: &str) -> Declaration {
     Declaration {
         runtime,
         source,
-        spec: parts(bare).map(|parts| Spec::all(vec![Comparator::prefix(parts)])),
-        wants: trimmed.to_owned(),
-        refuse_probe: None,
+        spec: looks_like_version(trimmed)
+            .then(|| parts(bare))
+            .flatten()
+            .map(|parts| Spec::all(vec![Comparator::prefix(parts)])),
+        wants: printable(trimmed),
+        refuse_probe: path_like(trimmed).then_some(
+            "the pinned version is shaped like a path, which a version manager would follow",
+        ),
     }
 }
 
@@ -323,39 +398,30 @@ fn minimum(runtime: Runtime, source: &'static str, text: &str) -> Declaration {
         runtime,
         source,
         spec: parts(text.trim()).map(|parts| Spec::all(vec![Comparator::new(Op::Ge, parts)])),
-        wants: format!(">={}", text.trim()),
+        wants: printable(&format!(">={}", text.trim())),
         refuse_probe: None,
     }
 }
 
+/// The channel a rust-toolchain file names. Whether to probe at all is decided by the caller, which
+/// has seen both files.
 fn rust_toolchain(source: &'static str, text: &str) -> Option<Declaration> {
     let is_toml = source.ends_with(".toml") || text.contains('[');
-    let (channel, has_path) = if is_toml {
-        (
-            toml_string(text, "channel"),
-            text.lines()
-                .any(|line| line.trim_start().starts_with("path") && line.contains('=')),
-        )
+    let channel = if is_toml {
+        toml_string(text, "channel")
     } else {
-        (first_value(text), false)
-    };
-    if has_path {
-        return Some(Declaration {
-            runtime: Runtime::Rust,
-            source,
-            wants: "a toolchain at a local path".to_owned(),
-            spec: None,
-            refuse_probe: Some("the toolchain file points at a binary inside the project"),
-        });
-    }
-    let channel = channel?;
+        first_value(text)
+    }?;
     // `1.80.0`, or `1.80.0-x86_64-unknown-linux-gnu`; `stable`/`nightly-2024-01-01` stay unknown.
     let version = channel.split('-').next().unwrap_or(&channel);
     Some(Declaration {
         runtime: Runtime::Rust,
         source,
-        spec: parts(version).map(|parts| Spec::all(vec![Comparator::prefix(parts)])),
-        wants: channel,
+        spec: looks_like_version(version)
+            .then(|| parts(version))
+            .flatten()
+            .map(|parts| Spec::all(vec![Comparator::prefix(parts)])),
+        wants: printable(&channel),
         refuse_probe: None,
     })
 }
@@ -405,8 +471,8 @@ fn tool_versions(text: &str) -> Vec<Declaration> {
     let mut found = Vec::new();
     for line in text.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
-        let mut fields = line.split_whitespace();
-        let (Some(tool), Some(version)) = (fields.next(), fields.next()) else {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let [tool, version, ..] = fields[..] else {
             continue;
         };
         let runtime = match tool {
@@ -418,7 +484,12 @@ fn tool_versions(text: &str) -> Vec<Declaration> {
             _ => continue,
         };
         let mut declaration = pin(runtime, ".tool-versions", version);
-        if version.starts_with("path:") || version.starts_with("ref:") {
+        // Every field counts: asdf treats later ones as fallbacks, so `nodejs 99.0.0 path:./x`
+        // reaches the path as soon as 99.0.0 is not installed.
+        if fields[1..]
+            .iter()
+            .any(|field| field.starts_with("path:") || field.starts_with("ref:"))
+        {
             declaration.spec = None;
             declaration.refuse_probe =
                 Some("the version manager would run or build a binary the project names");
@@ -447,11 +518,13 @@ fn probe(runtime: Runtime, project: &Path) -> Probe {
 
 /// `Err` when the program does not exist; `Ok(None)` when it ran but failed or timed out.
 fn run_bounded(program: &str, args: &[&str], directory: &Path) -> Result<Option<String>, ()> {
+    let program = crate::exec::trusted_program(program, directory).ok_or(())?;
     let mut child = Command::new(program)
         .args(args)
         .current_dir(directory)
         // A pinned but uninstalled toolchain must be reported as such, not downloaded.
         .env("RUSTUP_AUTO_INSTALL", "0")
+        .env("GOTOOLCHAIN", "local")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -873,6 +946,78 @@ mod tests {
             assert_eq!(fact.verdict, Verdict::Unknown);
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn every_way_of_naming_a_local_rust_toolchain_refuses_the_probe() {
+        for (name, body) in [
+            ("rust-toolchain.toml", "[toolchain]\npath = \"./evil\"\n"),
+            ("rust-toolchain.toml", "toolchain = { path = \"./evil\" }\n"),
+            ("rust-toolchain.toml", "toolchain.path = \"./evil\"\n"),
+            (
+                "rust-toolchain.toml",
+                "[toolchain]\n\"path\" = \"./evil\"\n",
+            ),
+            ("rust-toolchain", "[toolchain]\npath = \"./evil\"\n"),
+        ] {
+            let root = project(&[(name, body), ("Cargo.toml", "rust-version = \"1.70\"\n")]);
+            let facts = observe(&root);
+            assert!(!facts.is_empty(), "{name}: {body}");
+            for fact in &facts {
+                assert!(
+                    matches!(fact.probe, Probe::Refused(_)),
+                    "{name}: {body}: {fact:?}"
+                );
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+        // rustup prefers the legacy file, so a harmless `.toml` beside it cannot vouch for it.
+        let root = project(&[
+            ("rust-toolchain.toml", "[toolchain]\nchannel = \"1.80.0\"\n"),
+            ("rust-toolchain", "[toolchain]\npath = \"./evil\"\n"),
+        ]);
+        assert!(observe(&root)
+            .iter()
+            .all(|fact| matches!(fact.probe, Probe::Refused(_))));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_fallback_path_on_a_tool_versions_line_refuses_the_probe() {
+        let root = project(&[(".tool-versions", "nodejs 99.0.0 path:./evil\n")]);
+        let facts = observe(&root);
+        assert_eq!(facts.len(), 1);
+        assert!(matches!(facts[0].probe, Probe::Refused(_)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pin_shaped_like_a_path_is_not_followed() {
+        for pin_text in ["../../evil", "/opt/evil", "./evil", "~/evil"] {
+            let root = project(&[(".python-version", pin_text)]);
+            let facts = observe(&root);
+            assert!(matches!(facts[0].probe, Probe::Refused(_)), "{pin_text}");
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn alias_and_environment_names_are_not_read_as_versions() {
+        assert!(looks_like_version("20"));
+        assert!(looks_like_version("v20.11.1"));
+        assert!(looks_like_version("3.12.0rc1"));
+        assert!(looks_like_version("3.13t"));
+        assert!(!looks_like_version("311"));
+        assert!(!looks_like_version("2024-api"));
+        assert!(!looks_like_version("lts/iron"));
+        assert!(!looks_like_version("3.11.4/envs/web"));
+        assert_eq!(pin(Runtime::Python, ".python-version", "311").spec, None);
+    }
+
+    #[test]
+    fn requirement_text_cannot_carry_terminal_escapes() {
+        let declaration = pin(Runtime::Node, ".nvmrc", "20\u{1b}]52;c;aGk=\u{7}");
+        assert!(!declaration.wants.chars().any(char::is_control));
     }
 
     #[test]

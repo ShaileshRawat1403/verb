@@ -17,7 +17,6 @@
 //! Each warning carries the *safe* way out, as text; Verb runs nothing.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Operation {
@@ -84,12 +83,45 @@ impl Warning {
     }
 }
 
-/// `None` outside a Git repository, or when Git itself could not run.
-pub(crate) fn observe(project: &Path) -> Option<RepoState> {
-    let git_dir = git(project, &["rev-parse", "--absolute-git-dir"]).map(PathBuf::from)?;
+/// What Verb could learn about the repository. "Not a repository" and "Git could not tell us" are
+/// different answers: a missing `git`, or one refusing a checkout owned by another account, must not
+/// read as "there is nothing here to worry about".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Reading {
+    NotRepository,
+    Unavailable,
+    State(RepoState),
+}
+
+impl Reading {
+    pub(crate) fn state(self) -> Option<RepoState> {
+        match self {
+            Self::State(state) => Some(state),
+            _ => None,
+        }
+    }
+}
+
+pub(crate) fn observe(project: &Path) -> Reading {
+    let Some(mut command) = crate::exec::git(project) else {
+        return Reading::Unavailable;
+    };
+    let Ok(output) = command.args(["rev-parse", "--absolute-git-dir"]).output() else {
+        return Reading::Unavailable;
+    };
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return if error.contains("not a git repository") {
+            Reading::NotRepository
+        } else {
+            Reading::Unavailable
+        };
+    }
+    let git_dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     let operation = operation_in(&git_dir);
-    let unmerged = git(project, &["status", "--porcelain=v1"])
-        .map(|status| count_unmerged(&status))
+    // The index's unmerged entries, not a full status: no untracked-file scan on a hot path.
+    let unmerged = git(project, &["ls-files", "--unmerged", "-z"])
+        .map(|entries| count_unmerged(&entries))
         .unwrap_or(0);
     let head = git(project, &["symbolic-ref", "-q", "HEAD"]);
     let detached = head.is_none();
@@ -106,7 +138,7 @@ pub(crate) fn observe(project: &Path) -> Option<RepoState> {
         .unwrap_or(Upstream::Unknown),
         None => Upstream::None,
     };
-    Some(RepoState {
+    Reading::State(RepoState {
         operation,
         unmerged,
         detached,
@@ -139,17 +171,16 @@ fn operation_in(git_dir: &Path) -> Option<Operation> {
     }
 }
 
-/// Porcelain v1 unmerged states: `DD AU UD UA DU AA UU`.
-fn count_unmerged(status: &str) -> usize {
-    status
-        .lines()
-        .filter(|line| {
-            matches!(
-                line.get(..2),
-                Some("DD" | "AU" | "UD" | "UA" | "DU" | "AA" | "UU")
-            )
-        })
-        .count()
+/// `ls-files --unmerged -z` lists one entry per conflict stage (`MODE OID STAGE\tPATH`); a path with
+/// three stages is one conflicted file.
+fn count_unmerged(entries: &str) -> usize {
+    let mut paths: Vec<&str> = entries
+        .split('\0')
+        .filter_map(|entry| entry.split_once('\t').map(|(_, path)| path))
+        .collect();
+    paths.sort_unstable();
+    paths.dedup();
+    paths.len()
 }
 
 /// `refs/remotes/origin/main\tahead 2, behind 1`, `…\tgone`, `\t` (no upstream).
@@ -269,12 +300,7 @@ impl RepoState {
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(project)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .ok()?;
+    let output = crate::exec::git(project)?.args(args).output().ok()?;
     output
         .status
         .success()
@@ -285,6 +311,7 @@ fn git(project: &Path, args: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::process::Command;
 
     fn run(dir: &Path, args: &[&str]) {
         let status = try_run(dir, args);
@@ -345,9 +372,10 @@ mod tests {
     }
 
     #[test]
-    fn only_unmerged_porcelain_codes_count_as_conflicts() {
-        let status = "UU a.txt\nAA b.txt\n M c.txt\nMM d.txt\n?? e.txt\nDU f.txt\n";
-        assert_eq!(count_unmerged(status), 3);
+    fn conflict_stages_of_one_path_count_once() {
+        let entries = "100644 aaa 1\ta.txt\x00100644 bbb 2\ta.txt\x00100644 ccc 3\ta.txt\x00100644 ddd 2\tb c.txt\x00";
+        assert_eq!(count_unmerged(entries), 2);
+        assert_eq!(count_unmerged(""), 0);
     }
 
     #[test]
@@ -389,7 +417,7 @@ mod tests {
     #[test]
     fn a_real_detached_head_and_merge_conflict_are_observed() {
         let Some(root) = repo() else { return };
-        let state = observe(&root).unwrap();
+        let state = observe(&root).state().unwrap();
         assert_eq!(state.operation, None);
         assert!(!state.detached);
         assert_eq!(state.upstream, Upstream::None);
@@ -402,13 +430,13 @@ mod tests {
         run(&root, &["commit", "-q", "-am", "main"]);
         // Expected to fail with a conflict; the state it leaves is what is under test.
         assert!(!try_run(&root, &["merge", "-q", "side"]).status.success());
-        let state = observe(&root).unwrap();
+        let state = observe(&root).state().unwrap();
         assert_eq!(state.operation, Some(Operation::Merge));
         assert_eq!(state.unmerged, 1);
 
         run(&root, &["merge", "--abort"]);
         run(&root, &["switch", "-q", "--detach", "HEAD~1"]);
-        let state = observe(&root).unwrap();
+        let state = observe(&root).state().unwrap();
         assert!(state.detached);
         assert_eq!(state.warnings()[0].code, "detached-head");
         fs::remove_dir_all(root).unwrap();
@@ -420,7 +448,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         // GIT_CEILING_DIRECTORIES is not needed: temp_dir is not inside a repository on CI.
         if git(&root, &["rev-parse", "--absolute-git-dir"]).is_none() {
-            assert_eq!(observe(&root), None);
+            assert_eq!(observe(&root), Reading::NotRepository);
         }
         fs::remove_dir_all(root).unwrap();
     }

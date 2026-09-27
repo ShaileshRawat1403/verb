@@ -51,7 +51,29 @@ start and after a command, a declared-runtime problem (probed off the UI thread)
 command the distance from last-known-good. The web workbench has a "Reasons for care" panel
 (`GET /api/checks`, `POST /api/good/mark`).
 
-**Still open.** The same observations on Android. A band that fires *before* a risky Git command
+**Hardened after review.** An independent review found ways a repository could make these
+automatic observations run its own code, and each now has a regression test:
+
+- rust-toolchain `path` written as an inline table, a dotted key, a quoted key, or in the legacy
+  `rust-toolchain` file that rustup prefers over a harmless `.toml`: any `path` in either file
+  refuses the Rust probe;
+- `.tool-versions` fallback fields (`nodejs 99.0.0 path:./x`), and pins shaped like paths;
+- relative or empty `PATH` entries, which the OS resolves in the project (`node_modules/.bin`):
+  programs are found on absolute entries outside the project only (`exec.rs`);
+- `core.fsmonitor`, textconv and clean/smudge filters defined in the repository's own
+  `.git/config`: switched off or blanked for Verb's Git reads (user-level filters such as git-lfs
+  keep working); `hash-object --no-filters`, and untracked symlinks and FIFOs are never read through;
+- `GOTOOLCHAIN=local`, so a `go.mod` pin is reported rather than downloaded.
+
+Also from the review: the TUI's Git reads and the web host's checks run off their loops; the diff
+behind the fingerprint is streamed with a cap instead of buffered; a mark made before the first
+commit no longer claims "no file differs"; "Git could not read this checkout" is distinguished from
+"not a repository"; requirement text is stripped of control characters; alias names such as `311`
+are not read as versions; and runtime output says it read *Verb's* environment, not the shell's.
+
+**Still open.** The same observations on Android. The pre-existing `git_snapshot` in `lib.rs`
+(status line, `verb status`) still runs plain `git status`; moving it onto `exec::git` is a small,
+separate change. The fingerprint does not cover ignored files or submodule working trees. A band that fires *before* a risky Git command
 runs would need command text, which Verb does not keep, so it is not planned. The web front-end
 logic has API tests but no browser tests.
 
