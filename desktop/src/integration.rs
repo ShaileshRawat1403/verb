@@ -17,8 +17,26 @@
 //! * **Nothing durable learns the command text.** The `E` sequence exists for the screen; see
 //!   `shell.rs` and `docs/VERB_SESSION_SCHEMA.md`.
 
+use crate::fsutil::atomic_write;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Verb's shell directory, created owner-only. The bash integration keeps a scratch file here; a
+/// shared location such as `/tmp` let another account plant its contents (see `BASH_INTEGRATION`).
+fn private_directory(path: &Path) -> Option<PathBuf> {
+    fs::create_dir_all(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let metadata = fs::symlink_metadata(path).ok()?;
+        let me = fs::metadata(std::env::var_os("HOME")?).ok()?.uid();
+        if !metadata.file_type().is_dir() || metadata.uid() != me {
+            return None;
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).ok()?;
+    }
+    Some(path.to_path_buf())
+}
 
 /// The shells Verb knows how to instrument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +70,7 @@ pub(crate) struct Instrumented {
 /// `directory` is Verb's own state directory; everything written lives under it.
 pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
     let kind = Kind::of(shell)?;
-    let root = directory.join("shell");
-    fs::create_dir_all(&root).ok()?;
+    let root = private_directory(&directory.join("shell"))?;
 
     match kind {
         Kind::Zsh => {
@@ -64,7 +81,12 @@ pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
             let original = std::env::var("ZDOTDIR").unwrap_or(home);
             let zdotdir = root.join("zsh");
             fs::create_dir_all(&zdotdir).ok()?;
-            fs::write(zdotdir.join("verb-integration.zsh"), ZSH_INTEGRATION).ok()?;
+            // Atomic: two Verb processes launching shells at once must not interleave a shim.
+            atomic_write(
+                &zdotdir.join("verb-integration.zsh"),
+                ZSH_INTEGRATION.as_bytes(),
+            )
+            .ok()?;
 
             for file in ["zshenv", "zprofile", "zshrc", "zlogin"] {
                 let shim = format!(
@@ -81,7 +103,7 @@ pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
                         String::new()
                     }
                 );
-                fs::write(zdotdir.join(format!(".{file}")), shim).ok()?;
+                atomic_write(&zdotdir.join(format!(".{file}")), shim.as_bytes()).ok()?;
             }
 
             Some(Instrumented {
@@ -96,7 +118,7 @@ pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
         }
         Kind::Bash => {
             let rc = root.join("verb-integration.bash");
-            fs::write(&rc, BASH_INTEGRATION).ok()?;
+            atomic_write(&rc, BASH_INTEGRATION.as_bytes()).ok()?;
             Some(Instrumented {
                 // --init-file replaces ~/.bashrc for this shell only, and applies to interactive
                 // non-login shells -- so this is `-i` rather than `-il`. The file sources the
@@ -108,7 +130,7 @@ pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
                     rc.display().to_string(),
                     "-i".to_owned(),
                 ],
-                env: Vec::new(),
+                env: vec![("VERB_SHELL_DIR".to_owned(), root.display().to_string())],
             })
         }
     }
@@ -246,14 +268,32 @@ __verb_cwd
 # this file has finished traces Verb's own remaining lines. Hence: read the existing trap through a
 # file, which `trap -p` writes from the current shell; decide here rather than in a function; and
 # install after everything else has run.
-__verb_trap_file="${TMPDIR:-/tmp}/verb-debug-trap.$$"
+#
+# The file lives in Verb's owner-only shell directory, never in a shared /tmp: there, another account
+# could create `verb-debug-trap.<pid>` first, the write here would fail quietly, and the read would
+# return *their* trap -- which is then eval'd before every command. If the private directory is not
+# there, Verb does not read a trap at all and installs no hook.
 __verb_existing_debug=""
-trap -p DEBUG > "$__verb_trap_file" 2>/dev/null
-IFS= read -r __verb_existing_debug < "$__verb_trap_file" 2>/dev/null
-rm -f "$__verb_trap_file"
-unset __verb_trap_file
-
 __verb_install=1
+if [ -n "$VERB_SHELL_DIR" ] && [ -d "$VERB_SHELL_DIR" ] && [ -O "$VERB_SHELL_DIR" ]; then
+  __verb_trap_file="$VERB_SHELL_DIR/debug-trap.$$"
+  rm -f "$__verb_trap_file"
+  # Not in a subshell: a subshell has its DEBUG trap reset and would report none.
+  __verb_umask=$(umask)
+  umask 077
+  if trap -p DEBUG > "$__verb_trap_file" 2>/dev/null && [ -O "$__verb_trap_file" ]; then
+    IFS= read -r __verb_existing_debug < "$__verb_trap_file"
+  else
+    __verb_install=0
+  fi
+  umask "$__verb_umask"
+  unset __verb_umask
+  rm -f "$__verb_trap_file"
+  unset __verb_trap_file
+else
+  __verb_install=0
+fi
+
 if [ -n "$__verb_existing_debug" ]; then
   case "$__verb_existing_debug" in
     "trap -- '"*"' DEBUG")
@@ -286,3 +326,18 @@ else
   unset __verb_install
 fi
 "#;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_bash_integration_never_uses_a_shared_temporary_directory() {
+        // Another account can pre-create files in /tmp; whatever the script reads back is eval'd.
+        let code: Vec<&str> = super::BASH_INTEGRATION
+            .lines()
+            .filter(|line| !line.trim_start().starts_with('#'))
+            .collect();
+        assert!(!code.iter().any(|line| line.contains("/tmp")));
+        assert!(!code.iter().any(|line| line.contains("TMPDIR")));
+        assert!(super::BASH_INTEGRATION.contains("-O \"$VERB_SHELL_DIR\""));
+    }
+}
