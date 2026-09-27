@@ -1,4 +1,44 @@
-# Verb return handoff — 2026-08-24
+# Verb return handoff — updated 2026-09-26
+
+## September 26 final review addendum
+
+This source archive includes the desktop Rust TUI and web workbench, plus the Android recovery
+fixes from the final review. It contains source and built browser assets; it does not contain a Git
+history, Android APK, local credentials, `~/.verb/work`, project working trees, or any native agent
+conversation store. Copy those separately only after reviewing what they contain.
+
+The final review fixes Android's same-agent session overwrite, foreground-terminal replacement,
+ambiguous latest-conversation resume, false LIVE status after a silent resume attempt, unchecked
+session-store writes, and archive staging failures. The session registry now keeps records by
+product session ID; resume dispatch requires a verified native conversation ID and a fresh running
+shell boundary. Failed archive import leaves the prior staging file intact, and a failed export
+removes its pending MediaStore item. The desktop CI builds the embedded web assets before Rust.
+
+The following gates passed on this Mac:
+
+```text
+./gradlew :app:testFullCliDebugUnitTest :app:testPlayDebugUnitTest
+./gradlew :app:lintFullCliDebug :app:lintPlayDebug
+./gradlew :app:assembleFullCliDebug :app:assemblePlayDebug
+npm ci --prefix desktop/web
+npm run build --prefix desktop/web
+cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
+cargo clippy --manifest-path desktop/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path desktop/Cargo.toml --all-targets
+cargo build --release --manifest-path desktop/Cargo.toml
+git diff --check
+```
+
+There was no attached Android device or emulator for this review, so new Android behavior has not
+had a physical acceptance run. The desktop live bridge is local to its Unix socket. An encrypted
+phone transport and Android receiver have not been built, so live desktop sessions cannot yet be
+controlled from Verb Mobile. The `.vcont` file carries read-only history, not a live process or a
+portable native agent conversation. These are remaining product capabilities, not claims made by
+this archive.
+
+---
+
+## August 24 baseline handoff
 
 This is a verified source-only release candidate produced from transfer snapshot `bf9fd84`. It is
 intended to be reviewed and integrated into the primary Verb checkout that owns the real Git

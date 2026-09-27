@@ -18,6 +18,7 @@ distributed with the app; the obligations of their licenses are addressed here.
 | proot | GPL-2.0-or-later | Statically linked v5.3.0 wrapper bundled as an app asset (`assets/proot-arm64-v8a`). |
 | GNU tar | GPL-3.0-or-later | Termux package 1.35-3, bundled as an app asset (`assets/gnu-tar-aarch64`) and installed over the bootstrap's toybox `tar` when needed so dpkg can unpack packages. |
 | Per-package libraries and tools (git, curl, bash, coreutils, apt, dpkg, openssl, etc.) | Each under its own license (GPL-2.0, GPL-3.0, LGPL-2.1/3.0, MIT, BSD, Apache-2.0, ISC, MPL-2.0, CC0, public domain, ...) | Full license texts ship inside the userland. |
+| xterm.js and addon-fit | MIT | Bundled in the desktop browser workbench; notices are under `desktop/web/LICENSES/`. |
 
 Full license texts are installed in the userland under `usr/share/LICENSES/` (all SPDX
 variants used by packages) and `usr/share/doc/<package>/` (per-package notices), and the

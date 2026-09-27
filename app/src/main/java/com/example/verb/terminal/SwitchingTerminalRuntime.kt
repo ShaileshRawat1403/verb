@@ -77,6 +77,8 @@ class SwitchingTerminalRuntime(
 
     override val commandHistory: StateFlow<List<CommandExecutionRecord>> =
         following(emptyList()) { it.commandHistory }
+    override val runningCommand: StateFlow<CommandExecutionRecord?> =
+        following(null) { it.runningCommand }
 
     override val shellIntegrationActive: StateFlow<Boolean> =
         following(false) { it.shellIntegrationActive }

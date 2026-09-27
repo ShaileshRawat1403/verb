@@ -41,6 +41,9 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
   observers are bound strictly to their originating concrete PTY session. Switching active UI
   selection, running commands in concurrent shell sessions, and Activity/ViewModel recreation produce
   zero false lifecycle transitions or misrouted commands.
+  Android now keeps separate durable records for multiple sessions of the same agent type. If its
+  local evidence cannot uniquely identify a conversation, that record remains interrupted rather
+  than resuming the agent's latest conversation.
 * **One session lifecycle, three recovery-capable agents.** `LIVE -> INTERRUPTED -> RECOVERABLE ->
   ENDED` is implemented for Claude Code, Codex CLI and OpenCode. Each contributes only an adapter
   that reads its own evidence; Hermes and Antigravity currently have verified launch support.
@@ -69,7 +72,7 @@ re-exported.
 
 ```text
 app/       Android application (Kotlin, Compose)
-desktop/   Desktop host, CLI and Ratatui workspace (Rust)
+desktop/   Desktop host, CLI, Ratatui workspace and local web UI (Rust)
 runtime/   Termux-derived userland components for Android
 docs/      Product and implementation documentation
 ```
@@ -91,10 +94,16 @@ cargo build --release --manifest-path desktop/Cargo.toml
 cargo test --manifest-path desktop/Cargo.toml
 cargo install --path desktop              # install from source
 ./desktop/target/release/verb          # the session UI, on a terminal
+./desktop/target/release/verb web      # local browser workbench
+./launch-web.sh                        # build and launch the browser workbench
 ./desktop/target/release/verb help
 ```
 
 The developer preview does not yet publish prebuilt desktop binaries.
+The web assets are bundled into the Rust binary. To change them, run `npm ci --prefix desktop/web`
+and `npm run build --prefix desktop/web` before building Rust. See
+[`desktop/README.md`](desktop/README.md) for the browser host's local access and PTY ownership
+boundary.
 
 ## Documentation
 

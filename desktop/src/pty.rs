@@ -86,6 +86,7 @@ unsafe extern "C" {
     fn kill(pid: PidT, signal: c_int) -> c_int;
     fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int;
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
+    fn dup(fd: c_int) -> c_int;
 }
 
 /// A process running on its own PTY, with the master side handed back to the caller.
@@ -105,8 +106,17 @@ pub(super) fn spawn(
     args: &[String],
     env: &[(String, String)],
     size: Option<(u16, u16)>,
+    session_lock_fd: Option<c_int>,
 ) -> Result<PtyProcess, String> {
-    let (master, pid) = fork_pty(project, session_id, command, args, env, size)?;
+    let (master, pid) = fork_pty(
+        project,
+        session_id,
+        command,
+        args,
+        env,
+        size,
+        session_lock_fd,
+    )?;
     Ok(PtyProcess { master, pid })
 }
 
@@ -209,13 +219,15 @@ pub(super) fn run(
     args: &[String],
     env: &[(String, String)],
     is_new_session: bool,
+    session_lock: &File,
 ) -> Result<i32, String> {
     // Capture the observation boundary before the process can create its record. Creating the
     // watch after `forkpty` races a fast agent: its new record then appears older than the watch and
     // Verb permanently misses both its structural events and its positive resume identity.
-    let mut watch = crate::observe::AgentWatch::for_agent(
+    let mut watch = crate::observe::AgentWatch::for_session(
         session.agent.as_ref().map(|agent| agent.label()),
         project,
+        session.resume_identity.as_deref(),
     );
     let (mut master, pid) = fork_pty(
         project,
@@ -224,7 +236,9 @@ pub(super) fn run(
         args,
         env,
         terminal_window_size(),
+        Some(session_lock.as_raw_fd()),
     )?;
+    let mut reaper = ReapOnDrop(Some(pid));
 
     let mut logger = EventLogger::new(session)?;
     if is_new_session {
@@ -233,13 +247,28 @@ pub(super) fn run(
         logger.agent_started(agent.label())?;
     }
     logger.process_started()?;
+    session.state = super::SessionState::Live;
+    session.last_seen_at = super::now_millis();
     super::save_session(session)?;
 
     let _terminal_mode = TerminalMode::new()?;
     // The CLI proxy observes an agent exactly as the workspace does: same reader, same events, same
     // wording. Only the surface differs -- there is no band here to raise, so a failure is recorded
     // and left for `verb context` to report.
-    proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)
+    let result = proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)?;
+    reaper.0 = None;
+    Ok(result)
+}
+
+/// A PTY spawned during CLI setup must not survive an error before the proxy takes over.
+struct ReapOnDrop(Option<PidT>);
+
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0.take() {
+            let _ = terminate(pid);
+        }
+    }
 }
 
 fn fork_pty(
@@ -249,6 +278,7 @@ fn fork_pty(
     args: &[String],
     env: &[(String, String)],
     size: Option<(u16, u16)>,
+    session_lock_fd: Option<c_int>,
 ) -> Result<(File, PidT), String> {
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
@@ -299,6 +329,12 @@ fn fork_pty(
 
     if pid == 0 {
         unsafe {
+            // File::lock uses flock on Unix. A dup has CLOEXEC cleared, so the agent inherits
+            // the same open-file-description lock if Verb itself dies before the agent exits.
+            // The host still owns and closes its original handle on the normal path.
+            if session_lock_fd.is_some_and(|fd| dup(fd) < 0) {
+                _exit(126);
+            }
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
             }
@@ -434,8 +470,10 @@ unsafe fn set_child_environment(session_id: &str, project: &Path, extra: &[(CStr
     };
     let verb_session_id = CString::new("VERB_SESSION_ID").expect("literal has no NUL");
     let verb_project_root = CString::new("VERB_PROJECT_ROOT").expect("literal has no NUL");
+    let pwd = CString::new("PWD").expect("literal has no NUL");
     setenv(verb_session_id.as_ptr(), session_id.as_ptr(), 1);
     setenv(verb_project_root.as_ptr(), project.as_ptr(), 1);
+    setenv(pwd.as_ptr(), project.as_ptr(), 1);
     for (name, value) in extra {
         setenv(name.as_ptr(), value.as_ptr(), 1);
     }
@@ -691,6 +729,7 @@ mod tests {
             &["-c".to_owned(), "sleep 30".to_owned()],
             &[],
             None,
+            None,
         )
         .unwrap();
         let started = std::time::Instant::now();
@@ -712,6 +751,7 @@ mod tests {
             &["-c".to_owned(), "stty size".to_owned()],
             &[],
             Some((7, 33)),
+            None,
         )
         .unwrap();
         let mut master = process.master;

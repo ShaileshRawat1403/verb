@@ -76,7 +76,7 @@ pub(crate) fn assemble_for(project: &Path, hosting: Option<&Session>) -> Result<
         None => hosting.cloned(),
     };
     let events = match session.as_ref() {
-        Some(session) => read_events(project, &session.id)?,
+        Some(session) => read_events(&session.project_id, &session.id)?,
         None => Vec::new(),
     };
     Ok(Context {

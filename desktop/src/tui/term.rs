@@ -5,10 +5,12 @@
 //! only the hosting: bytes are parsed into a terminal state (`vt100`) that Verb draws, instead of
 //! being proxied to a terminal Verb had given away.
 
+use crate::mobile::{LiveBridge, LocalServer};
 use crate::observe::{AgentEvent, AgentWatch, Observed};
 use crate::pty::{self, ShellIntegration, Structural};
 use crate::{EventLogger, Session};
-use std::io::{Read, Write};
+use std::io::Read;
+use std::os::fd::AsRawFd;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
@@ -18,8 +20,13 @@ pub struct Hosted {
     integration: ShellIntegration,
     master: std::fs::File,
     pid: i32,
+    /// Held for the whole PTY lifetime so no second Verb process can resume this session.
+    _session_lock: std::fs::File,
     parser: vt100::Parser,
+    mobile: LiveBridge,
+    _mobile_server: Option<LocalServer>,
     output: Receiver<Vec<u8>>,
+    web_output: Option<Vec<Vec<u8>>>,
     reader_finished: bool,
     exit_code: Option<i32>,
     /// Structural outcomes the workspace has not yet reacted to. The band reads these; nothing
@@ -46,28 +53,59 @@ impl Hosted {
         rows: u16,
         cols: u16,
     ) -> Result<Self, String> {
+        let session_lock = crate::lock_session_for_host(&session.id)?;
+        if is_new {
+            // The child can fetch shared context immediately after exec, before this host's
+            // post-spawn setup. Make its identity visible first without claiming it is live yet.
+            session.state = crate::SessionState::Interrupted;
+            crate::save_session(&session)?;
+        }
         // This boundary must precede process creation. A fast agent can create its transcript
         // before `spawn` returns, and then a later boundary would reject the right record as old.
-        let watch =
-            AgentWatch::for_agent(session.agent.as_ref().map(|agent| agent.label()), project);
-        let process = pty::spawn(project, &session.id, command, args, env, Some((rows, cols)))?;
-
-        let mut logger = EventLogger::new(&session)?;
-        if is_new {
-            logger.session_started(&session)?;
-        } else if let Some(agent) = session.agent.as_ref() {
-            logger.agent_started(agent.label())?;
-        }
-        logger.process_started()?;
-        crate::save_session(&session)?;
+        let watch = AgentWatch::for_session(
+            session.agent.as_ref().map(|agent| agent.label()),
+            project,
+            session.resume_identity.as_deref(),
+        );
+        let process = pty::spawn(
+            project,
+            &session.id,
+            command,
+            args,
+            env,
+            Some((rows, cols)),
+            Some(session_lock.as_raw_fd()),
+        )?;
+        let setup = (|| -> Result<_, String> {
+            let reader = process
+                .master
+                .try_clone()
+                .map_err(|error| format!("could not observe the session: {error}"))?;
+            let mut logger = EventLogger::new(&session)?;
+            if is_new {
+                logger.session_started(&session)?;
+            } else if let Some(agent) = session.agent.as_ref() {
+                logger.agent_started(agent.label())?;
+            }
+            logger.process_started()?;
+            session.state = crate::SessionState::Live;
+            session.last_seen_at = crate::now_millis();
+            crate::save_session(&session)?;
+            Ok((reader, logger))
+        })();
+        let (mut reader, logger) = match setup {
+            Ok(setup) => setup,
+            Err(error) => {
+                let _ = pty::terminate(process.pid);
+                return Err(error);
+            }
+        };
 
         // A reader thread exists so drawing never waits on a process that has nothing to say. It
         // only moves bytes; every decision about them is made on the main thread.
-        let (sender, output) = mpsc::channel();
-        let mut reader = process
-            .master
-            .try_clone()
-            .map_err(|error| format!("could not observe the session: {error}"))?;
+        // Bound the reader queue so a noisy CLI cannot grow Verb without limit when rendering
+        // or browser delivery is slower than its PTY output. A full queue backpressures the PTY.
+        let (sender, output) = mpsc::sync_channel(128);
         thread::spawn(move || {
             let mut buffer = [0_u8; 8 * 1024];
             while let Ok(count) = reader.read(&mut buffer) {
@@ -77,15 +115,22 @@ impl Hosted {
             }
         });
 
-        session.state = crate::SessionState::Live;
+        let mobile = LiveBridge::new(session.id.clone());
+        // An unavailable optional bridge never prevents the agent from starting. `verb mobile
+        // offer ID` will report the missing endpoint if this host could not create it.
+        let mobile_server = LocalServer::bind(&session.id, mobile.clone()).ok();
         Ok(Self {
             session,
             logger,
             integration: ShellIntegration::new(),
             master: process.master,
             pid: process.pid,
+            _session_lock: session_lock,
             parser: vt100::Parser::new(rows, cols, SCROLLBACK_LINES),
+            mobile,
+            _mobile_server: mobile_server,
             output,
+            web_output: None,
             reader_finished: false,
             exit_code: None,
             pending: Vec::new(),
@@ -100,12 +145,27 @@ impl Hosted {
     /// the shell-integration scanner that turns markers into structural events. Neither retains
     /// them.
     pub fn poll(&mut self) -> Result<(Option<i32>, bool), String> {
+        self.mobile.expire_idle(std::time::Instant::now())?;
+        self.mobile.deliver_phone_input(&mut self.master)?;
+        if self.mobile.needs_initial_screen()? {
+            self.mobile
+                .publish_screen(self.parser.screen().contents_formatted())?;
+        }
         let mut changed = false;
-        loop {
+        // A continuous producer must not keep this poll in the drain loop forever. The next UI
+        // tick resumes where this one stopped, while the bounded queue applies backpressure.
+        for _ in 0..128 {
             match self.output.try_recv() {
                 Ok(bytes) => {
                     changed = true;
                     self.parser.process(&bytes);
+                    if let Some(web_output) = &mut self.web_output {
+                        web_output.push(bytes.clone());
+                    }
+                    if self.mobile.wants_screen()? {
+                        self.mobile
+                            .publish_screen(self.parser.screen().contents_formatted())?;
+                    }
                     let structural =
                         self.integration
                             .observe(&bytes, &mut self.session, &mut self.logger)?;
@@ -127,6 +187,12 @@ impl Hosted {
             changed |= self.exit_code != previous;
         }
         Ok((self.exit_code, changed))
+    }
+
+    /// A process can exit before its reader thread has forwarded the final PTY bytes. The web
+    /// host waits for this flag before recording the terminal's final screen.
+    pub fn output_drained(&self) -> bool {
+        self.reader_finished
     }
 
     /// Reads whatever the agent has appended to its own record since the last tick.
@@ -212,19 +278,36 @@ impl Hosted {
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> Result<(), String> {
-        self.master
-            .write_all(bytes)
-            .map_err(|error| format!("could not write to the session: {error}"))
+        self.mobile.write_desktop(&mut self.master, bytes)
+    }
+
+    /// The browser host forwards the exact PTY stream to xterm.js. The TUI does not enable this
+    /// second, volatile copy, so ordinary terminal sessions retain their existing memory bound.
+    pub fn capture_web_output(&mut self) {
+        self.web_output = Some(Vec::new());
+    }
+
+    pub fn take_web_output(&mut self) -> Vec<Vec<u8>> {
+        self.web_output
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.parser.screen_mut().set_size(rows, cols);
         pty::set_window_size(&self.master, rows, cols);
+        if self.mobile.wants_screen().unwrap_or(false) {
+            let _ = self
+                .mobile
+                .publish_screen(self.parser.screen().contents_formatted());
+        }
     }
 
     /// Closes the record out exactly as the CLI does: process ended, agent ended, state resolved
     /// from the agent's own evidence, session saved.
     pub fn finish(mut self, exit_code: i32) -> Result<Session, String> {
+        let _ = self.mobile.end();
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
         Ok(self.session.clone())
@@ -232,6 +315,7 @@ impl Hosted {
 
     /// Stops a still-running hosted program before closing its durable record.
     pub fn stop(mut self) -> Result<Session, String> {
+        let _ = self.mobile.end();
         let exit_code = match self.exit_code {
             Some(code) => code,
             None => pty::terminate(self.pid)?,
@@ -254,6 +338,7 @@ impl Drop for Hosted {
             .exit_code
             .or_else(|| pty::terminate(self.pid).ok())
             .unwrap_or(1);
+        let _ = self.mobile.end();
         let _ = crate::finish_session_quietly(&mut self.session, exit_code);
         self.closed = true;
     }

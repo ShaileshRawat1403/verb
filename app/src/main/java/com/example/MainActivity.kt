@@ -147,6 +147,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
     val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
     val agentSessions by viewModel.agentSessions.collectAsStateWithLifecycle()
+    val agentSessionHistory by viewModel.agentSessionHistory.collectAsStateWithLifecycle()
     val worldArchiveName by viewModel.worldArchiveName.collectAsStateWithLifecycle()
     val worldArchiveMessage by viewModel.worldArchiveMessage.collectAsStateWithLifecycle()
     val continuityMessage by viewModel.continuityMessage.collectAsStateWithLifecycle()
@@ -331,6 +332,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     agentKeyStatus = agentKeyStatus,
                     agentSignInStates = agentSignInStates,
                     agentSessions = agentSessions,
+                    agentSessionHistory = agentSessionHistory,
                     installingRuntimeProfile = installingRuntimeProfile,
                     runtimeInstallMessage = runtimeInstallMessage,
                     agentRuntimeStatus = agentRuntimeStatus,
@@ -418,6 +420,7 @@ private fun VerbTaskSurface(
     agentKeyStatus: List<com.example.verb.ui.AgentKeyStatus>,
     agentSignInStates: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.terminal.AgentSignInState>,
     agentSessions: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.session.VerbSession>,
+    agentSessionHistory: Map<com.example.verb.terminal.RuntimeProfileId, List<com.example.verb.session.VerbSession>>,
     installingRuntimeProfile: com.example.verb.terminal.RuntimeProfileId?,
     runtimeInstallMessage: String?,
     agentRuntimeStatus: com.example.verb.terminal.AgentRuntimeStatus,
@@ -496,7 +499,9 @@ private fun VerbTaskSurface(
                     installingProfile = installingRuntimeProfile,
                     message = runtimeInstallMessage,
                     agentSessions = agentSessions,
+                    sessionHistory = agentSessionHistory,
                     onResumeSession = viewModel::resumeAgentSession,
+                    onResumeSavedSession = viewModel::resumeExactAgentSession,
                     onStartNewSession = viewModel::startNewAgentSession,
                     terminalSessionIds = terminalSessionIds,
                     activeTerminalSessionId = activeTerminalSessionId,

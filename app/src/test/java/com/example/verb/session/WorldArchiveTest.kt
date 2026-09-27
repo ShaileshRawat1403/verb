@@ -67,6 +67,20 @@ class WorldArchiveTest {
     }
 
     @Test
+    fun `a complete new archive replaces an earlier staged archive`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val staged = File(home(), "imported-world.vbak").apply { writeText("old") }
+        val source = File(temporaryFolder.newFolder("replacement"), "chosen.vbak")
+            .apply { writeText("new-encrypted-bytes") }
+
+        assertTrue(
+            WorldArchive.stageForImport(context, Uri.fromFile(source), temporaryFolder.root)
+                is WorldArchive.Outcome.Saved
+        )
+        assertEquals("new-encrypted-bytes", staged.readText())
+    }
+
+    @Test
     fun `staging never replaces the world itself -- only a file import will later read`() {
         // The failure this guards against is a one-tap restore: staging must leave the live
         // credentials untouched, because the person has not yet seen what the archive contains.
@@ -84,9 +98,12 @@ class WorldArchiveTest {
     fun `an unreadable source is reported, not swallowed into a false success`() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val missing = Uri.fromFile(File(temporaryFolder.root, "does-not-exist.vbak"))
+        val existing = File(home(), "imported-world.vbak").apply { writeText("known-good") }
 
         val outcome = WorldArchive.stageForImport(context, missing, temporaryFolder.root)
 
         assertTrue(outcome is WorldArchive.Outcome.Failed)
+        assertEquals("known-good", existing.readText())
+        assertTrue(home().listFiles()?.none { it.name.startsWith("imported-world-") } == true)
     }
 }

@@ -144,6 +144,19 @@ jobs:
         # and fails with "invalid toolchain name: 'rustfmt'".
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
 
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/web/package-lock.json
+
+      - name: Build browser assets embedded by Rust
+        run: |
+          npm ci --prefix web
+          npm run build --prefix web
+          git diff --exit-code -- web/dist
+
       - name: Cache cargo
         uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
         with:

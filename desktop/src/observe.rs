@@ -347,6 +347,73 @@ impl RecordTail {
         })
     }
 
+    /// Binds a resumed Verb session to the agent conversation it explicitly selected. The old
+    /// transcript is history: start at EOF so only work after this resume creates new events.
+    pub fn find_existing(record: Record, home: &Path, project: &Path, id: &str) -> Option<Self> {
+        let path = match record {
+            Record::Claude => home
+                .join(".claude")
+                .join("projects")
+                .join(crate::agents::claude_project_dir(project))
+                .join(format!("{id}.jsonl")),
+            Record::Codex => {
+                let root = home.join(".codex").join("sessions");
+                let suffix = format!("-{id}.jsonl");
+                let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+                for directory in codex_day_directories(&root) {
+                    let Ok(entries) = std::fs::read_dir(directory) else {
+                        continue;
+                    };
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path
+                            .file_name()
+                            .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+                        {
+                            continue;
+                        }
+                        let Ok(mut file) = std::fs::File::open(&path) else {
+                            continue;
+                        };
+                        let mut header = String::new();
+                        if file
+                            .by_ref()
+                            .take(16 * 1024)
+                            .read_to_string(&mut header)
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        let Some(first) = header.lines().next() else {
+                            continue;
+                        };
+                        if json_string(first, "id").as_deref() != Some(id)
+                            || !json_string(first, "cwd")
+                                .is_some_and(|cwd| crate::agents::same_directory(&cwd, project))
+                        {
+                            continue;
+                        }
+                        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+                            continue;
+                        };
+                        if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+                            newest = Some((modified, path));
+                        }
+                    }
+                }
+                newest?.1
+            }
+        };
+        let offset = std::fs::metadata(&path).ok()?.len();
+        Some(Self {
+            record,
+            path,
+            conversation_id: Some(id.to_owned()),
+            offset,
+            partial: String::new(),
+        })
+    }
+
     /// The events appended since the last call.
     pub fn poll(&mut self, now: u128) -> Vec<AgentEvent> {
         let Ok(mut file) = std::fs::File::open(&self.path) else {
@@ -419,6 +486,7 @@ fn codex_day_directories(root: &Path) -> Vec<PathBuf> {
 pub struct AgentWatch {
     record: Option<Record>,
     project: PathBuf,
+    resume_identity: Option<String>,
     /// Anything the agent wrote before this instant belongs to some earlier session, not this one.
     started_at: std::time::SystemTime,
     tail: Option<RecordTail>,
@@ -427,10 +495,16 @@ pub struct AgentWatch {
 
 impl AgentWatch {
     /// A watch for `agent`, which observes nothing when Verb has no reader for that agent.
+    #[cfg(test)]
     pub fn for_agent(agent: Option<&str>, project: &Path) -> Self {
+        Self::for_session(agent, project, None)
+    }
+
+    pub fn for_session(agent: Option<&str>, project: &Path, resume_identity: Option<&str>) -> Self {
         Self {
             record: agent.and_then(Record::for_agent),
             project: project.to_path_buf(),
+            resume_identity: resume_identity.map(str::to_owned),
             started_at: std::time::SystemTime::now(),
             tail: None,
             observed: Observed::default(),
@@ -451,7 +525,10 @@ impl AgentWatch {
             let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
                 return Vec::new();
             };
-            self.tail = RecordTail::find(record, &home, &self.project, self.started_at);
+            self.tail = match self.resume_identity.as_deref() {
+                Some(id) => RecordTail::find_existing(record, &home, &self.project, id),
+                None => RecordTail::find(record, &home, &self.project, self.started_at),
+            };
         }
         let Some(tail) = self.tail.as_mut() else {
             return Vec::new();
@@ -797,6 +874,84 @@ mod tests {
             Some("codex-abcd")
         );
         assert_eq!(Record::Codex.conversation_id(later), None);
+    }
+
+    #[test]
+    fn a_resumed_claude_watch_reads_only_new_lines_from_its_exact_conversation() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("verb-resumed-claude-{}", crate::new_id()));
+        let project = root.join("project");
+        let home = root.join("home");
+        std::fs::create_dir_all(&project).unwrap();
+        let directory = home
+            .join(".claude/projects")
+            .join(crate::agents::claude_project_dir(&project));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("ours.jsonl");
+        std::fs::write(&path, "{\"type\":\"user\",\"sessionId\":\"ours\"}\n").unwrap();
+        std::fs::write(
+            directory.join("other.jsonl"),
+            "{\"type\":\"user\",\"sessionId\":\"other\"}\n",
+        )
+        .unwrap();
+
+        let mut tail = RecordTail::find_existing(Record::Claude, &home, &project, "ours").unwrap();
+        assert_eq!(tail.conversation_id.as_deref(), Some("ours"));
+        assert!(tail.poll(1).is_empty(), "historical user turn was replayed");
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap(),
+            "{{\"type\":\"assistant\",\"sessionId\":\"ours\",\"message\":{{\"content\":[]}}}}"
+        )
+        .unwrap();
+        assert_eq!(tail.poll(2), vec![AgentEvent::TurnFinished { at: 2 }]);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_resumed_codex_watch_matches_identity_and_project() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("verb-resumed-codex-{}", crate::new_id()));
+        let project = root.join("project");
+        let other = root.join("other");
+        let home = root.join("home");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let directory = home.join(".codex/sessions/2026/09/24");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("rollout-2026-09-24T12-00-00-ours.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"ours\",\"cwd\":\"{}\"}}}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("rollout-2026-09-24T12-00-00-other.jsonl"),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"other\",\"cwd\":\"{}\"}}}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        assert!(RecordTail::find_existing(Record::Codex, &home, &other, "ours").is_none());
+
+        let mut tail = RecordTail::find_existing(Record::Codex, &home, &project, "ours").unwrap();
+        assert!(tail.poll(1).is_empty());
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap(),
+            "{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\"}}}}"
+        )
+        .unwrap();
+        assert_eq!(tail.poll(2), vec![AgentEvent::TurnStarted { at: 2 }]);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]

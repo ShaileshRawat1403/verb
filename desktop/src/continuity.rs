@@ -3,7 +3,7 @@
 //! Imported records are deliberately kept outside `sessions/`: a foreign file can contribute
 //! history, never current state or a resume capability.
 
-use crate::{event_log_path, iso8601, json_escape, load_session, state_root, Session};
+use crate::{event_log_path, iso8601, json_escape, load_sessions_for_project, state_root, Session};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -163,19 +163,28 @@ fn export(project: &Path, destination: &Path) -> Result<(), String> {
         exported_at: iso8601(crate::now_millis()),
     };
 
-    let session = load_session(project)?;
-    let session_record = session
-        .as_ref()
-        .map(|session| session_record(session, project, &project_key));
-    let events = match session.as_ref() {
-        Some(session) => export_events(project, session)?,
-        None => Vec::new(),
-    };
+    let sessions = load_sessions_for_project(project)?;
+    if sessions.len() > MAX_SESSIONS {
+        return Err(format!(
+            "too many sessions to export (maximum {MAX_SESSIONS})"
+        ));
+    }
+    let session_records: Vec<_> = sessions
+        .iter()
+        .map(|session| session_record(session, &session.project_id, &project_key))
+        .collect();
+    let mut events = Vec::new();
+    for session in &sessions {
+        events.extend(export_events(&session.project_id, session)?);
+        if events.len() > MAX_EVENTS {
+            return Err(format!("too many events to export (maximum {MAX_EVENTS})"));
+        }
+    }
 
     let mut payload = String::new();
     push_record(&mut payload, &origin)?;
     push_record(&mut payload, &project_record)?;
-    if let Some(record) = session_record.as_ref() {
+    for record in &session_records {
         push_record(&mut payload, record)?;
     }
     for event in &events {
@@ -195,7 +204,7 @@ fn export(project: &Path, destination: &Path) -> Result<(), String> {
     atomic_write(destination, &bytes)?;
     println!(
         "Exported {} session and {} structural events to {}",
-        usize::from(session_record.is_some()),
+        session_records.len(),
         events.len(),
         destination.display()
     );
