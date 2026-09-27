@@ -1169,7 +1169,25 @@ pub(crate) fn finish_session_quietly(session: &mut Session, exit_code: i32) -> R
     }
     logger.session_state_changed(session.state.as_str())?;
     logger.session_ended(session.state.as_str(), exit_code)?;
+    retire_session_lock(&session.id);
     Ok(())
+}
+
+/// Called by the host, which still holds the lock, once the session is closed cleanly.
+///
+/// The agent inherits the lock on purpose (if Verb itself dies, nothing may resume a conversation
+/// the agent is still in). But so does everything the agent starts: a `nohup`'d dev server kept the
+/// session "hosted" long after the agent exited. Unlinking the lock file here leaves any such
+/// straggler holding a lock on a file no one looks at; the next host creates a fresh one.
+fn retire_session_lock(id: &str) {
+    let encoded: String = id
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if let Ok(directory) = sessions_directory() {
+        let _ = fs::remove_file(directory.join("locks").join(format!("{encoded}.lock")));
+    }
 }
 
 fn effective_args(agent: &Agent, extra_args: Vec<String>) -> Vec<String> {

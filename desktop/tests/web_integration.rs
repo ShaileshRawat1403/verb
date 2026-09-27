@@ -321,3 +321,93 @@ fn checks_are_served_on_request_and_mark_good_needs_the_token() {
     assert_eq!(status, 400);
     assert!(String::from_utf8_lossy(&body).contains("needs a Git working tree"));
 }
+
+fn start_shell(server: &WebServer, script: &str) -> String {
+    let started = server.json(
+        "POST",
+        "/api/terminals",
+        Some(json!({"agent":"custom","command":"/bin/sh","args":["-c", script],"isolated":false})),
+    );
+    started["sessionId"].as_str().unwrap().to_owned()
+}
+
+fn wait_for_output(server: &WebServer, id: &str, needle: &str) -> String {
+    for _ in 0..60 {
+        let output = server.json("GET", &format!("/api/terminals/{id}/output?after=0"), None);
+        let text =
+            String::from_utf8_lossy(&BASE64.decode(output["data"].as_str().unwrap()).unwrap())
+                .into_owned();
+        if text.contains(needle) {
+            return text;
+        }
+        std::thread::sleep(Duration::from_millis(80));
+    }
+    panic!("never saw {needle:?}");
+}
+
+/// One session must not be able to write into another's terminal. `forkpty` returns the master
+/// without close-on-exec, so before the fix every later session inherited every earlier master.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_session_does_not_inherit_another_sessions_terminal() {
+    let server = WebServer::start();
+    let first = start_shell(&server, "printf 'first-ready\\n'; sleep 20");
+    wait_for_output(&server, &first, "first-ready");
+    let second = start_shell(
+        &server,
+        "printf 'masters=%s\\n' \"$(ls -l /proc/$$/fd | grep -c ptmx)\"; sleep 20",
+    );
+    let text = wait_for_output(&server, &second, "masters=");
+    assert!(text.contains("masters=0"), "{text}");
+    server.json("DELETE", &format!("/api/terminals/{first}"), None);
+    server.json("DELETE", &format!("/api/terminals/{second}"), None);
+}
+
+/// Closing a session stops its whole process group, including a child that ignores hangup.
+#[test]
+fn closing_a_session_stops_children_that_ignore_hangup() {
+    let server = WebServer::start();
+    let marker = server.root.join("survived");
+    let id = start_shell(
+        &server,
+        &format!(
+            "(trap '' HUP; sleep 1; touch '{}') & printf 'armed\\n'; sleep 30",
+            marker.display()
+        ),
+    );
+    wait_for_output(&server, &id, "armed");
+    server.json("DELETE", &format!("/api/terminals/{id}"), None);
+    std::thread::sleep(Duration::from_millis(1800));
+    assert!(!marker.exists(), "a child outlived its closed session");
+}
+
+/// A background process a session left behind must not keep the finished session "hosted": the
+/// hosted child inherits the session lock on purpose, and so did everything it started.
+#[test]
+fn a_leftover_background_process_does_not_keep_a_finished_session_live() {
+    let server = WebServer::start();
+    let id = start_shell(
+        &server,
+        "nohup sleep 6 >/dev/null 2>&1 & printf 'leaving\\n'",
+    );
+    for _ in 0..60 {
+        let output = server.json("GET", &format!("/api/terminals/{id}/output?after=0"), None);
+        if output["running"] == false {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(80));
+    }
+    let listing = Command::new(env!("CARGO_BIN_EXE_verb"))
+        .args(["sessions", "--json"])
+        .current_dir(server.root.join("project"))
+        .env("VERB_STATE_DIR", server.root.join("state"))
+        .env("HOME", server.root.join("home"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&listing.stdout);
+    assert!(text.contains(&id), "{text}");
+    assert!(
+        !text.contains("\"LIVE\""),
+        "finished session still live: {text}"
+    );
+}
