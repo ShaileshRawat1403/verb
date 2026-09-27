@@ -30,6 +30,99 @@ const MAX_REQUEST_BYTES: usize = 32 * 1024;
 
 unsafe extern "C" {
     fn geteuid() -> u32;
+    fn getsid(pid: i32) -> i32;
+    fn getsockopt(
+        fd: std::os::raw::c_int,
+        level: std::os::raw::c_int,
+        name: std::os::raw::c_int,
+        value: *mut std::os::raw::c_void,
+        len: *mut u32,
+    ) -> std::os::raw::c_int;
+}
+
+/// Who is on the other end of a bridge connection, relative to the hosted session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Caller {
+    /// A process outside the hosted program's session: the user's own terminal, the host UI.
+    Outside,
+    /// The hosted program or something it started. It shares the session's socket path (it knows
+    /// its own `VERB_SESSION_ID`) and runs as the same account, so only this check keeps it from
+    /// pairing itself as "the phone" and pushing keystrokes into its own terminal.
+    InsideSession,
+    /// The peer could not be identified. Treated as inside: unknown is not permission.
+    Unknown,
+}
+
+fn peer_pid(stream: &UnixStream) -> Option<i32> {
+    use std::os::unix::io::AsRawFd;
+    #[cfg(target_os = "linux")]
+    {
+        #[repr(C)]
+        struct Credentials {
+            pid: i32,
+            uid: u32,
+            gid: u32,
+        }
+        let mut credentials = Credentials {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut len = std::mem::size_of::<Credentials>() as u32;
+        // SOL_SOCKET = 1, SO_PEERCRED = 17.
+        let result = unsafe {
+            getsockopt(
+                stream.as_raw_fd(),
+                1,
+                17,
+                std::ptr::from_mut(&mut credentials).cast(),
+                &mut len,
+            )
+        };
+        (result == 0 && credentials.pid > 0).then_some(credentials.pid)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut pid: i32 = 0;
+        let mut len = std::mem::size_of::<i32>() as u32;
+        // SOL_LOCAL = 0, LOCAL_PEERPID = 2.
+        let result = unsafe {
+            getsockopt(
+                stream.as_raw_fd(),
+                0,
+                2,
+                std::ptr::from_mut(&mut pid).cast(),
+                &mut len,
+            )
+        };
+        (result == 0 && pid > 0).then_some(pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = stream;
+        None
+    }
+}
+
+/// `forkpty` makes the hosted child a session leader, so its pid is the session id every process
+/// it starts inherits (unless one deliberately calls `setsid`, which this cannot see).
+fn classify(stream: &UnixStream, hosted: Option<i32>) -> Caller {
+    let Some(hosted) = hosted else {
+        return Caller::Outside;
+    };
+    match peer_pid(stream) {
+        Some(pid) => {
+            let session = unsafe { getsid(pid) };
+            if session < 0 {
+                Caller::Unknown
+            } else if session == hosted {
+                Caller::InsideSession
+            } else {
+                Caller::Outside
+            }
+        }
+        None => Caller::Unknown,
+    }
 }
 
 #[derive(Clone)]
@@ -398,11 +491,17 @@ struct Request {
 }
 
 impl LocalServer {
-    pub(crate) fn bind(session_id: &str, bridge: LiveBridge) -> Result<Self, String> {
-        Self::bind_at(socket_path(session_id)?, bridge)
+    /// `hosted_pid` is the hosted program's pid, which is also its session id; connections from
+    /// inside that session may not create offers or move input control.
+    pub(crate) fn bind(
+        session_id: &str,
+        bridge: LiveBridge,
+        hosted_pid: i32,
+    ) -> Result<Self, String> {
+        Self::bind_at(socket_path(session_id)?, bridge, Some(hosted_pid))
     }
 
-    fn bind_at(path: PathBuf, bridge: LiveBridge) -> Result<Self, String> {
+    fn bind_at(path: PathBuf, bridge: LiveBridge, hosted: Option<i32>) -> Result<Self, String> {
         let parent = path.parent().ok_or("invalid phone socket directory")?;
         fs::create_dir_all(parent)
             .map_err(|error| format!("could not create phone socket directory: {error}"))?;
@@ -438,8 +537,9 @@ impl LocalServer {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                        let caller = classify(&stream, hosted);
                         let response = match read_request(&mut stream)
-                            .and_then(|request| process_request(&bridge, request))
+                            .and_then(|request| process_request(&bridge, request, caller))
                         {
                             Ok(result) => {
                                 serde_json::json!({"version":1,"ok":true,"result":result})
@@ -529,9 +629,21 @@ fn read_request(stream: &mut UnixStream) -> Result<Request, String> {
     }
 }
 
-fn process_request(bridge: &LiveBridge, request: Request) -> Result<serde_json::Value, String> {
+fn process_request(
+    bridge: &LiveBridge,
+    request: Request,
+    caller: Caller,
+) -> Result<serde_json::Value, String> {
     if request.version != 1 {
         return Err("unsupported phone bridge protocol version".to_owned());
+    }
+    // Offers and control moves are the desktop user's decisions. The hosted program may not make
+    // them for itself: `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md`, "the session ID is never enough to
+    // authorize phone input".
+    if matches!(request.op.as_str(), "offer" | "desktop_take" | "revoke")
+        && caller != Caller::Outside
+    {
+        return Err("only the desktop user can do that, not the hosted session itself".to_owned());
     }
     let secret = || {
         request
@@ -772,11 +884,27 @@ mod tests {
     }
 
     #[test]
+    fn the_hosted_session_cannot_offer_pairing_or_move_control_itself() {
+        let root = std::env::temp_dir().join(format!("verb-mobile-{}", random_secret().unwrap()));
+        let path = socket_path_in(&root, "session-inside").unwrap();
+        let bridge = LiveBridge::new("session-inside".to_owned());
+        // Pretend this test process *is* the hosted session: bind with our own session id.
+        let own_session = unsafe { getsid(0) };
+        let server = LocalServer::bind_at(path.clone(), bridge.clone(), Some(own_session)).unwrap();
+        for op in ["offer", "desktop_take", "revoke"] {
+            let error = ask(&path, serde_json::json!({ "op": op })).unwrap_err();
+            assert!(error.contains("only the desktop user"), "{op}: {error}");
+        }
+        drop(server);
+    }
+
+    #[test]
     fn local_process_protocol_pairs_and_controls_only_the_chosen_live_session() {
         let root = std::env::temp_dir().join(format!("verb-mobile-{}", random_secret().unwrap()));
         let path = socket_path_in(&root, "session-five").unwrap();
         let bridge = LiveBridge::new("session-five".to_owned());
-        let server = LocalServer::bind_at(path.clone(), bridge.clone()).unwrap();
+        // A hosted pid that is not this test's session: the test process is "outside" it.
+        let server = LocalServer::bind_at(path.clone(), bridge.clone(), Some(i32::MAX)).unwrap();
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600

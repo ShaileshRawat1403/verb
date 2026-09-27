@@ -537,6 +537,20 @@ impl WebHost {
                 hosted.write(input.data.as_bytes())?;
                 Ok(Reply::json(200, json!({"ok": true})))
             }
+            // The desktop user takes input back from a paired phone. Only reachable with the page's
+            // token, which the hosted program does not have.
+            ["api", "terminals", id, "control"] if method == &Method::Post => {
+                let terminal = self
+                    .terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
+                hosted.take_input_back()?;
+                Ok(Reply::json(
+                    200,
+                    json!({"message": "Input is back with this desktop."}),
+                ))
+            }
             ["api", "terminals", id, "resize"] if method == &Method::Post => {
                 let size: ResizeRequest = read_json(request)?;
                 if !(4..=200).contains(&size.rows) || !(20..=400).contains(&size.cols) {

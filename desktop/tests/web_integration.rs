@@ -445,3 +445,15 @@ fn an_unread_request_body_cannot_freeze_or_crash_the_host() {
     drop(withheld);
     drop(huge);
 }
+
+#[test]
+fn the_desktop_can_take_input_back_and_it_needs_the_token() {
+    let server = WebServer::start();
+    let id = start_shell(&server, "printf 'ready\\n'; sleep 20");
+    wait_for_output(&server, &id, "ready");
+    let path = format!("/api/terminals/{id}/control");
+    assert_eq!(server.request("POST", &path, None, false).0, 403);
+    let taken = server.json("POST", &path, None);
+    assert!(taken["message"].as_str().unwrap().contains("back with this desktop"));
+    server.json("DELETE", &format!("/api/terminals/{id}"), None);
+}

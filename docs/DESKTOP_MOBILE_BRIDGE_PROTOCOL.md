@@ -33,6 +33,14 @@ the session ID is never enough to authorize phone input.
 | `disconnect` / `reconnect` | `secret: deviceToken` | connection status | Disconnect returns input control to desktop. |
 | `desktop_take` / `revoke` | none | controller or status | Owner-account actions. Both clear queued phone input; revoke invalidates the device token. |
 
+`offer`, `desktop_take` and `revoke` are refused when the connecting process belongs to the hosted
+program's own process session (checked from the socket peer's pid with `SO_PEERCRED` on Linux and
+`LOCAL_PEERPID` on macOS; an unidentifiable peer is refused too). The hosted program knows its own
+`VERB_SESSION_ID` and runs as the same account, so without this check it could offer, pair and
+take control of its own terminal. A descendant that deliberately calls `setsid` is not detected.
+The browser workbench takes input back with `POST /api/terminals/ID/control`, which needs the
+page's token.
+
 `snapshot` and accepted phone input refresh the client's heartbeat. Thirty seconds without contact
 marks the phone disconnected and returns input control to desktop. Reconnect uses the same device
 token only while the original hosted process remains live. Control transfer and PTY writes use one

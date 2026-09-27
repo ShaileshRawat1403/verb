@@ -384,7 +384,28 @@ function addTerminal(session) {
     if (terminal.closed || terminal.ended) return;
     terminal.inputQueue = terminal.inputQueue
       .then(() => api("POST", `/api/terminals/${session.id}/input`, { data }))
-      .catch((error) => toast(error.message, "error"));
+      .catch(async (error) => {
+        // A paired phone holds input. Taking it back is the desktop user's explicit choice.
+        if (/phone controls input/.test(error.message)) {
+          if (
+            window.confirm(
+              "Your phone controls input for this session. Take it back to this desktop?",
+            )
+          ) {
+            try {
+              const result = await api(
+                "POST",
+                `/api/terminals/${session.id}/control`,
+              );
+              toast(result.message);
+            } catch (takeError) {
+              toast(takeError.message, "error");
+            }
+          }
+          return;
+        }
+        toast(error.message, "error");
+      });
   });
   let resizeTimer;
   const observer = new ResizeObserver(() => {

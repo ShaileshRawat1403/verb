@@ -118,7 +118,7 @@ impl Hosted {
         let mobile = LiveBridge::new(session.id.clone());
         // An unavailable optional bridge never prevents the agent from starting. `verb mobile
         // offer ID` will report the missing endpoint if this host could not create it.
-        let mobile_server = LocalServer::bind(&session.id, mobile.clone()).ok();
+        let mobile_server = LocalServer::bind(&session.id, mobile.clone(), process.pid).ok();
         Ok(Self {
             session,
             logger,
@@ -292,6 +292,11 @@ impl Hosted {
             .as_mut()
             .map(std::mem::take)
             .unwrap_or_default()
+    }
+
+    /// Returns input control to the desktop when a paired phone holds it.
+    pub fn take_input_back(&self) -> Result<(), String> {
+        self.mobile.desktop_take_control()
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
