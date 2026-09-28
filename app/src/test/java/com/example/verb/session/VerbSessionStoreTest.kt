@@ -81,6 +81,45 @@ class VerbSessionStoreTest {
     }
 
     @Test
+    fun `two sessions of the same agent survive in one durable store`() {
+        val store = SharedPreferencesVerbSessionStore(context)
+        fun session(id: String) = VerbSession(
+            id = id, projectId = "alpha", runtime = "claude",
+            createdAt = Instant.ofEpochMilli(if (id == "first") 10 else 20),
+            lastSeenAt = Instant.ofEpochMilli(30), state = VerbSessionState.RECOVERABLE,
+            agent = AgentRef("claude", id)
+        )
+        store.save(session("first"))
+        store.save(session("second"))
+
+        val reopened = SharedPreferencesVerbSessionStore(context)
+        assertEquals(listOf("first", "second"), reopened.loadAll().map { it.id })
+        assertEquals("second", reopened.load()?.id)
+    }
+
+    @Test
+    fun `a version one record migrates when another session is saved`() {
+        context.getSharedPreferences("verb_session", Context.MODE_PRIVATE).edit()
+            .putInt("schemaVersion", 1)
+            .putString("sessionId", "legacy")
+            .putString("state", "RECOVERABLE")
+            .putLong("createdAt", 10)
+            .putLong("lastSeenAt", 20)
+            .putString("agentType", "claude")
+            .commit()
+        val store = SharedPreferencesVerbSessionStore(context)
+        assertEquals("legacy", store.load()?.id)
+        store.save(
+            VerbSession(
+                id = "new", projectId = "alpha", runtime = "claude",
+                createdAt = Instant.ofEpochMilli(30), lastSeenAt = Instant.ofEpochMilli(40),
+                state = VerbSessionState.INTERRUPTED, agent = AgentRef("claude")
+            )
+        )
+        assertEquals(listOf("legacy", "new"), store.loadAll().map { it.id })
+    }
+
+    @Test
     fun `durable preferences contain no pid or terminal fields`() {
         val store = SharedPreferencesVerbSessionStore(context)
         store.save(

@@ -20,6 +20,10 @@ const POLLHUP: CShort = 0x010;
 const EIO: i32 = 5;
 const EINTR: i32 = 4;
 const ESRCH: i32 = 3;
+// Same values on Linux and macOS.
+const F_GETFD: c_int = 1;
+const F_SETFD: c_int = 2;
+const FD_CLOEXEC: c_int = 1;
 const WNOHANG: c_int = 1;
 const SIGHUP: c_int = 1;
 const SIGTERM: c_int = 15;
@@ -86,6 +90,8 @@ unsafe extern "C" {
     fn kill(pid: PidT, signal: c_int) -> c_int;
     fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int;
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
+    fn dup(fd: c_int) -> c_int;
+    fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
 }
 
 /// A process running on its own PTY, with the master side handed back to the caller.
@@ -105,8 +111,17 @@ pub(super) fn spawn(
     args: &[String],
     env: &[(String, String)],
     size: Option<(u16, u16)>,
+    session_lock_fd: Option<c_int>,
 ) -> Result<PtyProcess, String> {
-    let (master, pid) = fork_pty(project, session_id, command, args, env, size)?;
+    let (master, pid) = fork_pty(
+        project,
+        session_id,
+        command,
+        args,
+        env,
+        size,
+        session_lock_fd,
+    )?;
     Ok(PtyProcess { master, pid })
 }
 
@@ -156,6 +171,15 @@ pub(super) fn reap(pid: PidT) -> Result<Option<i32>, String> {
 /// child a session leader, so its pid is also the process-group id. The bounded escalation keeps a
 /// cooperative shell graceful while ensuring an agent that ignores hangup cannot outlive its host.
 pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
+    let code = terminate_leader(pid)?;
+    // The leader being gone is not the group being gone: a child that ignored SIGHUP kept running
+    // (and kept the PTY open) after `terminate` returned. Keep signalling the group until the kernel
+    // says it is empty. A process-group id cannot be reused while any member is alive.
+    drain_group(pid);
+    Ok(code)
+}
+
+fn terminate_leader(pid: PidT) -> Result<i32, String> {
     if let Some(code) = wait_nonblocking(pid)? {
         return Ok(code);
     }
@@ -173,6 +197,18 @@ pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
     // SIGKILL cannot be ignored. A blocking wait here only covers the small scheduler gap between
     // delivery and collection; it cannot wait on a process that is still able to keep running.
     wait_blocking(pid)
+}
+
+fn drain_group(pid: PidT) {
+    for signal in [SIGTERM, SIGKILL] {
+        for _ in 0..20 {
+            if unsafe { kill(-pid, signal) } != 0 {
+                // ESRCH: no member left. Anything else (EPERM) is not ours to keep trying.
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
@@ -209,13 +245,15 @@ pub(super) fn run(
     args: &[String],
     env: &[(String, String)],
     is_new_session: bool,
+    session_lock: &File,
 ) -> Result<i32, String> {
     // Capture the observation boundary before the process can create its record. Creating the
     // watch after `forkpty` races a fast agent: its new record then appears older than the watch and
     // Verb permanently misses both its structural events and its positive resume identity.
-    let mut watch = crate::observe::AgentWatch::for_agent(
+    let mut watch = crate::observe::AgentWatch::for_session(
         session.agent.as_ref().map(|agent| agent.label()),
         project,
+        session.resume_identity.as_deref(),
     );
     let (mut master, pid) = fork_pty(
         project,
@@ -224,7 +262,9 @@ pub(super) fn run(
         args,
         env,
         terminal_window_size(),
+        Some(session_lock.as_raw_fd()),
     )?;
+    let mut reaper = ReapOnDrop(Some(pid));
 
     let mut logger = EventLogger::new(session)?;
     if is_new_session {
@@ -233,13 +273,28 @@ pub(super) fn run(
         logger.agent_started(agent.label())?;
     }
     logger.process_started()?;
+    session.state = super::SessionState::Live;
+    session.last_seen_at = super::now_millis();
     super::save_session(session)?;
 
     let _terminal_mode = TerminalMode::new()?;
     // The CLI proxy observes an agent exactly as the workspace does: same reader, same events, same
     // wording. Only the surface differs -- there is no band here to raise, so a failure is recorded
     // and left for `verb context` to report.
-    proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)
+    let result = proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)?;
+    reaper.0 = None;
+    Ok(result)
+}
+
+/// A PTY spawned during CLI setup must not survive an error before the proxy takes over.
+struct ReapOnDrop(Option<PidT>);
+
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0.take() {
+            let _ = terminate(pid);
+        }
+    }
 }
 
 fn fork_pty(
@@ -249,6 +304,7 @@ fn fork_pty(
     args: &[String],
     env: &[(String, String)],
     size: Option<(u16, u16)>,
+    session_lock_fd: Option<c_int>,
 ) -> Result<(File, PidT), String> {
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
@@ -279,6 +335,7 @@ fn fork_pty(
             Ok((name, value))
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let child_env = child_environment(session_id, project, child_env)?;
 
     let window = size.map(|(rows, cols)| WinSize {
         rows,
@@ -299,12 +356,33 @@ fn fork_pty(
 
     if pid == 0 {
         unsafe {
+            // File::lock uses flock on Unix. A dup has CLOEXEC cleared, so the agent inherits
+            // the same open-file-description lock if Verb itself dies before the agent exits.
+            // The host still owns and closes its original handle on the normal path.
+            if session_lock_fd.is_some_and(|fd| dup(fd) < 0) {
+                _exit(126);
+            }
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
             }
-            set_child_environment(session_id, project, &child_env);
+            set_child_environment(&child_env);
             execvp(command_value.as_ptr(), argument_pointers.as_ptr());
             _exit(127);
+        }
+    }
+
+    // `forkpty` hands back a master without close-on-exec, so every program Verb starts later --
+    // the next agent, a shell in another pane -- inherited it and could write into *this* session:
+    // one agent answering another's permission prompt. Marked now, before anything else is spawned
+    // from this thread. (A spawn on another thread in the instant between `forkpty` and this call
+    // could still inherit it; closing that window needs `posix_openpt(O_CLOEXEC)`.)
+    unsafe {
+        let flags = fcntl(master_fd, F_GETFD);
+        if flags < 0 || fcntl(master_fd, F_SETFD, flags | FD_CLOEXEC) < 0 {
+            let error = io::Error::last_os_error();
+            let _ = kill(-pid, SIGKILL);
+            let _ = kill(pid, SIGKILL);
+            return Err(format!("could not protect the PTY: {error}"));
         }
     }
 
@@ -425,18 +503,28 @@ impl ShellIntegration {
     }
 }
 
-unsafe fn set_child_environment(session_id: &str, project: &Path, extra: &[(CString, CString)]) {
-    let Ok(session_id) = CString::new(session_id) else {
-        _exit(126);
-    };
-    let Ok(project) = CString::new(project.to_string_lossy().as_bytes()) else {
-        _exit(126);
-    };
-    let verb_session_id = CString::new("VERB_SESSION_ID").expect("literal has no NUL");
-    let verb_project_root = CString::new("VERB_PROJECT_ROOT").expect("literal has no NUL");
-    setenv(verb_session_id.as_ptr(), session_id.as_ptr(), 1);
-    setenv(verb_project_root.as_ptr(), project.as_ptr(), 1);
-    for (name, value) in extra {
+/// The variables every hosted child gets, converted before the fork: the child of a fork in a
+/// multi-threaded process must not allocate, and `CString::new` does.
+fn child_environment(
+    session_id: &str,
+    project: &Path,
+    extra: Vec<(CString, CString)>,
+) -> Result<Vec<(CString, CString)>, String> {
+    let session_id =
+        CString::new(session_id).map_err(|_| "session id contains a NUL byte".to_owned())?;
+    let project = CString::new(project.to_string_lossy().as_bytes())
+        .map_err(|_| "project path contains a NUL byte".to_owned())?;
+    let mut all = vec![
+        (c"VERB_SESSION_ID".to_owned(), session_id),
+        (c"VERB_PROJECT_ROOT".to_owned(), project.clone()),
+        (c"PWD".to_owned(), project),
+    ];
+    all.extend(extra);
+    Ok(all)
+}
+
+unsafe fn set_child_environment(variables: &[(CString, CString)]) {
+    for (name, value) in variables {
         setenv(name.as_ptr(), value.as_ptr(), 1);
     }
 }
@@ -691,6 +779,7 @@ mod tests {
             &["-c".to_owned(), "sleep 30".to_owned()],
             &[],
             None,
+            None,
         )
         .unwrap();
         let started = std::time::Instant::now();
@@ -712,6 +801,7 @@ mod tests {
             &["-c".to_owned(), "stty size".to_owned()],
             &[],
             Some((7, 33)),
+            None,
         )
         .unwrap();
         let mut master = process.master;

@@ -120,16 +120,26 @@ class ClaudeAgentAdapterTest {
     // --- resume(): a settled command-history record is the only failure signal ---
 
     @Test
-    fun `resume succeeds when nothing new settles within the window`() = runTest {
+    fun `resume requires a new running command boundary`() = runTest {
         val (filesDir, project) = setUpFilesystem()
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = ClaudeAgentAdapter(filesDir, project, fake, resumeSettleMs = 200, pollIntervalMs = 20)
 
-        // Nothing is ever fed to fake.simulateShellIntegration -- standing in for Claude staying
-        // interactive and never returning to the prompt.
-        val binding = adapter.resume(AgentRef("claude", "session-abc"))
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { adapter.resume(AgentRef("claude", "session-abc")) }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        advanceUntilIdle()
+        assertNotNull(resumeCall.await())
+    }
 
-        assertNotNull("nothing settling within the window must read as still running", binding)
+    @Test
+    fun `resume without shell start evidence stays unconfirmed`() = runTest {
+        val (filesDir, project) = setUpFilesystem()
+        val fake = FakeTerminalRuntimeAdapter(filesDir)
+        val adapter = ClaudeAgentAdapter(filesDir, project, fake, resumeSettleMs = 200, pollIntervalMs = 20)
+
+        assertNull(adapter.resume(AgentRef("claude", "session-abc")))
     }
 
     @Test
@@ -138,6 +148,7 @@ class ClaudeAgentAdapterTest {
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = ClaudeAgentAdapter(filesDir, project, fake, resumeSettleMs = 5_000, pollIntervalMs = 50)
 
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeCall = async { adapter.resume(AgentRef("claude", "bad-id")) }
         runCurrent() // let resume() capture the pre-resume history and send the command first
         fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
@@ -156,6 +167,7 @@ class ClaudeAgentAdapterTest {
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = ClaudeAgentAdapter(filesDir, project, fake, resumeSettleMs = 5_000, pollIntervalMs = 50)
 
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeCall = async { adapter.resume(AgentRef("claude", "session-abc")) }
         runCurrent()
         fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
@@ -177,9 +189,9 @@ class ClaudeAgentAdapterTest {
             pollIntervalMs = 5
         )
 
-        adapter.resume(AgentRef("claude", "abc; touch owned"))
+        assertNull(adapter.resume(AgentRef("claude", "abc; touch owned")))
 
         assertEquals(false, fake.terminalOutput.value.contains("touch owned"))
-        assertEquals(true, fake.terminalOutput.value.contains("claude --continue"))
+        assertEquals(false, fake.terminalOutput.value.contains("claude --continue"))
     }
 }

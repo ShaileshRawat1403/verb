@@ -1,6 +1,11 @@
 package com.example.verb.session
 
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
+import com.example.verb.terminal.ShellIntegrationEvent
+import kotlinx.coroutines.async
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -21,6 +26,7 @@ import java.time.Instant
  * this is the first test in the codebase where the `VerbSession` abstraction produces an outcome a
  * user would actually see, rather than only proving its own internal bookkeeping.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class ClaudeResumeCycleTest {
 
     @get:Rule
@@ -76,7 +82,12 @@ class ClaudeResumeCycleTest {
         assertEquals(VerbSessionState.RECOVERABLE, session.state)
 
         // The user chooses Resume.
-        session = VerbSessionResumer.resume(session, adapter)
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { VerbSessionResumer.resume(session, adapter) }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        advanceUntilIdle()
+        session = resumeCall.await()
 
         assertEquals(VerbSessionState.LIVE, session.state)
         assertEquals("session-1", session.id)

@@ -18,14 +18,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::json::{json_number, json_string, json_strings};
+use crate::json::{json_string, json_strings};
 use crate::ResumeVerdict;
 
-/// A conversation an agent could resume: what to hand back to the agent, and how recent it is.
+/// A conversation an agent could resume by its exact identity.
 struct Conversation {
     id: String,
-    /// Sort key only. Milliseconds where the agent records them, otherwise file mtime.
-    updated_at: u128,
 }
 
 // ---------------------------------------------------------------------------
@@ -35,58 +33,73 @@ struct Conversation {
 /// Claude records a project's transcripts under a normalized project-path directory.
 /// and (on builds that have one) session metadata under `~/.claude/sessions/*.json`. The metadata
 /// filename is a PID and is never used as identity -- the `sessionId` inside it is.
-pub fn claude_verdict(project: &Path, home: &Path) -> ResumeVerdict {
+/// The directory name the installed Claude Code build writes transcripts under.
+///
+/// This is shared by recovery and live observation because a mismatch is not cosmetic: it turns a
+/// real recoverable conversation into one Verb never finds. The rule is Claude's own, read from the
+/// installed CLI (`qx` in its bundle): every UTF-16 code unit that is not an ASCII letter or digit
+/// becomes `-`, and a result longer than 200 characters is cut to 200 and suffixed with `-` and the
+/// base-36 absolute value of a Java-style string hash of the *original* path. The earlier version
+/// mapped only `/`, `.` and `_`, so any project path with a space, `@`, `+` or a non-ASCII
+/// character was never observed and could never be resumed.
+pub(crate) fn claude_project_dir(project: &Path) -> String {
+    const LIMIT: usize = 200;
+    let original = project.to_string_lossy();
+    let units: Vec<u16> = original.encode_utf16().collect();
+    let replaced: String = units
+        .iter()
+        .map(|unit| match char::from_u32(u32::from(*unit)) {
+            Some(character) if character.is_ascii_alphanumeric() => character,
+            _ => '-',
+        })
+        .collect();
+    if replaced.len() <= LIMIT {
+        return replaced;
+    }
+    let mut hash: i32 = 0;
+    for unit in &units {
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(i32::from(*unit));
+    }
+    format!(
+        "{}-{}",
+        &replaced[..LIMIT],
+        base36(i64::from(hash).unsigned_abs())
+    )
+}
+
+fn base36(mut value: u64) -> String {
+    if value == 0 {
+        return "0".to_owned();
+    }
+    let mut digits = Vec::new();
+    while value > 0 {
+        digits.push(b"0123456789abcdefghijklmnopqrstuvwxyz"[(value % 36) as usize]);
+        value /= 36;
+    }
+    digits.reverse();
+    String::from_utf8(digits).expect("ASCII digits")
+}
+
+pub fn claude_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdict {
     let transcript_dir = home
         .join(".claude")
         .join("projects")
         .join(claude_project_dir(project));
-
-    let transcripts = match fs::read_dir(&transcript_dir) {
-        Ok(entries) => Some(
-            entries
-                .flatten()
-                .any(|entry| has_extension(&entry.path(), "jsonl")),
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return ResumeVerdict::Unknown,
-    };
-
-    if transcripts == Some(true) {
+    if has_extension(&transcript_dir.join(format!("{id}.jsonl")), "jsonl") {
         return ResumeVerdict::Yes;
     }
-
+    // `~/.claude/sessions` lists *running* Claude processes, keyed by PID. Being listed there is
+    // evidence the conversation exists; not being listed only says no process has it open right
+    // now, which is not evidence that it cannot be resumed.
     match claude_conversations(project, home) {
-        Some(conversations) if !conversations.is_empty() => ResumeVerdict::Yes,
-        Some(_) => ResumeVerdict::No,
-        // No session metadata store on this host: fall back to what the transcript directory said,
-        // and to Unknown when it did not exist at all.
-        None => match transcripts {
-            Some(true) => ResumeVerdict::Yes,
-            Some(false) => ResumeVerdict::No,
-            None => ResumeVerdict::Unknown,
-        },
+        Some(conversations) if conversations.iter().any(|candidate| candidate.id == id) => {
+            ResumeVerdict::Yes
+        }
+        _ => ResumeVerdict::Unknown,
     }
-}
-
-/// The directory name written by the installed Claude Code build.
-///
-/// This is shared by recovery and live observation because a mismatch is not cosmetic: it turns a
-/// real recoverable conversation into `UNKNOWN`. Slash, dot and underscore normalization are all
-/// covered by local real-session evidence; other characters are preserved until evidence says
-/// Claude treats them differently.
-pub(crate) fn claude_project_dir(project: &Path) -> String {
-    project
-        .to_string_lossy()
-        .chars()
-        .map(|character| match character {
-            '/' | '.' | '_' => '-',
-            other => other,
-        })
-        .collect()
-}
-
-pub fn claude_identity(project: &Path, home: &Path) -> Option<String> {
-    newest(claude_conversations(project, home)?)
 }
 
 /// `None` when this Claude build keeps no readable session metadata store.
@@ -110,10 +123,7 @@ fn claude_conversations(project: &Path, home: &Path) -> Option<Vec<Conversation>
         let Some(id) = json_string(&metadata, "sessionId") else {
             continue;
         };
-        conversations.push(Conversation {
-            id,
-            updated_at: json_number(&metadata, "updatedAt").unwrap_or_else(|| modified_at(&path)),
-        });
+        conversations.push(Conversation { id });
     }
     Some(conversations)
 }
@@ -125,56 +135,53 @@ fn claude_conversations(project: &Path, home: &Path) -> Option<Vec<Conversation>
 /// Codex records each conversation as a rollout file,
 /// `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<id>.jsonl`, whose first line carries
 /// the conversation `id` and the `cwd` it ran in.
-pub fn codex_verdict(project: &Path, home: &Path) -> ResumeVerdict {
-    match codex_conversations(project, home) {
-        None => ResumeVerdict::Unknown,
-        Some(conversations) if conversations.is_empty() => ResumeVerdict::No,
-        Some(_) => ResumeVerdict::Yes,
-    }
-}
-
-pub fn codex_identity(project: &Path, home: &Path) -> Option<String> {
-    newest(codex_conversations(project, home)?)
-}
-
-fn codex_conversations(project: &Path, home: &Path) -> Option<Vec<Conversation>> {
+pub fn codex_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdict {
     let root = home.join(".codex").join("sessions");
     if !root.is_dir() {
-        return None;
+        return ResumeVerdict::Unknown;
     }
     let mut rollouts = Vec::new();
     collect_files(&root, "jsonl", 5, &mut rollouts);
-
-    let mut conversations = Vec::new();
-    for rollout in rollouts {
-        let Ok(contents) = fs::read_to_string(&rollout) else {
-            continue;
-        };
-        let mut lines = contents.lines();
-        let Some(header) = lines.next() else {
-            continue;
-        };
-        let Some(cwd) = json_string(header, "cwd") else {
-            continue;
-        };
-        if !same_directory(&cwd, project) {
-            continue;
-        }
-        let Some(id) = json_string(header, "id") else {
-            continue;
-        };
-        // Opened is not used: Codex writes the rollout at startup and injects its own
-        // `<environment_context>` as a user-role message, so neither proves a conversation. Only a
-        // user-role record that is not one of those injected blocks does.
-        if !contents.lines().any(records_user_turn) {
-            continue;
-        }
-        conversations.push(Conversation {
-            id,
-            updated_at: modified_at(&rollout),
-        });
+    // Codex names each rollout after its conversation, so only files ending in `-<id>.jsonl` can
+    // hold this one. Reading every rollout in full on each check cost ~0.8 s per GiB of history,
+    // and it ran on every reconcile -- which the web page triggers every few seconds.
+    let suffix = format!("-{id}.jsonl");
+    let found = rollouts
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+        })
+        .any(|path| codex_rollout_is_conversation(path, project, id));
+    if found {
+        ResumeVerdict::Yes
+    } else {
+        ResumeVerdict::No
     }
-    Some(conversations)
+}
+
+/// Header names this conversation and project, and a real user turn follows. Streamed, and stops at
+/// the first user turn or after a bounded number of bytes.
+fn codex_rollout_is_conversation(path: &Path, project: &Path, id: &str) -> bool {
+    use std::io::{BufRead, BufReader, Read};
+    const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut lines = BufReader::new(file.take(MAX_SCAN_BYTES)).lines();
+    let Some(Ok(header)) = lines.next() else {
+        return false;
+    };
+    let header_matches = json_string(&header, "cwd")
+        .is_some_and(|cwd| same_directory(&cwd, project))
+        && json_string(&header, "id").as_deref() == Some(id);
+    // Opened is not used: Codex writes the rollout at startup and injects its own
+    // `<environment_context>` as a user-role message, so neither proves a conversation. Only a
+    // user-role record that is not one of those injected blocks does.
+    header_matches
+        && lines
+            .map_while(Result::ok)
+            .any(|line| records_user_turn(&line))
 }
 
 fn records_user_turn(line: &str) -> bool {
@@ -199,38 +206,46 @@ fn records_user_turn(line: &str) -> bool {
 /// dependencies for this, so it asks the `sqlite3` the host already provides -- read-only, against
 /// an immutable URI, so a running OpenCode is never disturbed. No `sqlite3` means no answer, which
 /// is [`ResumeVerdict::Unknown`], not a `No`.
-pub fn opencode_verdict(project: &Path, home: &Path) -> ResumeVerdict {
+pub fn opencode_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdict {
+    let wal = opencode_database(home).with_extension("db-wal");
+    let wal_before = wal.exists();
     match opencode_session_ids(project, home) {
+        Some(ids) if ids.iter().any(|candidate| candidate == id) => ResumeVerdict::Yes,
+        // An immutable SQLite read deliberately ignores the writer's WAL. A missing ID could
+        // still be present there. Check before and after the query so a checkpoint racing the
+        // read cannot turn stale evidence into a false No.
+        Some(_) if wal_before || wal.exists() => ResumeVerdict::Unknown,
+        Some(_) => ResumeVerdict::No,
         None => ResumeVerdict::Unknown,
-        Some(ids) if ids.is_empty() => ResumeVerdict::No,
-        Some(_) => ResumeVerdict::Yes,
     }
 }
 
-pub fn opencode_identity(project: &Path, home: &Path) -> Option<String> {
-    opencode_session_ids(project, home)?.into_iter().next()
+fn opencode_database(home: &Path) -> PathBuf {
+    home.join(".local")
+        .join("share")
+        .join("opencode")
+        .join("opencode.db")
 }
 
 fn opencode_session_ids(project: &Path, home: &Path) -> Option<Vec<String>> {
-    let database = home
-        .join(".local")
-        .join("share")
-        .join("opencode")
-        .join("opencode.db");
+    let database = opencode_database(home);
     if !database.is_file() {
         return None;
     }
 
     // `immutable=1` is what makes this safe to run against a live database: sqlite3 reads the file
     // without taking locks or touching the WAL, so Verb can never block or corrupt OpenCode's own
-    // writer. The cost is that entries still only in the WAL are not visible, which can read as a
-    // slightly out-of-date "no" -- the honest trade against interfering with a running agent.
+    // writer. When a WAL exists, a missing ID is reported as Unknown rather than a false No.
     let query = "SELECT s.id, s.directory FROM session s \
                  WHERE s.parent_id IS NULL AND EXISTS ( \
                    SELECT 1 FROM message m WHERE m.session_id = s.id \
                      AND m.data LIKE '%\"role\":\"user\"%' \
                  ) ORDER BY s.time_updated DESC;";
-    let output = Command::new("sqlite3")
+    // Verb usually runs from inside a project, so a relative PATH entry would let that project pick
+    // the `sqlite3` binary; resolve it the same way the observation modules resolve theirs.
+    let here = std::env::current_dir().ok()?;
+    let sqlite = crate::exec::trusted_program("sqlite3", &here)?;
+    let output = Command::new(sqlite)
         .arg("-readonly")
         .arg("-separator")
         .arg("\u{1f}")
@@ -258,17 +273,10 @@ fn opencode_session_ids(project: &Path, home: &Path) -> Option<Vec<String>> {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-fn newest(conversations: Vec<Conversation>) -> Option<String> {
-    conversations
-        .into_iter()
-        .max_by_key(|conversation| conversation.updated_at)
-        .map(|conversation| conversation.id)
-}
-
 /// Compares what an agent recorded against the project Verb is tracking. Kept as one function so
 /// every adapter agrees on what "the same directory" means; the desktop host has no Android-style
 /// path aliases, so this is a canonicalised comparison rather than a set of spellings.
-fn same_directory(recorded: &str, project: &Path) -> bool {
+pub(crate) fn same_directory(recorded: &str, project: &Path) -> bool {
     let recorded = Path::new(recorded);
     if recorded == project {
         return true;
@@ -298,15 +306,6 @@ fn collect_files(directory: &Path, extension: &str, depth: usize, found: &mut Ve
             found.push(path);
         }
     }
-}
-
-fn modified_at(path: &Path) -> u128 {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -374,14 +373,36 @@ mod tests {
             "{}\n",
         );
 
-        assert_eq!(claude_verdict(&project, &home), ResumeVerdict::Yes);
+        assert_eq!(
+            claude_verdict_for(&project, &home, "conversation"),
+            ResumeVerdict::Yes
+        );
+        assert_eq!(
+            claude_verdict_for(&project, &home, "other"),
+            ResumeVerdict::Unknown
+        );
     }
 
     #[test]
     fn claude_project_directory_matches_the_installed_normalization() {
+        // Expected values produced by running Claude Code's own function on these inputs.
         assert_eq!(
             claude_project_dir(Path::new("/tmp/Verb_Transfer.v1")),
             "-tmp-Verb-Transfer-v1"
+        );
+        assert_eq!(
+            claude_project_dir(Path::new("/Users/apple/My Project@2+x")),
+            "-Users-apple-My-Project-2-x"
+        );
+        // One dash per UTF-16 code unit: the emoji is two.
+        assert_eq!(
+            claude_project_dir(Path::new("/home/ü/项目/🚀x")),
+            "-home--------x"
+        );
+        let long = format!("/{}/b c", "a".repeat(250));
+        assert_eq!(
+            claude_project_dir(Path::new(&long)),
+            format!("-{}-lv1bdn", "a".repeat(199))
         );
     }
 
@@ -396,10 +417,19 @@ mod tests {
             ),
         );
 
-        assert_eq!(claude_verdict(&project, &home), ResumeVerdict::Yes);
         assert_eq!(
-            claude_identity(&project, &home).as_deref(),
-            Some("claude-conversation")
+            claude_verdict_for(&project, &home, "claude-conversation"),
+            ResumeVerdict::Yes
+        );
+        // The PID filename is never an identity.
+        assert_ne!(
+            claude_verdict_for(&project, &home, "4321"),
+            ResumeVerdict::Yes
+        );
+        // Not being in the list of *running* sessions is not evidence the conversation is gone.
+        assert_eq!(
+            claude_verdict_for(&project, &home, "other"),
+            ResumeVerdict::Unknown
         );
     }
 
@@ -407,7 +437,10 @@ mod tests {
     fn claude_with_no_state_at_all_is_unknown_never_no() {
         let (home, project) = scratch("claude-nothing");
 
-        assert_eq!(claude_verdict(&project, &home), ResumeVerdict::Unknown);
+        assert_eq!(
+            claude_verdict_for(&project, &home, "missing"),
+            ResumeVerdict::Unknown
+        );
     }
 
     // --- Codex ---
@@ -417,8 +450,14 @@ mod tests {
         let (home, project) = scratch("codex-real");
         codex_rollout(&home, &project, "codex-1", Some("say hi"));
 
-        assert_eq!(codex_verdict(&project, &home), ResumeVerdict::Yes);
-        assert_eq!(codex_identity(&project, &home).as_deref(), Some("codex-1"));
+        assert_eq!(
+            codex_verdict_for(&project, &home, "codex-1"),
+            ResumeVerdict::Yes
+        );
+        assert_eq!(
+            codex_verdict_for(&project, &home, "other"),
+            ResumeVerdict::No
+        );
     }
 
     #[test]
@@ -434,8 +473,14 @@ mod tests {
             Some("<environment_context>\\n  <cwd>/somewhere</cwd>"),
         );
 
-        assert_eq!(codex_verdict(&project, &home), ResumeVerdict::No);
-        assert_eq!(codex_identity(&project, &home), None);
+        assert_eq!(
+            codex_verdict_for(&project, &home, "codex-idle"),
+            ResumeVerdict::No
+        );
+        assert_eq!(
+            codex_verdict_for(&project, &home, "codex-injected"),
+            ResumeVerdict::No
+        );
     }
 
     #[test]
@@ -445,14 +490,20 @@ mod tests {
         fs::create_dir_all(&other).unwrap();
         codex_rollout(&home, &other, "codex-elsewhere", Some("hello"));
 
-        assert_eq!(codex_verdict(&project, &home), ResumeVerdict::No);
+        assert_eq!(
+            codex_verdict_for(&project, &home, "codex-elsewhere"),
+            ResumeVerdict::No
+        );
     }
 
     #[test]
     fn codex_with_no_sessions_tree_is_unknown_never_no() {
         let (home, project) = scratch("codex-nothing");
 
-        assert_eq!(codex_verdict(&project, &home), ResumeVerdict::Unknown);
+        assert_eq!(
+            codex_verdict_for(&project, &home, "missing"),
+            ResumeVerdict::Unknown
+        );
     }
 
     // --- OpenCode ---
@@ -461,7 +512,10 @@ mod tests {
     fn opencode_without_a_database_is_unknown_never_no() {
         let (home, project) = scratch("opencode-nothing");
 
-        assert_eq!(opencode_verdict(&project, &home), ResumeVerdict::Unknown);
+        assert_eq!(
+            opencode_verdict_for(&project, &home, "missing"),
+            ResumeVerdict::Unknown
+        );
     }
 
     #[test]
@@ -487,12 +541,31 @@ mod tests {
         let Ok(status) = created else {
             // No sqlite3 on this machine: the adapter's own answer in that case is Unknown, which
             // is exactly what this asserts instead of failing the suite.
-            assert_eq!(opencode_verdict(&project, &home), ResumeVerdict::Unknown);
+            assert_eq!(
+                opencode_verdict_for(&project, &home, "used"),
+                ResumeVerdict::Unknown
+            );
             return;
         };
         assert!(status.success());
 
-        assert_eq!(opencode_verdict(&project, &home), ResumeVerdict::Yes);
-        assert_eq!(opencode_identity(&project, &home).as_deref(), Some("used"));
+        assert_eq!(
+            opencode_verdict_for(&project, &home, "used"),
+            ResumeVerdict::Yes
+        );
+        assert_eq!(
+            opencode_verdict_for(&project, &home, "idle"),
+            ResumeVerdict::No
+        );
+
+        fs::write(database.with_extension("db-wal"), b"uncheckpointed").unwrap();
+        assert_eq!(
+            opencode_verdict_for(&project, &home, "used"),
+            ResumeVerdict::Yes
+        );
+        assert_eq!(
+            opencode_verdict_for(&project, &home, "idle"),
+            ResumeVerdict::Unknown
+        );
     }
 }

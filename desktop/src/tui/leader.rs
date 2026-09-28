@@ -93,6 +93,9 @@ impl fmt::Display for Chord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Palette,
+    Workbench,
+    FocusPane(usize),
+    ToggleZoom,
     Sessions,
     Help,
     Contextual,
@@ -110,6 +113,9 @@ pub enum Command {
 fn command_for(key: char) -> Option<Command> {
     match key {
         'p' => Some(Command::Palette),
+        'w' => Some(Command::Workbench),
+        '1'..='9' => Some(Command::FocusPane((key as u8 - b'1') as usize)),
+        'z' => Some(Command::ToggleZoom),
         's' => Some(Command::Sessions),
         '?' | 'h' => Some(Command::Help),
         'v' => Some(Command::Contextual),
@@ -265,7 +271,7 @@ mod tests {
         assert_eq!(leader.key(false, 'é'), Outcome::Passthrough);
 
         leader.key(true, 'o');
-        assert_eq!(leader.key(false, 'Z'), Outcome::SendLeaderThen);
+        assert_eq!(leader.key(false, 'X'), Outcome::SendLeaderThen);
     }
 
     #[test]
@@ -274,6 +280,13 @@ mod tests {
         assert_eq!(leader.key(true, 'o'), Outcome::Pending);
         assert_eq!(leader.key(false, 'p'), Outcome::Run(Command::Palette));
         assert!(!leader.is_pending());
+    }
+
+    #[test]
+    fn leader_z_toggles_pane_zoom() {
+        let mut leader = leader();
+        leader.key(true, 'o');
+        assert_eq!(leader.key(false, 'z'), Outcome::Run(Command::ToggleZoom));
     }
 
     #[test]
@@ -288,7 +301,7 @@ mod tests {
     fn an_unbound_follow_up_forwards_both_keys_rather_than_eating_them() {
         let mut leader = leader();
         leader.key(true, 'o');
-        assert_eq!(leader.key(false, 'z'), Outcome::SendLeaderThen);
+        assert_eq!(leader.key(false, 'x'), Outcome::SendLeaderThen);
     }
 
     #[test]

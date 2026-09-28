@@ -1,0 +1,612 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Verb — Project workbench</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">v<span>.</span></div>
+          <div><strong>verb</strong><small>PROJECT WORKBENCH</small></div>
+        </div>
+        <div class="project-switcher">
+          <div class="project-avatar">⌘</div>
+          <div class="project-copy">
+            <span id="sidebar-project">Loading project</span
+            ><small id="sidebar-branch">Reading local state…</small>
+          </div>
+          <span class="chevron">⌄</span>
+        </div>
+        <div class="nav-label">WORKSPACE</div>
+        <nav class="main-nav" aria-label="Workspace">
+          <button
+            class="nav-item active"
+            type="button"
+            data-view="overview"
+            aria-label="Overview"
+            aria-current="page"
+          >
+            <span class="nav-icon">◫</span><span>Overview</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="sessions"
+            aria-label="Sessions"
+          >
+            <span class="nav-icon">▤</span><span>Sessions</span
+            ><span class="nav-count" id="nav-session-count">0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="tasks"
+            aria-label="Tasks"
+          >
+            <span class="nav-icon">☷</span><span>Tasks</span
+            ><span class="nav-count" id="nav-task-count">0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="memory"
+            aria-label="Memory"
+          >
+            <span class="nav-icon">◇</span><span>Memory</span>
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <span class="connection-dot"></span
+          ><span>Running on this computer</span
+          ><span class="local-pill">LOCAL</span>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="breadcrumb">
+            <span id="breadcrumb-project">Project</span
+            ><span class="breadcrumb-separator">/</span
+            ><strong id="breadcrumb-view">Overview</strong>
+          </div>
+          <div class="top-actions">
+            <div class="git-indicator">
+              <span class="git-icon">⑂</span><span id="top-branch">—</span
+              ><span class="git-changes" id="top-changes">0 changed</span>
+            </div>
+            <button
+              class="icon-button"
+              id="refresh-button"
+              type="button"
+              title="Refresh project"
+              aria-label="Refresh project"
+            >
+              ↻</button
+            ><button
+              class="primary-button top-new"
+              type="button"
+              data-action="new-session"
+            >
+              <span>＋</span> New session
+            </button>
+          </div>
+        </header>
+
+        <div class="page-content">
+          <section id="view-overview" class="view active">
+            <div class="hero">
+              <div class="hero-copy">
+                <div class="eyebrow">
+                  <span class="eyebrow-line"></span> YOUR PROJECT, IN MOTION
+                </div>
+                <h1>One project.<br /><em>Every agent.</em></h1>
+                <p>
+                  Pick up a session, hand off a task, and keep the shared
+                  context in sight. Work stays connected when agents change.
+                </p>
+                <div class="hero-actions">
+                  <button
+                    class="primary-button"
+                    type="button"
+                    data-action="new-session"
+                  >
+                    ＋ Start an agent</button
+                  ><button
+                    class="subtle-button"
+                    type="button"
+                    data-view="tasks"
+                  >
+                    See project work <span>→</span>
+                  </button>
+                </div>
+              </div>
+              <div class="hero-graphic" aria-hidden="true">
+                <div class="orbit orbit-one"></div>
+                <div class="orbit orbit-two"></div>
+                <div class="hero-node node-one">&gt;_</div>
+                <div class="hero-node node-two">✳</div>
+                <div class="hero-node node-three">◆</div>
+                <div class="hero-core">v<span>.</span></div>
+                <div class="hero-caption">SHARED CONTEXT</div>
+              </div>
+            </div>
+            <div class="stat-grid">
+              <div class="stat-card">
+                <span class="stat-icon purple">▤</span>
+                <div>
+                  <strong id="stat-sessions">0</strong
+                  ><span>Agent sessions</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <span class="stat-icon amber">☷</span>
+                <div>
+                  <strong id="stat-tasks">0</strong><span>Open tasks</span>
+                </div>
+              </div>
+              <div class="stat-card">
+                <span class="stat-icon green">◎</span>
+                <div>
+                  <strong id="stat-attention">0</strong
+                  ><span>Need attention</span>
+                </div>
+              </div>
+            </div>
+            <div class="panel checks-panel">
+              <div class="panel-heading">
+                <div>
+                  <span class="section-kicker">OBSERVED NOW</span>
+                  <h2>Reasons for care</h2>
+                </div>
+                <div class="checks-actions">
+                  <button
+                    class="text-button"
+                    type="button"
+                    data-action="refresh-checks"
+                  >
+                    Check again</button
+                  ><button
+                    class="text-button"
+                    type="button"
+                    data-action="mark-good"
+                    title="Record this state as one that works, to compare against later"
+                  >
+                    Mark as good
+                  </button>
+                </div>
+              </div>
+              <div id="checks-list" class="list-stack" aria-live="polite">
+                <p class="check-empty">Reading the repository and runtimes…</p>
+              </div>
+            </div>
+            <div class="overview-columns">
+              <div class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="section-kicker">CONTINUE WORK</span>
+                    <h2>Agent sessions</h2>
+                  </div>
+                  <button
+                    class="text-button"
+                    type="button"
+                    data-view="sessions"
+                  >
+                    View all <span>→</span>
+                  </button>
+                </div>
+                <div id="overview-sessions" class="list-stack"></div>
+              </div>
+              <div class="panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="section-kicker">PROJECT PULSE</span>
+                    <h2>Priority tasks</h2>
+                  </div>
+                  <button class="text-button" type="button" data-view="tasks">
+                    View all <span>→</span>
+                  </button>
+                </div>
+                <div id="overview-tasks" class="list-stack"></div>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-sessions" class="view">
+            <div class="page-heading">
+              <div>
+                <span class="section-kicker">SESSIONS</span>
+                <h1>Every agent, one project.</h1>
+                <p>
+                  Run CLI agents side by side. Each session keeps its own
+                  checkout and shares Verb’s project work.
+                </p>
+              </div>
+              <button
+                class="primary-button"
+                type="button"
+                data-action="new-session"
+              >
+                ＋ New session
+              </button>
+            </div>
+            <div class="sessions-layout">
+              <div class="panel sessions-list-panel">
+                <div class="panel-heading compact">
+                  <h2>Sessions</h2>
+                  <span class="count-chip" id="session-count">0</span>
+                </div>
+                <label class="list-search-label" for="session-search">Find a session</label>
+                <input id="session-search" class="list-search" type="search" placeholder="Agent, state, or ID…" autocomplete="off" />
+                <div id="session-list" class="session-list"></div>
+              </div>
+              <div class="terminal-area">
+                <div class="terminal-toolbar">
+                  <div>
+                    <span class="section-kicker">LIVE WORKSPACE</span>
+                    <h2>Terminal panes</h2>
+                  </div>
+                  <span class="toolbar-note">Click to type · Focus expands one pane · click again to restore</span>
+                </div>
+                <div id="terminal-grid" class="terminal-grid">
+                  <div class="terminal-empty">
+                    <div class="empty-icon">&gt;_</div>
+                    <h3>Your agents will appear here</h3>
+                    <p>
+                      Start an agent to open a real terminal. Add another to
+                      work side by side.
+                    </p>
+                    <button
+                      class="primary-button"
+                      type="button"
+                      data-action="new-session"
+                    >
+                      Start a session
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-tasks" class="view">
+            <div class="page-heading">
+              <div>
+                <span class="section-kicker">PROJECT WORK</span>
+                <h1>Tasks that travel with the work.</h1>
+                <p>
+                  Ownership, requests for help, and handoffs stay visible across
+                  agent sessions.
+                </p>
+              </div>
+              <button
+                class="primary-button"
+                type="button"
+                data-action="new-task"
+              >
+                ＋ New task
+              </button>
+            </div>
+            <div class="task-layout">
+              <div class="panel task-list-panel">
+                <div class="panel-heading compact">
+                  <h2>Tasks</h2>
+                  <span class="count-chip" id="task-count">0</span>
+                </div>
+                <label class="list-search-label" for="task-search">Find work</label>
+                <input id="task-search" class="list-search" type="search" placeholder="Title, owner, or status…" autocomplete="off" />
+                <div id="task-list" class="task-list"></div>
+              </div>
+              <div class="panel task-detail-panel" id="task-detail">
+                <div class="empty-detail">
+                  <span class="empty-icon">☷</span>
+                  <h3>Select a task</h3>
+                  <p>See its brief, owner, and recorded handoffs here.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-memory" class="view">
+            <div class="page-heading">
+              <div>
+                <span class="section-kicker">SHARED CONTEXT</span>
+                <h1>A memory for the project.</h1>
+                <p>
+                  Short decisions and facts available to every agent session
+                  through Verb’s shared read.
+                </p>
+              </div>
+              <button
+                class="primary-button"
+                type="button"
+                data-action="add-note"
+              >
+                ＋ Add note
+              </button>
+            </div>
+            <div class="memory-layout">
+              <div class="panel memory-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="section-kicker">PROJECT MEMORY</span>
+                    <h2>Shared notes</h2>
+                  </div>
+                  <span class="small-status">Durable on this computer</span>
+                </div>
+                <pre id="memory-content" class="memory-content"></pre>
+              </div>
+              <div class="context-tip">
+                <span class="tip-symbol">✳</span>
+                <div>
+                  <strong>Keep it useful, keep it short.</strong>
+                  <p>
+                    Record decisions, constraints, and handoff context. Agent
+                    conversations remain in each agent’s own CLI store.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="phone-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading"><div><span class="section-kicker">LIVE DESKTOP SESSION</span>
+          <h2>Continue on your phone</h2>
+          <p>On the same network, scan the code with your phone or paste the link in Verb Mobile. The agent keeps running here.</p>
+        </div><button class="modal-close" type="button" data-close="phone-dialog" aria-label="Close">×</button></div>
+        <div class="phone-status" id="phone-status" role="status" aria-live="polite"><span class="phone-status-dot" aria-hidden="true"></span><span id="phone-status-text">Preparing a secure link…</span></div>
+        <div class="phone-pairing"><img id="phone-qr" alt="Scan this code in your phone camera to open Verb Mobile" />
+          <div><label class="field-label">Desktop address <select id="phone-address"></select></label>
+            <label class="field-label">Pairing link <textarea id="phone-link" readonly rows="4"></textarea></label></div></div>
+        <p class="small-status">The link is one-use. Keep it private. Your desktop session stays open if you close this window.</p>
+        <div class="modal-footer phone-actions"><button class="secondary-button" type="button" id="phone-stop">Stop sharing</button>
+          <button class="secondary-button" type="button" id="phone-renew">New pairing link</button>
+          <button class="primary-button" type="button" id="phone-copy">Copy link</button></div>
+      </div>
+    </dialog>
+    <dialog id="session-dialog" class="modal">
+      <form id="session-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">NEW SESSION</span>
+            <h2>Choose your agent</h2>
+            <p>Verb hosts the CLI you already use.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="session-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="agent-choice" role="radiogroup" aria-label="Agent">
+          <label
+            ><input type="radio" name="agent" value="claude" checked /><span
+              class="agent-icon claude"
+              >✳</span
+            ><strong>Claude Code</strong><small>Installed CLI</small></label
+          ><label
+            ><input type="radio" name="agent" value="codex" /><span
+              class="agent-icon codex"
+              >✦</span
+            ><strong>Codex</strong><small>Installed CLI</small></label
+          ><label
+            ><input type="radio" name="agent" value="opencode" /><span
+              class="agent-icon open"
+              >◇</span
+            ><strong>OpenCode</strong><small>Installed CLI</small></label
+          ><label
+            ><input type="radio" name="agent" value="custom" /><span
+              class="agent-icon custom"
+              >&gt;_</span
+            ><strong>Other CLI</strong><small>Any executable</small></label
+          >
+        </div>
+        <div id="custom-command-fields" class="custom-fields" hidden>
+          <label class="field-label" for="custom-command">Executable</label
+          ><input
+            id="custom-command"
+            name="command"
+            placeholder="agy, hermes, openclaw…"
+            autocomplete="off"
+          /><label class="field-label" for="custom-args"
+            >Arguments <span>(one per line, optional)</span></label
+          ><textarea
+            id="custom-args"
+            name="args"
+            rows="2"
+            placeholder="tui"
+          ></textarea>
+        </div>
+        <label class="isolation-option"
+          ><input type="checkbox" name="isolated" /><span
+            class="checkbox-visual"
+          ></span
+          ><span
+            ><strong>Use an isolated Git checkout</strong
+            ><small
+              >Creates a worktree from committed HEAD. Your current uncommitted
+              edits are not copied.</small
+            ></span
+          ></label
+        >
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="session-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit">
+            Start session <span>→</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="task-dialog" class="modal">
+      <form id="task-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">NEW TASK</span>
+            <h2>Give the work a name</h2>
+            <p>All agents in this project can see it.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="task-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label class="field-label" for="task-title">Task title</label
+        ><input
+          id="task-title"
+          name="title"
+          maxlength="200"
+          required
+          placeholder="Review the session recovery flow"
+        /><label class="field-label" for="task-brief"
+          >Brief <span>(optional)</span></label
+        ><textarea
+          id="task-brief"
+          name="brief"
+          rows="5"
+          placeholder="What should an agent know before starting?"
+        ></textarea>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="task-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit">Create task</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="note-dialog" class="modal">
+      <form id="note-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">PROJECT MEMORY</span>
+            <h2>Add a shared note</h2>
+            <p>Keep decisions and constraints available across sessions.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="note-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label class="field-label" for="note-text">Note</label
+        ><textarea
+          id="note-text"
+          name="note"
+          rows="7"
+          required
+          placeholder="We chose… because…"
+        ></textarea>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="note-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit">Add to memory</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="action-dialog" class="modal">
+      <form id="action-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">TASK ACTION</span>
+            <h2 id="action-title">Update task</h2>
+            <p id="action-description"></p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="action-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label class="field-label" for="action-agent">Agent session</label
+        ><select id="action-agent" name="session_id" required></select
+        ><label class="field-label" for="action-note">Note</label
+        ><textarea
+          id="action-note"
+          name="note"
+          rows="4"
+          placeholder="What should the next agent know?"
+        ></textarea>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="action-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit" id="action-submit">
+            Save action
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="inbox-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">SESSION INBOX</span>
+            <h2 id="inbox-title">Recorded attention</h2>
+            <p id="inbox-subtitle"></p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="inbox-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div id="inbox-content" class="inbox-content"></div>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="inbox-dialog"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

@@ -7,7 +7,7 @@
 use super::context_view::{EvidenceLines, Kind};
 use super::leader::Command;
 use super::theme::{self, glyph, no_colour, space};
-use super::{Action, App, Context, Surface};
+use super::{Action, App, Context, Mode, Surface};
 use crate::{Agent, Session, SessionState};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -75,7 +75,7 @@ pub(super) fn is_too_small(width: u16, height: u16) -> bool {
     width < MINIMUM.0 || height < MINIMUM.1
 }
 
-pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
+pub(super) fn workspace(frame: &mut Frame, app: &App) -> Vec<(String, Rect)> {
     let area = frame.area();
     if is_too_small(area.width, area.height) {
         // Said plainly rather than drawn badly. The session underneath is untouched and comes back
@@ -91,12 +91,22 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
             .wrap(Wrap { trim: true }),
             area,
         );
-        return Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width.max(1),
-            height: area.height.max(1),
-        };
+        return Vec::new();
+    }
+
+    if app.mode != Mode::Terminal {
+        super::workbench_view::draw(frame, app);
+        match app.surface() {
+            Surface::Palette { filter, selected } => palette(frame, filter, *selected),
+            Surface::ExternalAgent { command, isolated } => {
+                external_agent_form(frame, command, *isolated)
+            }
+            Surface::Help => help(frame, app),
+            Surface::Evidence => evidence(frame, app),
+            Surface::Changes => changes(frame, app),
+            _ => {}
+        }
+        return Vec::new();
     }
 
     let band = if app.message().is_some() || !matches!(app.context(), Context::None) {
@@ -116,17 +126,18 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
         .split(frame.area());
 
     status(frame, app, areas[0]);
-    terminal(frame, app, areas[1]);
+    let panes = terminal(frame, app, areas[1]);
     if band > 0 {
         context_band(frame, app, areas[2]);
     }
     action_bar(frame, app, areas[3]);
 
-    let terminal_area = areas[1];
-
     match app.surface() {
         Surface::None => {}
         Surface::Palette { filter, selected } => palette(frame, filter, *selected),
+        Surface::ExternalAgent { command, isolated } => {
+            external_agent_form(frame, command, *isolated)
+        }
         Surface::Sessions { selected } => sessions(
             frame,
             app.sessions(),
@@ -137,7 +148,6 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
         Surface::Help => help(frame, app),
         Surface::Evidence => evidence(frame, app),
         Surface::Changes => changes(frame, app),
-        Surface::Welcome => welcome(frame, app),
         // The scrollback view is drawn as a bar over the terminal rather than a panel in front of
         // it: what is being looked at is the terminal itself.
         Surface::Scrollback {
@@ -153,7 +163,7 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
         ),
     }
 
-    terminal_area
+    panes
 }
 
 /// project · branch · changes · runtime · session state · leader hint.
@@ -163,7 +173,7 @@ pub(super) fn workspace(frame: &mut Frame, app: &App) -> Rect {
 /// most needs -- because they were last in the string. Now the path shortens first, then the
 /// optional details drop in reverse order of usefulness, and state and leader survive to the end.
 fn status(frame: &mut Frame, app: &App, area: Rect) {
-    let git = crate::git_snapshot(app.project());
+    let git = &app.git;
     let session = app.hosted().map(|hosted| &hosted.session);
     let width = area.width as usize;
 
@@ -323,9 +333,50 @@ fn state_span(state: &SessionState) -> Span<'static> {
     )
 }
 
-/// The hosted session's screen, cell for cell.
-fn terminal(frame: &mut Frame, app: &App, area: Rect) {
-    let Some(hosted) = app.hosted() else {
+/// Divides the available terminal region into stable, visible panes.
+pub(super) fn pane_rects(area: Rect, count: usize) -> Vec<Rect> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let columns = match count {
+        1 => 1,
+        2 if area.width < 100 => 1,
+        2..=4 => 2,
+        _ if area.width >= 120 => 3,
+        _ => 2,
+    };
+    let rows = count.div_ceil(columns);
+    (0..count)
+        .map(|index| {
+            let column = index % columns;
+            let row = index / columns;
+            let lone_last = index == count - 1 && count % columns == 1 && columns > 1;
+            let left = if lone_last {
+                0
+            } else {
+                column as u16 * area.width / columns as u16
+            };
+            let right = if lone_last {
+                area.width
+            } else {
+                (column as u16 + 1) * area.width / columns as u16
+            };
+            let top = row as u16 * area.height / rows as u16;
+            let bottom = (row as u16 + 1) * area.height / rows as u16;
+            Rect::new(area.x + left, area.y + top, right - left, bottom - top)
+        })
+        .collect()
+}
+
+/// Every hosted session is visible. The active session keeps the keyboard; clicking another pane
+/// changes focus without starting or stopping either process.
+fn terminal(frame: &mut Frame, app: &App, area: Rect) -> Vec<(String, Rect)> {
+    let hosts = if app.terminal_zoom {
+        app.hosted.iter().collect::<Vec<_>>()
+    } else {
+        app.pane_hosts()
+    };
+    if hosts.is_empty() {
         let leader = app.leader().chord();
         frame.render_widget(
             Paragraph::new(vec![
@@ -340,9 +391,64 @@ fn terminal(frame: &mut Frame, app: &App, area: Rect) {
             ]),
             area,
         );
-        return;
-    };
+        return Vec::new();
+    }
 
+    let rects = pane_rects(area, hosts.len());
+    let mut geometry = Vec::with_capacity(hosts.len());
+    for (hosted, pane) in hosts.into_iter().zip(rects) {
+        let focused = app
+            .hosted
+            .as_ref()
+            .is_some_and(|active| active.session.id == hosted.session.id);
+        let agent = hosted.session.display_agent();
+        let display_number = app
+            .pane_order
+            .iter()
+            .position(|id| id == &hosted.session.id)
+            .map_or(1, |index| index + 1);
+        let title = format!(
+            " {} {} · {} · {}{} ",
+            display_number,
+            agent,
+            &hosted.session.id[..hosted.session.id.len().min(8)],
+            if focused { "FOCUSED" } else { "running" },
+            if app.terminal_zoom { " · ZOOM" } else { "" }
+        );
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(short_title(&title, pane.width.saturating_sub(2)))
+                .border_style(if focused {
+                    theme::emphasis()
+                } else {
+                    theme::secondary()
+                }),
+            pane,
+        );
+        let content = Rect {
+            x: pane.x + 1,
+            y: pane.y + 1,
+            width: pane.width.saturating_sub(2),
+            height: pane.height.saturating_sub(2),
+        };
+        draw_hosted(
+            frame,
+            hosted,
+            content,
+            focused && matches!(app.surface(), Surface::None),
+        );
+        geometry.push((hosted.session.id.clone(), content));
+    }
+    geometry
+}
+
+fn short_title(title: &str, width: u16) -> String {
+    truncate(title, width as usize)
+}
+
+/// One hosted session's cells, mapped exactly into its pane.
+fn draw_hosted(frame: &mut Frame, hosted: &super::term::Hosted, area: Rect, cursor_active: bool) {
     let screen = hosted.screen();
     let buffer = frame.buffer_mut();
     for row in 0..area.height {
@@ -363,7 +469,7 @@ fn terminal(frame: &mut Frame, app: &App, area: Rect) {
 
     // Not while a Verb surface is in front: a cursor blinking in the terminal underneath an open
     // palette says the keyboard is going somewhere it is not.
-    if !screen.hide_cursor() && matches!(app.surface(), Surface::None) {
+    if !screen.hide_cursor() && cursor_active {
         let (row, column) = screen.cursor_position();
         if row < area.height && column < area.width {
             frame.set_cursor_position((area.x + column, area.y + row));
@@ -454,6 +560,7 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
             exit_code,
             millis,
             label,
+            since_good,
         } => {
             lines.push(Line::from(vec![
                 Span::styled(
@@ -467,12 +574,41 @@ fn context_band(frame: &mut Frame, app: &App, area: Rect) {
                     duration(*millis)
                 )),
             ]));
+            // Two rows only: the missing-label note is the more important caveat, so the distance
+            // from last-known-good shows when the shell did report what ran.
             if let Some(note) = failure_note(label.as_deref()) {
                 lines.push(Line::from(Span::styled(
                     format!("  {note}"),
                     theme::secondary(),
                 )));
+            } else if let Some(since) = since_good {
+                lines.push(Line::from(Span::styled(
+                    format!("  {since} {} verb good files", glyph::SEPARATOR),
+                    theme::secondary(),
+                )));
             }
+        }
+        // Observed now, from Git's own markers; the safe step is text, and Verb runs nothing.
+        Context::RepoWarning { fact, safe_next } => {
+            lines.push(Line::from(Span::styled(
+                format!("  {} {fact}", glyph::FAILED),
+                theme::danger(),
+            )));
+            lines.push(Line::from(Span::styled(
+                format!("  safe next: {safe_next}"),
+                theme::secondary(),
+            )));
+        }
+        Context::RuntimeMismatch(fact) => {
+            lines.push(Line::from(Span::styled(
+                format!("  {} {fact}", glyph::FAILED),
+                theme::danger(),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  declared by the project; version read in Verb's environment · verb check"
+                    .to_owned(),
+                theme::secondary(),
+            )));
         }
         // Worded as reporting, not as witnessing. Verb did not watch this happen: it read the
         // agent's own record afterwards, and the difference between those two is the difference
@@ -589,6 +725,18 @@ fn action_bar(frame: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
+    if app.pane_hosts().len() > 1 {
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+        let hint = if app.terminal_zoom {
+            format!("   {} z unzoom · 1–9 switch", app.leader().chord())
+        } else {
+            format!("   click pane · {} 1–9/z", app.leader().chord())
+        };
+        if used + hint.chars().count() <= area.width as usize {
+            spans.push(Span::styled(hint, theme::secondary()));
+        }
+    }
+
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -668,7 +816,7 @@ pub(super) fn bar_actions(app: &App) -> Vec<BarAction> {
     }];
 
     // What just happened outranks everything else: it is what the person is looking at.
-    if !matches!(app.context(), Context::None) {
+    if app.pane_hosts().len() <= 1 && !matches!(app.context(), Context::None) {
         actions.push(BarAction {
             key: "F3",
             label: "What Verb knows",
@@ -678,10 +826,10 @@ pub(super) fn bar_actions(app: &App) -> Vec<BarAction> {
 
     actions.push(BarAction {
         key: "F2",
-        label: "Sessions",
-        command: Command::Sessions,
+        label: "Workbench",
+        command: Command::Workbench,
     });
-    if matches!(app.context(), Context::None) {
+    if app.pane_hosts().len() <= 1 && matches!(app.context(), Context::None) {
         actions.push(BarAction {
             key: "F3",
             label: "What Verb knows",
@@ -703,6 +851,9 @@ fn leader_menu(frame: &mut Frame, app: &App, area: Rect) {
     let leader = app.leader().chord();
     let entries = [
         ("p", "Commands"),
+        ("w", "Workbench"),
+        ("1-9", "Focus pane"),
+        ("z", "Zoom / unzoom"),
         ("s", "Sessions"),
         ("v", "What Verb knows"),
         ("[", "Scroll back"),
@@ -797,36 +948,6 @@ fn scrollback_bar(
     frame.render_widget(Paragraph::new(line), area);
 }
 
-/// Shown once, on a first run. Everything here is a fact about how Verb behaves, not a tour.
-fn welcome(frame: &mut Frame, app: &App) {
-    let leader = app.leader().chord();
-    let inner = overlay(frame, "Welcome to Verb", 14);
-    let lines = vec![
-        Line::from("This is your terminal. Verb watches the session around it —"),
-        Line::from("what ran, what failed, what can be resumed."),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("One key opens everything:  "),
-            Span::styled(format!("{leader}"), theme::emphasis()),
-        ]),
-        Line::from(format!("  {leader} p   commands, by name")),
-        Line::from(format!("  {leader} v   what Verb has observed")),
-        Line::from(format!("  {leader} s   sessions across projects")),
-        Line::from(format!("  {leader} [   look back through output")),
-        Line::from(format!("  {leader} ?   help")),
-        Line::from(""),
-        Line::from(Span::styled(
-            format!("Every other key goes to the terminal, including {leader} {leader}."),
-            theme::secondary(),
-        )),
-        Line::from(Span::styled(
-            "Press any key to start.".to_owned(),
-            theme::secondary(),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
-}
-
 /// What Verb has observed, rendered from the same assembly `verb context` prints.
 /// What Git reports as changed, and nothing more.
 ///
@@ -898,14 +1019,30 @@ fn evidence(frame: &mut Frame, app: &App) {
 
 /// Which overlay row the pointer is over, if any -- so a click selects what it is pointing at and a
 /// click elsewhere closes the overlay.
-pub(super) fn overlay_row_at(surface: &Surface, sessions: usize, row: u16) -> Option<usize> {
-    let (count, first_row) = match surface {
-        // Rows start after the border and the filter line.
-        Surface::Palette { filter, .. } => (palette_entries(filter).len(), 3_u16),
-        Surface::Sessions { .. } => (sessions, 2_u16),
+pub(super) fn overlay_row_at(
+    surface: &Surface,
+    sessions: usize,
+    imported: usize,
+    area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let (count, requested_height, row_offset) = match surface {
+        Surface::Palette { filter, .. } => {
+            let count = palette_entries(filter).len();
+            (count, count as u16 + 4, 3_u16)
+        }
+        Surface::Sessions { .. } => (sessions, (sessions + imported) as u16 + 7, 1_u16),
         _ => return None,
     };
-    if count == 0 || row < first_row {
+    let rect = overlay_rect(area, requested_height);
+    let first_row = rect.y + row_offset;
+    if count == 0
+        || column < rect.x + 2
+        || column >= rect.x + rect.width.saturating_sub(2)
+        || row < first_row
+        || row >= rect.y + rect.height.saturating_sub(1)
+    {
         return None;
     }
     let index = (row - first_row) as usize;
@@ -921,12 +1058,12 @@ pub(crate) struct Entry {
 pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
     let all = vec![
         Entry {
-            label: "Resume session in this project",
-            action: Action::Resume,
+            label: "Workbench: tasks and sessions",
+            action: Action::Workbench,
         },
         Entry {
-            label: "New shell session",
-            action: Action::NewShell,
+            label: "Resume session in this project",
+            action: Action::Resume,
         },
         Entry {
             label: "New Claude session",
@@ -939,6 +1076,42 @@ pub(crate) fn palette_entries(filter: &str) -> Vec<Entry> {
         Entry {
             label: "New OpenCode session",
             action: Action::NewAgent(Agent::OpenCode),
+        },
+        Entry {
+            label: "New isolated Claude session (from HEAD)",
+            action: Action::NewIsolatedAgent(Agent::Claude),
+        },
+        Entry {
+            label: "New isolated Codex session (from HEAD)",
+            action: Action::NewIsolatedAgent(Agent::Codex),
+        },
+        Entry {
+            label: "New isolated OpenCode session (from HEAD)",
+            action: Action::NewIsolatedAgent(Agent::OpenCode),
+        },
+        Entry {
+            label: "New AGY session (Antigravity CLI)",
+            action: Action::NewExternalPreset("agy", &[]),
+        },
+        Entry {
+            label: "New Hermes session",
+            action: Action::NewExternalPreset("hermes", &[]),
+        },
+        Entry {
+            label: "New OpenClaw terminal session",
+            action: Action::NewExternalPreset("openclaw", &["tui"]),
+        },
+        Entry {
+            label: "New agent from another CLI command",
+            action: Action::NewExternalAgent,
+        },
+        Entry {
+            label: "New isolated agent from another CLI (from HEAD)",
+            action: Action::NewIsolatedExternalAgent,
+        },
+        Entry {
+            label: "New shell session",
+            action: Action::NewShell,
         },
         Entry {
             label: "What Verb has observed here",
@@ -1018,16 +1191,19 @@ pub(super) fn fuzzy_score(label: &str, filter: &str) -> Option<usize> {
     Some(score)
 }
 
-fn overlay(frame: &mut Frame, title: &str, height: u16) -> Rect {
-    let area = frame.area();
+fn overlay_rect(area: Rect, height: u16) -> Rect {
     let width = area.width.saturating_sub(8).clamp(24, 72);
     let height = height.min(area.height.saturating_sub(4)).max(3);
-    let rect = Rect {
+    Rect {
         x: area.x + (area.width.saturating_sub(width)) / 2,
         y: area.y + (area.height.saturating_sub(height)) / 2,
         width,
         height,
-    };
+    }
+}
+
+fn overlay(frame: &mut Frame, title: &str, height: u16) -> Rect {
+    let rect = overlay_rect(frame.area(), height);
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Block::default()
@@ -1071,6 +1247,39 @@ fn palette(frame: &mut Frame, filter: &str, selected: usize) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+pub(super) fn external_agent_rect(area: Rect) -> Rect {
+    overlay_rect(area, 8)
+}
+
+fn external_agent_form(frame: &mut Frame, command: &str, isolated: bool) {
+    let inner = overlay(
+        frame,
+        if isolated {
+            "New isolated CLI agent"
+        } else {
+            "New CLI agent"
+        },
+        8,
+    );
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from("Executable name or path"),
+            Line::from(Span::styled(format!("> {command}"), theme::emphasis())),
+            Line::from(""),
+            Line::from(Span::styled("[Start]", theme::selected())),
+            Line::from(Span::styled(
+                if isolated {
+                    "Separate checkout from committed HEAD · Esc cancels"
+                } else {
+                    "Native resume depends on this CLI · Esc cancels"
+                },
+                theme::secondary(),
+            )),
+        ]),
+        inner,
+    );
+}
+
 fn sessions(
     frame: &mut Frame,
     sessions: &[Session],
@@ -1099,17 +1308,18 @@ fn sessions(
             space::INDENT.to_owned()
         };
         let line = format!(
-            "{marker}{:<13} {:<9} {:>8}  {}",
+            "{marker}{:<13} {:<9} {:>8}  {}  [{}]",
             // "unconfirmed" everywhere else, because a record alone never proves a process. Here
             // Verb is holding that process, so for this one row the doubt would be false modesty.
             match session.state {
-                SessionState::Live if hosted == Some(session.id.as_str()) => "running".to_owned(),
-                SessionState::Live => "running?".to_owned(),
+                SessionState::Live if hosted == Some(session.id.as_str()) => "active".to_owned(),
+                SessionState::Live => "running".to_owned(),
                 ref other => plain_state(other).to_owned(),
             },
             session.runtime_id.as_deref().unwrap_or("shell"),
             crate::relative_time(now.saturating_sub(session.last_seen_at)),
-            crate::display_path(&session.project_id)
+            crate::display_path(&session.project_id),
+            session.id.chars().take(8).collect::<String>()
         );
         lines.push(Line::from(Span::styled(
             truncate(&line, inner.width as usize),
@@ -1147,67 +1357,101 @@ fn sessions(
     let help = if sessions.is_empty() {
         "imported evidence has no actions · esc close"
     } else if imported.is_empty() {
-        "enter resume · n new session · x forget record · esc close"
+        "enter open/resume · n new session · x forget record · esc close"
     } else {
-        "local rows: enter resume · n new · x forget · imported rows: read-only · esc close"
+        "local rows: enter open/resume · n new · x forget · imported: read-only · esc close"
     };
     lines.push(Line::from(Span::styled(help, theme::secondary())));
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 fn help(frame: &mut Frame, app: &App) {
-    let inner = overlay(frame, "Verb keys", 14);
+    let inner = overlay(frame, "Verb controls", 21);
     let leader = app.leader().chord();
-    let mut lines = vec![
-        Line::from(Span::raw(app.leader().hint())),
+    let lines = vec![
+        Line::from(Span::styled("WORKBENCH", theme::emphasis())),
+        Line::from("Tab switch lists · ↑↓ select · Enter open"),
+        Line::from("t new task · n new agent · / search · m memory"),
+        Line::from("g changed files · r refresh · ? help · q quit"),
         Line::from(""),
-        Line::from(Span::raw(format!("{leader} p    command palette"))),
-        Line::from(Span::raw(format!("{leader} s    sessions"))),
-        Line::from(Span::raw(format!("{leader} v    what Verb has observed"))),
-        Line::from(Span::raw(format!("{leader} [    look back through output"))),
-        Line::from(Span::raw(format!("{leader} ?    this help"))),
-        Line::from(Span::raw(format!(
-            "{leader} m    give the mouse back to the terminal"
-        ))),
-        Line::from(Span::raw(format!(
-            "{leader} {leader}    send {leader} to the terminal"
-        ))),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Every other key belongs to the terminal.".to_owned(),
-            theme::secondary(),
+        Line::from(Span::styled("TILED TERMINALS", theme::emphasis())),
+        Line::from(format!(
+            "Click a pane, or press {leader} then 1–9 to focus it."
         )),
+        Line::from(format!("{leader} w Workbench · {leader} p commands")),
+        Line::from(format!("{leader} z zoom or unzoom the focused pane")),
+        Line::from(format!("{leader} s all sessions · {leader} [ scrollback")),
+        Line::from(format!("{leader} v observed activity · {leader} ? help")),
         Line::from(""),
         Line::from(Span::styled(
-            "Verb holds the mouse, so the bar below can be clicked. Option-drag still selects \
-             text; leader m hands the mouse back entirely."
-                .to_owned(),
-            theme::secondary(),
-        )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "running · recoverable · checking · ended  are Verb's session states;".to_owned(),
+            "A child TUI receives mouse events when it enables tracking.".to_owned(),
             theme::secondary(),
         )),
         Line::from(Span::styled(
-            "`verb status` prints the same four as LIVE, RECOVERABLE, INTERRUPTED, ENDED."
-                .to_owned(),
+            format!("{leader} m releases mouse capture for text selection."),
             theme::secondary(),
         )),
+        Line::from(format!(
+            "{leader} {leader} sends the leader key to the child."
+        )),
+        Line::from(Span::styled(
+            "Running, recoverable, checking, and ended are evidence states.".to_owned(),
+            theme::secondary(),
+        )),
+        Line::from(Span::styled(
+            "Set VERB_LEADER=ctrl-g if your terminal cannot send Ctrl+Space.".to_owned(),
+            theme::secondary(),
+        )),
+        Line::from("Esc closes this panel."),
     ];
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Set VERB_LEADER to rebind the leader, for example VERB_LEADER=ctrl-g. Some terminals do \
-         not transmit Ctrl+Space at all, and that is what rebinding is for."
-            .to_owned(),
-        theme::secondary(),
-    )));
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn centered_palette_rows_use_the_drawn_overlay_coordinates() {
+        let surface = Surface::Palette {
+            filter: "New".to_owned(),
+            selected: 0,
+        };
+        let area = Rect::new(0, 0, 120, 30);
+        let count = palette_entries("New").len();
+        let rect = overlay_rect(area, count as u16 + 4);
+        assert_eq!(
+            overlay_row_at(&surface, 0, 0, area, rect.x + 2, rect.y + 3),
+            Some(0)
+        );
+        assert_eq!(
+            overlay_row_at(&surface, 0, 0, area, rect.x + 1, rect.y + 3),
+            None
+        );
+        assert_eq!(overlay_row_at(&surface, 0, 0, area, rect.x + 2, 3), None);
+    }
+
+    #[test]
+    fn tiled_terminal_rectangles_cover_every_live_pane_without_overlap() {
+        for (width, height) in [(120, 28), (80, 22)] {
+            let area = Rect::new(0, 0, width, height);
+            for count in 1..=8 {
+                let panes = pane_rects(area, count);
+                assert_eq!(panes.len(), count);
+                for (index, pane) in panes.iter().enumerate() {
+                    assert!(pane.width >= 2 && pane.height >= 2);
+                    assert!(pane.x + pane.width <= width && pane.y + pane.height <= height);
+                    for other in panes.iter().skip(index + 1) {
+                        let separated = pane.x + pane.width <= other.x
+                            || other.x + other.width <= pane.x
+                            || pane.y + pane.height <= other.y
+                            || other.y + other.height <= pane.y;
+                        assert!(separated, "pane rectangles overlap: {pane:?} and {other:?}");
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_minimum_size_guard_has_an_exact_boundary() {
@@ -1292,6 +1536,74 @@ mod tests {
 
         let quiet = rendered_bar(&app);
         assert!(!quiet.contains("mouse"), "default bar mentioned the mouse");
+    }
+
+    fn rendered_band(app: &App) -> Vec<String> {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 2)).unwrap();
+        terminal
+            .draw(|frame| context_band(frame, app, Rect::new(0, 0, 120, 2)))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..2)
+            .map(|row| {
+                (0..120)
+                    .map(|column| buffer[(column, row)].symbol().to_owned())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_command_says_how_far_the_tree_is_from_last_known_good() {
+        let mut app = App::for_tests();
+        app.set_context_for_tests(Context::CommandFailed {
+            exit_code: 1,
+            millis: 1200,
+            label: Some("npm test".to_owned()),
+            since_good: Some("last known good 1a2b3c: 2 commits, 5 files differ".to_owned()),
+        });
+        let band = rendered_band(&app);
+        assert!(band[0].contains("npm test"), "{band:?}");
+        assert!(band[1].contains("2 commits, 5 files differ"), "{band:?}");
+        assert!(band[1].contains("verb good files"), "{band:?}");
+    }
+
+    #[test]
+    fn the_missing_label_caveat_outranks_the_last_known_good_line() {
+        let mut app = App::for_tests();
+        app.set_context_for_tests(Context::CommandFailed {
+            exit_code: 1,
+            millis: 10,
+            label: None,
+            since_good: Some("last known good 1a2b3c: 1 file differs".to_owned()),
+        });
+        let band = rendered_band(&app);
+        assert!(
+            band[1].contains("did not report what was running"),
+            "{band:?}"
+        );
+    }
+
+    #[test]
+    fn repository_and_runtime_warnings_state_the_fact_and_the_safe_step() {
+        let mut app = App::for_tests();
+        app.set_context_for_tests(Context::RepoWarning {
+            fact: "A rebase is in progress.".to_owned(),
+            safe_next: "git rebase --abort".to_owned(),
+        });
+        let band = rendered_band(&app);
+        assert!(band[0].contains("A rebase is in progress."));
+        assert!(band[1].contains("safe next: git rebase --abort"));
+
+        app.set_context_for_tests(Context::RuntimeMismatch(
+            "node 18.19.0 · .nvmrc wants 20 · mismatch".to_owned(),
+        ));
+        let band = rendered_band(&app);
+        assert!(band[0].contains(".nvmrc wants 20"));
+        assert!(band[1].contains("declared by the project"));
     }
 
     fn rendered_bar(app: &App) -> String {

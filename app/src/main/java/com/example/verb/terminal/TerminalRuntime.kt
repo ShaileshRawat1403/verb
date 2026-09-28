@@ -213,6 +213,7 @@ class TerminalRuntime(
     override val isSessionActive: StateFlow<Boolean> get() = delegate.isSessionActive
     override val terminalContextState: StateFlow<TerminalContextState> get() = delegate.terminalContextState
     override val commandHistory: StateFlow<List<CommandExecutionRecord>> get() = delegate.commandHistory
+    override val runningCommand: StateFlow<CommandExecutionRecord?> get() = delegate.runningCommand
     override val shellIntegrationActive: StateFlow<Boolean> get() = delegate.shellIntegrationActive
     override val urlToOpen: StateFlow<String?> get() = delegate.urlToOpen
     override fun consumeUrlToOpen() = delegate.consumeUrlToOpen()
