@@ -104,8 +104,9 @@ now has a test that fails on the old code:
   lock file. Codex checks no longer read every rollout; event logs are 0600; `continuity import`
   enforces its limit on bytes read; the Android release workflow reads its tag through `env`.
 
-Android's `ClaudeProjectDirectory` has the same incomplete directory rule as the desktop did; it was
-left alone because `app/` is out of scope for this branch.
+Android's `ClaudeProjectDirectory` had the same incomplete directory rule as the desktop did. The
+transfer branch now shares the installed CLI rule and matching edge-case fixtures. Android device
+acceptance remains to be run on the destination system.
 
 **Still open.** The same observations on Android. The fingerprint does not cover ignored files or
 submodule working trees. A band that fires *before* a risky Git command runs would need command
