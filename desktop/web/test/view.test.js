@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   checksHtml,
   escapeHtml,
+  filterSessions,
+  filterTasks,
   sessionAction,
   stateName,
 } from "../src/view.js";
@@ -143,4 +145,20 @@ test("session labels name the action a row will take", () => {
   assert.equal(sessionAction({ canResume: true }), "Resume session");
   assert.equal(stateName("interrupted"), "Recovery unconfirmed");
   assert.equal(stateName("something-new"), "something-new");
+});
+
+test("session and task search find the next place to work", () => {
+  const sessions = [
+    { id: "abc123", agent: "Codex", state: "live", isolated: true },
+    { id: "def456", agent: "OpenCode", state: "recoverable", isolated: false },
+  ];
+  assert.deepEqual(filterSessions(sessions, " READY TO RESUME "), [sessions[1]]);
+  assert.deepEqual(filterSessions(sessions, "abc123"), [sessions[0]]);
+  assert.deepEqual(filterSessions(sessions, "isolated"), [sessions[0]]);
+  const tasks = [
+    { title: "Review handoff", brief: "Check the phone bridge", status: "needs review", owner: "abc123", needsHelp: false },
+    { title: "Fix colors", brief: "", status: "active", owner: null, needsHelp: true },
+  ];
+  assert.deepEqual(filterTasks(tasks, "codex", () => "Codex abc123"), [tasks[0]]);
+  assert.deepEqual(filterTasks(tasks, "help requested", () => ""), [tasks[1]]);
 });

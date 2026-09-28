@@ -393,6 +393,18 @@ impl LiveBridge {
         Ok((state.controller, state.connected))
     }
 
+    pub(crate) fn share_status(&self, now: Instant) -> Result<(bool, bool, bool), String> {
+        let state = self.lock()?;
+        Ok((
+            state
+                .offer
+                .as_ref()
+                .is_some_and(|offer| now < offer.expires_at),
+            state.paired_digest.is_some(),
+            state.connected,
+        ))
+    }
+
     /// The bridge has exactly the lifetime of the hosted process. No token can revive a session.
     pub(crate) fn end(&self) -> Result<(), String> {
         let mut state = self.lock()?;
@@ -644,8 +656,10 @@ fn process_request(
     // Offers and control moves are the desktop user's decisions. The hosted program may not make
     // them for itself: `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md`, "the session ID is never enough to
     // authorize phone input".
-    if matches!(request.op.as_str(), "offer" | "desktop_take" | "revoke")
-        && caller != Caller::Outside
+    if matches!(
+        request.op.as_str(),
+        "offer" | "desktop_take" | "revoke" | "status"
+    ) && caller != Caller::Outside
     {
         return Err("only the desktop user can do that, not the hosted session itself".to_owned());
     }
@@ -657,6 +671,12 @@ fn process_request(
     };
     match request.op.as_str() {
         "offer" => Ok(serde_json::json!({"pairingToken":bridge.offer(Instant::now())?})),
+        "status" => {
+            let (pairing_ready, paired, connected) = bridge.share_status(Instant::now())?;
+            Ok(
+                serde_json::json!({"pairingReady":pairing_ready,"paired":paired,"connected":connected}),
+            )
+        }
         "pair" => Ok(serde_json::json!({"deviceToken":bridge.pair(secret()?, Instant::now())?})),
         "reconnect" => {
             bridge.reconnect(secret()?)?;
@@ -896,7 +916,7 @@ mod tests {
         // Pretend this test process *is* the hosted session: bind with our own session id.
         let own_session = unsafe { getsid(0) };
         let server = LocalServer::bind_at(path.clone(), bridge.clone(), Some(own_session)).unwrap();
-        for op in ["offer", "desktop_take", "revoke"] {
+        for op in ["offer", "status", "desktop_take", "revoke"] {
             let error = ask(&path, serde_json::json!({ "op": op })).unwrap_err();
             assert!(error.contains("only the desktop user"), "{op}: {error}");
         }

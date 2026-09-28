@@ -7,6 +7,8 @@ import {
   agentMark,
   checksHtml,
   escapeHtml,
+  filterSessions,
+  filterTasks,
   sessionAction,
   stateName,
   taskName,
@@ -27,6 +29,9 @@ const ui = {
   terminals: new Map(),
   refreshing: null,
   toastTimer: null,
+  focusedTerminal: null,
+  pairingExpiresAt: null,
+  phoneStatus: null,
 };
 
 function toast(message, tone = "info") {
@@ -61,11 +66,12 @@ function showView(view) {
     .forEach((element) =>
       element.classList.toggle("active", element.id === `view-${view}`),
     );
-  document
-    .querySelectorAll(".nav-item")
-    .forEach((element) =>
-      element.classList.toggle("active", element.dataset.view === view),
-    );
+  document.querySelectorAll(".nav-item").forEach((element) => {
+    const active = element.dataset.view === view;
+    element.classList.toggle("active", active);
+    if (active) element.setAttribute("aria-current", "page");
+    else element.removeAttribute("aria-current");
+  });
   $("#breadcrumb-view").textContent =
     view.charAt(0).toUpperCase() + view.slice(1);
   if (view === "sessions") {
@@ -159,20 +165,7 @@ function render() {
         "Give an agent a task that can survive a handoff.",
         '<button class="text-button" type="button" data-action="new-task">Create a task →</button>',
       );
-  $("#session-list").innerHTML = sessions.length
-    ? sessions.map((session) => sessionItem(session)).join("")
-    : emptyState(
-        "▤",
-        "No sessions yet",
-        "Start a CLI agent. It will appear here with its own durable record.",
-      );
-  $("#task-list").innerHTML = tasks.length
-    ? tasks.map((task) => taskItem(task)).join("")
-    : emptyState(
-        "☷",
-        "No tasks yet",
-        "Create the first piece of shared work.",
-      );
+  renderListResults();
   $("#memory-content").textContent =
     memory ||
     "No shared notes yet. Add a decision, constraint, or handoff fact.";
@@ -182,6 +175,34 @@ function render() {
   renderTaskDetail();
   syncHostedTerminals();
 }
+
+function renderListResults() {
+  if (!ui.state) return;
+  const { sessions, tasks } = ui.state;
+  const sessionMatches = filterSessions(sessions, $("#session-search").value);
+  const taskMatches = filterTasks(tasks, $("#task-search").value, sessionLabel);
+  $("#session-list").innerHTML = sessionMatches.length
+    ? sessionMatches.map((session) => sessionItem(session)).join("")
+    : emptyState(
+        "⌕",
+        sessions.length ? "No matching sessions" : "No sessions yet",
+        sessions.length
+          ? "Try an agent name, state, or session ID."
+          : "Start a CLI agent. It will appear here with its own durable record.",
+      );
+  $("#task-list").innerHTML = taskMatches.length
+    ? taskMatches.map((task) => taskItem(task)).join("")
+    : emptyState(
+        "⌕",
+        tasks.length ? "No matching tasks" : "No tasks yet",
+        tasks.length
+          ? "Try a task title, owner, or status."
+          : "Create the first piece of shared work.",
+      );
+}
+
+$("#session-search").addEventListener("input", renderListResults);
+$("#task-search").addEventListener("input", renderListResults);
 
 function renderTaskDetail() {
   const task = ui.state?.tasks.find((item) => item.id === ui.selectedTask);
@@ -341,7 +362,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><div class="window-dots"><i></i><i></i><i></i></div><span class="terminal-title">${escapeHtml(session.agent)} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}">Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="Close terminal tile">×</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><div class="window-dots"><i></i><i></i><i></i></div><span class="terminal-title">${escapeHtml(session.agent)} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}">Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="Stop and close terminal">×</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -423,7 +444,30 @@ function addTerminal(session) {
   });
   observer.observe(mount);
   terminal.observer = observer;
+  updateTerminalFocus();
   pollTerminal(session.id);
+}
+
+function updateTerminalFocus() {
+  const grid = $("#terminal-grid");
+  if (ui.focusedTerminal && !ui.terminals.has(ui.focusedTerminal))
+    ui.focusedTerminal = null;
+  grid.classList.toggle("focused", Boolean(ui.focusedTerminal));
+  ui.terminals.forEach(({ tile, fit, mount }, id) => {
+    const focused = id === ui.focusedTerminal;
+    tile.classList.toggle("focused", focused);
+    const button = tile.querySelector("[data-focus-terminal]");
+    button.setAttribute("aria-pressed", String(focused));
+    button.setAttribute(
+      "aria-label",
+      focused ? "Show all terminals" : "Focus terminal",
+    );
+    button.title = focused ? "Show all terminals" : "Focus this terminal";
+    button.textContent = focused ? "⤡" : "⤢";
+    requestAnimationFrame(() => {
+      if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
+    });
+  });
 }
 
 async function pollTerminal(id) {
@@ -445,8 +489,15 @@ async function pollTerminal(id) {
       const phoneControls = output.controller === "phone";
       terminal.tile.querySelector("[data-take-terminal]").hidden = !phoneControls;
       terminal.tile.querySelector(".terminal-state").textContent = phoneControls
-        ? "● Phone controls input" : output.phoneConnected
-          ? "● Desktop controls input · phone connected" : "● Desktop controls input";
+        ? "● Phone controls input"
+        : output.phoneConnected
+          ? "● Desktop controls input · phone connected"
+          : "● Desktop controls input";
+      if ($("#phone-dialog").open && $("#phone-dialog").dataset.sessionId === id) {
+        if (ui.phoneStatus)
+          ui.phoneStatus.connected = Boolean(output.phoneConnected);
+        updatePhoneStatus();
+      }
     }
     if (!output.running) {
       terminal.tile.querySelector(".terminal-state").textContent = output.error
@@ -543,11 +594,27 @@ document.addEventListener("click", async (event) => {
   }
   const action = event.target.closest("[data-task-action]");
   if (action) return openAction(action.dataset.taskAction);
+  const focus = event.target.closest("[data-focus-terminal]");
+  if (focus) {
+    ui.focusedTerminal =
+      ui.focusedTerminal === focus.dataset.focusTerminal
+        ? null
+        : focus.dataset.focusTerminal;
+    updateTerminalFocus();
+    if (ui.focusedTerminal) ui.terminals.get(ui.focusedTerminal)?.term.focus();
+    return;
+  }
   const take = event.target.closest("[data-take-terminal]");
   if (take) {
-    try { const result = await api("POST", `/api/terminals/${take.dataset.takeTerminal}/control`);
-      toast(result.message); }
-    catch (error) { toast(error.message, "error"); }
+    try {
+      const result = await api(
+        "POST",
+        `/api/terminals/${take.dataset.takeTerminal}/control`,
+      );
+      toast(result.message);
+    } catch (error) {
+      toast(error.message, "error");
+    }
     return;
   }
   const phone = event.target.closest("[data-phone-terminal]");
@@ -556,23 +623,19 @@ document.addEventListener("click", async (event) => {
     phone.disabled = true;
     try {
       const existing = await api("GET", `/api/terminals/${id}/phone`);
-      const result = existing.links ? existing : await api("POST", `/api/terminals/${id}/phone`);
-      const address = $("#phone-address");
-      address.replaceChildren();
-      for (const link of result.links) {
-        const option = document.createElement("option");
-        option.value = link;
-        option.textContent = new URLSearchParams(new URL(link).hash.slice(1)).get("host");
-        address.append(option);
-      }
+      const result = existing.links
+        ? existing
+        : await api("POST", `/api/terminals/${id}/phone`);
       $("#phone-dialog").dataset.sessionId = id;
       phone.dataset.sharing = "true";
-      phone.textContent = "Phone linked";
-      try { await renderPhoneLink(result.links[0]); }
-      catch { $("#phone-link").value = result.links[0]; }
+      phone.textContent = "Phone access";
+      await showPhoneOffer(result);
       showDialog("phone-dialog");
-    } catch (error) { toast(error.message, "error"); }
-    finally { phone.disabled = false; }
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      phone.disabled = false;
+    }
     return;
   }
   const terminalClose = event.target.closest("[data-close-terminal]");
@@ -593,6 +656,7 @@ document.addEventListener("click", async (event) => {
       tile.term.dispose();
       tile.tile.remove();
       ui.terminals.delete(id);
+      updateTerminalFocus();
       await refreshState();
     } catch (error) {
       toast(error.message, "error");
@@ -621,16 +685,113 @@ document.addEventListener("click", async (event) => {
     }
   }
 });
+
+async function showPhoneOffer(result) {
+  const address = $("#phone-address");
+  const chosenHost = address.selectedOptions[0]?.textContent;
+  address.replaceChildren();
+  for (const link of result.links || []) {
+    const option = document.createElement("option");
+    option.value = link;
+    option.textContent = new URLSearchParams(new URL(link).hash.slice(1)).get(
+      "host",
+    );
+    address.append(option);
+  }
+  const matching = [...address.options].find(
+    (option) => option.textContent === chosenHost,
+  );
+  if (matching) address.value = matching.value;
+  ui.pairingExpiresAt = result.expiresAt;
+  ui.phoneStatus = result.status;
+  if (address.value) {
+    try {
+      await renderPhoneLink(address.value);
+    } catch {
+      $("#phone-link").value = address.value;
+    }
+  }
+  updatePhoneStatus();
+}
+
+function updatePhoneStatus() {
+  const status = ui.phoneStatus;
+  const seconds = Math.max(
+    0,
+    (ui.pairingExpiresAt || 0) - Math.floor(Date.now() / 1000),
+  );
+  const ready = Boolean(status?.pairingReady && seconds > 0);
+  const text = ready
+    ? status?.connected
+      ? `New link ready for ${seconds}s · current phone stays connected until replaced`
+      : `Ready to pair · link expires in ${seconds}s`
+    : status?.connected
+      ? "Phone connected · pairing link already used"
+      : status?.paired
+        ? "Phone paired but offline · use New pairing link for another device"
+        : "Pairing link expired · create a new one";
+  $("#phone-status-text").textContent = text;
+  $("#phone-status").dataset.state = ready
+    ? "ready"
+    : status?.connected
+      ? "connected"
+      : "expired";
+  $("#phone-copy").disabled = !ready;
+  $(".phone-pairing").classList.toggle("unavailable", !ready);
+}
+
+async function refreshPhoneStatus() {
+  const dialog = $("#phone-dialog");
+  if (!dialog.open) return;
+  try {
+    const result = await api(
+      "GET",
+      `/api/terminals/${dialog.dataset.sessionId}/phone`,
+    );
+    if (!result.links) {
+      closeDialog("phone-dialog");
+      toast("Phone access was stopped.");
+      return;
+    }
+    ui.phoneStatus = result.status;
+    ui.pairingExpiresAt = result.expiresAt;
+    updatePhoneStatus();
+  } catch {
+    // The terminal poll reports connection failures.
+  }
+}
+
 async function renderPhoneLink(link) {
   $("#phone-link").value = link;
   $("#phone-qr").src = await QRCode.toDataURL(link, { width: 240, margin: 1 });
 }
 $("#phone-address").addEventListener("change", (event) => {
-  renderPhoneLink(event.target.value).catch((error) => toast(error.message, "error"));
+  renderPhoneLink(event.target.value).catch((error) =>
+    toast(error.message, "error"),
+  );
 });
 $("#phone-copy").addEventListener("click", async () => {
-  try { await navigator.clipboard.writeText($("#phone-link").value); toast("Pairing link copied."); }
-  catch { $("#phone-link").select(); toast("Select and copy the pairing link.", "error"); }
+  if ($("#phone-copy").disabled) return;
+  try {
+    await navigator.clipboard.writeText($("#phone-link").value);
+    toast("Pairing link copied.");
+  } catch {
+    $("#phone-link").select();
+    toast("Select and copy the pairing link.", "error");
+  }
+});
+$("#phone-renew").addEventListener("click", async () => {
+  const button = $("#phone-renew");
+  button.disabled = true;
+  try {
+    const id = $("#phone-dialog").dataset.sessionId;
+    await showPhoneOffer(await api("POST", `/api/terminals/${id}/phone/renew`));
+    toast("New one-use pairing link is ready.");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 });
 $("#phone-stop").addEventListener("click", async () => {
   const id = $("#phone-dialog").dataset.sessionId;
@@ -639,6 +800,8 @@ $("#phone-stop").addEventListener("click", async () => {
     const button = document.querySelector(`[data-phone-terminal="${CSS.escape(id)}"]`);
     if (button) { button.dataset.sharing = "false"; button.textContent = "Phone"; }
     $("#phone-link").value = "";
+    ui.phoneStatus = null;
+    ui.pairingExpiresAt = null;
     closeDialog("phone-dialog"); toast("Phone access revoked.");
   } catch (error) { toast(error.message, "error"); }
 });
@@ -763,4 +926,6 @@ if (!token || !/^[0-9a-f]{64}$/.test(token)) {
   refreshChecks();
   setInterval(() => refreshState(true), 4000);
   setInterval(() => refreshChecks(), 60000);
+  setInterval(updatePhoneStatus, 1000);
+  setInterval(refreshPhoneStatus, 2500);
 }

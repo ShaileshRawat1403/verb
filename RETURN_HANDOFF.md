@@ -11,10 +11,13 @@ The web title bar shows the controller and can take control back or revoke the p
 phone capability tokens are never written to Verb's durable stores. The earlier `.vcont` boundary
 is unchanged: it carries read-only structural history, not a running process.
 
-The desktop integration test covers pairing, pin rejection, screen through TLS, keystrokes into an
-actual PTY, desktop takeback, and revocation. The Android link parser has unit tests. The package
+The desktop integration test covers pairing, pin rejection, code renewal without disconnecting an
+existing phone, phone replacement, screen through TLS, keystrokes into an actual PTY, desktop
+takeback, and revocation. Android JVM tests cover link parsing, exact TLS pin validation, and IP
+name rejection. The web workbench now has searchable session/task lists, a focused terminal layout,
+pairing status and one-use link renewal, with reduced-motion styling. The package
 still needs a physical Android and same-network acceptance run, including camera/deep-link launch,
-Android TLS hostname behavior, touch layout, and reconnect after an interruption. The desktop and
+touch layout, and reconnect after an interruption. The desktop and
 phone must remain on the same reachable network; there is no internet relay or phone-local process
 transfer. See `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md` for the exact contract.
 

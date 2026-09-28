@@ -74,8 +74,10 @@ macOS builds are not notarized; after a browser download, run `xattr -d com.appl
 
 `verb web` prints a local URL to open in a browser. It binds only to `127.0.0.1` and uses a
 random token for its API. The browser shows the same project sessions, tasks, and memory as the
-CLI and TUI, with clickable task actions and side-by-side live terminal panes. Run it from the
-project you want to work on; `--port PORT` optionally fixes the local port. The browser host owns
+CLI and TUI, with clickable task actions and side-by-side live terminal panes. Session and task
+lists can be searched, and a terminal's Focus control expands that pane while the others keep
+running. Click the control again to show all panes. Run it from the project you want to work on;
+`--port PORT` optionally fixes the local port. The browser host owns
 only the PTYs it starts. Sessions running in another Verb process remain visible, but their live
 terminal cannot be controlled from this page. Closing the web host stops its hosted processes and
 keeps the durable work records. The page uses bundled assets and makes no external browser
@@ -84,7 +86,10 @@ requests.
 To control a running web terminal from Verb Mobile, keep desktop and phone on the same network,
 choose **Phone** on that terminal, and scan the QR code. Android opens **Control a desktop
 session** with the link filled in; tap **Connect**, then **Take input control**. The desktop can
-take control back, and **Stop sharing** revokes phone access. For a session running in `verb ui`,
+take control back, and **Stop sharing** revokes phone access. The pairing view names when the
+one-use code is ready, used, or expired. **New pairing link**
+renews the code without interrupting an already connected phone; pairing another phone replaces
+the old device. For a session running in `verb ui`,
 use `verb mobile share SESSION_ID` in a second desktop shell and open the printed link on the
 phone. The CLI and agent process continue to run on the desktop. The phone sees the current
 plain-text terminal screen, not the transcript. A firewall must allow the temporary TLS port

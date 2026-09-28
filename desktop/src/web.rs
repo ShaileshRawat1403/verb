@@ -579,15 +579,37 @@ impl WebHost {
                 }
                 let share = PhoneShare::start(id)?;
                 let links = share.links.clone();
+                let expires_at = share.offer_expires_at;
+                let status = share.status()?;
                 self.phone_shares.insert((*id).to_owned(), share);
-                Ok(Reply::json(200, json!({"links": links})))
+                Ok(Reply::json(
+                    200,
+                    json!({"links": links, "expiresAt": expires_at, "status": status}),
+                ))
             }
             ["api", "terminals", id, "phone"] if method == &Method::Get => {
                 self.terminals
                     .get(*id)
                     .ok_or("terminal is not hosted here")?;
-                let links = self.phone_shares.get(*id).map(|share| share.links.clone());
-                Ok(Reply::json(200, json!({"links": links})))
+                let share = self.phone_shares.get(*id);
+                let status = share.map(|share| share.status()).transpose()?;
+                Ok(Reply::json(
+                    200,
+                    json!({"links": share.map(|share| &share.links),
+                    "expiresAt": share.map(|share| share.offer_expires_at), "status": status}),
+                ))
+            }
+            ["api", "terminals", id, "phone", "renew"] if method == &Method::Post => {
+                let share = self
+                    .phone_shares
+                    .get_mut(*id)
+                    .ok_or("this terminal is not shared")?;
+                share.renew_offer()?;
+                let status = share.status()?;
+                Ok(Reply::json(
+                    200,
+                    json!({"links": share.links, "expiresAt": share.offer_expires_at, "status": status}),
+                ))
             }
             ["api", "terminals", id, "phone"] if method == &Method::Delete => {
                 self.phone_shares

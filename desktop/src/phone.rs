@@ -19,13 +19,15 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MAX_REQUEST: usize = 32 * 1024;
 const MAX_REPLY: usize = 2 * 1024 * 1024;
 
 pub(crate) struct PhoneShare {
     pub links: Vec<String>,
+    pub offer_expires_at: u64,
+    link_bases: Vec<String>,
     running: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     session_id: String,
@@ -62,17 +64,11 @@ impl PhoneShare {
             .local_addr()
             .map_err(|error| format!("could not read phone listener address: {error}"))?
             .port();
-        let offer = mobile::request_local(session_id, b"{\"version\":1,\"op\":\"offer\"}\n")?;
-        let code = offer["pairingToken"]
-            .as_str()
-            .filter(|value| value.len() == 32)
-            .ok_or("local phone bridge returned no pairing code")?;
-        let links = addresses
+        let link_bases: Vec<String> = addresses
             .iter()
-            .map(|address| {
-                format!("verb://pair#host={address}&port={port}&pin={fingerprint}&code={code}")
-            })
+            .map(|address| format!("verb://pair#host={address}&port={port}&pin={fingerprint}"))
             .collect();
+        let (links, offer_expires_at) = make_offer(session_id, &link_bases)?;
         let running = Arc::new(AtomicBool::new(true));
         let active = Arc::clone(&running);
         let owned_session = session_id.to_owned();
@@ -91,12 +87,46 @@ impl PhoneShare {
         });
         Ok(Self {
             links,
+            offer_expires_at,
+            link_bases,
             running,
             thread: Some(thread),
             session_id: session_id.to_owned(),
             _share_lock: share_lock,
         })
     }
+
+    /// A fresh one-use code leaves the current paired phone connected until a new phone pairs.
+    pub(crate) fn renew_offer(&mut self) -> Result<(), String> {
+        let (links, offer_expires_at) = make_offer(&self.session_id, &self.link_bases)?;
+        self.links = links;
+        self.offer_expires_at = offer_expires_at;
+        Ok(())
+    }
+
+    pub(crate) fn status(&self) -> Result<serde_json::Value, String> {
+        mobile::request_local(&self.session_id, b"{\"version\":1,\"op\":\"status\"}\n")
+    }
+}
+
+fn make_offer(session_id: &str, link_bases: &[String]) -> Result<(Vec<String>, u64), String> {
+    let offer = mobile::request_local(session_id, b"{\"version\":1,\"op\":\"offer\"}\n")?;
+    let code = offer["pairingToken"]
+        .as_str()
+        .filter(|value| value.len() == 32)
+        .ok_or("local phone bridge returned no pairing code")?;
+    let expires_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("could not read pairing expiry: {error}"))?
+        .as_secs()
+        + 120;
+    Ok((
+        link_bases
+            .iter()
+            .map(|base| format!("{base}&code={code}"))
+            .collect(),
+        expires_at,
+    ))
 }
 
 fn claim_share(session_id: &str) -> Result<File, String> {

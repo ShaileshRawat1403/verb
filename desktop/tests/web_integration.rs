@@ -221,6 +221,18 @@ fn phone_controls_exact_live_web_terminal_over_pinned_tls_and_revocation() {
         403
     );
     let shared = server.json("POST", &format!("/api/terminals/{id}/phone"), None);
+    assert_eq!(shared["status"]["pairingReady"], true);
+    assert_eq!(
+        server
+            .request(
+                "POST",
+                &format!("/api/terminals/{id}/phone/renew"),
+                None,
+                false
+            )
+            .0,
+        403
+    );
     let competing_share = Command::new(env!("CARGO_BIN_EXE_verb"))
         .args(["mobile", "share", id])
         .current_dir(server.root.join("project"))
@@ -253,6 +265,42 @@ fn phone_controls_exact_live_web_terminal_over_pinned_tls_and_revocation() {
         phone_request(port, pin, json!({"version":1,"op":"pair","secret":code})).unwrap()["ok"],
         false
     );
+    let paired_status = server.json("GET", &format!("/api/terminals/{id}/phone"), None);
+    assert_eq!(paired_status["status"]["pairingReady"], false);
+    assert_eq!(paired_status["status"]["paired"], true);
+    let renewed = server.json("POST", &format!("/api/terminals/{id}/phone/renew"), None);
+    assert_eq!(renewed["status"]["pairingReady"], true);
+    let new_link = renewed["links"][0].as_str().unwrap();
+    let new_code = new_link.split("&code=").nth(1).unwrap();
+    assert_ne!(new_code, code);
+    assert_eq!(
+        phone_request(
+            port,
+            pin,
+            json!({"version":1,"op":"snapshot","secret":token})
+        )
+        .unwrap()["ok"],
+        true,
+        "renewing a link must not interrupt the current phone"
+    );
+    let replacement = phone_request(
+        port,
+        pin,
+        json!({"version":1,"op":"pair","secret":new_code}),
+    )
+    .unwrap();
+    assert_eq!(replacement["ok"], true);
+    assert_eq!(
+        phone_request(
+            port,
+            pin,
+            json!({"version":1,"op":"snapshot","secret":token})
+        )
+        .unwrap()["ok"],
+        false,
+        "pairing another phone must revoke the earlier device"
+    );
+    let token = replacement["result"]["deviceToken"].as_str().unwrap();
     let mut ready = false;
     for _ in 0..30 {
         let screen = phone_request(

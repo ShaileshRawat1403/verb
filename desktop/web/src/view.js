@@ -51,6 +51,28 @@ export function agentMark(agent) {
   return "&gt;_";
 }
 
+export function filterSessions(sessions, query) {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return sessions;
+  return sessions.filter((session) =>
+    [session.agent, session.id, stateName(session.state), session.isolated ? "isolated" : "main"]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
+export function filterTasks(tasks, query, ownerLabel) {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return tasks;
+  return tasks.filter((task) =>
+    [task.title, task.brief, taskName(task.status), task.needsHelp ? "help requested" : "", task.owner ? ownerLabel(task.owner) : "unassigned"]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle),
+  );
+}
+
 // Everything below comes from `verb check`: observed facts with the safe next step beside each.
 // Verb runs none of the steps; they are shown so the person can choose.
 export function checkRow(mark, tone, fact, next) {

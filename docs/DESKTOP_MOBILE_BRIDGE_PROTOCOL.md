@@ -32,6 +32,7 @@ the session ID is never enough to authorize phone input.
 | Operation | Request fields | Result | Rule |
 | --- | --- | --- | --- |
 | `offer` | none | `pairingToken` | Desktop-local only. Replaces an older offer. |
+| `status` | none | `pairingReady`, `paired`, `connected` | Desktop-local only. Reports the current offer and device state without exposing a token. |
 | `pair` | `secret: pairingToken` | `deviceToken` | One use, 120 seconds, at most five failed attempts. Replaces an earlier paired phone. |
 | `snapshot` | `secret: deviceToken` | `sessionId`, `revision`, `bytes`, `controller` | `bytes` is a byte array containing the current plain-text screen, or null when too large. |
 | `take` | `secret: deviceToken` | `controller: phone` | Gives phone the sole input lease. |
@@ -39,7 +40,7 @@ the session ID is never enough to authorize phone input.
 | `disconnect` / `reconnect` | `secret: deviceToken` | connection status | Disconnect returns input control to desktop. |
 | `desktop_take` / `revoke` | none | controller or status | Owner-account actions. Both clear queued phone input; revoke invalidates the device token. |
 
-`offer`, `desktop_take` and `revoke` are refused when the connecting process belongs to the hosted
+`offer`, `status`, `desktop_take` and `revoke` are refused when the connecting process belongs to the hosted
 program's own process session (checked from the socket peer's pid with `SO_PEERCRED` on Linux and
 `LOCAL_PEERPID` on macOS; an unidentifiable peer is refused too). The hosted program knows its own
 `VERB_SESSION_ID` and runs as the same account, so without this check it could offer, pair and
@@ -56,7 +57,10 @@ increase when the current screen changes; they are volatile and are not task or 
 ## User flow and scope
 
 In `verb web`, start a terminal and choose **Phone** in its title bar. Scan its QR code or copy the
-link; if several desktop addresses are offered, select the one the phone can reach. On Android,
+link; if several desktop addresses are offered, select the one the phone can reach. The web view
+shows when that code expires or has been used. **New pairing link** creates another one-use code
+without disconnecting the current phone; pairing the replacement phone revokes the earlier device.
+On Android,
 tap **Connect**, then **Take input control** to send text and terminal keys. The screen displays the
 current control owner; a connection failure stops the live claim and offers **Reconnect**. The
 desktop can take control back, and **Stop sharing** invalidates the phone token. The same flow for
@@ -75,6 +79,7 @@ the socket in a separate thread, its file mode, protocol version check, pairing,
 input, desktop takeback, revocation, and cleanup. Other mobile tests cover expiry, reconnect,
 single-controller input, idle disconnection, and byte bounds.
 `tests/web_integration.rs::phone_controls_exact_live_web_terminal_over_pinned_tls_and_revocation`
-exercises the HTTPS-token gate, certificate pin, one-use pairing, screen over TLS, phone input to
-the actual PTY, desktop takeback, and revocation. Android link parsing has unit tests. A physical
+exercises the HTTPS-token gate, certificate pin, one-use pairing, code renewal, phone replacement,
+screen over TLS, phone input to the actual PTY, desktop takeback, and revocation. Android link
+parsing and its TLS client have local-JVM tests for a valid pin, a wrong pin, and a wrong IP name. A physical
 Android device and network are still required for final touch and camera acceptance.

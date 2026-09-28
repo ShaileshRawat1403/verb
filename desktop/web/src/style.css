@@ -736,6 +736,28 @@ body {
 .task-list {
   padding: 10px;
 }
+.list-search-label {
+  display: block;
+  margin: 0 15px 7px;
+  color: #aab5c7;
+  font-size: 10px;
+  font-weight: 720;
+  letter-spacing: 0.3px;
+}
+.list-search {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 0 10px 4px;
+  padding: 10px 12px;
+  border: 1px solid #414a5d;
+  border-radius: 9px;
+  background: #151b28;
+  color: #eef0f8;
+  font-size: 12px;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.list-search::placeholder { color: #7e8a9e; }
+.list-search:focus { border-color: #ab9bff; box-shadow: 0 0 0 3px #ab9bff20; }
 .session-list .session-item {
   padding: 12px 9px;
 }
@@ -764,6 +786,9 @@ body {
   gap: 14px;
   align-items: start;
 }
+.terminal-grid.focused { grid-template-columns: minmax(0, 1fr); }
+.terminal-grid.focused .terminal-tile:not(.focused) { display: none; }
+.terminal-grid.focused .terminal-mount { height: clamp(420px, 68vh, 900px); }
 .terminal-empty {
   border: 1px dashed #4b5166;
   background: #1b2030;
@@ -808,6 +833,8 @@ body {
   min-width: 0;
   overflow: hidden;
   box-shadow: 0 15px 50px #05070e55;
+  container-type: inline-size;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 .terminal-tile:focus-within {
   border-color: #aa9bff;
@@ -846,6 +873,8 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 .terminal-title small {
   font-weight: 500;
@@ -859,7 +888,25 @@ body {
   border: 1px solid #625888;
   padding: 3px 5px;
   border-radius: 4px;
-  margin-left: auto;
+  flex: 0 0 auto;
+}
+.terminal-focus {
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #b9c3d6;
+  font-size: 17px;
+  line-height: 1;
+}
+.terminal-focus:hover,
+.terminal-focus[aria-pressed="true"] { background: #3b4660; color: #f2eeff; border-color: #6d6b94; }
+@container (max-width: 510px) {
+  .terminal-checkout,
+  .window-dots { display: none; }
+  .terminal-titlebar { gap: 6px; }
 }
 .terminal-close {
   border: none;
@@ -878,9 +925,32 @@ body {
   white-space: nowrap;
 }
 .terminal-phone:hover { background: #4a426b; }
+.terminal-phone[data-sharing="true"] { border-color: #5e9d82; color: #afe3c3; background: #284638; }
+.phone-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid #596486;
+  border-radius: 10px;
+  background: #252f44;
+  color: #dfd8ff;
+  font-size: 11px;
+  line-height: 1.45;
+  margin: -5px 0 17px;
+}
+.phone-status-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; background: #bba9ff; box-shadow: 0 0 0 4px #bba9ff22; }
+.phone-status[data-state="connected"] { color: #bdebd0; border-color: #416f57; background: #223a30; }
+.phone-status[data-state="connected"] .phone-status-dot { background: #82d8a4; box-shadow: 0 0 0 4px #82d8a422; }
+.phone-status[data-state="expired"] { color: #e7c99b; border-color: #756041; background: #3a3023; }
+.phone-status[data-state="expired"] .phone-status-dot { background: #efbd7d; box-shadow: none; }
 .phone-pairing { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px; align-items: start; }
 .phone-pairing img { width: 180px; height: 180px; background: white; border-radius: 8px; }
 .phone-pairing textarea { word-break: break-all; min-height: 115px; resize: none; }
+.phone-pairing.unavailable img,
+.phone-pairing.unavailable textarea { opacity: 0.35; }
+.phone-actions { flex-wrap: wrap; }
+.phone-actions #phone-stop { margin-right: auto; }
 @media (max-width: 600px) { .phone-pairing { grid-template-columns: 1fr; } }
 .terminal-close:hover {
   color: white;
@@ -1086,7 +1156,9 @@ body {
   width: min(550px, calc(100vw - 28px));
   max-height: min(90vh, 840px);
   box-shadow: 0 30px 100px #000a;
+  animation: dialog-enter 0.2s ease-out;
 }
+@keyframes dialog-enter { from { opacity: 0; transform: translateY(10px) scale(0.985); } to { opacity: 1; transform: none; } }
 .modal::backdrop {
   background: #080b14c9;
   backdrop-filter: blur(5px);
@@ -1579,4 +1651,7 @@ body {
   .modal-content {
     padding: 18px;
   }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }

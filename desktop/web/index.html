@@ -31,6 +31,7 @@
             type="button"
             data-view="overview"
             aria-label="Overview"
+            aria-current="page"
           >
             <span class="nav-icon">◫</span><span>Overview</span>
           </button>
@@ -241,6 +242,8 @@
                   <h2>Sessions</h2>
                   <span class="count-chip" id="session-count">0</span>
                 </div>
+                <label class="list-search-label" for="session-search">Find a session</label>
+                <input id="session-search" class="list-search" type="search" placeholder="Agent, state, or ID…" autocomplete="off" />
                 <div id="session-list" class="session-list"></div>
               </div>
               <div class="terminal-area">
@@ -249,9 +252,7 @@
                     <span class="section-kicker">LIVE WORKSPACE</span>
                     <h2>Terminal panes</h2>
                   </div>
-                  <span class="toolbar-note"
-                    >Click a pane to type · resize freely</span
-                  >
+                  <span class="toolbar-note">Click to type · Focus expands one pane · click again to restore</span>
                 </div>
                 <div id="terminal-grid" class="terminal-grid">
                   <div class="terminal-empty">
@@ -298,6 +299,8 @@
                   <h2>Tasks</h2>
                   <span class="count-chip" id="task-count">0</span>
                 </div>
+                <label class="list-search-label" for="task-search">Find work</label>
+                <input id="task-search" class="list-search" type="search" placeholder="Title, owner, or status…" autocomplete="off" />
                 <div id="task-list" class="task-list"></div>
               </div>
               <div class="panel task-detail-panel" id="task-detail">
@@ -361,11 +364,13 @@
           <h2>Continue on your phone</h2>
           <p>On the same network, scan the code with your phone or paste the link in Verb Mobile. The agent keeps running here.</p>
         </div><button class="modal-close" type="button" data-close="phone-dialog" aria-label="Close">×</button></div>
+        <div class="phone-status" id="phone-status" role="status" aria-live="polite"><span class="phone-status-dot" aria-hidden="true"></span><span id="phone-status-text">Preparing a secure link…</span></div>
         <div class="phone-pairing"><img id="phone-qr" alt="Scan this code in your phone camera to open Verb Mobile" />
           <div><label class="field-label">Desktop address <select id="phone-address"></select></label>
             <label class="field-label">Pairing link <textarea id="phone-link" readonly rows="4"></textarea></label></div></div>
-        <p class="small-status">Expires in two minutes. Keep this link private.</p>
-        <div class="modal-footer"><button class="secondary-button" type="button" id="phone-stop">Stop sharing</button>
+        <p class="small-status">The link is one-use. Keep it private. Your desktop session stays open if you close this window.</p>
+        <div class="modal-footer phone-actions"><button class="secondary-button" type="button" id="phone-stop">Stop sharing</button>
+          <button class="secondary-button" type="button" id="phone-renew">New pairing link</button>
           <button class="primary-button" type="button" id="phone-copy">Copy link</button></div>
       </div>
     </dialog>
