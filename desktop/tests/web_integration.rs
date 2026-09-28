@@ -1,13 +1,21 @@
 #![cfg(unix)]
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{
+    ClientConfig, ClientConnection, DigitallySignedStruct, Error as TlsError, SignatureScheme,
+    StreamOwned,
+};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static NEXT_SERVER_ID: AtomicU64 = AtomicU64::new(0);
@@ -123,6 +131,203 @@ impl Drop for WebServer {
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.root);
     }
+}
+
+#[derive(Debug)]
+struct PinnedDesktop(String);
+
+impl ServerCertVerifier for PinnedDesktop {
+    fn verify_server_cert(
+        &self,
+        cert: &CertificateDer<'_>,
+        _: &[CertificateDer<'_>],
+        _: &ServerName<'_>,
+        _: &[u8],
+        _: UnixTime,
+    ) -> Result<ServerCertVerified, TlsError> {
+        let actual: String = Sha256::digest(cert.as_ref())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if actual != self.0 {
+            return Err(TlsError::General("certificate pin mismatch".into()));
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, TlsError> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+fn phone_request(port: u16, pin: &str, request: Value) -> Result<Value, String> {
+    let config = ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(PinnedDesktop(pin.to_owned())))
+        .with_no_client_auth();
+    let conn = ClientConnection::new(Arc::new(config), ServerName::try_from("localhost").unwrap())
+        .map_err(|error| error.to_string())?;
+    let tcp = TcpStream::connect(("127.0.0.1", port)).map_err(|error| error.to_string())?;
+    tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    tcp.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
+    let mut stream = StreamOwned::new(conn, tcp);
+    writeln!(stream, "{request}").map_err(|error| error.to_string())?;
+    stream.flush().map_err(|error| error.to_string())?;
+    let mut line = String::new();
+    BufReader::new(stream)
+        .read_line(&mut line)
+        .map_err(|error| error.to_string())?;
+    serde_json::from_str(&line).map_err(|error| error.to_string())
+}
+
+#[test]
+fn phone_controls_exact_live_web_terminal_over_pinned_tls_and_revocation() {
+    let server = WebServer::start();
+    let started = server.json("POST", "/api/terminals", Some(json!({"agent":"custom",
+        "command":"/bin/sh", "args":["-c", "printf 'phone-ready\\n'; read answer; printf 'got:%s\\n' \"$answer\"; sleep 10"],
+        "isolated":false})));
+    let id = started["sessionId"].as_str().unwrap();
+    assert_eq!(
+        server
+            .request("POST", &format!("/api/terminals/{id}/phone"), None, false)
+            .0,
+        403
+    );
+    let shared = server.json("POST", &format!("/api/terminals/{id}/phone"), None);
+    let competing_share = Command::new(env!("CARGO_BIN_EXE_verb"))
+        .args(["mobile", "share", id])
+        .current_dir(server.root.join("project"))
+        .env("VERB_STATE_DIR", server.root.join("state"))
+        .output()
+        .unwrap();
+    assert!(!competing_share.status.success());
+    assert!(String::from_utf8_lossy(&competing_share.stderr).contains("already shared"));
+    let link = shared["links"][0].as_str().unwrap();
+    let fields: std::collections::HashMap<_, _> = link
+        .trim_start_matches("verb://pair#")
+        .split('&')
+        .map(|part| part.split_once('=').unwrap())
+        .collect();
+    let port: u16 = fields["port"].parse().unwrap();
+    let pin = fields["pin"];
+    let code = fields["code"];
+    let denied = phone_request(port, pin, json!({"version":1,"op":"offer","secret":code})).unwrap();
+    assert_eq!(denied["ok"], false);
+    let paired = phone_request(port, pin, json!({"version":1,"op":"pair","secret":code})).unwrap();
+    assert_eq!(paired["ok"], true);
+    let token = paired["result"]["deviceToken"].as_str().unwrap();
+    assert!(phone_request(
+        port,
+        &"0".repeat(64),
+        json!({"version":1,"op":"snapshot","secret":token})
+    )
+    .is_err());
+    assert_eq!(
+        phone_request(port, pin, json!({"version":1,"op":"pair","secret":code})).unwrap()["ok"],
+        false
+    );
+    let mut ready = false;
+    for _ in 0..30 {
+        let screen = phone_request(
+            port,
+            pin,
+            json!({"version":1,"op":"snapshot","secret":token}),
+        )
+        .unwrap();
+        let bytes: Vec<u8> = serde_json::from_value(screen["result"]["bytes"].clone()).unwrap();
+        if String::from_utf8_lossy(&bytes).contains("phone-ready") {
+            ready = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(ready, "phone never saw the desktop PTY screen");
+    assert_eq!(
+        phone_request(port, pin, json!({"version":1,"op":"take","secret":token})).unwrap()["ok"],
+        true
+    );
+    assert_eq!(
+        server
+            .request(
+                "POST",
+                &format!("/api/terminals/{id}/input"),
+                Some(json!({"data":"desktop-should-not-type\\n"})),
+                true
+            )
+            .0,
+        400
+    );
+    assert_eq!(
+        phone_request(
+            port,
+            pin,
+            json!({"version":1,"op":"input","secret":token,
+        "bytes":[104,101,108,108,111,10]})
+        )
+        .unwrap()["ok"],
+        true
+    );
+    let mut got = false;
+    for _ in 0..30 {
+        let screen = phone_request(
+            port,
+            pin,
+            json!({"version":1,"op":"snapshot","secret":token}),
+        )
+        .unwrap();
+        let bytes: Vec<u8> = serde_json::from_value(screen["result"]["bytes"].clone()).unwrap();
+        if String::from_utf8_lossy(&bytes).contains("got:hello") {
+            got = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(got, "phone input did not reach the desktop PTY");
+    server.json("POST", &format!("/api/terminals/{id}/control"), None);
+    assert_eq!(
+        phone_request(
+            port,
+            pin,
+            json!({"version":1,"op":"input","secret":token,"bytes":[120]})
+        )
+        .unwrap()["ok"],
+        false
+    );
+    server.json("DELETE", &format!("/api/terminals/{id}/phone"), None);
+    assert!(phone_request(
+        port,
+        pin,
+        json!({"version":1,"op":"snapshot","secret":token})
+    )
+    .is_err());
+    server.json("DELETE", &format!("/api/terminals/{id}"), None);
 }
 
 #[test]

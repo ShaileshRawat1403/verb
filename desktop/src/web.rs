@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
+use crate::phone::PhoneShare;
 use crate::tui::term::Hosted;
 use crate::{project, workbench, Agent, SessionState};
 
@@ -109,13 +110,19 @@ impl WebTerminal {
     }
 
     fn output(&self, after: u64) -> Value {
+        let (controller, phone_connected) = self
+            .hosted
+            .as_ref()
+            .and_then(|hosted| hosted.phone_control_status().ok())
+            .unwrap_or((crate::mobile::Controller::Desktop, false));
         if after < self.base || after > self.next {
             let screen = self.hosted.as_ref().map_or_else(
                 || self.final_screen.clone(),
                 |hosted| hosted.screen().contents_formatted(),
             );
             return json!({"reset": true, "data": BASE64.encode(screen), "cursor": self.next,
-                "running": self.hosted.is_some(), "error": self.failure});
+                "running": self.hosted.is_some(), "error": self.failure,
+                "controller": controller, "phoneConnected": phone_connected});
         }
         let mut bytes = Vec::new();
         let mut cursor = after;
@@ -138,7 +145,8 @@ impl WebTerminal {
             }
         }
         json!({"reset": false, "data": BASE64.encode(bytes), "cursor": cursor,
-            "running": self.hosted.is_some(), "error": self.failure})
+            "running": self.hosted.is_some(), "error": self.failure,
+            "controller": controller, "phoneConnected": phone_connected})
     }
 }
 
@@ -148,6 +156,7 @@ struct WebHost {
     token: String,
     origin: String,
     terminals: HashMap<String, WebTerminal>,
+    phone_shares: HashMap<String, PhoneShare>,
     checks: Arc<std::sync::Mutex<ChecksCache>>,
 }
 
@@ -308,6 +317,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         token: token.clone(),
         origin: format!("http://127.0.0.1:{}", address.port()),
         terminals: HashMap::new(),
+        phone_shares: HashMap::new(),
         checks: Arc::default(),
     };
     let running = Arc::new(AtomicBool::new(true));
@@ -337,6 +347,11 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
                 terminal.fail(error);
             }
         }
+        host.phone_shares.retain(|id, _| {
+            host.terminals
+                .get(id)
+                .is_some_and(|terminal| terminal.hosted.is_some())
+        });
         if let Some(request) = server
             .recv_timeout(Duration::from_millis(30))
             .map_err(|error| format!("web server stopped: {error}"))?
@@ -551,6 +566,35 @@ impl WebHost {
                     json!({"message": "Input is back with this desktop."}),
                 ))
             }
+            ["api", "terminals", id, "phone"] if method == &Method::Post => {
+                let terminal = self
+                    .terminals
+                    .get(*id)
+                    .ok_or("terminal is not hosted here")?;
+                if terminal.hosted.is_none() {
+                    return Err("terminal has ended".to_owned());
+                }
+                if self.phone_shares.contains_key(*id) {
+                    return Err("stop the current phone share before creating a new one".to_owned());
+                }
+                let share = PhoneShare::start(id)?;
+                let links = share.links.clone();
+                self.phone_shares.insert((*id).to_owned(), share);
+                Ok(Reply::json(200, json!({"links": links})))
+            }
+            ["api", "terminals", id, "phone"] if method == &Method::Get => {
+                self.terminals
+                    .get(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let links = self.phone_shares.get(*id).map(|share| share.links.clone());
+                Ok(Reply::json(200, json!({"links": links})))
+            }
+            ["api", "terminals", id, "phone"] if method == &Method::Delete => {
+                self.phone_shares
+                    .remove(*id)
+                    .ok_or("this terminal is not shared")?;
+                Ok(Reply::json(200, json!({"message":"Phone access revoked."})))
+            }
             ["api", "terminals", id, "resize"] if method == &Method::Post => {
                 let size: ResizeRequest = read_json(request)?;
                 if !(4..=200).contains(&size.rows) || !(20..=400).contains(&size.cols) {
@@ -565,6 +609,7 @@ impl WebHost {
                 Ok(Reply::json(200, json!({"ok": true})))
             }
             ["api", "terminals", id] if method == &Method::Delete => {
+                self.phone_shares.remove(*id);
                 let mut terminal = self
                     .terminals
                     .remove(*id)

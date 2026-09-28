@@ -355,6 +355,20 @@
       </main>
     </div>
 
+    <dialog id="phone-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading"><div><span class="section-kicker">LIVE DESKTOP SESSION</span>
+          <h2>Continue on your phone</h2>
+          <p>On the same network, scan the code with your phone or paste the link in Verb Mobile. The agent keeps running here.</p>
+        </div><button class="modal-close" type="button" data-close="phone-dialog" aria-label="Close">×</button></div>
+        <div class="phone-pairing"><img id="phone-qr" alt="Scan this code in your phone camera to open Verb Mobile" />
+          <div><label class="field-label">Desktop address <select id="phone-address"></select></label>
+            <label class="field-label">Pairing link <textarea id="phone-link" readonly rows="4"></textarea></label></div></div>
+        <p class="small-status">Expires in two minutes. Keep this link private.</p>
+        <div class="modal-footer"><button class="secondary-button" type="button" id="phone-stop">Stop sharing</button>
+          <button class="primary-button" type="button" id="phone-copy">Copy link</button></div>
+      </div>
+    </dialog>
     <dialog id="session-dialog" class="modal">
       <form id="session-form" class="modal-content">
         <div class="modal-heading">

@@ -1,4 +1,22 @@
-# Verb return handoff — updated 2026-09-27
+# Verb return handoff — updated 2026-09-28
+
+## September 28 live desktop-to-phone control addendum
+
+The later live-control slice supersedes the September 26/27 statements below that Android has no
+desktop receiver. A live desktop web terminal now exposes a one-use QR/deep-link pair action and a
+temporary TLS relay; `verb mobile share SESSION_ID` serves a TUI-hosted terminal. Android adds the
+**Control a desktop session** task, verifies the pinned desktop certificate and IP name, displays
+the volatile current screen, and sends explicit input only after taking the single input lease.
+The web title bar shows the controller and can take control back or revoke the phone. Pairing and
+phone capability tokens are never written to Verb's durable stores. The earlier `.vcont` boundary
+is unchanged: it carries read-only structural history, not a running process.
+
+The desktop integration test covers pairing, pin rejection, screen through TLS, keystrokes into an
+actual PTY, desktop takeback, and revocation. The Android link parser has unit tests. The package
+still needs a physical Android and same-network acceptance run, including camera/deep-link launch,
+Android TLS hostname behavior, touch layout, and reconnect after an interruption. The desktop and
+phone must remain on the same reachable network; there is no internet relay or phone-local process
+transfer. See `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md` for the exact contract.
 
 ## September 27 desktop addendum
 

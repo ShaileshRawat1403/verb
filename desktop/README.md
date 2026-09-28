@@ -79,7 +79,17 @@ project you want to work on; `--port PORT` optionally fixes the local port. The 
 only the PTYs it starts. Sessions running in another Verb process remain visible, but their live
 terminal cannot be controlled from this page. Closing the web host stops its hosted processes and
 keeps the durable work records. The page uses bundled assets and makes no external browser
-requests. The phone receiver for live desktop sessions is not implemented.
+requests.
+
+To control a running web terminal from Verb Mobile, keep desktop and phone on the same network,
+choose **Phone** on that terminal, and scan the QR code. Android opens **Control a desktop
+session** with the link filled in; tap **Connect**, then **Take input control**. The desktop can
+take control back, and **Stop sharing** revokes phone access. For a session running in `verb ui`,
+use `verb mobile share SESSION_ID` in a second desktop shell and open the printed link on the
+phone. The CLI and agent process continue to run on the desktop. The phone sees the current
+plain-text terminal screen, not the transcript. A firewall must allow the temporary TLS port
+printed in the link. See `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md` for the security and lifetime
+contract.
 
 For a quick launch from this repository, run `./launch-web.sh`. To rebuild the browser assets
 after editing `desktop/web/src`, run `npm ci --prefix desktop/web` and

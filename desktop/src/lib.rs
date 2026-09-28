@@ -23,6 +23,8 @@ mod json;
 #[cfg(unix)]
 mod mobile;
 mod observe;
+#[cfg(unix)]
+mod phone;
 mod project;
 mod pty;
 mod runtime;
@@ -560,6 +562,7 @@ Usage:
                        Keep task ownership and handoffs across agent sessions
   verb mobile offer ID   Open a local pairing offer for a live TUI session (preview)
   verb mobile request ID Read one local bridge request from stdin (JSON line)
+  verb mobile share ID   Share one live terminal with Verb Mobile on the same network
   verb ui              Browse and resume sessions on a full screen
   verb web [--port PORT] Open the local browser workbench
   verb version         Print the version

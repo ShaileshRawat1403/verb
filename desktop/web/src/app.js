@@ -1,5 +1,6 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import {
@@ -340,7 +341,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><div class="window-dots"><i></i><i></i><i></i></div><span class="terminal-title">${escapeHtml(session.agent)} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="Close terminal tile">×</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><div class="window-dots"><i></i><i></i><i></i></div><span class="terminal-title">${escapeHtml(session.agent)} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}">Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="Close terminal tile">×</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -440,6 +441,13 @@ async function pollTerminal(id) {
     if (bytes.length)
       await new Promise((resolve) => terminal.term.write(bytes, resolve));
     terminal.cursor = output.cursor;
+    if (output.running) {
+      const phoneControls = output.controller === "phone";
+      terminal.tile.querySelector("[data-take-terminal]").hidden = !phoneControls;
+      terminal.tile.querySelector(".terminal-state").textContent = phoneControls
+        ? "● Phone controls input" : output.phoneConnected
+          ? "● Desktop controls input · phone connected" : "● Desktop controls input";
+    }
     if (!output.running) {
       terminal.tile.querySelector(".terminal-state").textContent = output.error
         ? `○ Session stopped: ${output.error}`
@@ -535,6 +543,38 @@ document.addEventListener("click", async (event) => {
   }
   const action = event.target.closest("[data-task-action]");
   if (action) return openAction(action.dataset.taskAction);
+  const take = event.target.closest("[data-take-terminal]");
+  if (take) {
+    try { const result = await api("POST", `/api/terminals/${take.dataset.takeTerminal}/control`);
+      toast(result.message); }
+    catch (error) { toast(error.message, "error"); }
+    return;
+  }
+  const phone = event.target.closest("[data-phone-terminal]");
+  if (phone) {
+    const id = phone.dataset.phoneTerminal;
+    phone.disabled = true;
+    try {
+      const existing = await api("GET", `/api/terminals/${id}/phone`);
+      const result = existing.links ? existing : await api("POST", `/api/terminals/${id}/phone`);
+      const address = $("#phone-address");
+      address.replaceChildren();
+      for (const link of result.links) {
+        const option = document.createElement("option");
+        option.value = link;
+        option.textContent = new URLSearchParams(new URL(link).hash.slice(1)).get("host");
+        address.append(option);
+      }
+      $("#phone-dialog").dataset.sessionId = id;
+      phone.dataset.sharing = "true";
+      phone.textContent = "Phone linked";
+      try { await renderPhoneLink(result.links[0]); }
+      catch { $("#phone-link").value = result.links[0]; }
+      showDialog("phone-dialog");
+    } catch (error) { toast(error.message, "error"); }
+    finally { phone.disabled = false; }
+    return;
+  }
   const terminalClose = event.target.closest("[data-close-terminal]");
   if (terminalClose) {
     const id = terminalClose.dataset.closeTerminal;
@@ -580,6 +620,27 @@ document.addEventListener("click", async (event) => {
       return;
     }
   }
+});
+async function renderPhoneLink(link) {
+  $("#phone-link").value = link;
+  $("#phone-qr").src = await QRCode.toDataURL(link, { width: 240, margin: 1 });
+}
+$("#phone-address").addEventListener("change", (event) => {
+  renderPhoneLink(event.target.value).catch((error) => toast(error.message, "error"));
+});
+$("#phone-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("#phone-link").value); toast("Pairing link copied."); }
+  catch { $("#phone-link").select(); toast("Select and copy the pairing link.", "error"); }
+});
+$("#phone-stop").addEventListener("click", async () => {
+  const id = $("#phone-dialog").dataset.sessionId;
+  try {
+    await api("DELETE", `/api/terminals/${id}/phone`);
+    const button = document.querySelector(`[data-phone-terminal="${CSS.escape(id)}"]`);
+    if (button) { button.dataset.sharing = "false"; button.textContent = "Phone"; }
+    $("#phone-link").value = "";
+    closeDialog("phone-dialog"); toast("Phone access revoked.");
+  } catch (error) { toast(error.message, "error"); }
 });
 
 $("#refresh-button").addEventListener("click", () => refreshState());

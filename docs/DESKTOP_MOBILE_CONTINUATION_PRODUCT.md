@@ -1,8 +1,7 @@
 # Continue Verb work on a phone
 
-Status: product and UX proposal. The desktop-only live bridge exists behind a local Unix socket;
-cross-device transport and the mobile receiver are not implemented. Android has local session
-durability work, but it cannot attach to this desktop bridge.
+Status: same-network live control implemented in the desktop web workbench, desktop CLI, and
+Verb Mobile. The broader cross-device work handoff below remains a product proposal.
 The click-through desktop/phone concept is `docs/mockups/desktop-phone-continuation.html`.
 The desktop-local process contract is `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md`.
 
@@ -30,7 +29,8 @@ of “same session”: the CLI, working tree, conversation store, and credential
 Verb Mobile is a small remote window and controller. It does not duplicate the agent or move a
 transcript. The desktop must stay running and reachable. Scope the first acceptance run to a paired
 phone and desktop on the same network; choose a broader transport only after this interaction is
-proven. The phone app needs a later, separately authorized implementation to receive this view.
+proven on a physical phone. The current receiver displays a plain-text terminal screen and sends
+explicit terminal input. It does not create a second agent process.
 
 The next release is **continue as a new phone session** for times when the desktop is unavailable
 or the user deliberately wants local execution. This requires a separate work handoff contract:
@@ -77,7 +77,7 @@ If the desktop cannot host the connection, explain the missing prerequisite in p
 “This Mac is offline. You can view the last shared task update on your phone; live control is
 unavailable.” Do not turn an imported `.vcont` record into a playable session.
 
-## Phone interaction to validate before changing the app
+## Phone interaction and future refinements
 
 The first screen answers *what can I continue?* rather than opening a raw terminal first.
 
@@ -151,8 +151,11 @@ files not available on this phone” is clearer than a Git error or a greyed-out
 
 ## Implementation boundary for this pass
 
-This bridge does not make `.vcont` executable. The desktop bridge has tested one-use pairing, a
-single input lease, bounded volatile screen snapshots, heartbeat expiry, and an owner-only local
-process protocol. The mobile app cannot yet attach. The next slice is an authenticated, encrypted
-transport and mobile receiver. A real Workbench Continue on phone control should appear only when
-that receiver is usable.
+This bridge does not make `.vcont` executable. The first live slice now has a pinned TLS relay,
+QR/deep-link pairing, a mobile receiver, bounded screen snapshots, explicit input control,
+heartbeat expiry, and desktop revocation. The web workbench offers **Phone** only for a live hosted
+terminal; the TUI flow uses `verb mobile share SESSION_ID`. Automated tests prove the desktop TLS
+path to a real PTY and Android link parsing. The physical-phone acceptance journeys above still
+need a device on the same network, especially camera launch, touch layout, and interruption
+behavior. Discovery of all project sessions on the phone and phone-local successor execution are
+later product work.

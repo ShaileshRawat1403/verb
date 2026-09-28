@@ -868,6 +868,20 @@ body {
   font-size: 20px;
   padding: 0 2px;
 }
+.terminal-phone {
+  border: 1px solid #625888;
+  background: #37324e;
+  color: #d9d0ff;
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.terminal-phone:hover { background: #4a426b; }
+.phone-pairing { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px; align-items: start; }
+.phone-pairing img { width: 180px; height: 180px; background: white; border-radius: 8px; }
+.phone-pairing textarea { word-break: break-all; min-height: 115px; resize: none; }
+@media (max-width: 600px) { .phone-pairing { grid-template-columns: 1fr; } }
 .terminal-close:hover {
   color: white;
 }

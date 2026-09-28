@@ -149,7 +149,7 @@ impl Hosted {
         self.mobile.deliver_phone_input(&mut self.master)?;
         if self.mobile.needs_initial_screen()? {
             self.mobile
-                .publish_screen(self.parser.screen().contents_formatted())?;
+                .publish_screen(self.parser.screen().contents().into_bytes())?;
         }
         let mut changed = false;
         // A continuous producer must not keep this poll in the drain loop forever. The next UI
@@ -164,7 +164,7 @@ impl Hosted {
                     }
                     if self.mobile.wants_screen()? {
                         self.mobile
-                            .publish_screen(self.parser.screen().contents_formatted())?;
+                            .publish_screen(self.parser.screen().contents().into_bytes())?;
                     }
                     let structural =
                         self.integration
@@ -299,13 +299,17 @@ impl Hosted {
         self.mobile.desktop_take_control()
     }
 
+    pub fn phone_control_status(&self) -> Result<(crate::mobile::Controller, bool), String> {
+        self.mobile.control_status()
+    }
+
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.parser.screen_mut().set_size(rows, cols);
         pty::set_window_size(&self.master, rows, cols);
         if self.mobile.wants_screen().unwrap_or(false) {
             let _ = self
                 .mobile
-                .publish_screen(self.parser.screen().contents_formatted());
+                .publish_screen(self.parser.screen().contents().into_bytes());
         }
     }
 

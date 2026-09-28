@@ -1,10 +1,9 @@
 //! The desktop half of a live mobile continuation.
 //!
-//! A transport may hold a clone of `LiveBridge`, but only the PTY host can publish its current
-//! screen or deliver queued input. Pairing is a short-lived, one-use capability. One phone can be
-//! paired and connected; only one side owns input at a time. The local Unix socket is accessible
-//! only to the desktop account. A future phone receiver must reach it through an authenticated,
-//! encrypted transport; Verb deliberately exposes no LAN listener here.
+//! Only the PTY host publishes its current screen or delivers queued input. Pairing is a
+//! short-lived, one-use capability. One phone can be paired and connected; only one side owns
+//! input at a time. The local Unix socket is accessible only to the desktop account. `phone.rs`
+//! exposes a separately authorized, session-scoped TLS relay for Verb Mobile.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -389,6 +388,11 @@ impl LiveBridge {
         })
     }
 
+    pub(crate) fn control_status(&self) -> Result<(Controller, bool), String> {
+        let state = self.lock()?;
+        Ok((state.controller, state.connected))
+    }
+
     /// The bridge has exactly the lifetime of the hosted process. No token can revive a session.
     pub(crate) fn end(&self) -> Result<(), String> {
         let mut state = self.lock()?;
@@ -684,7 +688,7 @@ fn process_request(
     }
 }
 
-fn request_local(session_id: &str, request: &[u8]) -> Result<serde_json::Value, String> {
+pub(crate) fn request_local(session_id: &str, request: &[u8]) -> Result<serde_json::Value, String> {
     request_path(&socket_path(session_id)?, request)
 }
 
@@ -724,6 +728,7 @@ fn request_path(path: &Path, request: &[u8]) -> Result<serde_json::Value, String
 
 pub(crate) fn command(args: &[String]) -> Result<(), String> {
     match args {
+        [action, session_id] if action == "share" => crate::phone::share_command(session_id),
         [action, session_id] if action == "offer" => {
             let result = request_local(session_id, b"{\"version\":1,\"op\":\"offer\"}\n")?;
             println!("{}", result["pairingToken"].as_str().unwrap_or_default());
@@ -740,7 +745,7 @@ pub(crate) fn command(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         _ => Err(
-            "usage: verb mobile offer SESSION_ID | request SESSION_ID < request.jsonl".to_owned(),
+            "usage: verb mobile share SESSION_ID | offer SESSION_ID | request SESSION_ID < request.jsonl".to_owned(),
         ),
     }
 }

@@ -19,6 +19,7 @@ distributed with the app; the obligations of their licenses are addressed here.
 | GNU tar | GPL-3.0-or-later | Termux package 1.35-3, bundled as an app asset (`assets/gnu-tar-aarch64`) and installed over the bootstrap's toybox `tar` when needed so dpkg can unpack packages. |
 | Per-package libraries and tools (git, curl, bash, coreutils, apt, dpkg, openssl, etc.) | Each under its own license (GPL-2.0, GPL-3.0, LGPL-2.1/3.0, MIT, BSD, Apache-2.0, ISC, MPL-2.0, CC0, public domain, ...) | Full license texts ship inside the userland. |
 | xterm.js and addon-fit | MIT | Bundled in the desktop browser workbench; notices are under `desktop/web/LICENSES/`. |
+| qrcode and bundled dijkstrajs | MIT | Generate pairing QR codes locally in the desktop browser workbench; notices are under `desktop/web/LICENSES/`. |
 | tiny_http 0.12.0 | MIT OR Apache-2.0 | Vendored in `desktop/vendor/tiny_http/` with one security patch (`VERB_PATCH.md`); license files kept there. |
 
 Full license texts are installed in the userland under `usr/share/LICENSES/` (all SPDX

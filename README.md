@@ -52,6 +52,11 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
 * **Manual, evidence-only continuity.** A checksummed `.vcont` file moves structural session history
   between Android and desktop. Imported state is dated, read-only evidence - not a live-process or
   cross-device resume claim. Physically accepted in both directions on 26 August.
+* **Live desktop control from Verb Mobile.** A desktop web terminal can show a short-lived pairing
+  QR code; Android verifies a pinned TLS identity, displays the current screen, and can take input
+  control of that exact desktop PTY. `verb mobile share SESSION_ID` enables the same path for a TUI
+  session. The process, files, and CLI credentials stay on the desktop. The same-network protocol
+  and input lease have an automated end-to-end test; physical-phone acceptance is still pending.
 * **Structural memory, not surveillance.** Durable records hold identity, context and state. Never a
   PID, process handle, command text, terminal bytes, prompts, transcripts or credentials.
 * **Ask about your own work, without explaining it.** One assistant, reachable from Ask Verb and
