@@ -206,7 +206,11 @@ fun VerbAppContent(viewModel: VerbViewModel, desktopPhoneState: DesktopPhoneView
     val activity = LocalActivity.current
     BackHandler {
         if (activity == null) return@BackHandler
-        if (!viewModel.dismissVerbSurface()) {
+        if (BuildConfig.FULL_CLI) {
+            if (!viewModel.dismissVerbSurface()) {
+                activity.finish()
+            }
+        } else {
             activity.finish()
         }
     }
@@ -271,8 +275,9 @@ fun VerbAppContent(viewModel: VerbViewModel, desktopPhoneState: DesktopPhoneView
                 // job is hosting a full-screen agent, one honest jump beats eight repaints.
                 .windowInsetsPadding(WindowInsets.imeAnimationTarget)
         ) {
-            // The workspace. Always composed, never replaced -- see this function's own note.
-            TerminalScreen(
+            if (BuildConfig.FULL_CLI) {
+                // The workspace. Always composed, never replaced -- see this function's own note.
+                TerminalScreen(
                 terminalOutput = terminalOutput,
                 terminalRuntime = viewModel.terminalRuntime,
                 sessionState = terminalSessionState,
@@ -406,7 +411,14 @@ fun VerbAppContent(viewModel: VerbViewModel, desktopPhoneState: DesktopPhoneView
                     onExecuteSuggestedIntent = viewModel::submitIntent
                 )
             }
+        } else {
+            DesktopPhoneScreen(
+                state = desktopPhoneState,
+                initialLink = pairingLink,
+                onLinkConsumed = onPairingLinkConsumed
+            )
         }
+    }
     }
 }
 

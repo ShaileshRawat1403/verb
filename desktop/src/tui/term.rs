@@ -35,6 +35,7 @@ pub struct Hosted {
     /// The agent's own record, once it has begun one. Shared with the CLI proxy, which observes
     /// the same way from its own loop.
     watch: AgentWatch,
+    chat_adapter: Option<Box<dyn crate::agent_chat::AgentChatAdapter>>,
     /// Set only after the process and durable session have both been closed out.
     closed: bool,
 }
@@ -119,6 +120,12 @@ impl Hosted {
         // An unavailable optional bridge never prevents the agent from starting. `verb mobile
         // offer ID` will report the missing endpoint if this host could not create it.
         let mobile_server = LocalServer::bind(&session.id, mobile.clone(), process.pid).ok();
+        let chat_adapter = crate::agent_chat::create_adapter(
+            session.agent.as_ref().map(|agent| agent.label()),
+            project,
+            process.pid,
+            session.resume_identity.as_deref(),
+        );
         Ok(Self {
             session,
             logger,
@@ -135,6 +142,7 @@ impl Hosted {
             exit_code: None,
             pending: Vec::new(),
             watch,
+            chat_adapter,
             closed: false,
         })
     }
@@ -147,6 +155,11 @@ impl Hosted {
     pub fn poll(&mut self) -> Result<(Option<i32>, bool), String> {
         self.mobile.expire_idle(std::time::Instant::now())?;
         self.mobile.deliver_phone_input(&mut self.master)?;
+        if let Some(adapter) = &mut self.chat_adapter {
+            let screen = self.parser.screen().contents();
+            let update = adapter.poll_chat(&screen);
+            let _ = self.mobile.update_chat(update);
+        }
         if self.mobile.needs_initial_screen()? {
             self.mobile
                 .publish_screen(self.parser.screen().contents().into_bytes())?;

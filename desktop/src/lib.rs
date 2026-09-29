@@ -10,6 +10,7 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod agent_chat;
 mod agents;
 mod checks;
 mod context;

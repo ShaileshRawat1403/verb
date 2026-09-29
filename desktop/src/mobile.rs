@@ -124,6 +124,8 @@ fn classify(stream: &UnixStream, hosted: Option<i32>) -> Caller {
     }
 }
 
+use crate::agent_chat::{ChatMessageDto, ChatStateUpdate};
+
 #[derive(Clone)]
 pub(crate) struct LiveBridge(Arc<Mutex<BridgeState>>);
 
@@ -141,6 +143,10 @@ struct BridgeState {
     screen: Vec<u8>,
     screen_revision: u64,
     screen_available: bool,
+    agent: Option<String>,
+    agent_state: String,
+    can_send_prompt: bool,
+    messages: Vec<ChatMessageDto>,
 }
 
 struct Offer {
@@ -169,6 +175,10 @@ pub(crate) struct ScreenSnapshot {
     pub revision: u64,
     pub bytes: Option<Vec<u8>>,
     pub controller: Controller,
+    pub agent: Option<String>,
+    pub agent_state: String,
+    pub can_send_prompt: bool,
+    pub messages: Vec<ChatMessageDto>,
 }
 
 impl LiveBridge {
@@ -187,6 +197,10 @@ impl LiveBridge {
             screen: Vec::new(),
             screen_revision: 0,
             screen_available: true,
+            agent: None,
+            agent_state: "waiting".to_owned(),
+            can_send_prompt: true,
+            messages: Vec::new(),
         })))
     }
 
@@ -373,6 +387,18 @@ impl LiveBridge {
         Ok(())
     }
 
+    pub(crate) fn update_chat(&self, update: ChatStateUpdate) -> Result<(), String> {
+        let mut state = self.lock()?;
+        if state.ended {
+            return Ok(());
+        }
+        state.agent = Some(update.agent);
+        state.agent_state = update.agent_state;
+        state.can_send_prompt = update.can_send_prompt;
+        state.messages = update.messages;
+        Ok(())
+    }
+
     pub(crate) fn snapshot(&self, device_secret: &str) -> Result<ScreenSnapshot, String> {
         let mut state = self.lock()?;
         state.ensure_device(device_secret)?;
@@ -385,6 +411,10 @@ impl LiveBridge {
             revision: state.screen_revision,
             bytes: state.screen_available.then(|| state.screen.clone()),
             controller: state.controller,
+            agent: state.agent.clone(),
+            agent_state: state.agent_state.clone(),
+            can_send_prompt: state.can_send_prompt,
+            messages: state.messages.clone(),
         })
     }
 

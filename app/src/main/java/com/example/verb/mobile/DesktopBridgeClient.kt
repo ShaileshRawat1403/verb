@@ -1,5 +1,7 @@
 package com.example.verb.mobile
 
+import com.example.verb.model.ChatMessage
+import com.example.verb.model.ChatSender
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.Socket
@@ -47,8 +49,16 @@ data class DesktopPairingLink(val host: String, val port: Int, val pin: String, 
     }
 }
 
-data class DesktopScreen(val sessionId: String, val revision: Long, val text: String,
-                         val controller: String)
+data class DesktopScreen(
+    val sessionId: String,
+    val revision: Long,
+    val text: String,
+    val controller: String,
+    val agent: String? = null,
+    val agentState: String = "waiting",
+    val canSendPrompt: Boolean = true,
+    val messages: List<ChatMessage> = emptyList()
+)
 
 /** One bounded JSON request per pinned TLS connection. No trust-all fallback or plaintext port. */
 class DesktopBridgeClient(private val link: DesktopPairingLink) {
@@ -121,8 +131,34 @@ class DesktopBridgeClient(private val link: DesktopPairingLink) {
         val result = request("snapshot", token)
         val array = result.optJSONArray("bytes")
         val bytes = array?.let { ByteArray(it.length()) { index -> it.getInt(index).toByte() } }
-        return DesktopScreen(result.getString("sessionId"), result.getLong("revision"),
-            bytes?.toString(StandardCharsets.UTF_8) ?: "Screen unavailable.",
-            result.getString("controller"))
+        val agent = result.optString("agent").takeIf { it.isNotEmpty() && it != "null" }
+        val agentState = result.optString("agentState", "waiting")
+        val canSendPrompt = result.optBoolean("canSendPrompt", true)
+        val msgs = mutableListOf<ChatMessage>()
+        val msgArray = result.optJSONArray("messages")
+        if (msgArray != null) {
+            for (i in 0 until msgArray.length()) {
+                val item = msgArray.optJSONObject(i) ?: continue
+                val sender = if (item.optString("sender") == "user") ChatSender.USER else ChatSender.AGENT
+                msgs.add(
+                    ChatMessage(
+                        id = item.optString("id", java.util.UUID.randomUUID().toString()),
+                        sender = sender,
+                        text = item.optString("text", ""),
+                        timestamp = item.optLong("timestamp", System.currentTimeMillis())
+                    )
+                )
+            }
+        }
+        return DesktopScreen(
+            sessionId = result.getString("sessionId"),
+            revision = result.getLong("revision"),
+            text = bytes?.toString(StandardCharsets.UTF_8) ?: "Screen unavailable.",
+            controller = result.getString("controller"),
+            agent = agent,
+            agentState = agentState,
+            canSendPrompt = canSendPrompt,
+            messages = msgs
+        )
     }
 }

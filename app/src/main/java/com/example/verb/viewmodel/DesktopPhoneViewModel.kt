@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import com.example.verb.mobile.DesktopBridgeClient
 import com.example.verb.mobile.DesktopScreen
+import com.example.verb.model.ChatMessage
 
 /** Keeps a paired live connection through rotation without saving its capability to disk. */
 class DesktopPhoneViewModel : ViewModel() {
@@ -18,4 +19,9 @@ class DesktopPhoneViewModel : ViewModel() {
     var connected by mutableStateOf(false)
     var busy by mutableStateOf(false)
     var command by mutableStateOf("")
+    var agent by mutableStateOf<String?>(null)
+    var agentState by mutableStateOf("waiting")
+    var canSendPrompt by mutableStateOf(true)
+    var messages by mutableStateOf<List<ChatMessage>>(emptyList())
+    var showTerminalInspector by mutableStateOf(false)
 }
