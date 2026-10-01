@@ -19,17 +19,18 @@ Rust tests passed (248 passed, 2 existing ignored), web tests passed (11 passed)
 desktop, and ARM64 Linux builds passed. The candidate was verified on the OnePlus using
 disposable project/state and temporary forwarding. Measurements and limits are preserved in
 [performance](WEB_UX_PERFORMANCE_REVIEW.md), [journey](WEB_UX_JOURNEY_REVIEW.md), and
-[polish](WEB_UX_POLISH_REVIEW.md) review snapshots. Production has not been replaced.
+[polish](WEB_UX_POLISH_REVIEW.md) review snapshots. Production was subsequently deployed
+and verified through the real URL; see [the deployment record](WEB_UX_DEPLOYMENT.md).
 
 **Remaining, in order.**
 
-- **Deployment acceptance:** back up the installed Verb binary, deploy/restart only Verb on
-  PocketFabric Node 1, then verify through `https://verb.pruningmypothos.com`. Restarting Verb
-  interrupts live PTYs; preserve session records and account for active work first. Verify
-  Terminal (`pwd`, `git status`, `uname -a`), Claude/Codex launch and switching, browser
-  close/reopen persistence, collapsed history, and `PocketFabric Node 1 / REMOTE`. Record
-  the deployed hash, rollback path, and real Cloudflare-path observations before declaring
-  production acceptance. The Mac must remain unnecessary for runtime operation.
+- **User acceptance:** the deployed web flow passed through the real URL: node commands,
+  Claude/Codex panes and switching, browser close/reopen, collapsed History, and the REMOTE
+  label. Complete Claude theme setup and Codex sign-in, then test normal work. The Mac remains
+  unnecessary for runtime operation. Rollback details are in the deployment record.
+- **Verb restart handling:** `sv restart verb` timed out at the PRoot wrapper; terminating
+  its specifically verified Verb child allowed supervision to restart it. Diagnose graceful
+  signal forwarding separately before unattended deployment; no service configuration changed.
 - **Responsive acceptance:** repeat the final polish at a confirmed narrow viewport or
   actual mobile browser. The last viewport override did not change the observed desktop
   width, so it is not fresh narrow-screen evidence.
@@ -48,8 +49,8 @@ disposable project/state and temporary forwarding. Measurements and limits are p
   establish its cause.
 
 Cloudflare, DNS, Access policies, AdGuard, SSH configuration, LanguageOps, the Android APK,
-and the PocketFabric tunnel remain outside this web closeout. No production deployment,
-remote branch deletion, or push is part of the closeout request. Local merged feature/review
+and the PocketFabric tunnel remain outside this web closeout. The user subsequently authorized
+the remote push and Verb-only deployment. Remote branches were not deleted. Local merged feature/review
 branches may be removed; preserve `main`, the current integration branch, and unmerged work.
 
 ---
