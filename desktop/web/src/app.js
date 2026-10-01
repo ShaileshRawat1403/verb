@@ -4,6 +4,8 @@ import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import {
+  takeInputChunk,
+  agentDisplayName,
   agentMark,
   checksHtml,
   escapeHtml,
@@ -22,17 +24,74 @@ if (location.hash && token) {
   history.replaceState(null, "", location.pathname);
 }
 
+function panelPreference(name) {
+  try {
+    return localStorage.getItem(`verb-panel-${name}`) === "collapsed";
+  } catch {
+    return false;
+  }
+}
+
 const ui = {
   state: null,
-  view: "overview",
+  view: "sessions",
   selectedTask: null,
   terminals: new Map(),
   refreshing: null,
+  workspaceRefreshing: null,
+  sessionRevision: 0,
   toastTimer: null,
   focusedTerminal: null,
+  splitTerminals: false,
+  launchingTerminal: false,
+  navigationCollapsed: panelPreference("navigation"),
+  sessionsCollapsed: panelPreference("sessions"),
   pairingExpiresAt: null,
   phoneStatus: null,
 };
+
+const emptyTerminalTemplate = $("#terminal-grid .terminal-empty").cloneNode(
+  true,
+);
+
+function applyPanelLayout() {
+  $("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
+  $("#view-sessions").classList.toggle(
+    "sessions-collapsed",
+    ui.sessionsCollapsed,
+  );
+  for (const [name, collapsed] of [
+    ["navigation", ui.navigationCollapsed],
+    ["sessions", ui.sessionsCollapsed],
+  ]) {
+    const button = $(`#toggle-${name}`);
+    const label = `${collapsed ? "Show" : "Hide"} ${name}`;
+    button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>${name === "sessions" ? "<span>Sessions</span>" : ""}`;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-expanded", String(!collapsed));
+  }
+  requestAnimationFrame(() =>
+    ui.terminals.forEach(({ fit, mount }) => {
+      if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
+    }),
+  );
+}
+for (const name of ["navigation", "sessions"]) {
+  $(`#toggle-${name}`).addEventListener("click", () => {
+    const key =
+      name === "navigation" ? "navigationCollapsed" : "sessionsCollapsed";
+    ui[key] = !ui[key];
+    try {
+      localStorage.setItem(
+        `verb-panel-${name}`,
+        ui[key] ? "collapsed" : "expanded",
+      );
+    } catch {}
+    applyPanelLayout();
+  });
+}
+applyPanelLayout();
 
 function toast(message, tone = "info") {
   const element = $("#toast");
@@ -44,13 +103,17 @@ function toast(message, tone = "info") {
 }
 
 async function api(method, path, body) {
+  const headers = {
+    ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+  };
+  if (token) {
+    headers["X-Verb-Token"] = token;
+  }
   const response = await fetch(path, {
     method,
     cache: "no-store",
-    headers: {
-      "X-Verb-Token": token || "",
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-    },
+    credentials: "same-origin",
+    headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const value = await response.json();
@@ -74,6 +137,8 @@ function showView(view) {
   });
   $("#breadcrumb-view").textContent =
     view.charAt(0).toUpperCase() + view.slice(1);
+  if (view === "overview") refreshChecks();
+  if (view === "tasks" || view === "memory") refreshState(true);
   if (view === "sessions") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -84,15 +149,20 @@ function showView(view) {
   }
 }
 
-function sessionItem(session, compact = false) {
+function sessionItem(session, compact = false, showDelete = false) {
   const note = session.isolated ? "Isolated checkout" : "Main checkout";
-  return `<button class="session-item ${compact ? "compact" : ""}" type="button" data-session-id="${escapeHtml(session.id)}" aria-label="${escapeHtml(`${session.agent} ${session.id.slice(0, 6)} · ${sessionAction(session)}`)}">
+  const name = agentDisplayName(session.agent);
+  const btn = `<button class="session-item ${compact ? "compact" : ""} ${session.id === ui.focusedTerminal ? "current" : ""}" type="button" data-session-id="${escapeHtml(session.id)}" ${session.id === ui.focusedTerminal ? 'aria-current="true"' : ""} aria-label="${escapeHtml(`${name} ${session.id.slice(0, 6)} · ${sessionAction(session)}`)}">
     <span class="session-agent-icon">${agentMark(session.agent)}</span>
-    <span class="session-copy"><strong>${escapeHtml(session.agent)} <small>${escapeHtml(session.id.slice(0, 6))}</small></strong><span>${escapeHtml(note)} · ${escapeHtml(stateName(session.state))}</span></span>
+    <span class="session-copy"><strong>${escapeHtml(name)} <small>${escapeHtml(session.id.slice(0, 6))}</small></strong><span>${escapeHtml(note)} · ${escapeHtml(stateName(session.state))}</span></span>
     ${session.attention ? `<span class="attention-badge">${session.attention}</span>` : ""}
     ${compact ? "" : `<span class="session-next">${escapeHtml(sessionAction(session))}</span>`}
-    <span class="row-arrow">↗</span>
+    <span class="row-arrow" aria-hidden="true">${session.id === ui.focusedTerminal ? "●" : "↗"}</span>
   </button>`;
+  if (showDelete) {
+    return `<div class="session-item-row">${btn}<button class="session-delete-btn" type="button" data-delete-session="${escapeHtml(session.id)}" title="Forget session record" aria-label="Delete session">×</button></div>`;
+  }
+  return btn;
 }
 
 function taskItem(task, compact = false) {
@@ -105,7 +175,7 @@ function taskItem(task, compact = false) {
 function sessionLabel(id) {
   const session = ui.state?.sessions.find((item) => item.id === id);
   return session
-    ? `${session.agent} ${id.slice(0, 6)}`
+    ? `${agentDisplayName(session.agent)} ${id.slice(0, 6)}`
     : `Session ${id.slice(0, 6)}`;
 }
 
@@ -116,37 +186,49 @@ function emptyState(icon, title, body, action) {
 function render() {
   const state = ui.state;
   if (!state) return;
-  const { project, sessions, tasks, memory } = state;
+  const { project, sessions, tasks, memory, deployment } = state;
+  if (deployment) {
+    $("#deployment-name").textContent = deployment.name;
+    $("#deployment-mode").textContent = deployment.mode;
+  }
+  const activeCount = sessions.filter(isActiveSession).length;
+  $("#view-sessions").classList.toggle("has-sessions", activeCount > 0);
   const attention = tasks.filter(
     (task) => task.needsHelp || task.status === "needs review",
   ).length;
   $("#sidebar-project").textContent = project.name || "Project";
-  $("#sidebar-branch").textContent = project.branch || "No branch";
+  $(".project-switcher").title =
+    project.workspace || project.path || project.name || "Current project";
+  $("#sidebar-branch").textContent = project.branch ?? "Loading branch…";
   $("#breadcrumb-project").textContent = project.name || "Project";
-  $("#top-branch").textContent = project.branch || "No branch";
-  $("#top-changes").textContent = `${project.changedFiles} changed`;
-  $("#nav-session-count").textContent = sessions.length;
+  $("#top-branch").textContent = project.branch ?? "Loading branch…";
+  $("#top-changes").textContent =
+    project.changedFiles == null
+      ? "Loading status…"
+      : `${project.changedFiles} changed`;
+  $("#nav-session-count").textContent = activeCount;
   $("#nav-task-count").textContent = tasks.filter(
     (task) => task.status !== "done",
   ).length;
-  $("#stat-sessions").textContent = sessions.length;
+  $("#stat-sessions").textContent = activeCount;
   $("#stat-tasks").textContent = tasks.filter(
     (task) => task.status !== "done",
   ).length;
   $("#stat-attention").textContent = attention;
-  $("#session-count").textContent = sessions.length;
+  $("#session-count").textContent = activeCount;
   $("#task-count").textContent = tasks.length;
 
-  $("#overview-sessions").innerHTML = sessions.length
-    ? sessions
+  const activeSessions = sessions.filter(isActiveSession);
+  $("#overview-sessions").innerHTML = activeSessions.length
+    ? activeSessions
         .slice(0, 3)
         .map((session) => sessionItem(session, true))
         .join("")
     : emptyState(
         "▤",
-        "No sessions yet",
-        "Start a CLI agent to connect it to this project.",
-        '<button class="text-button" type="button" data-action="new-session">Start an agent →</button>',
+        "No active sessions",
+        "Open a Terminal or choose an agent to get started.",
+        '<button class="text-button" type="button" data-view="sessions">Open workspace →</button>',
       );
   $("#overview-tasks").innerHTML = tasks.length
     ? tasks
@@ -181,15 +263,47 @@ function renderListResults() {
   const { sessions, tasks } = ui.state;
   const sessionMatches = filterSessions(sessions, $("#session-search").value);
   const taskMatches = filterTasks(tasks, $("#task-search").value, sessionLabel);
-  $("#session-list").innerHTML = sessionMatches.length
-    ? sessionMatches.map((session) => sessionItem(session)).join("")
-    : emptyState(
-        "⌕",
-        sessions.length ? "No matching sessions" : "No sessions yet",
-        sessions.length
-          ? "Try an agent name, state, or session ID."
-          : "Start a CLI agent. It will appear here with its own durable record.",
+
+  const historyOpen =
+    $("#session-list details")?.open ||
+    Boolean($("#session-search").value.trim());
+  if (!sessionMatches.length) {
+    $("#session-list").innerHTML = emptyState(
+      "⌕",
+      sessions.length ? "No matching sessions" : "No sessions yet",
+      sessions.length
+        ? "Try an agent name, state, or session ID."
+        : "Open a Terminal or choose an agent to begin.",
+    );
+  } else {
+    const activeSessions = sessionMatches.filter(isActiveSession);
+    const endedSessions = sessionMatches.filter(
+      (s) => !activeSessions.includes(s),
+    );
+    let html = "";
+    if (activeSessions.length) {
+      html += activeSessions.map((session) => sessionItem(session)).join("");
+    } else {
+      html = emptyState(
+        "▤",
+        "No active sessions",
+        "Open a new session, or check History for previous work.",
       );
+    }
+    if (endedSessions.length) {
+      html += `<details class="session-history" ${historyOpen ? "open" : ""}>
+        <summary class="session-history-summary">
+          <span>History (${endedSessions.length})</span>
+          <button class="clear-history-button" type="button" id="clear-ended-button" title="Remove ended session records from ledger">Clear ended</button>
+        </summary>
+        <div class="session-history-items">
+          ${endedSessions.map((session) => sessionItem(session, false, session.state === "ended")).join("")}
+        </div>
+      </details>`;
+    }
+    $("#session-list").innerHTML = html;
+  }
+
   $("#task-list").innerHTML = taskMatches.length
     ? taskMatches.map((task) => taskItem(task)).join("")
     : emptyState(
@@ -252,12 +366,45 @@ function renderTaskDetail() {
   panel.innerHTML = `<div class="detail-top"><div class="section-kicker">TASK DETAIL</div><h2>${escapeHtml(task.title)}</h2><div class="detail-meta"><span class="status-pill ${escapeHtml(task.status.replaceAll(" ", "-"))}">${escapeHtml(task.needsHelp ? "Help requested" : taskName(task.status))}</span><span>${task.owner ? `Owned by ${escapeHtml(sessionLabel(task.owner))}` : "Unassigned"}</span></div></div><div class="detail-section"><span class="section-kicker">BRIEF</span><p class="task-brief">${escapeHtml(task.brief || "No brief recorded.")}</p></div><div class="detail-section"><span class="section-kicker">RECORDED HISTORY</span><div class="history-list">${history}</div></div>${buttons ? `<div class="detail-actions">${buttons}</div>` : ""}`;
 }
 
+function isActiveSession(session) {
+  return session.hostedHere === true || session.state === "live";
+}
+
+function removeTerminal(id) {
+  const terminal = ui.terminals.get(id);
+  if (!terminal) return;
+  terminal.closed = true;
+  clearTimeout(terminal.pollTimer);
+  terminal.observer.disconnect();
+  terminal.term.dispose();
+  terminal.tile.remove();
+  ui.terminals.delete(id);
+}
+
+function selectTerminal(id) {
+  ui.splitTerminals = false;
+  ui.focusedTerminal = id;
+  updateTerminalFocus();
+  renderListResults();
+  ui.terminals.get(id)?.term.focus();
+  pollTerminal(id);
+}
+
 function syncHostedTerminals() {
-  if (ui.view !== "sessions") return;
+  if (!ui.state || ui.view !== "sessions") return;
+  for (const id of ui.terminals.keys()) {
+    if (
+      !ui.state.sessions.some(
+        (session) => session.id === id && session.hostedHere,
+      )
+    )
+      removeTerminal(id);
+  }
   for (const session of ui.state.sessions) {
-    if (session.hasTerminal && !ui.terminals.has(session.id))
+    if (session.hostedHere && !ui.terminals.has(session.id))
       addTerminal(session);
   }
+  updateTerminalFocus();
 }
 
 function showDialog(id) {
@@ -278,16 +425,80 @@ async function refreshState(silent = false) {
       // The explicit refresh below still runs after a failed background request.
     }
   }
+  const revision = ui.sessionRevision;
   const request = api("GET", "/api/state");
   ui.refreshing = request;
   try {
-    ui.state = await request;
-    render();
+    const state = await request;
+    if (revision !== ui.sessionRevision) return;
+    if (JSON.stringify(state) !== JSON.stringify(ui.state)) {
+      ui.state = state;
+      render();
+    }
   } catch (error) {
     if (!silent) toast(error.message, "error");
   } finally {
     if (ui.refreshing === request) ui.refreshing = null;
   }
+}
+
+async function refreshWorkspace() {
+  if (ui.workspaceRefreshing) return ui.workspaceRefreshing;
+  const request = api("GET", "/api/workspace");
+  ui.workspaceRefreshing = request;
+  const revision = ui.sessionRevision;
+  try {
+    const workspace = await request;
+    if (revision !== ui.sessionRevision) return;
+    const previous = ui.state;
+    const ids = new Set(workspace.sessions.map((session) => session.id));
+    const history = (previous?.sessions || [])
+      .filter((session) => !ids.has(session.id))
+      .map((session) =>
+        session.hostedHere
+          ? {
+              ...session,
+              state: "ended",
+              hostedHere: false,
+              hasTerminal: false,
+            }
+          : session,
+      );
+    const state = {
+      ...workspace,
+      tasks: previous?.tasks || [],
+      memory: previous?.memory || "",
+      project: {
+        ...workspace.project,
+        branch: previous?.project.branch ?? null,
+        changedFiles: previous?.project.changedFiles ?? null,
+      },
+      sessions: [...workspace.sessions, ...history],
+    };
+    if (JSON.stringify(state) !== JSON.stringify(previous)) {
+      ui.state = state;
+      render();
+    }
+  } catch (error) {
+    if (!ui.state) toast(error.message, "error");
+  } finally {
+    ui.workspaceRefreshing = null;
+  }
+}
+
+function mountLaunchedSession(session) {
+  ui.sessionRevision += 1;
+  if (ui.state) {
+    ui.state.sessions = [
+      session,
+      ...ui.state.sessions.filter((item) => item.id !== session.id),
+    ];
+  }
+  addTerminal(session);
+  selectTerminal(session.id);
+  showView("sessions");
+  render();
+  refreshState(true);
 }
 
 function renderChecks(report) {
@@ -315,12 +526,10 @@ async function refreshChecks(silent = true, attempt = 0) {
 async function activateSession(id) {
   const session = ui.state?.sessions.find((item) => item.id === id);
   if (!session) return;
-  if (session.hasTerminal) {
+  if (session.hostedHere) {
     showView("sessions");
-    document
-      .getElementById(`terminal-${id}`)
-      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    ui.terminals.get(id)?.term.focus();
+    if (!ui.terminals.has(id)) addTerminal(session);
+    selectTerminal(id);
     return;
   }
   if (session.canResume) {
@@ -329,9 +538,15 @@ async function activateSession(id) {
         agent: "resume",
         resume_id: id,
       });
-      await refreshState();
-      showView("sessions");
-      ui.terminals.get(result.sessionId)?.term.focus();
+      const sessionObj = {
+        id: result.sessionId,
+        agent: session.agent,
+        isolated: session.isolated,
+        state: "live",
+        hasTerminal: true,
+        hostedHere: true,
+      };
+      mountLaunchedSession(sessionObj);
     } catch (error) {
       toast(error.message, "error");
     }
@@ -357,12 +572,13 @@ async function activateSession(id) {
 }
 
 function addTerminal(session) {
+  if (ui.terminals.has(session.id)) return;
   const grid = $("#terminal-grid");
   grid.querySelector(".terminal-empty")?.remove();
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><div class="window-dots"><i></i><i></i><i></i></div><span class="terminal-title">${escapeHtml(session.agent)} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}">Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="Stop and close terminal">×</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -398,36 +614,64 @@ function addTerminal(session) {
     mount,
     tile,
     cursor: 0,
-    inputQueue: Promise.resolve(),
     closed: false,
+    inputBuffer: "",
+    sendingInput: false,
+    polling: false,
+    pollTimer: null,
   };
   ui.terminals.set(session.id, terminal);
+
+  const sendInputBatch = async () => {
+    if (
+      !terminal.inputBuffer ||
+      terminal.closed ||
+      terminal.ending ||
+      terminal.ended ||
+      terminal.sendingInput
+    )
+      return;
+    terminal.sendingInput = true;
+    const { chunk: payload, rest } = takeInputChunk(terminal.inputBuffer);
+    terminal.inputBuffer = rest;
+    try {
+      await api("POST", `/api/terminals/${session.id}/input`, {
+        data: payload,
+      });
+      // Trigger prompt poll to render the typed character echo
+      pollTerminal(session.id);
+    } catch (error) {
+      if (/phone controls input/.test(error.message)) {
+        if (
+          window.confirm(
+            "Your phone controls input for this session. Take it back to this desktop?",
+          )
+        ) {
+          try {
+            const result = await api(
+              "POST",
+              `/api/terminals/${session.id}/control`,
+            );
+            toast(result.message);
+          } catch (takeError) {
+            toast(takeError.message, "error");
+          }
+        }
+        return;
+      }
+      toast(error.message, "error");
+    } finally {
+      terminal.sendingInput = false;
+      if (terminal.inputBuffer) {
+        sendInputBatch();
+      }
+    }
+  };
+
   term.onData((data) => {
     if (terminal.closed || terminal.ended) return;
-    terminal.inputQueue = terminal.inputQueue
-      .then(() => api("POST", `/api/terminals/${session.id}/input`, { data }))
-      .catch(async (error) => {
-        // A paired phone holds input. Taking it back is the desktop user's explicit choice.
-        if (/phone controls input/.test(error.message)) {
-          if (
-            window.confirm(
-              "Your phone controls input for this session. Take it back to this desktop?",
-            )
-          ) {
-            try {
-              const result = await api(
-                "POST",
-                `/api/terminals/${session.id}/control`,
-              );
-              toast(result.message);
-            } catch (takeError) {
-              toast(takeError.message, "error");
-            }
-          }
-          return;
-        }
-        toast(error.message, "error");
-      });
+    terminal.inputBuffer += data;
+    sendInputBatch();
   });
   let resizeTimer;
   const observer = new ResizeObserver(() => {
@@ -450,20 +694,28 @@ function addTerminal(session) {
 
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
-  if (ui.focusedTerminal && !ui.terminals.has(ui.focusedTerminal))
-    ui.focusedTerminal = null;
-  grid.classList.toggle("focused", Boolean(ui.focusedTerminal));
+  if (!ui.terminals.size && !grid.querySelector(".terminal-empty"))
+    grid.append(emptyTerminalTemplate.cloneNode(true));
+  if (!ui.focusedTerminal || !ui.terminals.has(ui.focusedTerminal))
+    ui.focusedTerminal = ui.terminals.keys().next().value || null;
+  grid.classList.toggle(
+    "focused",
+    Boolean(ui.focusedTerminal) && !ui.splitTerminals,
+  );
   ui.terminals.forEach(({ tile, fit, mount }, id) => {
-    const focused = id === ui.focusedTerminal;
+    const focused = id === ui.focusedTerminal && !ui.splitTerminals;
     tile.classList.toggle("focused", focused);
     const button = tile.querySelector("[data-focus-terminal]");
     button.setAttribute("aria-pressed", String(focused));
     button.setAttribute(
       "aria-label",
-      focused ? "Show all terminals" : "Focus terminal",
+      focused ? "Split panes" : "Focus this session",
     );
-    button.title = focused ? "Show all terminals" : "Focus this terminal";
-    button.textContent = focused ? "⤡" : "⤢";
+    button.hidden = ui.terminals.size < 2;
+    button.title = focused
+      ? "Show sessions side by side"
+      : "Use the full workspace for this session";
+    button.textContent = focused ? "Split panes" : "Focus";
     requestAnimationFrame(() => {
       if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
     });
@@ -472,28 +724,44 @@ function updateTerminalFocus() {
 
 async function pollTerminal(id) {
   const terminal = ui.terminals.get(id);
-  if (!terminal || terminal.closed) return;
+  if (!terminal || terminal.closed || terminal.ending) return;
+  if (terminal.polling) {
+    terminal.pollAgain = true;
+    return;
+  }
+  clearTimeout(terminal.pollTimer);
+  const startedAt = performance.now();
+  terminal.polling = true;
+  let receivedBytes = 0;
   try {
     const output = await api(
       "GET",
       `/api/terminals/${id}/output?after=${terminal.cursor}`,
     );
+    if (terminal.closed || terminal.ending) return;
     const bytes = Uint8Array.from(atob(output.data), (character) =>
       character.charCodeAt(0),
     );
+    receivedBytes = bytes.length;
     if (output.reset) terminal.term.reset();
     if (bytes.length)
       await new Promise((resolve) => terminal.term.write(bytes, resolve));
     terminal.cursor = output.cursor;
     if (output.running) {
       const phoneControls = output.controller === "phone";
-      terminal.tile.querySelector("[data-take-terminal]").hidden = !phoneControls;
+      const hasPhone = phoneControls || Boolean(output.phoneConnected);
+      terminal.tile.querySelector("[data-phone-terminal]").hidden = !hasPhone;
+      terminal.tile.querySelector("[data-take-terminal]").hidden =
+        !phoneControls;
       terminal.tile.querySelector(".terminal-state").textContent = phoneControls
         ? "● Phone controls input"
         : output.phoneConnected
           ? "● Desktop controls input · phone connected"
-          : "● Desktop controls input";
-      if ($("#phone-dialog").open && $("#phone-dialog").dataset.sessionId === id) {
+          : "● Connected to Verb";
+      if (
+        $("#phone-dialog").open &&
+        $("#phone-dialog").dataset.sessionId === id
+      ) {
         if (ui.phoneStatus)
           ui.phoneStatus.connected = Boolean(output.phoneConnected);
         updatePhoneStatus();
@@ -507,13 +775,26 @@ async function pollTerminal(id) {
       terminal.ended = true;
     }
   } catch (error) {
+    if (terminal.closed || terminal.ending) return;
     terminal.tile.querySelector(".terminal-state").textContent =
       "○ Connection interrupted";
     if (!terminal.reportedError) toast(error.message, "error");
     terminal.reportedError = true;
+  } finally {
+    terminal.polling = false;
   }
-  if (!terminal.closed && !terminal.ended)
-    setTimeout(() => pollTerminal(id), 150);
+  if (!terminal.closed && !terminal.ended) {
+    clearTimeout(terminal.pollTimer);
+    const cadence =
+      id === ui.focusedTerminal && ui.view === "sessions" && !document.hidden
+        ? receivedBytes > 0 || terminal.pollAgain
+          ? 0
+          : 100
+        : 1000;
+    terminal.pollAgain = false;
+    const delay = Math.max(0, cadence - (performance.now() - startedAt));
+    terminal.pollTimer = setTimeout(() => pollTerminal(id), delay);
+  }
 }
 
 async function openAction(action) {
@@ -558,7 +839,7 @@ async function openAction(action) {
   select.innerHTML = candidates
     .map(
       (session) =>
-        `<option value="${escapeHtml(session.id)}">${escapeHtml(session.agent)} · ${escapeHtml(session.id.slice(0, 8))} · ${escapeHtml(stateName(session.state))}${session.isolated ? " · isolated" : ""}</option>`,
+        `<option value="${escapeHtml(session.id)}">${escapeHtml(agentDisplayName(session.agent))} · ${escapeHtml(session.id.slice(0, 8))} · ${escapeHtml(stateName(session.state))}${session.isolated ? " · isolated" : ""}</option>`,
     )
     .join("");
   if (task.owner && candidates.some((session) => session.id === task.owner))
@@ -578,7 +859,128 @@ async function openAction(action) {
   showDialog("action-dialog");
 }
 
+async function endTerminal(id) {
+  const terminal = ui.terminals.get(id);
+  if (!terminal) return;
+  terminal.ending = true;
+  clearTimeout(terminal.pollTimer);
+  try {
+    if (!terminal.tile.classList.contains("ended"))
+      await api("DELETE", `/api/terminals/${id}`);
+  } catch (error) {
+    terminal.ending = false;
+    pollTerminal(id);
+    throw error;
+  }
+  ui.sessionRevision += 1;
+  removeTerminal(id);
+  if (ui.state)
+    ui.state.sessions = ui.state.sessions.map((session) =>
+      session.id === id
+        ? { ...session, state: "ended", hostedHere: false, hasTerminal: false }
+        : session,
+    );
+  render();
+  updateTerminalFocus();
+  refreshState(true);
+}
+$("#end-session-confirm").addEventListener("click", async () => {
+  const button = $("#end-session-confirm");
+  button.disabled = true;
+  try {
+    await endTerminal($("#end-session-dialog").dataset.sessionId);
+    closeDialog("end-session-dialog");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+async function launchQuickTerminal() {
+  if (ui.launchingTerminal) return;
+  ui.launchingTerminal = true;
+  const buttons = [
+    ...document.querySelectorAll(
+      "#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty",
+    ),
+  ];
+  const labels = buttons.map((button) => button.textContent);
+  buttons.forEach((button) => {
+    button.disabled = true;
+    button.textContent = "Opening…";
+  });
+  try {
+    const result = await api("POST", "/api/terminals", {
+      agent: "shell",
+      isolated: false,
+      args: [],
+    });
+    const sessionObj = {
+      id: result.sessionId,
+      agent: "shell",
+      isolated: false,
+      state: "live",
+      hasTerminal: true,
+      hostedHere: true,
+    };
+    mountLaunchedSession(sessionObj);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    ui.launchingTerminal = false;
+    buttons.forEach((button, index) => {
+      button.disabled = false;
+      button.textContent = labels[index];
+    });
+  }
+}
+
 document.addEventListener("click", async (event) => {
+  const quickTerm = event.target.closest(
+    "#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty",
+  );
+  if (quickTerm) return launchQuickTerminal();
+  const clearHistory = event.target.closest("#clear-ended-button");
+  if (clearHistory) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (
+      !confirm(
+        "Remove ended session records in this project? Active sessions and agent transcripts are kept.",
+      )
+    )
+      return;
+    clearHistory.disabled = true;
+    try {
+      const res = await api("POST", "/api/sessions/clear-ended");
+      toast(`Cleared ${res.cleared} ended session(s).`);
+      await refreshState(true);
+    } catch (e) {
+      toast(e.message, "error");
+    } finally {
+      clearHistory.disabled = false;
+    }
+    return;
+  }
+  const deleteSession = event.target.closest("[data-delete-session]");
+  if (deleteSession) {
+    const id = deleteSession.dataset.deleteSession;
+    if (
+      !confirm(
+        "Remove this ended session record? The agent transcript is kept.",
+      )
+    )
+      return;
+    try {
+      await api("DELETE", `/api/sessions/${id}`);
+      toast("Session record forgotten.");
+      await refreshState(true);
+    } catch (e) {
+      toast(e.message, "error");
+    }
+    return;
+  }
   const close = event.target.closest("[data-close]");
   if (close) return closeDialog(close.dataset.close);
   const view = event.target.closest("[data-view]");
@@ -596,11 +998,11 @@ document.addEventListener("click", async (event) => {
   if (action) return openAction(action.dataset.taskAction);
   const focus = event.target.closest("[data-focus-terminal]");
   if (focus) {
-    ui.focusedTerminal =
-      ui.focusedTerminal === focus.dataset.focusTerminal
-        ? null
-        : focus.dataset.focusTerminal;
+    ui.splitTerminals =
+      ui.focusedTerminal === focus.dataset.focusTerminal && !ui.splitTerminals;
+    ui.focusedTerminal = focus.dataset.focusTerminal;
     updateTerminalFocus();
+    renderListResults();
     if (ui.focusedTerminal) ui.terminals.get(ui.focusedTerminal)?.term.focus();
     return;
   }
@@ -641,32 +1043,20 @@ document.addEventListener("click", async (event) => {
   const terminalClose = event.target.closest("[data-close-terminal]");
   if (terminalClose) {
     const id = terminalClose.dataset.closeTerminal;
-    const tile = ui.terminals.get(id);
-    if (!tile) return;
-    if (
-      !tile.tile.classList.contains("ended") &&
-      !confirm("Stop this agent process and close its terminal?")
-    )
-      return;
-    try {
-      if (!tile.tile.classList.contains("ended"))
-        await api("DELETE", `/api/terminals/${id}`);
-      tile.closed = true;
-      tile.observer.disconnect();
-      tile.term.dispose();
-      tile.tile.remove();
-      ui.terminals.delete(id);
-      updateTerminalFocus();
-      await refreshState();
-    } catch (error) {
-      toast(error.message, "error");
-    }
+    const terminal = ui.terminals.get(id);
+    if (!terminal) return;
+    if (terminal.tile.classList.contains("ended")) return endTerminal(id);
+    $("#end-session-title").textContent = `End ${sessionLabel(id)}?`;
+    $("#end-session-dialog").dataset.sessionId = id;
+    showDialog("end-session-dialog");
     return;
   }
   const actionButton = event.target.closest("[data-action]");
   if (actionButton) {
-    if (actionButton.dataset.action === "new-session")
+    if (actionButton.dataset.action === "new-session") {
+      updateLaunchForm();
       return showDialog("session-dialog");
+    }
     if (actionButton.dataset.action === "new-task")
       return showDialog("task-dialog");
     if (actionButton.dataset.action === "add-note")
@@ -797,38 +1187,57 @@ $("#phone-stop").addEventListener("click", async () => {
   const id = $("#phone-dialog").dataset.sessionId;
   try {
     await api("DELETE", `/api/terminals/${id}/phone`);
-    const button = document.querySelector(`[data-phone-terminal="${CSS.escape(id)}"]`);
-    if (button) { button.dataset.sharing = "false"; button.textContent = "Phone"; }
+    const button = document.querySelector(
+      `[data-phone-terminal="${CSS.escape(id)}"]`,
+    );
+    if (button) {
+      button.dataset.sharing = "false";
+      button.textContent = "Phone";
+    }
     $("#phone-link").value = "";
     ui.phoneStatus = null;
     ui.pairingExpiresAt = null;
-    closeDialog("phone-dialog"); toast("Phone access revoked.");
-  } catch (error) { toast(error.message, "error"); }
+    closeDialog("phone-dialog");
+    toast("Phone access revoked.");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 });
 
 $("#refresh-button").addEventListener("click", () => refreshState());
+function updateLaunchForm() {
+  const form = $("#session-form");
+  const agent = form.elements.agent.value;
+  $("#custom-command-fields").hidden = agent !== "custom";
+  $("#launch-project").textContent =
+    ui.state?.project.name || "Current project";
+  const deployment = ui.state?.deployment;
+  $("#launch-node").textContent =
+    deployment?.mode === "REMOTE"
+      ? `Runs on ${deployment.name}`
+      : "Runs on this computer";
+  form.querySelector('[type="submit"]').textContent =
+    agent === "custom" ? "Open CLI →" : `Open ${agentDisplayName(agent)} →`;
+}
 document
   .querySelectorAll('#session-dialog input[name="agent"]')
-  .forEach((input) =>
-    input.addEventListener("change", () => {
-      $("#custom-command-fields").hidden =
-        $('#session-form input[name="agent"]:checked').value !== "custom";
-    }),
-  );
+  .forEach((input) => input.addEventListener("change", updateLaunchForm));
 
 $("#session-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const agent = form.elements.agent.value;
   const command = form.elements.command.value.trim();
+  const isolated = form.elements.isolated.checked;
   if (agent === "custom" && !command)
     return toast("Enter a CLI executable.", "error");
   const button = form.querySelector('[type="submit"]');
   button.disabled = true;
+  button.textContent = "Opening…";
   try {
     const result = await api("POST", "/api/terminals", {
       agent,
-      isolated: form.elements.isolated.checked,
+      isolated,
       command: agent === "custom" ? command : null,
       args:
         agent === "custom"
@@ -841,13 +1250,20 @@ $("#session-form").addEventListener("submit", async (event) => {
     closeDialog("session-dialog");
     form.reset();
     $("#custom-command-fields").hidden = true;
-    await refreshState();
-    showView("sessions");
-    ui.terminals.get(result.sessionId)?.term.focus();
+    const sessionObj = {
+      id: result.sessionId,
+      agent: agent === "custom" ? command || "custom" : agent,
+      isolated,
+      state: "live",
+      hasTerminal: true,
+      hostedHere: true,
+    };
+    mountLaunchedSession(sessionObj);
   } catch (error) {
     toast(error.message, "error");
   } finally {
     button.disabled = false;
+    updateLaunchForm();
   }
 });
 
@@ -918,14 +1334,25 @@ document.querySelectorAll("dialog").forEach((dialog) =>
   }),
 );
 
-if (!token || !/^[0-9a-f]{64}$/.test(token)) {
-  $("#app").innerHTML =
-    '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Open Verb from its local URL</h1><p>Run <code>verb web</code> in your project and open the URL printed in that terminal. It contains this browser session’s local access key.</p></div>';
-} else {
-  refreshState();
-  refreshChecks();
-  setInterval(() => refreshState(true), 4000);
-  setInterval(() => refreshChecks(), 60000);
+async function bootstrap() {
+  await refreshWorkspace();
+  if (!ui.state) {
+    if (!token) {
+      $("#app").innerHTML =
+        '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Open Verb from its local URL</h1><p>Run <code>verb web</code> in your project and open the URL printed in that terminal. It contains this browser session’s local access key.</p></div>';
+    } else {
+      toast("Could not connect to Verb session", "error");
+    }
+    return;
+  }
+  refreshState(true);
+  setInterval(refreshWorkspace, 4000);
+  setInterval(() => refreshState(true), 30000);
+  setInterval(() => {
+    if (ui.view === "overview") refreshChecks();
+  }, 60000);
   setInterval(updatePhoneStatus, 1000);
   setInterval(refreshPhoneStatus, 2500);
 }
+
+bootstrap();

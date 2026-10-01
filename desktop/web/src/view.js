@@ -47,15 +47,31 @@ export function taskName(status) {
 export function agentMark(agent) {
   if (/claude/i.test(agent)) return "✳";
   if (/codex/i.test(agent)) return "✦";
+  if (/agy|antigravity/i.test(agent)) return "▲";
+  if (/gemini/i.test(agent)) return "♊";
   if (/opencode/i.test(agent)) return "◇";
   return "&gt;_";
+}
+
+export function agentDisplayName(agent) {
+  if (/^shell$/i.test(agent)) return "Terminal";
+  if (/^claude$/i.test(agent)) return "Claude Code";
+  if (/^codex$/i.test(agent)) return "Codex";
+  if (/^agy|antigravity$/i.test(agent)) return "AGY";
+  if (/^gemini$/i.test(agent)) return "Gemini";
+  return agent;
 }
 
 export function filterSessions(sessions, query) {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return sessions;
   return sessions.filter((session) =>
-    [session.agent, session.id, stateName(session.state), session.isolated ? "isolated" : "main"]
+    [
+      session.agent,
+      session.id,
+      stateName(session.state),
+      session.isolated ? "isolated" : "main",
+    ]
       .join(" ")
       .toLocaleLowerCase()
       .includes(needle),
@@ -66,7 +82,13 @@ export function filterTasks(tasks, query, ownerLabel) {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return tasks;
   return tasks.filter((task) =>
-    [task.title, task.brief, taskName(task.status), task.needsHelp ? "help requested" : "", task.owner ? ownerLabel(task.owner) : "unassigned"]
+    [
+      task.title,
+      task.brief,
+      taskName(task.status),
+      task.needsHelp ? "help requested" : "",
+      task.owner ? ownerLabel(task.owner) : "unassigned",
+    ]
       .join(" ")
       .toLocaleLowerCase()
       .includes(needle),
@@ -169,4 +191,18 @@ export function checksHtml(report) {
     );
   }
   return rows.join("");
+}
+
+// The input endpoint bounds UTF-8 bytes, including pasted text.
+export function takeInputChunk(input, maxBytes = 8192) {
+  const encoder = new TextEncoder();
+  let length = 0;
+  let bytes = 0;
+  for (const character of input) {
+    const size = encoder.encode(character).length;
+    if (bytes + size > maxBytes) break;
+    bytes += size;
+    length += character.length;
+  }
+  return { chunk: input.slice(0, length), rest: input.slice(length) };
 }

@@ -2,6 +2,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  agentDisplayName,
+  agentMark,
   checksHtml,
   escapeHtml,
   filterSessions,
@@ -152,13 +154,72 @@ test("session and task search find the next place to work", () => {
     { id: "abc123", agent: "Codex", state: "live", isolated: true },
     { id: "def456", agent: "OpenCode", state: "recoverable", isolated: false },
   ];
-  assert.deepEqual(filterSessions(sessions, " READY TO RESUME "), [sessions[1]]);
+  assert.deepEqual(filterSessions(sessions, " READY TO RESUME "), [
+    sessions[1],
+  ]);
   assert.deepEqual(filterSessions(sessions, "abc123"), [sessions[0]]);
   assert.deepEqual(filterSessions(sessions, "isolated"), [sessions[0]]);
   const tasks = [
-    { title: "Review handoff", brief: "Check the phone bridge", status: "needs review", owner: "abc123", needsHelp: false },
-    { title: "Fix colors", brief: "", status: "active", owner: null, needsHelp: true },
+    {
+      title: "Review handoff",
+      brief: "Check the phone bridge",
+      status: "needs review",
+      owner: "abc123",
+      needsHelp: false,
+    },
+    {
+      title: "Fix colors",
+      brief: "",
+      status: "active",
+      owner: null,
+      needsHelp: true,
+    },
   ];
-  assert.deepEqual(filterTasks(tasks, "codex", () => "Codex abc123"), [tasks[0]]);
-  assert.deepEqual(filterTasks(tasks, "help requested", () => ""), [tasks[1]]);
+  assert.deepEqual(
+    filterTasks(tasks, "codex", () => "Codex abc123"),
+    [tasks[0]],
+  );
+  assert.deepEqual(
+    filterTasks(tasks, "help requested", () => ""),
+    [tasks[1]],
+  );
+});
+
+test("agentMark and agentDisplayName recognize Terminal, Claude, Codex, AGY, Gemini, and others", () => {
+  assert.equal(agentMark("claude"), "✳");
+  assert.equal(agentMark("codex"), "✦");
+  assert.equal(agentMark("agy"), "▲");
+  assert.equal(agentMark("antigravity"), "▲");
+  assert.equal(agentMark("gemini"), "♊");
+  assert.equal(agentMark("opencode"), "◇");
+  assert.equal(agentMark("shell"), "&gt;_");
+  assert.equal(agentMark("custom"), "&gt;_");
+
+  assert.equal(agentDisplayName("shell"), "Terminal");
+  assert.equal(agentDisplayName("claude"), "Claude Code");
+  assert.equal(agentDisplayName("codex"), "Codex");
+  assert.equal(agentDisplayName("agy"), "AGY");
+  assert.equal(agentDisplayName("antigravity"), "AGY");
+  assert.equal(agentDisplayName("gemini"), "Gemini");
+  assert.equal(agentDisplayName("custom-tool"), "custom-tool");
+});
+
+test("pasted input is bounded by UTF-8 bytes without splitting Unicode characters", async () => {
+  const { takeInputChunk } = await import("../src/view.js");
+  const input = "🙂".repeat(3000) + "\npwd\n";
+  const first = takeInputChunk(input);
+  assert.equal(new TextEncoder().encode(first.chunk).length, 8192);
+  assert.equal(first.chunk + first.rest, input);
+  assert.equal(first.chunk.endsWith("🙂"), true);
+  assert.equal(takeInputChunk("pwd\n").rest, "");
+});
+
+test("built terminal CSS contains xterm input and viewport styling", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const css = await readFile(
+    new URL("../dist/app.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(css, /\.xterm-helper-textarea/);
+  assert.match(css, /\.xterm-viewport/);
 });

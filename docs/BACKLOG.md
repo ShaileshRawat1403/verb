@@ -10,6 +10,50 @@ does it merely add another capability?
 
 ---
 
+## PocketFabric web UX closeout — 1 October 2026
+
+**Completed and recorded.** Terminal hot-path isolation, incremental workspace loading,
+active-first Sessions with collapsed History, deployment-aware identity, corrected xterm
+assets, and the interaction/layout polish are included in the closeout commit. Complete
+Rust tests passed (248 passed, 2 existing ignored), web tests passed (11 passed), and web,
+desktop, and ARM64 Linux builds passed. The candidate was verified on the OnePlus using
+disposable project/state and temporary forwarding. Measurements and limits are preserved in
+[performance](WEB_UX_PERFORMANCE_REVIEW.md), [journey](WEB_UX_JOURNEY_REVIEW.md), and
+[polish](WEB_UX_POLISH_REVIEW.md) review snapshots. Production has not been replaced.
+
+**Remaining, in order.**
+
+- **Deployment acceptance:** back up the installed Verb binary, deploy/restart only Verb on
+  PocketFabric Node 1, then verify through `https://verb.pruningmypothos.com`. Restarting Verb
+  interrupts live PTYs; preserve session records and account for active work first. Verify
+  Terminal (`pwd`, `git status`, `uname -a`), Claude/Codex launch and switching, browser
+  close/reopen persistence, collapsed history, and `PocketFabric Node 1 / REMOTE`. Record
+  the deployed hash, rollback path, and real Cloudflare-path observations before declaring
+  production acceptance. The Mac must remain unnecessary for runtime operation.
+- **Responsive acceptance:** repeat the final polish at a confirmed narrow viewport or
+  actual mobile browser. The last viewport override did not change the observed desktop
+  width, so it is not fresh narrow-screen evidence.
+- **Interaction coverage:** add meaningful browser coverage for launch/end cancellation,
+  last-session empty state, stale-state races, panel preferences, and session restoration
+  when a stable browser test setup is available. API and view logic already have coverage.
+- **Secondary computation:** full state/repository checks still take seconds on the node.
+  They no longer gate the terminal. Investigate only if background device contention remains
+  perceptible, using measurements; do not start another speculative optimization pass.
+- **Git/CI utilities, deferred:** assess compact changed-file/diff review, branch/upstream
+  context, and CI run/check summaries after deployment acceptance. Define the journey and
+  scope before adding integrations or write actions. No Git/CI feature was implemented here.
+- **Separate node administration issue:** SSH was reachable, but read-only inspection found
+  `sv status sshd` reporting `runsv not running` and no corresponding runsv process. Diagnose
+  supervision separately under explicit authorization; this patch does not repair it or
+  establish its cause.
+
+Cloudflare, DNS, Access policies, AdGuard, SSH configuration, LanguageOps, the Android APK,
+and the PocketFabric tunnel remain outside this web closeout. No production deployment,
+remote branch deletion, or push is part of the closeout request. Local merged feature/review
+branches may be removed; preserve `main`, the current integration branch, and unmerged work.
+
+---
+
 ## Desktop observation and release — 27 September
 
 Desktop only; `app/` was not touched. Everything below passed `cargo fmt --check`,

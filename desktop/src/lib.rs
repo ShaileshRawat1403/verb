@@ -43,6 +43,8 @@ enum Agent {
     Shell,
     Claude,
     Codex,
+    Gemini,
+    Agy,
     OpenCode,
     Dsh,
     External,
@@ -55,6 +57,8 @@ impl Agent {
             "shell" => Self::Shell,
             "claude" => Self::Claude,
             "codex" => Self::Codex,
+            "gemini" => Self::Gemini,
+            "agy" | "antigravity" => Self::Agy,
             "opencode" | "open-code" => Self::OpenCode,
             "dsh" | "deepseek" => Self::Dsh,
             "external" => Self::External,
@@ -67,6 +71,8 @@ impl Agent {
             Self::Shell => "shell",
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Gemini => "gemini",
+            Self::Agy => "agy",
             Self::OpenCode => "opencode",
             Self::Dsh => "dsh",
             Self::External => "external",
@@ -81,6 +87,8 @@ impl Agent {
             Self::Shell => default_shell(),
             Self::Claude => "claude".to_owned(),
             Self::Codex => "codex".to_owned(),
+            Self::Gemini => "gemini".to_owned(),
+            Self::Agy => "agy".to_owned(),
             Self::OpenCode => "opencode".to_owned(),
             Self::Dsh => "dsh".to_owned(),
             Self::External => "external".to_owned(),
@@ -145,7 +153,7 @@ impl Agent {
             // another agent session's evidence must never make this one recoverable.
             (Self::Claude | Self::Codex | Self::OpenCode, None) => ResumeVerdict::Unknown,
             (Self::Shell | Self::External | Self::Custom(_), _) => ResumeVerdict::No,
-            (Self::Dsh, _) => ResumeVerdict::Unknown,
+            (Self::Gemini | Self::Dsh | Self::Agy, _) => ResumeVerdict::Unknown,
         }
     }
 }
@@ -437,7 +445,7 @@ fn run() -> Result<(), Failure> {
             resume_session(&project, rest.first().map(String::as_str))?;
         }
         "shell" => launch_session(&project, Agent::Shell, rest)?,
-        "claude" | "codex" | "opencode" | "open-code" | "dsh" | "deepseek" => {
+        "claude" | "codex" | "gemini" | "opencode" | "open-code" | "dsh" | "deepseek" => {
             launch_session(&project, Agent::parse(&command), rest)?
         }
         "run" => {
@@ -461,14 +469,17 @@ fn run() -> Result<(), Failure> {
             if rest.is_empty() {
                 return Err(Failure::new(
                     exit::USAGE,
-                    "usage: verb isolated claude|codex|opencode|agent CMD [ARGS...]",
+                    "usage: verb isolated claude|codex|gemini|opencode|agent CMD [ARGS...]",
                 ));
             }
             let target = rest.remove(0);
-            if !matches!(target.as_str(), "claude" | "codex" | "opencode" | "agent") {
+            if !matches!(
+                target.as_str(),
+                "claude" | "codex" | "gemini" | "opencode" | "agent"
+            ) {
                 return Err(Failure::new(
                     exit::USAGE,
-                    "usage: verb isolated claude|codex|opencode|agent CMD [ARGS...]",
+                    "usage: verb isolated claude|codex|gemini|opencode|agent CMD [ARGS...]",
                 ));
             }
             if target == "agent" && rest.is_empty() {
@@ -569,10 +580,11 @@ Usage:
   verb version         Print the version
   verb claude          Launch Claude in the current project
   verb codex           Launch Codex in the current project
+  verb gemini          Launch Gemini in the current project
   verb opencode        Launch OpenCode in the current project
   verb dsh             Launch DeepSeek Harness in the current project
   verb agent CMD ...   Host any CLI as an agent that can share work while live
-  verb isolated claude|codex|opencode|agent CMD ...
+  verb isolated claude|codex|gemini|opencode|agent CMD ...
                        Start an agent in a separate worktree from committed HEAD
   verb run CMD ...     Launch any command in the current project
   verb resume [ID]     Resume the latest recoverable session here, or one exact session
@@ -646,11 +658,13 @@ pub(crate) fn read_sessions() -> Result<Vec<Session>, String> {
 pub(crate) fn read_sessions_except(hosting: &[&str]) -> Result<Vec<Session>, String> {
     let mut sessions = Vec::new();
     for session in read_session_records()? {
-        sessions.push(if hosting.contains(&session.id.as_str()) {
-            session
-        } else {
-            reconcile_session(session)?
-        });
+        sessions.push(
+            if hosting.contains(&session.id.as_str()) || session.state == SessionState::Ended {
+                session
+            } else {
+                reconcile_session(session)?
+            },
+        );
     }
 
     // Newest first, so the key is negated rather than the comparison reversed.
@@ -961,7 +975,17 @@ fn add_shared_bootstrap(agent: &Agent, args: &mut Vec<String>) {
 }
 
 pub(crate) fn begin_session(project: &Path, agent: Agent, extra_args: Vec<String>) -> SessionStart {
-    let session = Session::new(project.to_path_buf(), agent.clone());
+    begin_session_with_identity(project, agent, extra_args, None)
+}
+
+pub(crate) fn begin_session_with_identity(
+    project: &Path,
+    agent: Agent,
+    extra_args: Vec<String>,
+    identity: Option<&project::ProjectIdentity>,
+) -> SessionStart {
+    let mut session = Session::new(project.to_path_buf(), agent.clone());
+    session.verb_project_id = identity.map(|identity| identity.id.clone());
     let command = agent.command();
 
     // A shell Verb hosts is instrumented so it reports its own working directory and command
@@ -984,7 +1008,11 @@ pub(crate) fn begin_session(project: &Path, agent: Agent, extra_args: Vec<String
     if bootstrap {
         add_shared_bootstrap(&agent, &mut args);
     }
-    if let Ok(path) = workbench::memory_path(project) {
+    let memory_path = identity
+        .map(|identity| identity.store.join("memory.md"))
+        .map(Ok)
+        .unwrap_or_else(|| workbench::memory_path(project));
+    if let Ok(path) = memory_path {
         env.push((
             "VERB_PROJECT_MEMORY_PATH".to_owned(),
             path.to_string_lossy().into_owned(),
@@ -2050,6 +2078,9 @@ mod tests {
     #[test]
     fn parses_known_and_custom_agents() {
         assert_eq!(Agent::parse("Claude"), Agent::Claude);
+        assert_eq!(Agent::parse("Gemini"), Agent::Gemini);
+        assert_eq!(Agent::parse("agy"), Agent::Agy);
+        assert_eq!(Agent::parse("antigravity"), Agent::Agy);
         assert_eq!(Agent::parse("open-code"), Agent::OpenCode);
         assert_eq!(Agent::parse("my-agent").label(), "custom");
         assert_eq!(Agent::parse("my-agent").command(), "my-agent");

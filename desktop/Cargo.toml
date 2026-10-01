@@ -23,6 +23,8 @@ ctrlc = { version = "3.5.2", features = ["termination"] }
 rustls = { version = "0.23.45", default-features = false, features = ["std", "ring"] }
 rcgen = "0.14.10"
 if-addrs = "0.13.4"
+jsonwebtoken = "9.3"
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
 
 # tiny_http with one security patch: an unread request body is no longer drained on the thread that
 # pumps hosted terminals. See vendor/tiny_http/VERB_PATCH.md.
