@@ -64,6 +64,21 @@ class MainActivity : ComponentActivity() {
     private val desktopPhoneViewModel: DesktopPhoneViewModel by viewModels()
     private var incomingPairLink by mutableStateOf<String?>(null)
 
+    /**
+     * Terminals outlive Activities (`VerbTerminalSessionHolder` keeps them for the process), but
+     * each one's TerminalView was created in a specific Activity and holds it as its context. Left
+     * bound, a destroyed Activity stayed reachable from a process-wide object: on a Vivo I2202,
+     * four rotations then five minutes and forced GC left 2 Activities alive; released, 1.
+     * Release every view this Activity created; the next one binds fresh views to the same
+     * sessions.
+     */
+    override fun onDestroy() {
+        com.example.verb.session.VerbTerminalSessionHolder.runtimes.value.forEach { runtime ->
+            runtime.renderTarget.value?.releaseTerminalView(this)
+        }
+        super.onDestroy()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         incomingPairLink = intent?.dataString?.takeIf { it.startsWith("verb://pair#") }
