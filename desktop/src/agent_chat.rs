@@ -60,11 +60,7 @@ pub(crate) struct ClaudeChatAdapter {
 }
 
 impl ClaudeChatAdapter {
-    pub(crate) fn new(
-        project: PathBuf,
-        hosted_pid: i32,
-        resume_identity: Option<String>,
-    ) -> Self {
+    pub(crate) fn new(project: PathBuf, hosted_pid: i32, resume_identity: Option<String>) -> Self {
         Self {
             project,
             hosted_pid,
@@ -171,7 +167,10 @@ impl ClaudeChatAdapter {
             };
             let session_id = meta.get("sessionId").and_then(|v| v.as_str());
             if session_id == self.known_session_id.as_deref() {
-                return meta.get("status").and_then(|v| v.as_str()).map(str::to_owned);
+                return meta
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
             }
         }
         None
@@ -206,13 +205,19 @@ impl AgentChatAdapter for ClaudeChatAdapter {
                             bytes_read += line.len() as u64 + 1;
 
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-                                let is_meta = val.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false);
+                                let is_meta =
+                                    val.get("isMeta").and_then(|v| v.as_bool()).unwrap_or(false);
                                 if is_meta {
                                     continue;
                                 }
 
-                                let entry_type = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                                let uuid = val.get("uuid").and_then(|v| v.as_str()).unwrap_or("").to_owned();
+                                let entry_type =
+                                    val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                                let uuid = val
+                                    .get("uuid")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_owned();
                                 let ts = parse_timestamp(&val);
 
                                 if entry_type == "user" {
@@ -408,9 +413,15 @@ mod tests {
     #[test]
     fn filters_out_internal_system_tags() {
         assert!(!is_real_user_message("<command-name>/model</command-name>"));
-        assert!(!is_real_user_message("<local-command-stdout>Set model</local-command-stdout>"));
-        assert!(!is_real_user_message("<system-reminder>SessionStart</system-reminder>"));
-        assert!(is_real_user_message("Please explain how the database works."));
+        assert!(!is_real_user_message(
+            "<local-command-stdout>Set model</local-command-stdout>"
+        ));
+        assert!(!is_real_user_message(
+            "<system-reminder>SessionStart</system-reminder>"
+        ));
+        assert!(is_real_user_message(
+            "Please explain how the database works."
+        ));
     }
 
     #[test]
