@@ -1047,11 +1047,10 @@ impl WebHost {
                             .terminals
                             .get(&session.id)
                             .is_some_and(|terminal| terminal.hosted.is_some())
+                        && crate::forget_session(&session.id).is_ok()
                     {
-                        if crate::forget_session(&session.id).is_ok() {
-                            self.terminals.remove(&session.id);
-                            cleared += 1;
-                        }
+                        self.terminals.remove(&session.id);
+                        cleared += 1;
                     }
                 }
                 self.invalidate_state();
