@@ -1,5 +1,10 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { SearchAddon } from "@xterm/addon-search";
+import { ImageAddon } from "@xterm/addon-image";
 import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
@@ -22,6 +27,245 @@ const token =
 if (location.hash && token) {
   sessionStorage.setItem("verb-web-token", token);
   history.replaceState(null, "", location.pathname);
+}
+
+let streamSocket = null;
+let streamReady = false;
+let socketReconnectTimer = null;
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+const idBytesMap = new Map();
+
+function getIdBytes(id) {
+  let bytes = idBytesMap.get(id);
+  if (!bytes) {
+    bytes = textEncoder.encode(id);
+    idBytesMap.set(id, bytes);
+  }
+  return bytes;
+}
+
+function connectTerminalStream() {
+  if (
+    streamSocket &&
+    (streamSocket.readyState === WebSocket.OPEN ||
+      streamSocket.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+  clearTimeout(socketReconnectTimer);
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  const wsUrl = `${protocol}//${location.host}/api/terminals/ws?token=${encodeURIComponent(token || "")}`;
+  try {
+    streamSocket = new WebSocket(wsUrl);
+    streamSocket.binaryType = "arraybuffer";
+  } catch (e) {
+    scheduleStreamReconnect();
+    return;
+  }
+
+  streamSocket.onopen = () => {
+    streamReady = true;
+    console.info("Verb terminal stream connected over WebSocket");
+    ui.terminals.forEach((terminal, id) => {
+      terminal.streaming = true;
+      sendStreamAttach(id, terminal.term.rows, terminal.term.cols);
+      const stateEl = terminal.tile.querySelector(".terminal-state");
+      if (stateEl && !terminal.ended) {
+        stateEl.textContent = "● Connected to Verb (streaming)";
+      }
+    });
+  };
+
+  streamSocket.onmessage = (event) => {
+    if (typeof event.data === "string") {
+      try {
+        const msg = JSON.parse(event.data);
+        handleStreamControl(msg);
+      } catch (e) {
+        console.error("Malformed control frame", e);
+      }
+    } else if (event.data instanceof ArrayBuffer) {
+      handleStreamBinary(event.data);
+    }
+  };
+
+  streamSocket.onclose = (event) => {
+    streamReady = false;
+    streamSocket = null;
+    console.warn("Verb terminal stream closed:", event?.code, event?.reason);
+    ui.terminals.forEach((terminal, id) => {
+      terminal.streaming = false;
+      const stateEl = terminal.tile.querySelector(".terminal-state");
+      if (stateEl && !terminal.ended) {
+        stateEl.textContent = "○ Reconnecting stream…";
+      }
+      pollTerminal(id);
+    });
+    scheduleStreamReconnect();
+  };
+
+  streamSocket.onerror = (e) => {
+    streamReady = false;
+    console.warn("Verb terminal stream error:", e);
+  };
+}
+
+function scheduleStreamReconnect() {
+  clearTimeout(socketReconnectTimer);
+  socketReconnectTimer = setTimeout(connectTerminalStream, 2000);
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (
+    document.visibilityState === "visible" &&
+    (!streamSocket || streamSocket.readyState !== WebSocket.OPEN)
+  ) {
+    connectTerminalStream();
+  }
+});
+
+function sendStreamAttach(id, rows, cols) {
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+  streamSocket.send(JSON.stringify({ type: "attach", id, rows, cols }));
+}
+
+function sendStreamDetach(id) {
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+  streamSocket.send(JSON.stringify({ type: "detach", id }));
+}
+
+function sendStreamResize(id, rows, cols) {
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+  streamSocket.send(JSON.stringify({ type: "resize", id, rows, cols }));
+}
+
+function sendStreamAck(id, bytes) {
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+  streamSocket.send(JSON.stringify({ type: "ack", id, bytes }));
+}
+
+function sendStreamSignal(id, signal) {
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+  streamSocket.send(JSON.stringify({ type: "signal", id, signal }));
+}
+
+function sendStreamInput(id, dataStr) {
+  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  const idBytes = getIdBytes(id);
+  const dataBytes = textEncoder.encode(dataStr);
+  const frame = new Uint8Array(1 + idBytes.length + dataBytes.length);
+  frame[0] = idBytes.length;
+  frame.set(idBytes, 1);
+  frame.set(dataBytes, 1 + idBytes.length);
+  streamSocket.send(frame.buffer);
+  return true;
+}
+
+function markTerminalActivity(id) {
+  if (id === ui.focusedTerminal && !document.hidden && ui.view === "sessions")
+    return;
+  const terminal = ui.terminals.get(id);
+  if (!terminal) return;
+  terminal.tile.classList.add("has-activity");
+}
+
+function handleStreamBinary(buffer) {
+  const bytes = new Uint8Array(buffer);
+  if (bytes.length < 2) return;
+  const idLen = bytes[0];
+  if (bytes.length < 1 + idLen) return;
+  const id = textDecoder.decode(bytes.subarray(1, 1 + idLen));
+  const payload = bytes.subarray(1 + idLen);
+  const terminal = ui.terminals.get(id);
+  if (!terminal || terminal.closed || terminal.ended) return;
+
+  terminal.streaming = true;
+  terminal.unackedBytes = (terminal.unackedBytes || 0) + payload.length;
+  markTerminalActivity(id);
+
+  terminal.term.write(payload, () => {
+    terminal.unackedBytes = Math.max(0, terminal.unackedBytes - payload.length);
+    terminal.pendingAck = (terminal.pendingAck || 0) + payload.length;
+    if (terminal.pendingAck >= 16384) {
+      clearTimeout(terminal.ackTimer);
+      terminal.ackTimer = null;
+      sendStreamAck(id, terminal.pendingAck);
+      terminal.pendingAck = 0;
+    } else if (!terminal.ackTimer) {
+      terminal.ackTimer = setTimeout(() => {
+        terminal.ackTimer = null;
+        if (terminal.pendingAck > 0 && !terminal.closed && !terminal.ended) {
+          sendStreamAck(id, terminal.pendingAck);
+          terminal.pendingAck = 0;
+        }
+      }, 120);
+    }
+  });
+}
+
+function handleStreamControl(msg) {
+  if (msg.v === 1) {
+    return;
+  }
+  if (msg.type === "attached") {
+    const { id, screen, running, controller, phoneConnected } = msg;
+    const terminal = ui.terminals.get(id);
+    if (!terminal || terminal.closed) return;
+    terminal.streaming = true;
+    if (screen) {
+      const raw = Uint8Array.from(atob(screen), (c) => c.charCodeAt(0));
+      terminal.term.reset();
+      terminal.term.write(raw);
+    }
+    const phoneControls = controller === "phone";
+    const hasPhone = phoneControls || Boolean(phoneConnected);
+    terminal.tile.querySelector("[data-phone-terminal]").hidden = !hasPhone;
+    terminal.tile.querySelector("[data-take-terminal]").hidden = !phoneControls;
+    terminal.tile.querySelector(".terminal-state").textContent = phoneControls
+      ? "● Phone controls input"
+      : phoneConnected
+        ? "● Desktop controls input · phone connected"
+        : "● Connected to Verb (streaming)";
+    if (!running) {
+      terminal.tile.querySelector(".terminal-state").textContent =
+        "○ Session ended";
+      terminal.tile.classList.add("ended");
+      terminal.ended = true;
+    }
+  } else if (msg.type === "exit") {
+    const { id, code } = msg;
+    const terminal = ui.terminals.get(id);
+    if (!terminal) return;
+    terminal.tile.querySelector(".terminal-state").textContent =
+      code === 0 ? "○ Session finished" : `○ Session exited (${code})`;
+    terminal.tile.classList.add("ended");
+    terminal.ended = true;
+    const titleEl = terminal.tile.querySelector(".terminal-title");
+    if (titleEl && !titleEl.querySelector(".terminal-exit-badge")) {
+      const badge = document.createElement("span");
+      badge.className = `terminal-exit-badge ${code === 0 ? "exit-ok" : "exit-err"}`;
+      badge.textContent = `exit ${code}`;
+      titleEl.appendChild(badge);
+    }
+    refreshState(true);
+  } else if (msg.type === "title") {
+    const { id, title } = msg;
+    const terminal = ui.terminals.get(id);
+    if (!terminal || !title) return;
+    const titleEl = terminal.tile.querySelector(".terminal-title");
+    if (titleEl) {
+      titleEl.innerHTML = `${escapeHtml(title)} <small>${escapeHtml(id.slice(0, 6))}</small>`;
+    }
+  } else if (msg.type === "bell") {
+    const { id } = msg;
+    const terminal = ui.terminals.get(id);
+    if (!terminal) return;
+    terminal.tile.classList.add("terminal-bell");
+    setTimeout(() => terminal.tile.classList.remove("terminal-bell"), 500);
+  }
 }
 
 function panelPreference(name) {
@@ -371,10 +615,12 @@ function isActiveSession(session) {
 }
 
 function removeTerminal(id) {
+  sendStreamDetach(id);
   const terminal = ui.terminals.get(id);
   if (!terminal) return;
   terminal.closed = true;
   clearTimeout(terminal.pollTimer);
+  clearTimeout(terminal.ackTimer);
   terminal.observer.disconnect();
   terminal.term.dispose();
   terminal.tile.remove();
@@ -384,9 +630,13 @@ function removeTerminal(id) {
 function selectTerminal(id) {
   ui.splitTerminals = false;
   ui.focusedTerminal = id;
+  const terminal = ui.terminals.get(id);
+  if (terminal) {
+    terminal.tile.classList.remove("has-activity");
+  }
   updateTerminalFocus();
   renderListResults();
-  ui.terminals.get(id)?.term.focus();
+  terminal?.term.focus();
   pollTerminal(id);
 }
 
@@ -578,7 +828,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">● Connected to Verb</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout">${session.isolated ? "ISOLATED" : "MAIN"}</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">⌕</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">✕</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">${streamReady ? "● Connected to Verb (streaming)" : "● Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -588,7 +838,13 @@ function addTerminal(session) {
     fontSize: 13,
     lineHeight: 1.22,
     letterSpacing: 0.2,
-    scrollback: 4000,
+    scrollback: 10000,
+    allowProposedApi: true,
+    scrollOnUserInput: true,
+    fastScrollSensitivity: 2,
+    windowsMode: false,
+    macOptionIsMeta: true,
+    macOptionClickForcesSelection: true,
     theme: {
       background: "#101521",
       foreground: "#e5e7f0",
@@ -607,20 +863,283 @@ function addTerminal(session) {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
+  try {
+    term.loadAddon(new WebLinksAddon());
+  } catch {}
+  try {
+    const unicode11 = new Unicode11Addon();
+    term.loadAddon(unicode11);
+    term.unicode.activeVersion = "11";
+  } catch {}
+  let search = null;
+  try {
+    search = new SearchAddon();
+    term.loadAddon(search);
+  } catch {}
+  try {
+    const imageAddon = new ImageAddon({
+      enableSizeReports: true,
+      pixelLimit: 16777216,
+      sixelSupport: true,
+      iipSupport: true,
+    });
+    term.loadAddon(imageAddon);
+  } catch (e) {
+    console.warn("Image addon unavailable", e);
+  }
   term.open(mount);
+  if (mount.clientWidth > 0 && mount.clientHeight > 0) {
+    try {
+      fit.fit();
+    } catch {}
+  }
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => {
+      webgl.dispose();
+    });
+    term.loadAddon(webgl);
+  } catch (e) {
+    console.warn("WebGL addon unavailable, falling back to DOM renderer", e);
+  }
   const terminal = {
     term,
     fit,
+    search,
     mount,
     tile,
     cursor: 0,
     closed: false,
+    streaming: false,
+    unackedBytes: 0,
+    pendingAck: 0,
+    ackTimer: null,
     inputBuffer: "",
     sendingInput: false,
     polling: false,
     pollTimer: null,
   };
   ui.terminals.set(session.id, terminal);
+  sendStreamAttach(session.id, term.rows, term.cols);
+
+  term.onTitleChange((title) => {
+    if (title && !terminal.closed && !terminal.ended) {
+      const titleEl = tile.querySelector(".terminal-title");
+      if (titleEl) {
+        titleEl.innerHTML = `${escapeHtml(title)} <small>${escapeHtml(session.id.slice(0, 6))}</small>`;
+      }
+    }
+  });
+  term.onBell(() => {
+    tile.classList.add("bell");
+    setTimeout(() => tile.classList.remove("bell"), 400);
+  });
+
+  // OSC 52 clipboard support (allow-listed base64 copy to clipboard)
+  term.parser.registerOscHandler(52, (data) => {
+    const parts = data.split(";");
+    if (parts.length < 2) return true;
+    const b64 = parts[1];
+    if (b64 === "?") return true;
+    try {
+      const bin = atob(b64);
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      const text = new TextDecoder().decode(bytes);
+      if (text && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+    } catch {}
+    return true;
+  });
+
+  // OSC 7 working directory tracking
+  term.parser.registerOscHandler(7, (data) => {
+    let path = data;
+    if (path.startsWith("file://")) {
+      path = path.replace(/^file:\/\/[^\/]*/, "");
+      try {
+        path = decodeURIComponent(path);
+      } catch {}
+    }
+    if (path) {
+      terminal.cwd = path;
+      const checkoutEl = tile.querySelector(".terminal-checkout");
+      if (checkoutEl) {
+        checkoutEl.title = `Working directory: ${path}`;
+      }
+      const bottomPty = tile.querySelector(".terminal-bottom span:last-child");
+      if (bottomPty) {
+        bottomPty.textContent = `PTY · ${path}`;
+        bottomPty.title = path;
+      }
+    }
+    return true;
+  });
+
+  // OSC 133 / OSC 633 shell integration marks
+  const handleShellMark = (data) => {
+    const parts = data.split(";");
+    const mark = parts[0];
+    if (mark === "A") {
+      terminal.inCommand = false;
+    } else if (mark === "C") {
+      terminal.inCommand = true;
+    } else if (mark === "D") {
+      terminal.inCommand = false;
+      const code = parts[1];
+      if (code !== undefined && code !== "") {
+        terminal.lastCommandExitCode = parseInt(code, 10);
+      }
+    }
+    return true;
+  };
+  term.parser.registerOscHandler(133, handleShellMark);
+  term.parser.registerOscHandler(633, handleShellMark);
+
+  const searchBar = tile.querySelector(
+    `[data-search-bar="${CSS.escape(session.id)}"]`,
+  );
+  const searchInput = searchBar.querySelector(".search-input");
+  const searchPrev = searchBar.querySelector(".search-prev");
+  const searchNext = searchBar.querySelector(".search-next");
+  const searchCase = searchBar.querySelector(".search-case");
+  const searchRegex = searchBar.querySelector(".search-regex");
+  const searchClose = searchBar.querySelector(".search-close");
+  const searchToggle = tile.querySelector(
+    `[data-search-terminal="${CSS.escape(session.id)}"]`,
+  );
+
+  const searchOptions = {
+    caseSensitive: false,
+    regex: false,
+    incremental: true,
+  };
+
+  const runSearch = (forward = true) => {
+    const q = searchInput.value;
+    if (!q) {
+      try {
+        search?.clearDecorations?.();
+      } catch {}
+      return;
+    }
+    try {
+      if (forward) {
+        search?.findNext(q, searchOptions);
+      } else {
+        search?.findPrevious(q, searchOptions);
+      }
+    } catch {}
+  };
+
+  searchInput.addEventListener("input", () => runSearch(true));
+  searchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      runSearch(!e.shiftKey);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeSearch();
+    }
+  });
+
+  searchPrev.addEventListener("click", () => runSearch(false));
+  searchNext.addEventListener("click", () => runSearch(true));
+  searchCase.addEventListener("click", () => {
+    searchOptions.caseSensitive = !searchOptions.caseSensitive;
+    searchCase.setAttribute("aria-pressed", String(searchOptions.caseSensitive));
+    runSearch(true);
+  });
+  searchRegex.addEventListener("click", () => {
+    searchOptions.regex = !searchOptions.regex;
+    searchRegex.setAttribute("aria-pressed", String(searchOptions.regex));
+    runSearch(true);
+  });
+
+  const openSearch = () => {
+    searchBar.hidden = false;
+    searchToggle.setAttribute("aria-pressed", "true");
+    searchInput.focus();
+    searchInput.select();
+    if (searchInput.value) runSearch(true);
+  };
+  const closeSearch = () => {
+    searchBar.hidden = true;
+    searchToggle.setAttribute("aria-pressed", "false");
+    try {
+      search?.clearDecorations?.();
+    } catch {}
+    term.focus();
+  };
+  searchClose.addEventListener("click", closeSearch);
+  searchToggle.addEventListener("click", () => {
+    if (searchBar.hidden) openSearch();
+    else closeSearch();
+  });
+
+  const adjustZoom = (delta) => {
+    const current = term.options.fontSize || 13;
+    const next = delta === 0 ? 13 : Math.min(28, Math.max(9, current + delta));
+    if (next !== current) {
+      term.options.fontSize = next;
+      fit.fit();
+      sendStreamResize(session.id, term.rows, term.cols);
+    }
+  };
+
+  term.attachCustomKeyEventHandler((event) => {
+    const isMac = navigator.platform.includes("Mac");
+    const mod = isMac ? event.metaKey : event.ctrlKey;
+
+    if (mod && event.code === "KeyC" && term.hasSelection()) {
+      if (event.type === "keydown") {
+        navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+      }
+      return false;
+    }
+
+    if (mod && event.code === "KeyF") {
+      if (event.type === "keydown") {
+        openSearch();
+      }
+      return false;
+    }
+
+    if (mod && (event.key === "=" || event.key === "+")) {
+      if (event.type === "keydown") adjustZoom(1);
+      return false;
+    }
+    if (mod && event.key === "-") {
+      if (event.type === "keydown") adjustZoom(-1);
+      return false;
+    }
+    if (mod && event.key === "0") {
+      if (event.type === "keydown") adjustZoom(0);
+      return false;
+    }
+
+    return true;
+  });
+
+  mount.addEventListener("paste", (event) => {
+    const text = event.clipboardData?.getData("text");
+    if (!text) return;
+    const lines = text.split(/\r\n|\r|\n/);
+    if (lines.length > 1 && term.buffer?.active?.type !== "alternate") {
+      event.preventDefault();
+      event.stopPropagation();
+      promptMultiLinePaste(session.id, text, lines.length);
+    }
+  });
+
+  mount.addEventListener("contextmenu", async () => {
+    if (term.hasSelection()) {
+      try {
+        await navigator.clipboard.writeText(term.getSelection());
+        toast("Selection copied to clipboard.");
+      } catch {}
+    }
+  });
 
   const sendInputBatch = async () => {
     if (
@@ -670,8 +1189,18 @@ function addTerminal(session) {
 
   term.onData((data) => {
     if (terminal.closed || terminal.ended) return;
-    terminal.inputBuffer += data;
-    sendInputBatch();
+    if (!sendStreamInput(session.id, data)) {
+      terminal.inputBuffer += data;
+      sendInputBatch();
+    }
+  });
+
+  term.onBinary((data) => {
+    if (terminal.closed || terminal.ended) return;
+    if (!sendStreamInput(session.id, data)) {
+      terminal.inputBuffer += data;
+      sendInputBatch();
+    }
   });
   let resizeTimer;
   const observer = new ResizeObserver(() => {
@@ -680,6 +1209,7 @@ function addTerminal(session) {
       if (mount.clientWidth < 30 || mount.clientHeight < 30 || terminal.closed)
         return;
       fit.fit();
+      sendStreamResize(session.id, term.rows, term.cols);
       api("POST", `/api/terminals/${session.id}/resize`, {
         rows: term.rows,
         cols: term.cols,
@@ -725,6 +1255,7 @@ function updateTerminalFocus() {
 async function pollTerminal(id) {
   const terminal = ui.terminals.get(id);
   if (!terminal || terminal.closed || terminal.ending) return;
+  if (terminal.streaming) return;
   if (terminal.polling) {
     terminal.pollAgain = true;
     return;
@@ -757,7 +1288,9 @@ async function pollTerminal(id) {
         ? "● Phone controls input"
         : output.phoneConnected
           ? "● Desktop controls input · phone connected"
-          : "● Connected to Verb";
+          : terminal.streaming
+            ? "● Connected to Verb (streaming)"
+            : "● Connected to Verb (polling)";
       if (
         $("#phone-dialog").open &&
         $("#phone-dialog").dataset.sessionId === id
@@ -1334,6 +1867,38 @@ document.querySelectorAll("dialog").forEach((dialog) =>
   }),
 );
 
+function promptMultiLinePaste(id, text, lineCount) {
+  const dialog = $("#paste-dialog");
+  if (!dialog) {
+    sendStreamInput(id, text);
+    return;
+  }
+  $("#paste-lines-count").textContent = `${lineCount} lines`;
+  const preview = text.split(/\r\n|\r|\n/).slice(0, 6).join("\n");
+  $("#paste-preview-text").textContent =
+    preview + (lineCount > 6 ? `\n… (+${lineCount - 6} more lines)` : "");
+  dialog.dataset.sessionId = id;
+  ui.pendingPasteText = text;
+  showDialog("paste-dialog");
+}
+
+$("#paste-confirm-button")?.addEventListener("click", () => {
+  const dialog = $("#paste-dialog");
+  const id = dialog.dataset.sessionId;
+  const text = ui.pendingPasteText;
+  ui.pendingPasteText = null;
+  closeDialog("paste-dialog");
+  if (id && text) {
+    if (!sendStreamInput(id, text)) {
+      const terminal = ui.terminals.get(id);
+      if (terminal) {
+        terminal.inputBuffer += text;
+        terminal.sendingInput = false;
+      }
+    }
+  }
+});
+
 async function bootstrap() {
   await refreshWorkspace();
   if (!ui.state) {
@@ -1346,6 +1911,7 @@ async function bootstrap() {
     return;
   }
   refreshState(true);
+  connectTerminalStream();
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);
   setInterval(() => {

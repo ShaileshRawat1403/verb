@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=pocketfabric-ux-20261001" />
-    <script src="/app.js?v=pocketfabric-ux-20261001" defer></script>
+    <link rel="stylesheet" href="/app.css?v=stream-phase2-20261007" />
+    <script src="/app.js?v=stream-phase2-20261007" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -776,6 +776,42 @@
             data-close="inbox-dialog"
           >
             Close
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="paste-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">TERMINAL SAFETY</span>
+            <h2>Confirm Multi-Line Paste</h2>
+            <p>You are about to paste <strong id="paste-lines-count">multiple lines</strong> into the terminal shell prompt. This may execute commands immediately.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="paste-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="field">
+          <label class="field-label" for="paste-preview-text">Preview</label>
+          <pre id="paste-preview-text" class="paste-preview"></pre>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="paste-dialog"
+          >
+            Cancel
+          </button>
+          <button class="primary-button" type="button" id="paste-confirm-button">
+            Paste Anyway
           </button>
         </div>
       </div>
