@@ -73,6 +73,8 @@ impl From<TestRequest> for Request {
             Some(mock.remote_addr),
             mock.body.as_bytes(),
             std::io::sink(),
+            None,
+            None,
         )
         .unwrap()
     }

@@ -102,6 +102,14 @@ impl Connection {
             Self::Unix(s) => s.try_clone().map(Self::from),
         }
     }
+
+    pub(crate) fn try_clone_tcp(&self) -> Option<TcpStream> {
+        match self {
+            Self::Tcp(s) => s.try_clone().ok(),
+            #[cfg(unix)]
+            _ => None,
+        }
+    }
 }
 impl From<TcpStream> for Connection {
     fn from(s: TcpStream) -> Self {

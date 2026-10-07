@@ -52,6 +52,14 @@ impl Stream {
             Stream::Https(ssl_stream) => ssl_stream.shutdown(how),
         }
     }
+
+    pub(crate) fn try_clone_tcp(&self) -> Option<std::net::TcpStream> {
+        match self {
+            Stream::Http(conn) => conn.try_clone_tcp(),
+            #[cfg(any(feature = "ssl-openssl", feature = "ssl-rustls"))]
+            Stream::Https(_) => None,
+        }
+    }
 }
 
 impl Read for Stream {
@@ -86,6 +94,7 @@ pub struct RefinedTcpStream {
     stream: Stream,
     close_read: bool,
     close_write: bool,
+    disarmed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RefinedTcpStream {
@@ -97,16 +106,19 @@ impl RefinedTcpStream {
 
         let (read, write) = (stream.clone(), stream);
 
+        let disarmed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let read = RefinedTcpStream {
             stream: read,
             close_read: true,
             close_write: false,
+            disarmed: std::sync::Arc::clone(&disarmed),
         };
 
         let write = RefinedTcpStream {
             stream: write,
             close_read: false,
             close_write: true,
+            disarmed,
         };
 
         (read, write)
@@ -121,16 +133,26 @@ impl RefinedTcpStream {
     pub(crate) fn peer_addr(&mut self) -> IoResult<Option<SocketAddr>> {
         self.stream.peer_addr()
     }
+
+    pub(crate) fn try_clone_tcp(&self) -> Option<std::net::TcpStream> {
+        self.stream.try_clone_tcp()
+    }
+
+    pub(crate) fn disarm_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.disarmed)
+    }
 }
 
 impl Drop for RefinedTcpStream {
     fn drop(&mut self) {
-        if self.close_read {
-            self.stream.shutdown(Shutdown::Read).ok();
-        }
+        if !self.disarmed.load(std::sync::atomic::Ordering::SeqCst) {
+            if self.close_read {
+                self.stream.shutdown(Shutdown::Read).ok();
+            }
 
-        if self.close_write {
-            self.stream.shutdown(Shutdown::Write).ok();
+            if self.close_write {
+                self.stream.shutdown(Shutdown::Write).ok();
+            }
         }
     }
 }

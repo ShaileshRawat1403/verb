@@ -18,3 +18,10 @@ requests are small JSON bodies that Verb reads in full. `desktop/tests/web_integ
 both attacks.
 
 To update: copy the new upstream release here, re-apply the patch, and keep this file current.
+
+**Patch 2 (2026-10-04, Phase 1 real terminals)**: `Request::upgrade_tcp` and connection disarming in
+`src/util/refined_tcp_stream.rs`, `src/client.rs`, and `src/request.rs`. Upstream `upgrade` only
+yields a trait-erased `Box<dyn ReadWrite + Send>`, which prevents setting socket flags (such as
+`TCP_NODELAY` and nonblocking mode) or wrapping the underlying stream with `tungstenite` for
+WebSocket terminal streaming. `upgrade_tcp` provides the raw `TcpStream` while preserving HTTP
+protocol upgrade semantics and disarming automatic connection shutdown upon request drop.

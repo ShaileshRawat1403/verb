@@ -34,6 +34,9 @@ pub struct ClientConnection {
 
     // true if the connection goes through SSL
     secure: bool,
+
+    tcp_stream: Option<std::net::TcpStream>,
+    disarmed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Error that can happen when reading a request.
@@ -54,6 +57,8 @@ impl ClientConnection {
     ) -> ClientConnection {
         let remote_addr = read_socket.peer_addr();
         let secure = read_socket.secure();
+        let tcp_stream = read_socket.try_clone_tcp();
+        let disarmed = read_socket.disarm_handle();
 
         let mut source = SequentialReaderBuilder::new(BufReader::with_capacity(1024, read_socket));
         let first_header = source.next().unwrap();
@@ -65,6 +70,8 @@ impl ClientConnection {
             next_header_source: first_header,
             no_more_requests: false,
             secure,
+            tcp_stream,
+            disarmed,
         }
     }
 
@@ -143,6 +150,9 @@ impl ClientConnection {
         let mut data_source = self.source.next().unwrap();
         std::mem::swap(&mut self.next_header_source, &mut data_source);
 
+        let tcp_clone = self.tcp_stream.as_ref().and_then(|s| s.try_clone().ok());
+        let disarmed_clone = Some(std::sync::Arc::clone(&self.disarmed));
+
         // building the next reader
         let request = crate::request::new_request(
             self.secure,
@@ -153,6 +163,8 @@ impl ClientConnection {
             *self.remote_addr.as_ref().unwrap(),
             data_source,
             writer,
+            tcp_clone,
+            disarmed_clone,
         )
         .map_err(|e| {
             use crate::request;

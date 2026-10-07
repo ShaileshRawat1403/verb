@@ -74,6 +74,9 @@ pub struct Request {
 
     // If Some, a message must be sent after responding
     notify_when_responded: Option<Sender<()>>,
+
+    tcp_stream: Option<std::net::TcpStream>,
+    disarmed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 struct NotifyOnDrop<R> {
@@ -135,6 +138,8 @@ pub fn new_request<R, W>(
     remote_addr: Option<SocketAddr>,
     mut source_data: R,
     writer: W,
+    tcp_stream: Option<std::net::TcpStream>,
+    disarmed: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<Request, RequestCreationError>
 where
     R: Read + Send + 'static,
@@ -238,6 +243,8 @@ where
         body_length: content_length,
         must_send_continue: expects_continue,
         notify_when_responded: None,
+        tcp_stream,
+        disarmed,
     })
 }
 
@@ -330,6 +337,58 @@ impl Request {
             Box::new(stream) as Box<dyn ReadWrite + Send>
         } else {
             Box::new(stream) as Box<dyn ReadWrite + Send>
+        }
+    }
+
+    /// Access the underlying TCP stream, if this request came from a plain TCP connection.
+    pub fn tcp_stream(&self) -> Option<&std::net::TcpStream> {
+        self.tcp_stream.as_ref()
+    }
+
+    /// Sends a response with an `Upgrade` header and returns the underlying `TcpStream` if available,
+    /// disarming connection shutdown so the stream outlives the HTTP server request lifecycle.
+    pub fn upgrade_tcp<R: Read>(
+        mut self,
+        protocol: &str,
+        response: Response<R>,
+    ) -> Result<std::net::TcpStream, Box<dyn ReadWrite + Send>> {
+        response
+            .raw_print(
+                self.response_writer.as_mut().unwrap().by_ref(),
+                self.http_version.clone(),
+                &self.headers,
+                false,
+                Some(protocol),
+            )
+            .ok();
+
+        self.response_writer.as_mut().unwrap().flush().ok();
+
+        if let Some(disarmed) = self.disarmed.take() {
+            disarmed.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        if let Some(tcp) = self.tcp_stream.take() {
+            let _ = self.extract_writer_impl();
+            let _ = self.extract_reader_impl();
+            if let Some(sender) = self.notify_when_responded.take() {
+                let _ = sender.send(());
+            }
+            Ok(tcp)
+        } else {
+            let stream = crate::util::CustomStream::new(
+                self.extract_reader_impl(),
+                self.extract_writer_impl(),
+            );
+            if let Some(sender) = self.notify_when_responded.take() {
+                let stream = NotifyOnDrop {
+                    sender,
+                    inner: stream,
+                };
+                Err(Box::new(stream) as Box<dyn ReadWrite + Send>)
+            } else {
+                Err(Box::new(stream) as Box<dyn ReadWrite + Send>)
+            }
         }
     }
 
