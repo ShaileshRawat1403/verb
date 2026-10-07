@@ -9,6 +9,7 @@ import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import { initWorkbench } from "./specs-ui.js";
+import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
   agentDisplayName,
@@ -33,6 +34,14 @@ if (location.hash && token) {
 let streamSocket = null;
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
+// Light/dark theme; open terminals are recoloured in place when it changes.
+const theme = createThemeController({
+  onChange(resolved) {
+    ui?.terminals?.forEach(({ term }) => {
+      if (term) term.options.theme = TERMINAL_THEMES[resolved];
+    });
+  },
+});
 let streamReady = false;
 let socketReconnectTimer = null;
 const textEncoder = new TextEncoder();
@@ -854,21 +863,7 @@ function addTerminal(session) {
     windowsMode: false,
     macOptionIsMeta: true,
     macOptionClickForcesSelection: true,
-    theme: {
-      background: "#101521",
-      foreground: "#e5e7f0",
-      cursor: "#aa9dff",
-      selectionBackground: "#665ba677",
-      black: "#121623",
-      red: "#ff7e91",
-      green: "#9cdbba",
-      yellow: "#f5cc86",
-      blue: "#9cabff",
-      magenta: "#c7a6ff",
-      cyan: "#80d7e1",
-      white: "#e7e8f0",
-      brightBlack: "#687184",
-    },
+    theme: TERMINAL_THEMES[theme.resolved],
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
@@ -1933,6 +1928,7 @@ async function bootstrap() {
     fitTerminals,
     launchQuickTerminal,
     mountLaunchedSession,
+    theme,
   });
   showView(ui.view);
   setInterval(refreshWorkspace, 4000);

@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=specs-workbench-20261007" />
-    <script src="/app.js?v=specs-workbench-20261007" defer></script>
+    <link rel="stylesheet" href="/app.css?v=themes-20261007" />
+    <script src="/app.js?v=themes-20261007" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -168,6 +168,16 @@
               <span class="git-icon">⑂</span><span id="top-branch">—</span
               ><span class="git-changes" id="top-changes">0 changed</span>
             </div>
+            <button
+              class="theme-toggle"
+              type="button"
+              data-action="theme"
+              id="theme-toggle"
+              title="Theme: follows your system. Click to change."
+              aria-label="Change theme"
+            >
+              <span class="theme-icon" aria-hidden="true">◐</span><span id="theme-label">System</span>
+            </button>
             <button
               class="palette-hint"
               type="button"

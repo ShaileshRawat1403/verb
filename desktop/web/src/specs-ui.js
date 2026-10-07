@@ -412,6 +412,21 @@ export function initWorkbench(deps) {
     }
   });
 
+  // ------------------------------------------------------------------------------ theme
+
+  const THEME_UI = {
+    system: ["◐", "System", "Theme follows your system setting. Click for light."],
+    light: ["☀", "Light", "Light theme. Click for dark."],
+    dark: ["☾", "Dark", "Dark theme. Click to follow your system."],
+  };
+  function renderThemeToggle() {
+    const [icon, label, title] = THEME_UI[deps.theme.preference] ?? THEME_UI.system;
+    document.querySelector("#theme-toggle .theme-icon").textContent = icon;
+    $("#theme-label").textContent = label;
+    $("#theme-toggle").title = title;
+  }
+  renderThemeToggle();
+
   // ---------------------------------------------------------------------------- palette
 
   function commands() {
@@ -422,6 +437,14 @@ export function initWorkbench(deps) {
       { title: "Commit changes", hint: "Alt+C", run: openCommit },
       { title: "Refresh Git status", run: refreshGit },
       { title: "Keyboard shortcuts", hint: "?", run: () => showDialog("shortcuts-dialog") },
+      ...["system", "light", "dark"].map((choice) => ({
+        title: `Theme: ${choice === "system" ? "follow system" : choice}`,
+        hint: deps.theme.preference === choice ? "current" : "",
+        run: () => {
+          deps.theme.set(choice);
+          renderThemeToggle();
+        },
+      })),
       ...VIEWS.map((view, i) => ({
         title: `Go to ${view.charAt(0).toUpperCase()}${view.slice(1)}`,
         hint: `Alt+${i + 1}`,
@@ -509,6 +532,10 @@ export function initWorkbench(deps) {
       "spec-terminal": deps.launchQuickTerminal,
       "spec-agent": startAgent,
       palette: openPalette,
+      theme: () => {
+        deps.theme.cycle();
+        renderThemeToggle();
+      },
     };
     if (handlers[action]) handlers[action]();
   });
