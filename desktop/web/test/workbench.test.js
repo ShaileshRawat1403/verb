@@ -75,3 +75,28 @@ test("skipped stages come from the audit trail until they are entered", () => {
   );
   assert.equal(skippedStages(audit(["stage spec → plan"])).size, 0);
 });
+
+import { buildTree, filterFiles } from "../src/workbench.js";
+
+test("files nest into folders, folders first, with change counts", () => {
+  const tree = buildTree([
+    { path: "src/b.js", status: "M" },
+    { path: "README.md" },
+    { path: "src/a.js" },
+    { path: "src/lib/x.js", status: "??" },
+  ]);
+  assert.deepEqual(tree.dirs.map((d) => d.name), ["src"]);
+  assert.deepEqual(tree.files.map((f) => f.name), ["README.md"]);
+  const src = tree.dirs[0];
+  assert.deepEqual(src.files.map((f) => f.name), ["a.js", "b.js"]);
+  assert.equal(src.dirs[0].path, "src/lib");
+  assert.equal(src.changed, 2);
+  assert.equal(tree.changed, 2);
+});
+
+test("file filter needs every word and prefers file-name hits", () => {
+  const files = [{ path: "src/auth/login.js" }, { path: "docs/login-notes/readme.md" }, { path: "src/app.js" }];
+  assert.deepEqual(filterFiles(files, "login").map((f) => f.path)[0], "src/auth/login.js");
+  assert.deepEqual(filterFiles(files, "src login").map((f) => f.path), ["src/auth/login.js"]);
+  assert.deepEqual(filterFiles(files, ""), []);
+});

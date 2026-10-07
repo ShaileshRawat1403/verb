@@ -27,6 +27,9 @@ test.beforeAll(async () => {
   git("config", "user.name", "E2E Person");
   git("config", "user.email", "e2e@example.com");
   writeFileSync(join(repo, "README.md"), "# e2e\n");
+  writeFileSync(join(repo, ".gitignore"), ".env\n");
+  writeFileSync(join(repo, ".env"), "SECRET_TOKEN=do-not-show\n");
+  writeFileSync(join(repo, "AGENTS.md"), "# Team rules\n\nUse tabs.\n");
   git("add", "-A");
   git("commit", "-qm", "initial");
   const port = await freePort();
@@ -118,4 +121,48 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   await page.locator('[data-action="spec-terminal"]').click();
   await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
   await expect(page.locator("#spec-work .work-hint")).toBeHidden();
+});
+
+test("project view: files, preview, brief, and agent context sync", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(url);
+  await page.keyboard.press("Alt+Digit2");
+  await expect(page.locator("#view-project")).toHaveClass(/active/);
+
+  // The tree shows what Git tracks or would track, and never ignored files.
+  await expect(page.locator('#file-tree [data-file="README.md"]')).toBeVisible();
+  await expect(page.locator('#file-tree [data-file=".env"]')).toHaveCount(0);
+  await page.locator("#file-filter").fill("env");
+  await expect(page.locator('#file-tree [data-file=".env"]')).toHaveCount(0);
+  await page.locator("#file-filter").fill("");
+
+  // Read-only preview with line numbers.
+  await page.locator('#file-tree [data-file="README.md"]').click();
+  await expect(page.locator("#preview-path")).toHaveText("README.md");
+  await expect(page.locator(".code-lines li")).toHaveText(["# e2e"]);
+
+  // Nudges point at the next useful step; nothing is forced.
+  await expect(page.locator("#hub-nudges")).toContainText("project brief");
+  await page.locator('[data-nudge="write-brief"]').click();
+  await page.locator("#brief-problem").fill("Shops lose returning customers.");
+  await page.locator("#brief-users").fill("Returning shoppers");
+  await page.getByRole("button", { name: "Create brief" }).click();
+  await expect(page.locator("#preview-path")).toHaveText("docs/project/BRIEF.md");
+  await expect(page.locator("#brief-progress")).toHaveText("2/5 filled");
+
+  // Sync writes Verb's section and keeps the user's own text.
+  await page.locator('#view-project [data-action="sync-agents"]').click();
+  await expect(page.locator('#agent-files li[data-state="current"]')).toHaveCount(2);
+  const agents = readFileSync(join(repo, "AGENTS.md"), "utf8");
+  expect(agents.startsWith("# Team rules\n\nUse tabs.\n")).toBe(true);
+  expect(agents).toContain("**Problem:** Shops lose returning customers.");
+  expect(readFileSync(join(repo, "docs/project/BRIEF.md"), "utf8")).toContain("synced agent context into AGENTS.md and CLAUDE.md");
+
+  // The palette finds files.
+  await page.locator(".palette-hint").click();
+  await page.locator("#palette-input").fill("brief");
+  await expect(page.locator("#palette-list")).toContainText("Open file docs/project/BRIEF.md");
+  await page.keyboard.press("Escape");
+  expect(errors).toEqual([]);
 });

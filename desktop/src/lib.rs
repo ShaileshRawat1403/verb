@@ -19,6 +19,7 @@ mod exec;
 mod fsutil;
 mod gitstate;
 mod good;
+mod hub;
 mod integration;
 mod json;
 #[cfg(unix)]

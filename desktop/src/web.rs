@@ -374,6 +374,21 @@ struct LaunchRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct BriefRequest {
+    #[serde(default)]
+    problem: String,
+    #[serde(default)]
+    users: String,
+    #[serde(default)]
+    scope: String,
+    #[serde(default)]
+    constraints: String,
+    #[serde(default)]
+    glossary: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SpecCreateRequest {
     title: String,
     #[serde(default)]
@@ -1159,6 +1174,61 @@ impl WebHost {
             let session = self.launch(input)?;
             self.invalidate_state();
             return Ok(Reply::json(201, json!({"sessionId": session})));
+        }
+        if method == &Method::Get && path == "/api/hub" {
+            return Ok(Reply::json(200, json!(crate::hub::hub(&self.project))));
+        }
+        if method == &Method::Get && path == "/api/files" {
+            return Ok(Reply::json(200, json!(crate::hub::files(&self.project)?)));
+        }
+        if method == &Method::Get && path == "/api/files/preview" {
+            let wanted = url
+                .split('?')
+                .nth(1)
+                .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("path=")))
+                .map(crate::shell::percent_decode)
+                .ok_or("which file?")?;
+            return Ok(Reply::json(
+                200,
+                json!(crate::hub::preview(&self.project, &wanted)?),
+            ));
+        }
+        if method == &Method::Post && path == "/api/hub/brief" {
+            let input: BriefRequest = read_json(request)?;
+            crate::hub::create_brief(
+                &self.project,
+                crate::hub::NewBrief {
+                    problem: input.problem,
+                    users: input.users,
+                    scope: input.scope,
+                    constraints: input.constraints,
+                    glossary: input.glossary,
+                },
+                &crate::specs::actor(&self.project, "Verb web"),
+            )?;
+            self.invalidate_state();
+            return Ok(Reply::json(
+                201,
+                json!({"path": crate::hub::BRIEF_PATH, "message": format!("Created {}", crate::hub::BRIEF_PATH)}),
+            ));
+        }
+        if method == &Method::Post && path == "/api/hub/sync" {
+            let changed = crate::hub::sync_agent_files(
+                &self.project,
+                &crate::specs::actor(&self.project, "Verb web"),
+            )?;
+            self.invalidate_state();
+            return Ok(Reply::json(
+                200,
+                json!({
+                    "changed": changed,
+                    "message": if changed.is_empty() {
+                        "Agent context was already up to date.".to_owned()
+                    } else {
+                        format!("Updated {}", changed.join(" and "))
+                    }
+                }),
+            ));
         }
         if method == &Method::Get && path == "/api/specs" {
             return Ok(Reply::json(

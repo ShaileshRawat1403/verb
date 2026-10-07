@@ -136,3 +136,54 @@ export function filterCommands(commands, query) {
 export function commitPrefix(spec) {
   return spec ? `spec:${spec.id} ` : "";
 }
+
+/** Nests flat paths ("a/b.txt") into folders; folders first, then files, each alphabetical. */
+export function buildTree(files) {
+  const root = { name: "", path: "", dirs: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const name = parts[i];
+      if (!node.dirs.has(name)) {
+        node.dirs.set(name, {
+          name,
+          path: parts.slice(0, i + 1).join("/"),
+          dirs: new Map(),
+          files: [],
+          changed: 0,
+        });
+      }
+      node = node.dirs.get(name);
+    }
+    node.files.push({ name: parts.at(-1), path: file.path, status: file.status ?? null });
+  }
+  const finish = (node) => {
+    node.files.sort((a, b) => a.name.localeCompare(b.name));
+    const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
+    dirs.forEach(finish);
+    node.changed =
+      node.files.filter((f) => f.status).length + dirs.reduce((sum, d) => sum + d.changed, 0);
+    node.dirs = dirs;
+    return node;
+  };
+  return finish(root);
+}
+
+/** Files whose path matches every space-separated word of the query, best first, capped. */
+export function filterFiles(files, query, limit = 200) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  return files
+    .map((file) => {
+      const p = file.path.toLowerCase();
+      if (!words.every((w) => p.includes(w))) return null;
+      const name = p.split("/").at(-1);
+      const score = words.reduce((s, w) => s + (name.includes(w) ? 3 : 1), 0) - p.length * 0.001;
+      return { file, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.file);
+}

@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=themes-20261007" />
-    <script src="/app.js?v=themes-20261007" defer></script>
+    <link rel="stylesheet" href="/app.css?v=project-hub-20261007" />
+    <script src="/app.js?v=project-hub-20261007" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -56,6 +56,26 @@
                 <path d="M14 3v4h4M10 12l1.5 1.5L14 11M10 17h4" /></svg></span
             ><span>Specs</span
             ><span class="nav-count" id="nav-spec-count">0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="project"
+            aria-label="Project"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                <path d="M8 13h8M8 16.5h5" /></svg></span
+            ><span>Project</span
+            ><span class="nav-count nudge-dot" id="nav-nudge-count" hidden>0</span>
           </button>
           <button
             class="nav-item"
@@ -426,6 +446,69 @@
                   <ol id="audit-list" class="audit-list"></ol>
                 </section>
               </aside>
+            </div>
+          </section>
+
+          <section id="view-project" class="view">
+            <div class="project-layout">
+              <aside class="panel files-panel" aria-label="Project files">
+                <div class="rail-head">
+                  <h2>Files</h2>
+                  <span class="count-chip" id="file-count"></span>
+                </div>
+                <input
+                  id="file-filter"
+                  class="list-search"
+                  type="search"
+                  placeholder="Find a file…"
+                  autocomplete="off"
+                  aria-label="Find a file"
+                />
+                <div id="file-tree" class="file-tree" role="tree"></div>
+                <p class="files-note">Shows what Git tracks or would track. Ignored files such as <code>.env</code> stay hidden.</p>
+              </aside>
+              <section class="project-main">
+                <div id="file-preview" class="panel file-preview" hidden>
+                  <div class="preview-head">
+                    <code id="preview-path"></code>
+                    <span class="preview-meta" id="preview-meta"></span>
+                    <button class="text-button" type="button" data-action="copy-file-path">Copy path</button>
+                    <button class="modal-close" type="button" data-action="close-preview" aria-label="Close preview">×</button>
+                  </div>
+                  <div id="preview-body" class="preview-body"></div>
+                </div>
+                <div id="hub" class="hub">
+                  <div class="page-heading compact-heading">
+                    <div>
+                      <span class="section-kicker">PROJECT CONTEXT</span>
+                      <h1 id="hub-title">Project</h1>
+                      <p>What this project is, what is in it, and the context every agent shares.</p>
+                    </div>
+                  </div>
+                  <div id="hub-nudges" class="hub-nudges"></div>
+                  <div class="hub-grid">
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Project brief</h3><span class="count-chip" id="brief-progress"></span></div>
+                      <p class="proof-hint">A short, living description. Specs link to it and agents read it.</p>
+                      <ul id="brief-sections" class="brief-sections"></ul>
+                      <div class="hub-actions" id="brief-actions"></div>
+                    </article>
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Agent context</h3></div>
+                      <p class="proof-hint">Verb keeps one marked section of these files in step with your brief and specs. Your own text in them is never changed.</p>
+                      <ul id="agent-files" class="agent-files"></ul>
+                      <div class="hub-actions">
+                        <button class="primary-button" type="button" data-action="sync-agents">Sync agent context</button>
+                      </div>
+                    </article>
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Project documents</h3></div>
+                      <p class="proof-hint">Markdown files in <code>docs/project/</code>. Add a PRD, decisions or notes when they would help.</p>
+                      <ul id="hub-documents" class="hub-documents"></ul>
+                    </article>
+                  </div>
+                </div>
+              </section>
             </div>
           </section>
 
@@ -889,7 +972,7 @@
 
     <dialog id="palette-dialog" class="modal palette">
       <div class="palette-box">
-        <input id="palette-input" type="search" placeholder="Type a command or a spec…" autocomplete="off" aria-label="Command" />
+        <input id="palette-input" type="search" placeholder="Type a command, a spec or a file…" autocomplete="off" aria-label="Command" />
         <ul id="palette-list" class="palette-list" role="listbox"></ul>
         <div class="palette-foot">↑↓ choose · Enter run · Esc close · <kbd>?</kbd> all shortcuts</div>
       </div>
@@ -903,6 +986,33 @@
         </div>
         <dl class="shortcut-list" id="shortcut-list"></dl>
       </div>
+    </dialog>
+
+    <dialog id="brief-dialog" class="modal">
+      <form id="brief-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">PROJECT BRIEF</span>
+            <h2>Describe the project in a few lines</h2>
+            <p>Two minutes is enough. Every field is optional, and you can edit the file later.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="brief-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label" for="brief-problem">Problem <span>(what it solves, and why now)</span></label
+        ><textarea id="brief-problem" name="problem" rows="3" placeholder="Small shops lose returning customers because sign-in is painful."></textarea>
+        <label class="field-label" for="brief-users">Who it is for</label
+        ><input id="brief-users" name="users" placeholder="Returning shoppers on mobile; shop owners" />
+        <label class="field-label" for="brief-scope">Scope <span>(in, and deliberately out)</span></label
+        ><textarea id="brief-scope" name="scope" rows="2" placeholder="In: email sign-in, order history. Out: payments."></textarea>
+        <label class="field-label" for="brief-constraints">Constraints</label
+        ><input id="brief-constraints" name="constraints" placeholder="Launch by March; must work offline; GDPR" />
+        <label class="field-label" for="brief-glossary">Glossary <span>(words with a special meaning here)</span></label
+        ><input id="brief-glossary" name="glossary" placeholder="Basket = saved order not yet paid" />
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="brief-dialog">Cancel</button
+          ><button class="primary-button" type="submit">Create brief</button>
+        </div>
+      </form>
     </dialog>
 
     <dialog id="task-dialog" class="modal">

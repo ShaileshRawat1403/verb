@@ -9,6 +9,7 @@ import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import { initWorkbench } from "./specs-ui.js";
+import { initProject } from "./project-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -34,6 +35,8 @@ if (location.hash && token) {
 let streamSocket = null;
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
+// The Project view (project-ui.js): file tree, preview and context hub.
+let project = null;
 // Light/dark theme; open terminals are recoloured in place when it changes.
 const theme = createThemeController({
   onChange(resolved) {
@@ -396,6 +399,7 @@ function showView(view) {
   if (view === "overview") refreshChecks();
   if (view === "tasks" || view === "memory") refreshState(true);
   workbench?.onShowView(view);
+  project?.onShowView(view);
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -1916,7 +1920,9 @@ async function bootstrap() {
   }
   refreshState(true);
   connectTerminalStream();
+  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
   workbench = initWorkbench({
+    project,
     api,
     toast,
     showDialog,

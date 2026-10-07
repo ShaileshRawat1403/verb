@@ -19,11 +19,11 @@ const SHORTCUTS = [
   ["Alt+N", "New spec"],
   ["Alt+T", "New terminal"],
   ["Alt+C", "Commit changes"],
-  ["Alt+1 … Alt+5", "Specs, Sessions, Overview, Tasks, Memory"],
+  ["Alt+1 … Alt+6", "Specs, Project, Sessions, Overview, Tasks, Memory"],
   ["?", "This list"],
   ["Esc", "Close a dialog"],
 ];
-const VIEWS = ["specs", "sessions", "overview", "tasks", "memory"];
+const VIEWS = ["specs", "project", "sessions", "overview", "tasks", "memory"];
 
 export function initWorkbench(deps) {
   const { api, toast, showDialog, closeDialog, escapeHtml, $ } = deps;
@@ -429,7 +429,7 @@ export function initWorkbench(deps) {
 
   // ---------------------------------------------------------------------------- palette
 
-  function commands() {
+  function commands(query = "") {
     const spec = selected();
     const list = [
       { title: "New spec", hint: "Alt+N", run: openNewSpec },
@@ -467,6 +467,7 @@ export function initWorkbench(deps) {
     for (const s of state.specs) {
       list.push({ title: `Open spec ${s.id} · ${s.title}`, hint: STAGE_GUIDE[s.stage].label, run: () => selectSpec(s.id) });
     }
+    list.push(...(deps.project?.commands(query) ?? []));
     return list;
   }
 
@@ -477,7 +478,7 @@ export function initWorkbench(deps) {
     $("#palette-input").focus();
   }
   function renderPalette() {
-    state.palette = filterCommands(commands(), $("#palette-input").value).slice(0, 12);
+    state.palette = filterCommands(commands($("#palette-input").value), $("#palette-input").value).slice(0, 12);
     state.paletteIndex = Math.min(state.paletteIndex, Math.max(0, state.palette.length - 1));
     $("#palette-list").innerHTML =
       state.palette
@@ -558,7 +559,7 @@ export function initWorkbench(deps) {
     if (document.querySelector("dialog[open]")) return;
     if (event.altKey && !event.metaKey && !event.ctrlKey) {
       const map = { KeyN: openNewSpec, KeyT: deps.launchQuickTerminal, KeyC: openCommit };
-      const digit = /^Digit([1-5])$/.exec(event.code);
+      const digit = /^Digit([1-6])$/.exec(event.code);
       if (map[event.code] || digit) {
         event.preventDefault();
         return digit ? deps.showView(VIEWS[Number(digit[1]) - 1]) : map[event.code]();
