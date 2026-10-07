@@ -10,3 +10,5 @@ Entries before this file existed are reconstructed from `docs/WEB_UX_DEPLOYMENT.
 - 2026-10-07 `37a0424` sha256 `2019f89fde897b65f544b7947eace6dccff56960496f36f64579d21722a119ce`, installed, not restarted
 - 2026-10-07 token rotated on the node (`/root/.verb/web.token`; new fingerprint `d37ed9f99837`, value never left the node)
 - 2026-10-07 restarted onto `37a0424` (sv restart stalled; terminated only the `verb web` child, runit relaunched it)
+- 2026-10-07 `71b4500` sha256 `30956a2479a904af64bd073e48394bd1e6331693d824a76405303af986390150`, restarted
+- 2026-10-07 restarted onto `71b4500` (sv restart stalled again; stopped only the `verb web` process)

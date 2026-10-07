@@ -16,3 +16,18 @@ termux() { ssh -o BatchMode=yes -o ConnectTimeout=8 -p "$NODE_PORT" "$NODE_USER@
 debian() { termux "proot-distro login debian -- bash -lc $(printf '%q' "$1")"; }
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+# Restarts Verb under runit. `sv restart` reliably stalls at the PRoot wrapper (seen on every restart
+# on 2026-10-07), so when the old process survives, stop only the real `verb web` process; runit then
+# starts a fresh one. The pattern is anchored so it never matches this command's own shell.
+restart_verb() {
+  termux 'export SVDIR=$PREFIX/var/service
+    old=$(pgrep -f "^/usr/local/bin/verb web")
+    sv restart verb >/dev/null 2>&1
+    sleep 6
+    if [ -n "$old" ] && [ "$(pgrep -f "^/usr/local/bin/verb web")" = "$old" ]; then
+      echo "sv restart stalled; stopping only verb web ($old)"; kill $old; sleep 6
+    fi
+    new=$(pgrep -f "^/usr/local/bin/verb web")
+    [ -n "$new" ] && [ "$new" != "$old" ] && echo "restarted: verb web pid $new" || { echo "restart did not complete"; exit 1; }'
+}

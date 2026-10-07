@@ -62,8 +62,9 @@ Over the internet, Cloudflare Access is the gate. The token is for the LAN SSH t
 
 ## Restart troubleshooting
 
+`deploy.sh` and `rollback.sh` handle this automatically (`restart_verb` in `lib.sh`). By hand:
 `sv restart verb` can stall at the PRoot wrapper: `sv status` shows `got TERM` while the old process
-lives on. Find the `verb web --port 3005` child (`ps -eo pid,args | grep "verb web"`), terminate only
+lives on. Find it with `pgrep -f "^/usr/local/bin/verb web"` (anchored, so it cannot match your own shell), terminate only
 that PID, and runit starts a fresh one. Leave the wrapper and every other service alone.
 
 ## Known issues (2026-10-07)

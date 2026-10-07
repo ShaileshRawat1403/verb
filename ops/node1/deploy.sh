@@ -44,7 +44,7 @@ debian "set -e
 
 if [ "$RESTART" = 1 ]; then
   say "restarting Verb (live terminals end)"
-  termux 'SVDIR=$PREFIX/var/service sv restart verb' || say "sv restart stalled; see README: restart troubleshooting"
+  restart_verb
 fi
 
 printf -- '- %s `%s` sha256 `%s`%s\n' "$(date +%F)" "$GIT_SHA" "$SHA256" "$( [ $RESTART = 1 ] && echo ', restarted' || echo ', installed, not restarted')" >> "$HERE/DEPLOYMENTS.md"
