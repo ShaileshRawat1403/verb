@@ -57,3 +57,40 @@ pending; no PR or merge was performed.
 
 Cloudflare, DNS, Access policies, AdGuard, SSH configuration, LanguageOps, Android APK, and
 PocketFabric tunnel configuration were not modified. The OnePlus was not rebooted.
+
+# PocketFabric Node 1 Phase 1 Streaming Deployment — 6 October 2026
+
+The user authorized deploying and restarting Verb on PocketFabric Node 1 (OnePlus 9).
+The deployed build incorporates Phase 1 streaming WebSockets, `@xterm/addon-webgl`, backpressure flow control, and remote `Host` header whitelisting for `verb.pruningmypothos.com`.
+
+- Installed ARM64 binary SHA-256:
+  `00c342b1dbf9d4d0f5624d249ff6e5736d3872602707e98c897825e5b2ff289e`
+- Rollback binary: `/root/verb-deployments/phase1-streaming/verb.previous`, SHA-256:
+  `c70e1f493a493d587eb2c813b7c67d9dbe532b48ee1bdedd60f074067165eee3`
+- Node manifest: `/root/verb-deployments/phase1-streaming/manifest.json`.
+- Supervised restart was clean: terminated previous Verb PID 4842; `runsv` immediately launched new PID 5988 running `/usr/local/bin/verb web --port 3005`.
+- Verified `/api/terminals/ws` WebSocket upgrade responds with 400 (Bad Request: missing Sec-WebSocket-Key) for both loopback and remote host `verb.pruningmypothos.com` with authenticated token.
+- `cloudflared` remained alive with its original PID 9179.
+# PocketFabric Node 1 Phase 2 Performance & Terminal Emulation Deployment — 7 October 2026
+
+The user authorized deploying the latency elimination and Phase 2 terminal emulation build to PocketFabric Node 1 (OnePlus 9).
+
+- Installed ARM64 binary SHA-256:
+  `a912fc0b47ae1e1cdb2dede2b0378d52a233813ddf9d39192e17550107773fab`
+- Rollback binary: `/root/verb-deployments/phase2-perf-terminal/verb.prev`, SHA-256:
+  `00c342b1dbf9d4d0f5624d249ff6e5736d3872602707e98c897825e5b2ff289e`
+- Key latency & emulation improvements deployed:
+  - Fixed `unacked_bytes` unsigned underflow in `TerminalStreamSink::ack` that was triggering artificial 50-100ms pause penalties on PTY reads.
+  - Eliminated client micro-ACK packet storm: batched stream ACKs with 120ms debounce so single keystroke echoes never flood the uplink.
+  - Pre-encoded and memoized terminal ID UTF-8 byte arrays to remove per-keystroke garbage collection and allocations.
+  - Immediate queue flush in WebSocket event loop right after handling incoming terminal input, shaving off event loop cycles.
+  - Added `@xterm/addon-web-links`, `@xterm/addon-unicode11`, and `@xterm/addon-search` with `scrollback: 10000`.
+  - Configured `macOptionIsMeta: true`, `macOptionClickForcesSelection: true`, `scrollOnUserInput: true`, `windowsMode: false`.
+  - Added dynamic window title synchronization (`OSC 0/2` -> `.terminal-title`) and visual bell animation (`.terminal-tile.bell`).
+  - Added automatic alternate screen buffer reattach prefixing (`\x1b[?1049h`) when restoring full-screen apps (`vim`, `htop`, `opencode`).
+  - Set default environment variables `TERM=xterm-256color` and `COLORTERM=truecolor` for full 24-bit truecolor support.
+  - Expanded reader sync channel capacity to 2048 and drain batch to 512 chunks per tick.
+- Supervised restart was clean: terminated previous Verb PID 5988; `runsv` restarted PID 21949 running `/usr/local/bin/verb web --port 3005`.
+- Verified `/` serves updated assets `?v=stream-phase2-20261007` and public endpoint `https://verb.pruningmypothos.com` routes correctly.
+
+
