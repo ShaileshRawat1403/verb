@@ -31,6 +31,8 @@ mod pty;
 mod runtime;
 mod shell;
 #[cfg(unix)]
+pub mod stream;
+#[cfg(unix)]
 mod tui;
 #[cfg(unix)]
 mod web;

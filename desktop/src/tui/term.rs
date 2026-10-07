@@ -36,6 +36,7 @@ pub struct Hosted {
     /// the same way from its own loop.
     watch: AgentWatch,
     chat_adapter: Option<Box<dyn crate::agent_chat::AgentChatAdapter>>,
+    pub(crate) sink: Option<std::sync::Arc<crate::stream::TerminalStreamSink>>,
     /// Set only after the process and durable session have both been closed out.
     closed: bool,
 }
@@ -46,6 +47,22 @@ impl Hosted {
                                          // bundling them would only move the list somewhere else.
     pub fn start(
         project: &std::path::Path,
+        session: Session,
+        command: &str,
+        args: &[String],
+        env: &[(String, String)],
+        is_new: bool,
+        rows: u16,
+        cols: u16,
+    ) -> Result<Self, String> {
+        Self::start_with_sink(
+            project, session, command, args, env, is_new, rows, cols, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_sink(
+        project: &std::path::Path,
         mut session: Session,
         command: &str,
         args: &[String],
@@ -53,6 +70,7 @@ impl Hosted {
         is_new: bool,
         rows: u16,
         cols: u16,
+        sink: Option<std::sync::Arc<crate::stream::TerminalStreamSink>>,
     ) -> Result<Self, String> {
         let session_lock = crate::lock_session_for_host(&session.id)?;
         if is_new {
@@ -106,11 +124,20 @@ impl Hosted {
         // only moves bytes; every decision about them is made on the main thread.
         // Bound the reader queue so a noisy CLI cannot grow Verb without limit when rendering
         // or browser delivery is slower than its PTY output. A full queue backpressures the PTY.
-        let (sender, output) = mpsc::sync_channel(128);
+        let (sender, output) = mpsc::sync_channel(2048);
+        let sink_clone = sink.clone();
         thread::spawn(move || {
-            let mut buffer = [0_u8; 8 * 1024];
+            let mut buffer = [0_u8; 16 * 1024];
             while let Ok(count) = reader.read(&mut buffer) {
-                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                if count == 0 {
+                    break;
+                }
+                let chunk = &buffer[..count];
+                if let Some(s) = &sink_clone {
+                    s.wait_for_drain();
+                    s.broadcast_output(chunk);
+                }
+                if sender.send(chunk.to_vec()).is_err() {
                     break;
                 }
             }
@@ -138,6 +165,7 @@ impl Hosted {
             _mobile_server: mobile_server,
             output,
             web_output: None,
+            sink,
             reader_finished: false,
             exit_code: None,
             pending: Vec::new(),
@@ -167,7 +195,7 @@ impl Hosted {
         let mut changed = false;
         // A continuous producer must not keep this poll in the drain loop forever. The next UI
         // tick resumes where this one stopped, while the bounded queue applies backpressure.
-        for _ in 0..128 {
+        for _ in 0..512 {
             match self.output.try_recv() {
                 Ok(bytes) => {
                     changed = true;
@@ -326,9 +354,25 @@ impl Hosted {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn stream_sink(&self) -> Option<&std::sync::Arc<crate::stream::TerminalStreamSink>> {
+        self.sink.as_ref()
+    }
+
+    pub fn signal(&self, signal: i32) -> Result<(), String> {
+        pty::signal_group(self.pid, signal)
+    }
+
     /// Closes the record out exactly as the CLI does: process ended, agent ended, state resolved
     /// from the agent's own evidence, session saved.
     pub fn finish(mut self, exit_code: i32) -> Result<Session, String> {
+        if let Some(sink) = &self.sink {
+            sink.broadcast_control(serde_json::json!({
+                "type": "exit",
+                "id": self.session.id,
+                "code": exit_code,
+            }));
+        }
         let _ = self.mobile.end();
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
@@ -342,6 +386,13 @@ impl Hosted {
             Some(code) => code,
             None => pty::terminate(self.pid)?,
         };
+        if let Some(sink) = &self.sink {
+            sink.broadcast_control(serde_json::json!({
+                "type": "exit",
+                "id": self.session.id,
+                "code": exit_code,
+            }));
+        }
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
         Ok(self.session.clone())

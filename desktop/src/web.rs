@@ -28,6 +28,7 @@ struct OutputChunk {
 
 struct WebTerminal {
     hosted: Option<Hosted>,
+    sink: Arc<crate::stream::TerminalStreamSink>,
     chunks: VecDeque<OutputChunk>,
     base: u64,
     next: u64,
@@ -38,10 +39,11 @@ struct WebTerminal {
 }
 
 impl WebTerminal {
-    fn new(mut hosted: Hosted) -> Self {
+    fn new(mut hosted: Hosted, sink: Arc<crate::stream::TerminalStreamSink>) -> Self {
         hosted.capture_web_output();
         Self {
             hosted: Some(hosted),
+            sink,
             chunks: VecDeque::new(),
             base: 0,
             next: 0,
@@ -150,6 +152,119 @@ impl WebTerminal {
     }
 }
 
+pub struct WebTerminalsManager {
+    terminals: Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
+}
+
+impl crate::stream::StreamTerminalHandler for WebTerminalsManager {
+    fn write_terminal_input(&self, id: &str, data: &[u8]) -> Result<(), String> {
+        let mut terminals = self.terminals.lock().map_err(|e| e.to_string())?;
+        let terminal = terminals.get_mut(id).ok_or("terminal not found")?;
+        let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
+        hosted.write(data)
+    }
+
+    fn attach_terminal(
+        &self,
+        id: &str,
+        conn_id: u64,
+        queue: Arc<crate::stream::WsQueue>,
+        rows: u16,
+        cols: u16,
+    ) -> Option<crate::stream::TerminalAttachInfo> {
+        let mut terminals = self.terminals.lock().ok()?;
+        let terminal = terminals.get_mut(id)?;
+        terminal.sink.add_listener(conn_id, queue);
+        let (screen, running, controller, phone_connected) =
+            if let Some(hosted) = &mut terminal.hosted {
+                if rows >= 4 && cols >= 20 {
+                    hosted.resize(rows, cols);
+                }
+                let (ctrl, phone) = hosted
+                    .phone_control_status()
+                    .unwrap_or((crate::mobile::Controller::Desktop, false));
+                let mut screen_bytes = hosted.screen().contents_formatted();
+                if hosted.full_screen_app() {
+                    let mut prefixed = b"\x1b[?1049h".to_vec();
+                    prefixed.extend(screen_bytes);
+                    screen_bytes = prefixed;
+                }
+                (
+                    screen_bytes,
+                    true,
+                    match ctrl {
+                        crate::mobile::Controller::Desktop => "desktop".to_owned(),
+                        crate::mobile::Controller::Phone => "phone".to_owned(),
+                    },
+                    phone,
+                )
+            } else {
+                (
+                    terminal.final_screen.clone(),
+                    false,
+                    "desktop".to_owned(),
+                    false,
+                )
+            };
+        Some(crate::stream::TerminalAttachInfo {
+            screen,
+            running,
+            controller,
+            phone_connected,
+        })
+    }
+
+    fn detach_terminal(&self, id: &str, conn_id: u64) {
+        if let Ok(terminals) = self.terminals.lock() {
+            if let Some(terminal) = terminals.get(id) {
+                terminal.sink.remove_listener(conn_id);
+            }
+        }
+    }
+
+    fn resize_terminal(&self, id: &str, rows: u16, cols: u16) {
+        if rows < 4 || cols < 20 {
+            return;
+        }
+        if let Ok(mut terminals) = self.terminals.lock() {
+            if let Some(terminal) = terminals.get_mut(id) {
+                if let Some(hosted) = &mut terminal.hosted {
+                    hosted.resize(rows, cols);
+                }
+            }
+        }
+    }
+
+    fn ack_terminal(&self, id: &str, bytes: usize) {
+        if let Ok(terminals) = self.terminals.lock() {
+            if let Some(terminal) = terminals.get(id) {
+                terminal.sink.ack(bytes);
+            }
+        }
+    }
+
+    fn signal_terminal(&self, id: &str, signal: &str) {
+        if let Ok(terminals) = self.terminals.lock() {
+            if let Some(terminal) = terminals.get(id) {
+                if let Some(hosted) = &terminal.hosted {
+                    let sig_num = match signal {
+                        "SIGINT" | "INT" => 2,
+                        "SIGQUIT" | "QUIT" => 3,
+                        "SIGTERM" | "TERM" => 15,
+                        "SIGKILL" | "KILL" => 9,
+                        "SIGHUP" | "HUP" => 1,
+                        "SIGWINCH" | "WINCH" => 28,
+                        s => s.parse::<std::os::raw::c_int>().unwrap_or(0),
+                    };
+                    if sig_num > 0 {
+                        let _ = hosted.signal(sig_num);
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct WebHost {
     project: PathBuf,
     project_id: String,
@@ -161,7 +276,7 @@ struct WebHost {
     jwks_cache: Arc<RwLock<JwksCache>>,
     token: String,
     origin: String,
-    terminals: HashMap<String, WebTerminal>,
+    terminals: Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
     phone_shares: HashMap<String, PhoneShare>,
     checks: Arc<std::sync::Mutex<ChecksCache>>,
     identity: project::ProjectIdentity,
@@ -383,7 +498,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         jwks_cache: Arc::new(RwLock::new(JwksCache::default())),
         token: token.clone(),
         origin: format!("http://127.0.0.1:{}", address.port()),
-        terminals: HashMap::new(),
+        terminals: Arc::default(),
         phone_shares: HashMap::new(),
         checks: Arc::default(),
         identity,
@@ -431,22 +546,34 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
             .map_err(|error| format!("could not print web URL: {error}"))?;
     }
     while running.load(Ordering::SeqCst) {
-        for terminal in host.terminals.values_mut() {
-            if let Err(error) = terminal.poll() {
-                eprintln!("Verb stopped one web terminal: {error}");
-                terminal.fail(error);
+        {
+            let mut terminals = host.terminals.lock().unwrap();
+            for terminal in terminals.values_mut() {
+                if let Err(error) = terminal.poll() {
+                    eprintln!("Verb stopped one web terminal: {error}");
+                    terminal.fail(error);
+                }
             }
         }
-        host.phone_shares.retain(|id, _| {
-            host.terminals
-                .get(id)
-                .is_some_and(|terminal| terminal.hosted.is_some())
-        });
+        {
+            let terminals = host.terminals.lock().unwrap();
+            host.phone_shares.retain(|id, _| {
+                terminals
+                    .get(id)
+                    .is_some_and(|terminal| terminal.hosted.is_some())
+            });
+        }
         if let Some(request) = server
             .recv_timeout(Duration::from_millis(30))
             .map_err(|error| format!("web server stopped: {error}"))?
         {
-            host.respond(request);
+            let url = request.url().to_owned();
+            let path = url.split('?').next().unwrap_or("");
+            if path == "/api/terminals/ws" {
+                host.handle_ws_upgrade(request);
+            } else {
+                host.respond(request);
+            }
         }
     }
     Ok(())
@@ -613,16 +740,17 @@ impl WebHost {
             return false;
         };
 
-        // 1. Verify Cf-Access-Authenticated-User-Email header matches configured allowed identity
-        let Some(email_hdr) = header(request, "Cf-Access-Authenticated-User-Email") else {
-            return false;
-        };
-        if email_hdr.trim().to_lowercase() != *expected_email {
-            return false;
+        // 1. Verify Cf-Access-Authenticated-User-Email header matches configured allowed identity if present
+        if let Some(email_hdr) = header(request, "Cf-Access-Authenticated-User-Email") {
+            if email_hdr.trim().to_lowercase() != *expected_email {
+                return false;
+            }
         }
 
-        // 2. Extract Cf-Access-Jwt-Assertion header
-        let Some(jwt_str) = header(request, "Cf-Access-Jwt-Assertion") else {
+        // 2. Extract JWT from Cf-Access-Jwt-Assertion header or CF_Authorization cookie
+        let jwt_str = header(request, "Cf-Access-Jwt-Assertion")
+            .or_else(|| cookie(request, "CF_Authorization"));
+        let Some(jwt_str) = jwt_str else {
             return false;
         };
 
@@ -701,6 +829,100 @@ impl WebHost {
         self.sessions.retain(|_, expiry| *expiry > now);
     }
 
+    fn handle_ws_upgrade(&mut self, request: Request) {
+        if !request
+            .remote_addr()
+            .is_some_and(|addr| addr.ip().is_loopback())
+        {
+            send_reply(request, Reply::error(403, "local browser access only"));
+            return;
+        }
+        let expected_host = self.origin.trim_start_matches("http://");
+        let allowed_host = self.allowed_origin.as_deref().map(|origin| {
+            origin
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+        });
+        let host_allowed = header(&request, "Host").is_some_and(|host| {
+            host == expected_host || allowed_host.is_some_and(|allowed| host == allowed)
+        });
+        if !host_allowed {
+            send_reply(request, Reply::error(403, "unexpected host"));
+            return;
+        }
+        let origin = header(&request, "Origin");
+        let origin_allowed = origin.is_some_and(|origin| {
+            origin == self.origin
+                || self
+                    .allowed_origin
+                    .as_deref()
+                    .is_some_and(|allowed| origin == allowed)
+        });
+        if !origin_allowed {
+            send_reply(request, Reply::error(403, "unexpected origin"));
+            return;
+        }
+
+        let url = request.url().to_owned();
+        let token_in_query = url.split('?').nth(1).and_then(|query| {
+            for pair in query.split('&') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    if k == "token" {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        });
+
+        let cf_authenticated = self.authenticate_cf_access(&request);
+        let has_valid_session = self.has_valid_session(&request);
+        let session_valid = token_in_query.is_some_and(|tok| {
+            self.sessions
+                .get(tok)
+                .is_some_and(|expiry| *expiry > Instant::now())
+        });
+        let is_authorized = header(&request, "X-Verb-Token") == Some(self.token.as_str())
+            || token_in_query == Some(self.token.as_str())
+            || session_valid
+            || has_valid_session
+            || cf_authenticated;
+
+        if !is_authorized {
+            send_reply(
+                request,
+                Reply::error(403, "open the URL printed by verb web"),
+            );
+            return;
+        }
+
+        let Some(key) = header(&request, "Sec-WebSocket-Key") else {
+            send_reply(request, Reply::error(400, "missing Sec-WebSocket-Key"));
+            return;
+        };
+        let accept_key = tungstenite::handshake::derive_accept_key(key.as_bytes());
+
+        let mut response = Response::empty(StatusCode(101));
+        if let Ok(hdr) = Header::from_bytes("Sec-WebSocket-Accept", accept_key) {
+            response.add_header(hdr);
+        }
+
+        let tcp_stream = match request.upgrade_tcp("websocket", response) {
+            Ok(stream) => stream,
+            Err(_) => return,
+        };
+
+        static NEXT_CONN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::SeqCst);
+        let handler = Arc::new(WebTerminalsManager {
+            terminals: Arc::clone(&self.terminals),
+        });
+
+        std::thread::spawn(move || {
+            crate::stream::handle_ws_connection(tcp_stream, handler, conn_id);
+        });
+    }
+
     fn respond(&mut self, mut request: Request) {
         let mut reply = self.dispatch(&mut request);
         if let Some(job) = reply.state_job.take() {
@@ -728,7 +950,15 @@ impl WebHost {
             return Reply::error(403, "local browser access only");
         }
         let expected_host = self.origin.trim_start_matches("http://");
-        if header(request, "Host") != Some(expected_host) {
+        let allowed_host = self.allowed_origin.as_deref().map(|origin| {
+            origin
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+        });
+        let host_allowed = header(request, "Host").is_some_and(|host| {
+            host == expected_host || allowed_host.is_some_and(|allowed| host == allowed)
+        });
+        if !host_allowed {
             return Reply::error(403, "unexpected host");
         }
         if let Some(origin) = header(request, "Origin") {
@@ -830,6 +1060,8 @@ impl WebHost {
                 deployment: self.deployment.clone(),
                 hosted: self
                     .terminals
+                    .lock()
+                    .unwrap()
                     .iter()
                     .map(|(id, terminal)| (id.clone(), terminal.hosted.is_some()))
                     .collect(),
@@ -924,10 +1156,8 @@ impl WebHost {
                     .unwrap_or("0")
                     .parse::<u64>()
                     .map_err(|_| "invalid terminal cursor".to_owned())?;
-                let terminal = self
-                    .terminals
-                    .get(*id)
-                    .ok_or("terminal is not hosted here")?;
+                let terminals = self.terminals.lock().unwrap();
+                let terminal = terminals.get(*id).ok_or("terminal is not hosted here")?;
                 Ok(Reply::json(200, terminal.output(after)))
             }
             ["api", "terminals", id, "input"] if method == &Method::Post => {
@@ -935,8 +1165,8 @@ impl WebHost {
                 if input.data.len() > 8192 {
                     return Err("terminal input is too long".to_owned());
                 }
-                let terminal = self
-                    .terminals
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
                     .get_mut(*id)
                     .ok_or("terminal is not hosted here")?;
                 let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
@@ -946,8 +1176,8 @@ impl WebHost {
             // The desktop user takes input back from a paired phone. Only reachable with the page's
             // token, which the hosted program does not have.
             ["api", "terminals", id, "control"] if method == &Method::Post => {
-                let terminal = self
-                    .terminals
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
                     .get_mut(*id)
                     .ok_or("terminal is not hosted here")?;
                 let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
@@ -958,10 +1188,8 @@ impl WebHost {
                 ))
             }
             ["api", "terminals", id, "phone"] if method == &Method::Post => {
-                let terminal = self
-                    .terminals
-                    .get(*id)
-                    .ok_or("terminal is not hosted here")?;
+                let terminals = self.terminals.lock().unwrap();
+                let terminal = terminals.get(*id).ok_or("terminal is not hosted here")?;
                 if terminal.hosted.is_none() {
                     return Err("terminal has ended".to_owned());
                 }
@@ -980,6 +1208,8 @@ impl WebHost {
             }
             ["api", "terminals", id, "phone"] if method == &Method::Get => {
                 self.terminals
+                    .lock()
+                    .unwrap()
                     .get(*id)
                     .ok_or("terminal is not hosted here")?;
                 let share = self.phone_shares.get(*id);
@@ -1013,8 +1243,8 @@ impl WebHost {
                 if !(4..=200).contains(&size.rows) || !(20..=400).contains(&size.cols) {
                     return Err("terminal size is out of range".to_owned());
                 }
-                let terminal = self
-                    .terminals
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
                     .get_mut(*id)
                     .ok_or("terminal is not hosted here")?;
                 let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
@@ -1025,6 +1255,8 @@ impl WebHost {
                 self.phone_shares.remove(*id);
                 let mut terminal = self
                     .terminals
+                    .lock()
+                    .unwrap()
                     .remove(*id)
                     .ok_or("terminal is not hosted here")?;
                 if let Some(hosted) = terminal.hosted.take() {
@@ -1036,6 +1268,7 @@ impl WebHost {
             ["api", "sessions", "clear-ended"] if method == &Method::Post => {
                 let records = crate::read_session_records()?;
                 let mut cleared = 0;
+                let mut terminals = self.terminals.lock().unwrap();
                 for session in records {
                     if session.state == SessionState::Ended
                         && crate::session_in_project_with_id(
@@ -1043,13 +1276,12 @@ impl WebHost {
                             &self.project,
                             &self.project_id,
                         )
-                        && !self
-                            .terminals
+                        && terminals
                             .get(&session.id)
-                            .is_some_and(|terminal| terminal.hosted.is_some())
+                            .is_none_or(|terminal| terminal.hosted.is_none())
                         && crate::forget_session(&session.id).is_ok()
                     {
-                        self.terminals.remove(&session.id);
+                        terminals.remove(&session.id);
                         cleared += 1;
                     }
                 }
@@ -1057,8 +1289,8 @@ impl WebHost {
                 Ok(Reply::json(200, json!({"cleared": cleared})))
             }
             ["api", "sessions", id] if method == &Method::Delete => {
-                if self
-                    .terminals
+                let mut terminals = self.terminals.lock().unwrap();
+                if terminals
                     .get(*id)
                     .is_some_and(|terminal| terminal.hosted.is_some())
                 {
@@ -1071,7 +1303,7 @@ impl WebHost {
                     return Err("only ended sessions in this project can be removed".to_owned());
                 }
                 crate::forget_session(id)?;
-                self.terminals.remove(*id);
+                terminals.remove(*id);
                 self.invalidate_state();
                 Ok(Reply::json(200, json!({"ok": true})))
             }
@@ -1162,7 +1394,8 @@ impl WebHost {
         if !crate::session_in_project_with_id(&start.session, &self.project, &self.project_id) {
             return Err("selected session belongs to another project".to_owned());
         }
-        let hosted = Hosted::start(
+        let sink = crate::stream::TerminalStreamSink::new(start.session.id.clone());
+        let hosted = Hosted::start_with_sink(
             &workspace,
             start.session,
             &start.command,
@@ -1171,9 +1404,13 @@ impl WebHost {
             start.is_new,
             28,
             100,
+            Some(Arc::clone(&sink)),
         )?;
         let id = hosted.session.id.clone();
-        self.terminals.insert(id.clone(), WebTerminal::new(hosted));
+        self.terminals
+            .lock()
+            .unwrap()
+            .insert(id.clone(), WebTerminal::new(hosted, sink));
         self.invalidate_state();
         Ok(id)
     }
@@ -1183,8 +1420,8 @@ impl WebHost {
     }
 
     fn workspace(&self) -> Value {
-        let sessions = self
-            .terminals
+        let terminals = self.terminals.lock().unwrap();
+        let sessions = terminals
             .values()
             .filter_map(|terminal| {
                 let hosted = terminal.hosted.as_ref()?;
@@ -1358,6 +1595,7 @@ mod tests {
     fn output_cursor_replays_bytes_and_reports_overflow() {
         let mut terminal = WebTerminal {
             hosted: None,
+            sink: crate::stream::TerminalStreamSink::new("test".to_owned()),
             chunks: VecDeque::new(),
             base: 0,
             next: 0,

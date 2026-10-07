@@ -14,29 +14,44 @@ use std::thread;
 use std::time::Duration;
 
 const STDIN_FILENO: c_int = 0;
-const POLLIN: CShort = 0x001;
-const POLLERR: CShort = 0x008;
-const POLLHUP: CShort = 0x010;
-const EIO: i32 = 5;
-const EINTR: i32 = 4;
+pub(crate) const POLLIN: CShort = 0x001;
+pub(crate) const POLLERR: CShort = 0x008;
+pub(crate) const POLLHUP: CShort = 0x010;
+const EPERM: i32 = 1;
 const ESRCH: i32 = 3;
+const EINTR: i32 = 4;
+const EIO: i32 = 5;
+const ECHILD: i32 = 10;
 // Same values on Linux and macOS.
 const F_GETFD: c_int = 1;
 const F_SETFD: c_int = 2;
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
 const FD_CLOEXEC: c_int = 1;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const O_NONBLOCK: c_int = 4;
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: c_int = 0o4000;
 const WNOHANG: c_int = 1;
 const SIGHUP: c_int = 1;
 const SIGTERM: c_int = 15;
 const SIGKILL: c_int = 9;
 
-type CShort = i16;
+pub(crate) type CShort = i16;
 type PidT = c_int;
 
 #[repr(C)]
-struct PollFd {
-    fd: c_int,
-    events: CShort,
-    revents: CShort,
+pub(crate) struct PollFd {
+    pub fd: c_int,
+    pub events: CShort,
+    pub revents: CShort,
 }
 
 #[link(name = "util")]
@@ -92,6 +107,72 @@ unsafe extern "C" {
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
     fn dup(fd: c_int) -> c_int;
     fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
+    fn pipe(pipefd: *mut c_int) -> c_int;
+    fn write(fd: c_int, buffer: *const c_void, count: usize) -> isize;
+    fn close(fd: c_int) -> c_int;
+}
+
+pub(crate) fn poll_fds(fds: &mut [PollFd], timeout_ms: c_int) -> io::Result<c_int> {
+    let res = unsafe { poll(fds.as_mut_ptr(), fds.len(), timeout_ms) };
+    if res < 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(EINTR) {
+            Ok(0)
+        } else {
+            Err(err)
+        }
+    } else {
+        Ok(res)
+    }
+}
+
+pub(crate) fn make_pipe() -> io::Result<(c_int, c_int)> {
+    let mut fds = [0 as c_int; 2];
+    let res = unsafe { pipe(fds.as_mut_ptr()) };
+    if res != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    set_nonblocking(fds[0])?;
+    set_nonblocking(fds[1])?;
+    set_cloexec(fds[0])?;
+    set_cloexec(fds[1])?;
+    Ok((fds[0], fds[1]))
+}
+
+pub(crate) fn set_nonblocking(fd: c_int) -> io::Result<()> {
+    let flags = unsafe { fcntl(fd, F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { fcntl(fd, F_SETFL, flags | O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn set_cloexec(fd: c_int) -> io::Result<()> {
+    let flags = unsafe { fcntl(fd, F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { fcntl(fd, F_SETFD, flags | FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn close_fd(fd: c_int) {
+    unsafe {
+        close(fd);
+    }
+}
+
+pub(crate) fn write_fd(fd: c_int, bytes: &[u8]) -> isize {
+    unsafe { write(fd, bytes.as_ptr() as *const c_void, bytes.len()) }
+}
+
+pub(crate) fn read_fd(fd: c_int, buf: &mut [u8]) -> isize {
+    unsafe { read(fd, buf.as_mut_ptr() as *mut c_void, buf.len()) }
 }
 
 /// A process running on its own PTY, with the master side handed back to the caller.
@@ -211,14 +292,14 @@ fn drain_group(pid: PidT) {
     }
 }
 
-fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
+pub(crate) fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
     let result = unsafe { kill(-pid, signal) };
     if result == 0 {
         return Ok(());
     }
 
     let group_error = io::Error::last_os_error();
-    if group_error.raw_os_error() != Some(ESRCH) {
+    if group_error.raw_os_error() != Some(ESRCH) && group_error.raw_os_error() != Some(EPERM) {
         return Err(format!("could not signal PTY process group: {group_error}"));
     }
 
@@ -518,6 +599,8 @@ fn child_environment(
         (c"VERB_SESSION_ID".to_owned(), session_id),
         (c"VERB_PROJECT_ROOT".to_owned(), project.clone()),
         (c"PWD".to_owned(), project),
+        (c"TERM".to_owned(), c"xterm-256color".to_owned()),
+        (c"COLORTERM".to_owned(), c"truecolor".to_owned()),
     ];
     all.extend(extra);
     Ok(all)
@@ -638,7 +721,12 @@ fn wait_nonblocking(pid: PidT) -> Result<Option<i32>, String> {
     } else if result == pid {
         Ok(Some(decode_wait_status(status)))
     } else {
-        Err(format!("waitpid failed: {}", io::Error::last_os_error()))
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ECHILD) {
+            Ok(Some(0))
+        } else {
+            Err(format!("waitpid failed: {err}"))
+        }
     }
 }
 
@@ -648,7 +736,12 @@ fn wait_blocking(pid: PidT) -> Result<i32, String> {
     if result == pid {
         Ok(decode_wait_status(status))
     } else {
-        Err(format!("waitpid failed: {}", io::Error::last_os_error()))
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ECHILD) {
+            Ok(0)
+        } else {
+            Err(format!("waitpid failed: {err}"))
+        }
     }
 }
 
