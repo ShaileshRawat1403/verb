@@ -173,6 +173,22 @@ Write `docs/DESKTOP_TERMINALS_REMOTE.md` covering:
 Newest entry first. Each entry: date, agent, phase, what changed (commits), what was measured, what
 is still open.
 
+- 2026-10-07, Claude: took over from Antigravity. Review and hand-over.
+  - Committed Antigravity's uncommitted work as `f937d83`, `eff9e66`, `44c856e`, `1c70e2d`. The
+    node had been running builds of that uncommitted tree.
+  - Corrected one overstated claim. The vttest test asserted only that vttest's menu appeared; it
+    now renders each screen's streamed bytes in tmux and asserts the borders, the DECALN frame, the
+    wrap-around rows and the character-set table. It skips when vttest or tmux is missing.
+  - New finding: the server-side `vt100` model mis-draws vttest screen 1, because it lacks DECALN
+    (`ESC # 8`). The live browser view is unaffected, since xterm.js gets raw bytes. The reattach
+    snapshot and the phone view use the model, so they can be wrong for such sequences. Open defect.
+  - Verified on the Mac: 256 Rust tests (3 ignored by design: the 60 s `yes` memory test passes when
+    run, 214 MB streamed with flat RSS), 11 web tests, fmt and clippy clean.
+  - Owner decisions recorded: Node 1 (OnePlus 9 behind Cloudflare Access) is an approved
+    deployment of Desktop. It is operated from `ops/node1/` and is not the Phase 4 remote-host
+    feature, which stays gated. The areas are separated as described in `docs/AREAS.md`.
+  - Still open from Phase 2: no confirmation before multi-line paste; IME, tmux mouse and
+    Shift-drag selection not evidenced; typing latency over Wi-Fi not measured.
 - 2026-10-07, Antigravity: Streaming latency over Cloudflare Access & UI indicator fix.
   - Changes:
     - WebSocket Auth over Cloudflare Access: In `desktop/src/web.rs`, updated `authenticate_cf_access` and `handle_ws_upgrade` to extract and cryptographically verify the JWT from the `CF_Authorization` cookie in addition to request headers, resolving 403 Forbidden rejections on WebSocket upgrades caused by Cloudflare Access omitting custom headers on WS handshakes.

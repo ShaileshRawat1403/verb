@@ -29,3 +29,6 @@ desktop/web/node_modules/
 
 # Local agent session checkpoints. Machine-specific and not part of the product.
 .claude/
+
+# Node 1 local connection settings (no secrets, but machine-specific)
+ops/node1/node.env
