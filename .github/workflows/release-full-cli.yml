@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   verify:
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/android-ci.yml
 
   release:
     needs: verify
