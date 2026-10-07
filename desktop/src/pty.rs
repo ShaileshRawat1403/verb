@@ -103,6 +103,7 @@ unsafe extern "C" {
     fn _exit(status: c_int) -> !;
     fn waitpid(pid: PidT, status: *mut c_int, options: c_int) -> PidT;
     fn kill(pid: PidT, signal: c_int) -> c_int;
+    fn getsid(pid: PidT) -> PidT;
     fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int;
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
     fn dup(fd: c_int) -> c_int;
@@ -257,7 +258,40 @@ pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
     // (and kept the PTY open) after `terminate` returned. Keep signalling the group until the kernel
     // says it is empty. A process-group id cannot be reused while any member is alive.
     drain_group(pid);
+    // Process groups are not enough: a job-control shell (dash, bash with `set -m`) puts each
+    // background job in its own group, and some shells neither kill nor hang up those jobs when the
+    // terminal closes. Every one of them still carries the shell's session id, because forkpty made
+    // the shell a session leader. End the whole session.
+    drain_session(pid);
     Ok(code)
+}
+
+/// Kills every remaining process in the session `leader` started. A session id cannot be reused
+/// while any member is alive, so matching on it never reaches an unrelated process.
+fn drain_session(leader: PidT) {
+    for signal in [SIGHUP, SIGTERM, SIGKILL] {
+        let members = session_members(leader);
+        if members.is_empty() {
+            return;
+        }
+        for member in members {
+            unsafe {
+                kill(member, signal);
+            }
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn session_members(leader: PidT) -> Vec<PidT> {
+    let Ok(out) = Command::new("ps").args(["-A", "-o", "pid="]).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .filter_map(|p| p.parse::<PidT>().ok())
+        .filter(|&p| p != leader && p > 1 && unsafe { getsid(p) } == leader)
+        .collect()
 }
 
 fn terminate_leader(pid: PidT) -> Result<i32, String> {

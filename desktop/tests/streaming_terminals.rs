@@ -674,6 +674,21 @@ unsafe extern "C" {
 
 #[test]
 fn closing_terminal_kills_process_group_without_orphans() {
+    assert_no_orphan_after_close(b"sleep 1000 & echo BACKGROUND_PID=$!\n");
+}
+
+/// The case group-based teardown cannot reach: a job-control shell puts the background job in its
+/// own process group, and the job ignores SIGHUP. Only sweeping the terminal's whole session (every
+/// process whose session id is the shell's) ends it. Ubuntu's /bin/sh (dash) hit the milder form of
+/// this in CI: it neither kills nor hangs up its jobs when the terminal closes.
+#[test]
+fn closing_terminal_kills_hup_ignoring_jobs_in_their_own_process_group() {
+    assert_no_orphan_after_close(
+        b"set -m; (trap '' HUP; exec sleep 1000) & echo BACKGROUND_PID=$!\n",
+    );
+}
+
+fn assert_no_orphan_after_close(cmd: &[u8]) {
     let server = WebServer::start();
 
     // 1. Launch an interactive shell terminal
@@ -719,8 +734,7 @@ fn closing_terminal_kills_process_group_without_orphans() {
         let _ = ws.read();
     }
 
-    // 3. Send command to launch background sleep 1000 & and print its PID
-    let cmd = b"sleep 1000 & echo BACKGROUND_PID=$!\n";
+    // 3. Launch a background process and print its PID
     ws.send(encode_input_frame(&id, cmd)).unwrap();
 
     let mut child_pid: Option<i32> = None;
