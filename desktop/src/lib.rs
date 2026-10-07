@@ -30,6 +30,7 @@ mod project;
 mod pty;
 mod runtime;
 mod shell;
+mod specs;
 #[cfg(unix)]
 pub mod stream;
 #[cfg(unix)]

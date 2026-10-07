@@ -374,6 +374,50 @@ struct LaunchRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SpecCreateRequest {
+    title: String,
+    #[serde(default)]
+    problem: String,
+    #[serde(default)]
+    users: String,
+    #[serde(default)]
+    criteria: Vec<String>,
+    #[serde(default)]
+    out_of_scope: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecStageRequest {
+    stage: String,
+    #[serde(default)]
+    note: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecCriterionRequest {
+    done: bool,
+    #[serde(default)]
+    evidence: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecAgentRequest {
+    agent: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommitRequest {
+    message: String,
+    #[serde(default, rename = "specId")]
+    spec_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TaskRequest {
     title: String,
     #[serde(default)]
@@ -1116,8 +1160,128 @@ impl WebHost {
             self.invalidate_state();
             return Ok(Reply::json(201, json!({"sessionId": session})));
         }
+        if method == &Method::Get && path == "/api/specs" {
+            return Ok(Reply::json(
+                200,
+                json!({"specs": crate::specs::list(&self.project), "stages": crate::specs::STAGES}),
+            ));
+        }
+        if method == &Method::Post && path == "/api/specs" {
+            let input: SpecCreateRequest = read_json(request)?;
+            if input.criteria.len() > 50 {
+                return Err("keep a spec to 50 acceptance criteria or fewer".to_owned());
+            }
+            let spec = crate::specs::create(
+                &self.project,
+                crate::specs::NewSpec {
+                    title: input.title,
+                    problem: input.problem,
+                    users: input.users,
+                    criteria: input.criteria,
+                    out_of_scope: input.out_of_scope,
+                },
+                &crate::specs::actor(&self.project, "Verb web"),
+            )?;
+            self.invalidate_state();
+            return Ok(Reply::json(201, json!(spec)));
+        }
+        if method == &Method::Get && path == "/api/git" {
+            return Ok(Reply::json(
+                200,
+                json!(crate::specs::git_summary(&self.project)?),
+            ));
+        }
+        if method == &Method::Post && path == "/api/git/commit" {
+            let input: CommitRequest = read_json(request)?;
+            let sha = crate::specs::commit(
+                &self.project,
+                &input.message,
+                input.spec_id.as_deref(),
+                &crate::specs::actor(&self.project, "Verb web"),
+            )?;
+            self.invalidate_state();
+            return Ok(Reply::json(
+                200,
+                json!({"sha": sha, "message": format!("Committed {sha}")}),
+            ));
+        }
         let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
         match parts.as_slice() {
+            ["api", "specs", id] if method == &Method::Get => Ok(Reply::json(
+                200,
+                json!(crate::specs::find(&self.project, id)?.1),
+            )),
+            ["api", "specs", id, "stage"] if method == &Method::Post => {
+                let input: SpecStageRequest = read_json(request)?;
+                let (spec, warnings) = crate::specs::set_stage(
+                    &self.project,
+                    id,
+                    &input.stage,
+                    &input.note,
+                    &crate::specs::actor(&self.project, "Verb web"),
+                )?;
+                self.invalidate_state();
+                Ok(Reply::json(
+                    200,
+                    json!({"spec": spec, "warnings": warnings}),
+                ))
+            }
+            ["api", "specs", id, "criteria", index] if method == &Method::Post => {
+                let input: SpecCriterionRequest = read_json(request)?;
+                let index = index
+                    .parse::<usize>()
+                    .map_err(|_| "invalid criterion".to_owned())?;
+                let spec = crate::specs::set_criterion(
+                    &self.project,
+                    id,
+                    index,
+                    input.done,
+                    &input.evidence,
+                    &crate::specs::actor(&self.project, "Verb web"),
+                )?;
+                self.invalidate_state();
+                Ok(Reply::json(200, json!(spec)))
+            }
+            ["api", "specs", id, "branch"] if method == &Method::Post => {
+                let branch = crate::specs::switch_to_branch(
+                    &self.project,
+                    id,
+                    &crate::specs::actor(&self.project, "Verb web"),
+                )?;
+                self.invalidate_state();
+                Ok(Reply::json(
+                    200,
+                    json!({"branch": branch, "message": format!("Now on {branch}")}),
+                ))
+            }
+            ["api", "specs", id, "agent"] if method == &Method::Post => {
+                let input: SpecAgentRequest = read_json(request)?;
+                let (path, spec) = crate::specs::find(&self.project, id)?;
+                // Agents whose CLI takes an opening prompt as its first argument get the spec brief.
+                let args = match input.agent.as_str() {
+                    "claude" | "codex" | "gemini" => vec![crate::specs::agent_brief(&spec)],
+                    "agy" | "opencode" | "shell" => Vec::new(),
+                    _ => return Err("choose a supported agent".to_owned()),
+                };
+                let session = self.launch(LaunchRequest {
+                    agent: input.agent.clone(),
+                    isolated: false,
+                    command: None,
+                    args,
+                    resume_id: None,
+                })?;
+                crate::specs::record(
+                    &path,
+                    &crate::specs::actor(&self.project, "Verb web"),
+                    &format!(
+                        "started {} on this spec (session {})",
+                        input.agent,
+                        &session[..session.len().min(8)]
+                    ),
+                )?;
+                self.invalidate_state();
+                Ok(Reply::json(201, json!({"sessionId": session})))
+            }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
                 let revision = workbench::handoff_revision(&self.project, id)?;
                 Ok(Reply::json(200, json!({"revision": revision})))
