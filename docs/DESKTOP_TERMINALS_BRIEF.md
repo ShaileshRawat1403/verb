@@ -187,8 +187,10 @@ is still open.
   - Owner decisions recorded: Node 1 (OnePlus 9 behind Cloudflare Access) is an approved
     deployment of Desktop. It is operated from `ops/node1/` and is not the Phase 4 remote-host
     feature, which stays gated. The areas are separated as described in `docs/AREAS.md`.
-  - Still open from Phase 2: no confirmation before multi-line paste; IME, tmux mouse and
-    Shift-drag selection not evidenced; typing latency over Wi-Fi not measured.
+  - Still open from Phase 2: IME, tmux mouse and Shift-drag selection not evidenced; typing
+    latency over Wi-Fi not measured. (Correction, same day: multi-line paste confirmation does
+    exist, as `promptMultiLinePaste` and `#paste-dialog`. The review had searched case-sensitively
+    and missed it.)
 - 2026-10-07, Antigravity: Streaming latency over Cloudflare Access & UI indicator fix.
   - Changes:
     - WebSocket Auth over Cloudflare Access: In `desktop/src/web.rs`, updated `authenticate_cf_access` and `handle_ws_upgrade` to extract and cryptographically verify the JWT from the `CF_Authorization` cookie in addition to request headers, resolving 403 Forbidden rejections on WebSocket upgrades caused by Cloudflare Access omitting custom headers on WS handshakes.

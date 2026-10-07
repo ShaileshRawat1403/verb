@@ -8,6 +8,7 @@ import { ImageAddon } from "@xterm/addon-image";
 import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
+import { initWorkbench } from "./specs-ui.js";
 import {
   takeInputChunk,
   agentDisplayName,
@@ -30,6 +31,8 @@ if (location.hash && token) {
 }
 
 let streamSocket = null;
+// The spec workbench (specs-ui.js), created once the workspace has loaded.
+let workbench = null;
 let streamReady = false;
 let socketReconnectTimer = null;
 const textEncoder = new TextEncoder();
@@ -278,7 +281,7 @@ function panelPreference(name) {
 
 const ui = {
   state: null,
-  view: "sessions",
+  view: "specs",
   selectedTask: null,
   terminals: new Map(),
   refreshing: null,
@@ -383,14 +386,19 @@ function showView(view) {
     view.charAt(0).toUpperCase() + view.slice(1);
   if (view === "overview") refreshChecks();
   if (view === "tasks" || view === "memory") refreshState(true);
-  if (view === "sessions") {
+  workbench?.onShowView(view);
+  if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
-      ui.terminals.forEach(({ fit, mount }) => {
-        if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
-      });
+      fitTerminals();
     });
   }
+}
+
+function fitTerminals() {
+  ui.terminals.forEach(({ fit, mount }) => {
+    if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
+  });
 }
 
 function sessionItem(session, compact = false, showDelete = false) {
@@ -746,7 +754,8 @@ function mountLaunchedSession(session) {
   }
   addTerminal(session);
   selectTerminal(session.id);
-  showView("sessions");
+  // The spec workbench shows terminals in place; stay there rather than jumping to Sessions.
+  showView(ui.view === "specs" ? "specs" : "sessions");
   render();
   refreshState(true);
 }
@@ -1912,6 +1921,20 @@ async function bootstrap() {
   }
   refreshState(true);
   connectTerminalStream();
+  workbench = initWorkbench({
+    api,
+    toast,
+    showDialog,
+    closeDialog,
+    showView,
+    escapeHtml,
+    $,
+    ui,
+    fitTerminals,
+    launchQuickTerminal,
+    mountLaunchedSession,
+  });
+  showView(ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);
   setInterval(() => {

@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=stream-phase2-20261007" />
-    <script src="/app.js?v=stream-phase2-20261007" defer></script>
+    <link rel="stylesheet" href="/app.css?v=specs-workbench-20261007" />
+    <script src="/app.js?v=specs-workbench-20261007" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -39,9 +39,29 @@
           <button
             class="nav-item active"
             type="button"
+            data-view="specs"
+            aria-label="Specs"
+            aria-current="page"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M7 3h7l4 4v14H7z" />
+                <path d="M14 3v4h4M10 12l1.5 1.5L14 11M10 17h4" /></svg></span
+            ><span>Specs</span
+            ><span class="nav-count" id="nav-spec-count">0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
             data-view="sessions"
             aria-label="Sessions"
-            aria-current="page"
           >
             <span class="nav-icon" aria-hidden="true"
               ><svg
@@ -148,6 +168,14 @@
               <span class="git-icon">⑂</span><span id="top-branch">—</span
               ><span class="git-changes" id="top-changes">0 changed</span>
             </div>
+            <button
+              class="palette-hint"
+              type="button"
+              data-action="palette"
+              title="Command palette"
+            >
+              Search or run… <kbd>⌘K</kbd>
+            </button>
             <button
               class="icon-button"
               id="refresh-button"
@@ -259,7 +287,139 @@
             </div>
           </section>
 
-          <section id="view-sessions" class="view active">
+          <section id="view-specs" class="view active">
+            <div class="specs-layout">
+              <aside class="panel specs-rail" aria-label="Specs and Git">
+                <div class="rail-head">
+                  <h2>Specs</h2>
+                  <button
+                    class="primary-button small"
+                    type="button"
+                    data-action="new-spec"
+                    title="New spec (Alt+N)"
+                  >
+                    ＋ New spec
+                  </button>
+                </div>
+                <div id="spec-list" class="spec-list"></div>
+                <div class="git-card">
+                  <div class="git-card-head">
+                    <span class="section-kicker">GIT</span>
+                    <button
+                      class="text-button"
+                      type="button"
+                      data-action="refresh-git"
+                      title="Refresh Git status"
+                      aria-label="Refresh Git status"
+                    >
+                      ↻
+                    </button>
+                  </div>
+                  <div id="git-branch" class="git-branch">Reading…</div>
+                  <div id="git-status" class="git-status"></div>
+                  <button
+                    class="secondary-button full"
+                    type="button"
+                    data-action="commit"
+                    title="Commit changes (Alt+C)"
+                  >
+                    Commit changes…
+                  </button>
+                  <details class="git-recent">
+                    <summary>Recent commits</summary>
+                    <ol id="git-recent"></ol>
+                  </details>
+                </div>
+              </aside>
+
+              <section class="spec-main">
+                <div id="spec-empty" class="spec-empty">
+                  <span class="section-kicker">SPEC-DRIVEN WORKBENCH</span>
+                  <h1>Start with a spec</h1>
+                  <p>
+                    A spec says what to build and how you will know it works.
+                    Every piece of work in Verb follows the same six steps, and
+                    each step is recorded.
+                  </p>
+                  <ol class="flow-explainer" id="flow-explainer"></ol>
+                  <button
+                    class="primary-button"
+                    type="button"
+                    data-action="new-spec"
+                  >
+                    ＋ Write your first spec
+                  </button>
+                </div>
+                <div id="spec-detail" class="spec-detail" hidden>
+                  <header class="spec-header">
+                    <span class="section-kicker" id="spec-kicker">SPEC</span>
+                    <h1 id="spec-title"></h1>
+                    <div class="spec-meta">
+                      <span class="chip" id="spec-branch-chip" title="This spec's branch"></span>
+                      <button class="text-button" type="button" data-action="switch-branch">
+                        Switch to this branch
+                      </button>
+                      <button class="text-button" type="button" data-action="copy-spec-path">
+                        Copy file path
+                      </button>
+                    </div>
+                  </header>
+                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
+                  <div class="stage-guide" id="stage-guide"></div>
+                  <div class="spec-actions">
+                    <button
+                      class="secondary-button"
+                      type="button"
+                      data-action="spec-terminal"
+                      title="New terminal (Alt+T)"
+                    >
+                      &gt;_ Terminal
+                    </button>
+                    <span class="agent-picker">
+                      <select id="spec-agent" aria-label="AI agent">
+                        <option value="claude">Claude Code</option>
+                        <option value="codex">Codex</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="agy">Antigravity</option>
+                        <option value="opencode">OpenCode</option>
+                      </select>
+                      <button class="primary-button" type="button" data-action="spec-agent">
+                        Start agent on this spec
+                      </button>
+                    </span>
+                  </div>
+                  <div id="spec-work" class="spec-work">
+                    <p class="work-hint">Terminals and agents you open for this spec appear here. Agents start by reading the spec.</p>
+                  </div>
+                </div>
+              </section>
+
+              <aside class="panel spec-proof" aria-label="Proof">
+                <section>
+                  <div class="proof-head">
+                    <h3>Acceptance criteria</h3>
+                    <span id="criteria-progress" class="count-chip"></span>
+                  </div>
+                  <p class="proof-hint">Tick one when you can show it works. Verb asks how you know.</p>
+                  <ul id="criteria-list" class="criteria-list"></ul>
+                </section>
+                <section>
+                  <div class="proof-head">
+                    <h3>Changed files</h3>
+                    <span id="changes-count" class="count-chip"></span>
+                  </div>
+                  <ul id="changes-list" class="changes-list"></ul>
+                </section>
+                <section>
+                  <div class="proof-head"><h3>Audit trail</h3></div>
+                  <p class="proof-hint">Every change, who made it, and when. Stored in the spec file and in Git.</p>
+                  <ol id="audit-list" class="audit-list"></ol>
+                </section>
+              </aside>
+            </div>
+          </section>
+
+          <section id="view-sessions" class="view">
             <div class="page-heading">
               <div>
                 <span class="section-kicker">SESSIONS</span>
@@ -628,6 +788,111 @@
           </button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="spec-dialog" class="modal">
+      <form id="spec-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">NEW SPEC</span>
+            <h2 id="spec-dialog-title">What should be built?</h2>
+            <p id="spec-dialog-sub">Plain words are best. You can edit the file later.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="spec-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label" for="spec-title-input">Title</label
+        ><input id="spec-title-input" name="title" maxlength="120" required placeholder="Let people sign in with email" />
+        <label class="field-label" for="spec-problem">Problem <span>(what is wrong or missing today)</span></label
+        ><textarea id="spec-problem" name="problem" rows="3" placeholder="People who forgot their password cannot get back in."></textarea>
+        <label class="field-label" for="spec-users">Who it is for <span>(optional)</span></label
+        ><input id="spec-users" name="users" placeholder="Returning customers on mobile" />
+        <label class="field-label" for="spec-criteria">Acceptance criteria <span>(one per line: results anyone can check)</span></label
+        ><textarea id="spec-criteria" name="criteria" rows="4" placeholder="A sign-in link arrives by email within a minute&#10;An expired link shows a clear message"></textarea>
+        <label class="field-label" for="spec-scope">Out of scope <span>(optional)</span></label
+        ><textarea id="spec-scope" name="outOfScope" rows="2" placeholder="Social login"></textarea>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="spec-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="spec-dialog-submit">Create spec</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="stage-dialog" class="modal">
+      <form id="stage-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">CHANGE STAGE</span>
+            <h2 id="stage-dialog-title">Move stage</h2>
+            <p id="stage-dialog-sub"></p>
+          </div>
+          <button class="modal-close" type="button" data-close="stage-dialog" aria-label="Close">×</button>
+        </div>
+        <div id="stage-warnings" class="warning-box" hidden></div>
+        <label class="field-label" for="stage-note">Note for the audit trail <span>(optional)</span></label
+        ><textarea id="stage-note" rows="3" placeholder="Why now? e.g. all tests pass on CI"></textarea>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="stage-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="stage-dialog-submit">Move</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="evidence-dialog" class="modal">
+      <form id="evidence-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">PROVE A CRITERION</span>
+            <h2 id="evidence-dialog-title">How do you know it works?</h2>
+            <p id="evidence-dialog-sub"></p>
+          </div>
+          <button class="modal-close" type="button" data-close="evidence-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label" for="evidence-text">Evidence <span>(recommended: a test name, a link, or what you checked)</span></label
+        ><textarea id="evidence-text" rows="3" placeholder="login.test.ts passes; checked on a phone"></textarea>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="evidence-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Mark as proven</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="commit-dialog" class="modal">
+      <form id="commit-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">COMMIT</span>
+            <h2 id="commit-dialog-title">Save these changes to history</h2>
+            <p id="commit-dialog-sub">A commit is a named snapshot you can always come back to.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="commit-dialog" aria-label="Close">×</button>
+        </div>
+        <ul id="commit-files" class="changes-list compact"></ul>
+        <label class="field-label" for="commit-message">What changed and why</label
+        ><textarea id="commit-message" rows="3" required placeholder="spec:012 validate email addresses"></textarea>
+        <label class="check-row"><input type="checkbox" id="commit-record" checked /> <span id="commit-record-label">Record this commit in the spec's audit trail</span></label>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="commit-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="commit-dialog-submit">Commit</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="palette-dialog" class="modal palette">
+      <div class="palette-box">
+        <input id="palette-input" type="search" placeholder="Type a command or a spec…" autocomplete="off" aria-label="Command" />
+        <ul id="palette-list" class="palette-list" role="listbox"></ul>
+        <div class="palette-foot">↑↓ choose · Enter run · Esc close · <kbd>?</kbd> all shortcuts</div>
+      </div>
+    </dialog>
+
+    <dialog id="shortcuts-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div><span class="section-kicker">KEYBOARD</span><h2>Shortcuts</h2></div>
+          <button class="modal-close" type="button" data-close="shortcuts-dialog" aria-label="Close">×</button>
+        </div>
+        <dl class="shortcut-list" id="shortcut-list"></dl>
+      </div>
     </dialog>
 
     <dialog id="task-dialog" class="modal">
