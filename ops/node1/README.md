@@ -46,12 +46,19 @@ Rules:
 
 ## Rotating the token
 
-The token is a full shell on this phone. Rotate it whenever it has appeared anywhere but the node:
+The token is a full shell on this phone. `start_verb.sh` reads it from `/root/.verb/web.token`.
+Rotate it whenever it has appeared anywhere but the node. This generates the new value on the node
+and never prints it:
 
-1. On the node, in Debian, edit `/root/bin/start_verb.sh` and set `VERB_TOKEN` to the output of
-   `openssl rand -hex 32`.
-2. Restart Verb (live terminals end).
-3. Use the new token only through the local SSH tunnel; over the internet, Cloudflare Access is the gate.
+```sh
+. ops/node1/lib.sh
+debian 'umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d " \n" > /root/.verb/web.token.new && mv /root/.verb/web.token.new /root/.verb/web.token'
+# then restart Verb (see below); live terminals end
+```
+
+To read it, use your own terminal, never an agent's:
+`ssh -p 8022 u0_a306@192.168.68.114 "proot-distro login debian -- cat /root/.verb/web.token"`.
+Over the internet, Cloudflare Access is the gate. The token is for the LAN SSH tunnel.
 
 ## Restart troubleshooting
 
@@ -61,9 +68,8 @@ that PID, and runit starts a fresh one. Leave the wrapper and every other servic
 
 ## Known issues (2026-10-07)
 
-- The installed binary (`bc06dfe7…`) matches none of the recorded deployments. It was installed
-  after the last recorded entry without a record. The next `deploy.sh` run replaces it with a
-  traceable build.
-- `sv status verb` reports `got TERM` from an earlier restart that never completed.
+- `sv restart verb` stalls (see above). Seen on 2026-10-07; the troubleshooting step worked.
 - The log shows `proot info: vpid 1: terminated with signal 7` (SIGBUS) at 09:40 IST on 7 Oct;
   runit restarted Verb 2 s later. Cause not investigated.
+- Resolved 2026-10-07: an unrecorded binary (`bc06dfe7…`) was replaced by `37a0424`, a committed
+  build.
