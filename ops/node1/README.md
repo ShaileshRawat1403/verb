@@ -41,7 +41,8 @@ Rules:
   commit. Commit the line it appends to `DEPLOYMENTS.md`.
 - **A restart ends live terminals and agents.** Check the workspace first, and tell the owner.
 - **Ask the owner before deploying or restarting.** Node 1 is their live environment.
-- **Cross-building** needs `cargo install cargo-zigbuild` and `brew install zig`.
+- **Cross-building** needs rustup (the script installs the pinned toolchain and ARM64 target),
+  `cargo install cargo-zigbuild` and `brew install zig`. Homebrew's own `rustc` cannot build for the node.
 
 ## Rotating the token
 

@@ -14,9 +14,12 @@ cd "$REPO"
 [ -z "$(git status --porcelain)" ] || die "working tree is dirty; commit first so the deployment is reproducible"
 GIT_SHA="$(git rev-parse --short HEAD)"
 command -v cargo-zigbuild >/dev/null || die "cargo-zigbuild not installed (cargo install cargo-zigbuild; brew install zig)"
+RUSTUP="$(command -v rustup || echo "$HOME/.cargo/bin/rustup")"
+[ -x "$RUSTUP" ] || die "rustup not found; install it from https://rustup.rs"
+"$RUSTUP" toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$TARGET" >/dev/null
 
 say "building $GIT_SHA for $TARGET"
-cargo zigbuild --release --target "$TARGET" --manifest-path desktop/Cargo.toml
+PATH="$(dirname "$RUSTUP"):$PATH" cargo "+$RUST_TOOLCHAIN" zigbuild --release --target "$TARGET" --manifest-path desktop/Cargo.toml
 SHA256="$(shasum -a 256 "$BIN" | cut -c1-64)"
 say "built $BIN ($SHA256)"
 

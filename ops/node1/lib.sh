@@ -5,6 +5,9 @@ REPO="$(cd "$HERE/../.." && pwd)"
 [ -f "$HERE/node.env" ] && . "$HERE/node.env"
 : "${NODE_HOST:=192.168.68.114}" "${NODE_PORT:=8022}" "${NODE_USER:=u0_a306}"
 TARGET=aarch64-unknown-linux-gnu
+# The toolchain Desktop CI pins (.github/workflows/desktop-ci.yml). Built through rustup, not
+# Homebrew's rustc, which has no standard library for the ARM64 Linux target.
+RUST_TOOLCHAIN=1.99.0
 BIN="$REPO/desktop/target/$TARGET/release/verb"
 
 # Runs a command in Termux on the node.
