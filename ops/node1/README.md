@@ -70,7 +70,13 @@ that PID, and runit starts a fresh one. Leave the wrapper and every other servic
 ## Known issues (2026-10-07)
 
 - `sv restart verb` stalls (see above). Seen on 2026-10-07; the troubleshooting step worked.
-- The log shows `proot info: vpid 1: terminated with signal 7` (SIGBUS) at 09:40 IST on 7 Oct;
-  runit restarted Verb 2 s later. Cause not investigated.
+- Resolved 2026-10-07: the SIGBUS crashes (`proot info: vpid 1: terminated with signal 7`). Each one
+  happened within about 30 ms of `/usr/local/bin/verb` being overwritten in place while Verb was
+  running: 10-06 14:22:32 (Phase 1 install), 10-07 02:12:14 (Phase 2), 10-07 09:40:35 (the
+  unrecorded install). Overwriting a running executable changes the pages the process has mapped,
+  and the kernel kills it on the next fault. **Never `cp` over the binary.** `deploy.sh` writes
+  `verb.new` and renames it into place, which gives it a new inode, so the running process keeps
+  its own file; none of its deploys crashed. Some earlier SIGSEGVs (signal 11) may share this cause
+  but were not correlated.
 - Resolved 2026-10-07: an unrecorded binary (`bc06dfe7…`) was replaced by `37a0424`, a committed
   build.
