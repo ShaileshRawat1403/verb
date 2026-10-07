@@ -86,5 +86,24 @@ jobs:
         # the runner; the tests skip themselves rather than fail if a shell is missing.
         run: cargo test --all-targets
 
+      - name: Browser tests (real verb web + headless Chromium)
+        # Drives the workbench like a person: create a spec, prove a criterion with evidence, commit,
+        # palette, theme, terminal. `cargo test --all-targets` above already built target/debug/verb.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npx --prefix web playwright install --with-deps chromium
+          VERB_BIN="$PWD/target/debug/verb" npm run e2e --prefix web
+
+      - name: Upload browser test report
+        if: failure() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: playwright-report
+          path: |
+            desktop/web/playwright-report/
+            desktop/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Build release
         run: cargo build --release

@@ -32,3 +32,7 @@ desktop/web/node_modules/
 
 # Node 1 local connection settings (no secrets, but machine-specific)
 ops/node1/node.env
+
+# Playwright output
+desktop/web/test-results/
+desktop/web/playwright-report/
