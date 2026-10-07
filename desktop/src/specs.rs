@@ -112,15 +112,13 @@ fn parse_criteria(body: &str) -> Vec<Criterion> {
         .into_iter()
         .filter_map(|line| {
             let line = line.trim_start();
-            let (done, text) = if let Some(text) = line.strip_prefix("- [ ] ") {
-                (false, text)
-            } else if let Some(text) = line
-                .strip_prefix("- [x] ")
-                .or_else(|| line.strip_prefix("- [X] "))
-            {
-                (true, text)
-            } else {
-                return None;
+            let (done, text) = match line.strip_prefix("- [ ] ") {
+                Some(text) => (false, text),
+                None => (
+                    true,
+                    line.strip_prefix("- [x] ")
+                        .or_else(|| line.strip_prefix("- [X] "))?,
+                ),
             };
             Some((done, text.trim().to_owned()))
         })

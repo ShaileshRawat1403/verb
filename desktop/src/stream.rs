@@ -161,6 +161,9 @@ impl TerminalStreamSink {
 
     /// Acknowledges processed bytes to relieve backpressure.
     pub fn ack(&self, bytes: usize) {
+        // `fetch_update` is renamed `try_update` in Rust 1.99, which deprecates the old name. The new
+        // one does not exist in older toolchains (Homebrew ships 1.93), so keep the old call.
+        #[allow(deprecated)]
         let remaining = self
             .unacked_bytes
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
