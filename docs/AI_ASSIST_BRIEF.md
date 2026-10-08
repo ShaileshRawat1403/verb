@@ -9,7 +9,7 @@
 1. ✅ Light and dark themes, layout and motion (`79484e5`)
 2. ✅ Project context hub and agent-context sync (`31d11a8`), with a file tree
 3. ✅ Host page (read-only health) (`78d7b83`, `0dc65b3`)
-4. Ask Verb v1
+4. ✅ Ask Verb v1 (deterministic, cited; the model summary path is still to come)
 5. Session board, handoffs, context meter
 6. Observer badges
 7. Modern terminal: command blocks, splits, tabs
@@ -99,6 +99,10 @@ status and duration (from OSC 133), "Explain this failure" on a red block (Ask V
 tabs, searchable history, and a notification when a long command finishes in a background tab.
 
 ## Progress log
+
+- 2026-10-08, Claude: Ask Verb v1. Six evidence-only intents (what's left, what changed, where are we,
+  history/why, what is this project, who is working on what), each answer citing specs, files,
+  commits or sessions; honest decline otherwise. Dialog, Alt+A, palette entry. No model yet.
 
 - 2026-10-08, Claude: Host page. Verb version, deployed commit (from deploy manifests), uptime from
   process start, memory; machine model; memory and storage; temperatures; battery or why not; runit
