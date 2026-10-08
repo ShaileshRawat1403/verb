@@ -7,8 +7,8 @@
 ## Order
 
 1. ✅ Light and dark themes, layout and motion (`79484e5`)
-2. Project context hub and agent-context sync
-3. Host page for Node 1 (read-only health)
+2. ✅ Project context hub and agent-context sync (`31d11a8`), with a file tree
+3. ✅ Host page (read-only health) (`78d7b83`, `0dc65b3`)
 4. Ask Verb v1
 5. Session board, handoffs, context meter
 6. Observer badges
@@ -99,6 +99,14 @@ status and duration (from OSC 133), "Explain this failure" on a red block (Ask V
 tabs, searchable history, and a notification when a long command finishes in a background tab.
 
 ## Progress log
+
+- 2026-10-08, Claude: Host page. Verb version, deployed commit (from deploy manifests), uptime from
+  process start, memory; machine model; memory and storage; temperatures; battery or why not; runit
+  services; restart/crash timeline. Proot's fake uptime and load are hidden with a note. A temporary
+  second instance on the OnePlus found two bugs (a manifest-less folder hid the commit; services
+  outside runit showed "fail"), both fixed and re-verified there. Battery charge needs Termux:API.
+- 2026-10-07, Claude: context hub (Project Brief, agent-context sync, nudges) plus a file tree that
+  never lists or opens Git-ignored files.
 
 - 2026-10-07, Claude: step 1 shipped (`79484e5`): theme tokens, light and dark, xterm palettes that
   pass a contrast test, motion layer with reduced-motion support. Verified in Chrome.
