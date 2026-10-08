@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=ask-20261008" />
-    <script src="/app.js?v=ask-20261008" defer></script>
+    <link rel="stylesheet" href="/app.css?v=handoff-20261008" />
+    <script src="/app.js?v=handoff-20261008" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -446,7 +446,11 @@
                         Start agent on this spec
                       </button>
                     </span>
+                    <button class="secondary-button" type="button" data-action="handoff" title="Pass this spec to another agent with a written note">
+                      Hand off…
+                    </button>
                   </div>
+                  <div id="spec-sessions" class="spec-sessions" hidden></div>
                   <div id="spec-work" class="spec-work">
                     <p class="work-hint">Terminals and agents you open for this spec appear here. Agents start by reading the spec.</p>
                   </div>
@@ -1083,6 +1087,37 @@
         <div id="ask-suggestions" class="ask-suggestions"></div>
         <div id="ask-thread" class="ask-thread" aria-live="polite"></div>
         <p class="ask-footnote">Answered from evidence in this project. No AI model was used.</p>
+      </form>
+    </dialog>
+
+    <dialog id="handoff-dialog" class="modal">
+      <form id="handoff-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">HAND OFF</span>
+            <h2 id="handoff-title">Pass this spec to another agent</h2>
+            <p>Verb writes a handoff note into the spec, records it in the audit trail, and starts the next agent reading that note first.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="handoff-dialog" aria-label="Close">×</button>
+        </div>
+        <div class="handoff-route"><span id="handoff-from">nobody yet</span><span aria-hidden="true">→</span>
+          <select id="handoff-to" aria-label="Hand off to">
+            <option value="codex">Codex</option>
+            <option value="claude">Claude Code</option>
+            <option value="gemini">Gemini</option>
+            <option value="agy">Antigravity</option>
+            <option value="opencode">OpenCode</option>
+            <option value="shell">A terminal (you)</option>
+          </select>
+        </div>
+        <p class="proof-hint">The note includes open acceptance criteria, recent <code>spec:</code> commits, uncommitted files and the branch. Add anything they can't see:</p>
+        <label class="field-label" for="handoff-note">Your note <span>(optional)</span></label
+        ><textarea id="handoff-note" rows="3" maxlength="2000" placeholder="Login works; the email test is flaky on CI. Don't touch the session store."></textarea>
+        <p class="proof-hint">The previous agent keeps running. End it yourself when you're ready.</p>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="handoff-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="handoff-submit">Hand off</button>
+        </div>
       </form>
     </dialog>
 

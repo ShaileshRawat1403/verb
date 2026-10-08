@@ -423,6 +423,16 @@ struct SpecCriterionRequest {
     evidence: String,
 }
 
+const SPEC_AGENTS: [&str; 6] = ["claude", "codex", "gemini", "agy", "opencode", "shell"];
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpecHandoffRequest {
+    to: String,
+    #[serde(default)]
+    note: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpecAgentRequest {
@@ -1385,31 +1395,31 @@ impl WebHost {
             }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
-                let (path, spec) = crate::specs::find(&self.project, id)?;
-                // Agents whose CLI takes an opening prompt as its first argument get the spec brief.
-                let args = match input.agent.as_str() {
-                    "claude" | "codex" | "gemini" => vec![crate::specs::agent_brief(&spec)],
-                    "agy" | "opencode" | "shell" => Vec::new(),
-                    _ => return Err("choose a supported agent".to_owned()),
-                };
-                let session = self.launch(LaunchRequest {
-                    agent: input.agent.clone(),
-                    isolated: false,
-                    command: None,
-                    args,
-                    resume_id: None,
-                })?;
-                crate::specs::record(
-                    &path,
-                    &crate::specs::actor(&self.project, "Verb web"),
-                    &format!(
-                        "started {} on this spec (session {})",
-                        input.agent,
-                        &session[..session.len().min(8)]
-                    ),
-                )?;
+                let session = self.start_on_spec(id, &input.agent)?;
                 self.invalidate_state();
                 Ok(Reply::json(201, json!({"sessionId": session})))
+            }
+            ["api", "specs", id, "handoff"] if method == &Method::Post => {
+                let input: SpecHandoffRequest = read_json(request)?;
+                if input.note.len() > 2000 {
+                    return Err("keep the handoff note under 2000 characters".to_owned());
+                }
+                if !SPEC_AGENTS.contains(&input.to.as_str()) {
+                    return Err("choose a supported agent".to_owned());
+                }
+                let note = crate::specs::handoff(
+                    &self.project,
+                    id,
+                    &input.to,
+                    &input.note,
+                    &crate::specs::actor(&self.project, "Verb web"),
+                )?;
+                let session = self.start_on_spec(id, &input.to)?;
+                self.invalidate_state();
+                Ok(Reply::json(
+                    201,
+                    json!({"sessionId": session, "note": note}),
+                ))
             }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
                 let revision = workbench::handoff_revision(&self.project, id)?;
@@ -1602,6 +1612,34 @@ impl WebHost {
             }
             _ => Ok(Reply::error(404, "not found")),
         }
+    }
+
+    /// Starts an agent (or a shell) on a spec and records it in the spec's audit trail, which is
+    /// how the session board and Ask Verb know who worked on what.
+    fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<String, String> {
+        let (path, spec) = crate::specs::find(&self.project, id)?;
+        // Agents whose CLI takes an opening prompt as its first argument get the spec brief.
+        let args = match agent {
+            "claude" | "codex" | "gemini" => vec![crate::specs::agent_brief(&spec)],
+            "agy" | "opencode" | "shell" => Vec::new(),
+            _ => return Err("choose a supported agent".to_owned()),
+        };
+        let session = self.launch(LaunchRequest {
+            agent: agent.to_owned(),
+            isolated: false,
+            command: None,
+            args,
+            resume_id: None,
+        })?;
+        crate::specs::record(
+            &path,
+            &crate::specs::actor(&self.project, "Verb web"),
+            &format!(
+                "started {agent} on this spec (session {})",
+                &session[..session.len().min(8)]
+            ),
+        )?;
+        Ok(session)
     }
 
     fn launch(&mut self, input: LaunchRequest) -> Result<String, String> {
@@ -1841,7 +1879,10 @@ fn send_reply(request: Request, reply: Reply) {
             ("X-Frame-Options", "DENY"),
             ("Referrer-Policy", "no-referrer"),
             ("Cross-Origin-Resource-Policy", "same-origin"),
-            ("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"),
+            // 'wasm-unsafe-eval' lets the terminal's image addon compile its WebAssembly Sixel
+            // decoder. It permits WebAssembly compilation only, not JavaScript eval. Without it every
+            // terminal threw a CSP error and inline images never worked (caught by browser tests).
+            ("Content-Security-Policy", "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"),
         ] {
             response.add_header(Header::from_bytes(name, value).expect("static HTTP header"));
         }

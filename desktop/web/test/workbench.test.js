@@ -115,3 +115,27 @@ test("host formatting", () => {
   assert.equal(formatKb(524288), "512 MB");
   assert.deepEqual([38, 40, 44.9, 45].map(temperatureTone), ["ok", "warm", "warm", "hot"]);
 });
+
+import { lastAgent, specSessions } from "../src/workbench.js";
+
+test("spec sessions come from the audit trail, joined with live sessions", () => {
+  const spec = {
+    audit: [
+      { at: "2026-10-08T01:00:00Z", action: "created spec \"x\"" },
+      { at: "2026-10-08T02:00:00Z", action: "started claude on this spec (session aaaa1111)" },
+      { at: "2026-10-08T03:00:00Z", action: "handed off from claude to codex — flaky tests" },
+      { at: "2026-10-08T03:00:01Z", action: "started codex on this spec (session bbbb2222)" },
+    ],
+  };
+  const live = [{ id: "bbbb2222-full-id", state: "live" }];
+  const sessions = specSessions(spec, live);
+  assert.deepEqual(
+    sessions.map((s) => [s.agent, s.short, s.live, s.id]),
+    [
+      ["codex", "bbbb2222", true, "bbbb2222-full-id"],
+      ["claude", "aaaa1111", false, null],
+    ],
+  );
+  assert.equal(lastAgent(spec), "codex");
+  assert.equal(lastAgent({ audit: [] }), null);
+});

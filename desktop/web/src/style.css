@@ -3992,3 +3992,64 @@ kbd {
   color: var(--text-faint);
   margin: 12px 0 0;
 }
+
+/* ===================================================================== Session board, handoff */
+.spec-sessions {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: grid;
+  gap: 6px;
+  animation: rise-in 280ms var(--ease-out) both;
+}
+.board-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+.board-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  padding: 4px 2px;
+  color: var(--text-dim);
+}
+.board-row b {
+  color: var(--text);
+  font-weight: 600;
+}
+.board-row.live b {
+  color: var(--text-strong);
+}
+.board-row .muted {
+  flex: 1;
+}
+.handoff-route {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-weight: 600;
+  margin: 4px 0 6px;
+}
+.handoff-route > span:first-child {
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.handoff-route > span[aria-hidden] {
+  color: var(--accent);
+  font-size: 18px;
+}
+.handoff-route select {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font: inherit;
+}

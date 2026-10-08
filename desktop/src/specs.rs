@@ -588,16 +588,129 @@ pub(crate) fn record(path: &Path, actor: &str, action: &str) -> Result<(), Strin
 /// The prompt given to an agent started on a spec: read it, work criterion by criterion, and stop
 /// at the acceptance criteria rather than inventing scope.
 pub(crate) fn agent_brief(spec: &Spec) -> String {
+    let handoff = if spec.body.contains(HANDOFF_HEADING) {
+        " Another agent worked on this before you: read the newest entry in its 'Handoff notes' \
+         section first, and continue from there rather than starting over."
+    } else {
+        ""
+    };
     format!(
-        "Work on spec {id}, \"{title}\", described in {file}. Read that file first. \
+        "Work on spec {id}, \"{title}\", described in {file}. Read that file first.{handoff} \
          Implement it so each acceptance criterion is met, one at a time, and stay within its \
          'Out of scope' section. Commit with messages that start with \"spec:{id}\". \
-         Do not edit the spec's Audit trail section; Verb maintains it. When a criterion is met, \
-         say which one and what proves it.",
+         Do not edit the spec's Audit trail or Handoff notes sections; Verb maintains them. When a \
+         criterion is met, say which one and what proves it.",
         id = spec.id,
         title = spec.title,
         file = spec.file
     )
+}
+
+const HANDOFF_HEADING: &str = "## Handoff notes";
+
+/// The agent that most recently started on a spec, from its audit trail.
+pub(crate) fn last_agent(spec: &Spec) -> Option<String> {
+    spec.audit.iter().rev().find_map(|a| {
+        a.action
+            .strip_prefix("started ")
+            .and_then(|rest| rest.split(" on this spec").next())
+            .map(str::to_owned)
+    })
+}
+
+/// Writes a handoff note into the spec (newest first, under `## Handoff notes`) and records the
+/// handoff in the audit trail. Returns the note. Starting the next agent is the caller's job, and
+/// the previous agent is never stopped here: that stays the person's decision.
+pub(crate) fn handoff(
+    project: &Path,
+    id: &str,
+    to: &str,
+    note: &str,
+    actor: &str,
+) -> Result<String, String> {
+    let (path, spec) = find(project, id)?;
+    let from = last_agent(&spec).unwrap_or_else(|| "nobody yet".to_owned());
+    let at = crate::iso8601(crate::now_millis());
+    let one_line = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut lines = vec![format!(
+        "### {} · {from} → {to}",
+        &at[..16].replace('T', " ")
+    )];
+    let open: Vec<_> = spec.criteria.iter().filter(|c| !c.done).collect();
+    lines.push(if open.is_empty() {
+        "- All acceptance criteria are proven.".to_owned()
+    } else {
+        format!(
+            "- Still to prove: {}",
+            open.iter()
+                .map(|c| format!("{}. {}", c.index + 1, c.text))
+                .collect::<Vec<_>>()
+                .join("; ")
+        )
+    });
+    let grep = format!("spec:{id}");
+    if let Ok(log) = git(
+        project,
+        &[
+            "log",
+            "-5",
+            "--fixed-strings",
+            "--grep",
+            &grep,
+            "--format=%h %s",
+        ],
+    ) {
+        let commits: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+        if !commits.is_empty() {
+            lines.push(format!(
+                "- Recent commits for this spec: {}",
+                commits.join("; ")
+            ));
+        }
+    }
+    if let Ok(summary) = git_summary(project) {
+        let files: Vec<&str> = summary
+            .changes
+            .iter()
+            .map(|c| c.path.as_str())
+            .filter(|p| *p != spec.file)
+            .take(12)
+            .collect();
+        if !files.is_empty() {
+            lines.push(format!("- Uncommitted changes: {}", files.join(", ")));
+        }
+        if let Some(branch) = &summary.branch {
+            lines.push(format!("- Branch: {branch}"));
+        }
+    }
+    let note = one_line(note);
+    if !note.is_empty() {
+        lines.push(format!(
+            "- Note from {}: {note}",
+            actor.split(" via ").next().unwrap_or(actor)
+        ));
+    }
+    let entry = lines.join("\n");
+
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let next = if let Some(at_heading) = raw.find(HANDOFF_HEADING) {
+        let insert = at_heading + HANDOFF_HEADING.len();
+        format!("{}\n\n{entry}{}", &raw[..insert], &raw[insert..])
+    } else if let Some(at_audit) = raw.find(AUDIT_HEADING) {
+        format!(
+            "{}{HANDOFF_HEADING}\n\n<!-- Written by Verb at each handoff, newest first. -->\n\n{entry}\n\n{}",
+            &raw[..at_audit],
+            &raw[at_audit..]
+        )
+    } else {
+        format!("{}\n\n{HANDOFF_HEADING}\n\n{entry}\n", raw.trim_end())
+    };
+    let mut action = format!("handed off from {from} to {to}");
+    if !note.is_empty() {
+        action.push_str(&format!(" — {note}"));
+    }
+    write_atomic(&path, &append_audit(&next, &audit_line(actor, &action)))?;
+    Ok(entry)
 }
 
 #[cfg(test)]
@@ -763,6 +876,57 @@ mod tests {
             git_summary(&project).unwrap().branch.as_deref(),
             Some("spec/001-login-with-email")
         );
+    }
+
+    #[test]
+    fn handoff_writes_a_note_newest_first_and_audits_it() {
+        let project = temp_repo();
+        new_spec(&project);
+        let (path, _) = find(&project, "001").unwrap();
+        record(
+            &path,
+            "A via test",
+            "started claude on this spec (session aaaa1111)",
+        )
+        .unwrap();
+        set_criterion(&project, "001", 0, true, "seen", "A").unwrap();
+        commit(&project, "spec:001 first slice", None, "A").unwrap();
+        fs::write(project.join("wip.txt"), "x").unwrap();
+
+        let note = handoff(
+            &project,
+            "001",
+            "codex",
+            "tests  are\nflaky",
+            "Test Person via test",
+        )
+        .unwrap();
+        assert!(note.contains("claude → codex"), "{note}");
+        assert!(note.contains("- Still to prove: 2. Bad email rejected"));
+        assert!(note.contains("spec:001 first slice"));
+        assert!(note.contains("- Uncommitted changes: wip.txt"));
+        assert!(note.contains("- Note from Test Person: tests are flaky"));
+
+        let spec = find(&project, "001").unwrap().1;
+        assert_eq!(
+            spec.audit.last().unwrap().action,
+            "handed off from claude to codex — tests are flaky"
+        );
+        assert_eq!(
+            spec.criteria.len(),
+            2,
+            "criteria still parse with a handoff section present"
+        );
+        assert!(agent_brief(&spec).contains("read the newest entry in its 'Handoff notes'"));
+
+        record(&path, "A", "started codex on this spec (session bbbb2222)").unwrap();
+        handoff(&project, "001", "claude", "", "A").unwrap();
+        let raw = fs::read_to_string(&path).unwrap();
+        let first = raw.find("codex → claude").unwrap();
+        let second = raw.find("claude → codex").unwrap();
+        assert!(first < second, "newest note first");
+        assert_eq!(raw.matches(HANDOFF_HEADING).count(), 1);
+        assert!(raw.find(HANDOFF_HEADING).unwrap() < raw.find(AUDIT_HEADING).unwrap());
     }
 
     #[test]

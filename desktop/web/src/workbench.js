@@ -227,3 +227,24 @@ export function temperatureTone(celsius) {
   if (celsius >= 40) return "warm";
   return "ok";
 }
+
+/**
+ * Sessions that worked on a spec, newest first, from its audit trail ("started codex on this spec
+ * (session 1a2b3c4d)") joined with the sessions running now.
+ */
+export function specSessions(spec, liveSessions = []) {
+  const out = [];
+  for (const entry of spec.audit ?? []) {
+    const m = /^started (\S+) on this spec \(session ([0-9a-zA-Z_-]+)\)/.exec(entry.action);
+    if (!m) continue;
+    const [, agent, short] = m;
+    const live = liveSessions.find((s) => s.id.startsWith(short) && s.state === "live");
+    out.push({ agent, short, at: entry.at, live: Boolean(live), id: live?.id ?? null });
+  }
+  return out.reverse();
+}
+
+/** The agent that most recently started on a spec (mirrors specs::last_agent). */
+export function lastAgent(spec) {
+  return specSessions(spec)[0]?.agent ?? null;
+}

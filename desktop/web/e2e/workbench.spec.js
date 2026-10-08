@@ -99,6 +99,8 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
 });
 
 test("palette, theme and a terminal in the spec", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
   await expect(page.locator("#spec-title")).toBeVisible();
 
@@ -121,6 +123,10 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   await page.locator('[data-action="spec-terminal"]').click();
   await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
   await expect(page.locator("#spec-work .work-hint")).toBeHidden();
+  // A terminal must start without page errors (it once threw a CSP error compiling the image
+  // addon's WebAssembly decoder, which silently disabled inline images).
+  await page.waitForTimeout(500);
+  expect(errors).toEqual([]);
 });
 
 test("project view: files, preview, brief, and agent context sync", async ({ page }) => {
@@ -222,5 +228,34 @@ test("ask verb answers from evidence and its sources open", async ({ page }) => 
   await page.locator("#ask-input").fill("compose me a sonnet");
   await page.keyboard.press("Enter");
   await expect(page.locator(".ask-turn").last()).toContainText("I only answer from evidence");
+  expect(errors).toEqual([]);
+});
+
+test("session board and handoff with a written note", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(url);
+  await expect(page.locator("#spec-title")).toBeVisible();
+
+  // An earlier test opened a terminal from the spec; the board lists it from the audit trail.
+  await expect(page.locator("#spec-sessions")).toBeVisible();
+  await expect(page.locator("#spec-sessions .board-row").first()).toContainText("Terminal");
+
+  // Hand off (to a plain terminal here: CI has no agent CLIs installed).
+  await page.locator('[data-action="handoff"]').click();
+  await expect(page.locator("#handoff-from")).toHaveText("Terminal");
+  await page.locator("#handoff-to").selectOption("shell");
+  await page.locator("#handoff-note").fill("Validation is done; persistence is next.");
+  await page.locator("#handoff-submit").click();
+  await expect(page.locator("#handoff-dialog")).toBeHidden();
+  await expect(page.locator("#spec-sessions .board-row.live")).toHaveCount(2, { timeout: 15_000 });
+
+  const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
+  expect(file).toContain("## Handoff notes");
+  expect(file).toContain("shell → shell");
+  expect(file).toContain("- Note from E2E Person: Validation is done; persistence is next.");
+  expect(file).toContain("handed off from shell to shell — Validation is done; persistence is next.");
+  expect(file.indexOf("## Handoff notes")).toBeLessThan(file.indexOf("## Audit trail"));
+  await expect(page.locator("#audit-list li").first()).toContainText("started shell on this spec");
   expect(errors).toEqual([]);
 });

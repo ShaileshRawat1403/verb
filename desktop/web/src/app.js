@@ -1943,6 +1943,7 @@ async function bootstrap() {
     fitTerminals,
     launchQuickTerminal,
     mountLaunchedSession,
+    selectTerminal,
     theme,
   });
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });

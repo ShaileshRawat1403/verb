@@ -9,10 +9,13 @@ import {
   commitPrefix,
   filterCommands,
   groupByStage,
+  lastAgent,
   progressLabel,
   skippedStages,
+  specSessions,
   stageWarnings,
 } from "./workbench.js";
+import { agentDisplayName } from "./view.js";
 
 const SHORTCUTS = [
   ["⌘K / Ctrl+K", "Command palette: search specs and run any action"],
@@ -88,6 +91,7 @@ export function initWorkbench(deps) {
     $("#nav-spec-count").textContent = state.specs.filter((s) => s.stage !== "ship").length;
     renderList();
     renderDetail();
+    renderSessions();
     renderProof();
     renderGit();
     placeTerminals();
@@ -142,6 +146,23 @@ export function initWorkbench(deps) {
         ? `<button class="text-button" type="button" data-stage="${nextStage}">Ready? Move to ${STAGE_GUIDE[nextStage].label} →</button>`
         : '<span class="done-badge">Shipped</span>'
     }`;
+  }
+
+  /** Who has worked on this spec, from its audit trail, and which of them are running now. */
+  function renderSessions() {
+    const spec = selected();
+    const board = $("#spec-sessions");
+    const sessions = spec ? specSessions(spec, deps.ui.state?.sessions ?? []) : [];
+    board.hidden = !sessions.length;
+    board.innerHTML = sessions.length
+      ? `<div class="board-head"><span class="section-kicker">WORKED ON THIS SPEC</span><span class="muted">${sessions.filter((x) => x.live).length} running</span></div>${sessions
+          .slice(0, 6)
+          .map(
+            (x) =>
+              `<div class="board-row${x.live ? " live" : ""}"><span class="state-dot" data-state="${x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>`,
+          )
+          .join("")}`
+      : "";
   }
 
   function renderProof() {
@@ -288,10 +309,10 @@ export function initWorkbench(deps) {
     box.setSelectionRange(box.value.length, box.value.length);
   }
 
-  async function startAgent() {
+  /** Starts an agent, or a plain terminal ("shell"), on the selected spec. Recorded server-side. */
+  async function startOnSpec(agent) {
     const spec = selected();
-    if (!spec) return;
-    const agent = $("#spec-agent").value;
+    if (!spec) return deps.launchQuickTerminal();
     try {
       const result = await api("POST", `/api/specs/${spec.id}/agent`, { agent });
       deps.mountLaunchedSession({
@@ -302,11 +323,25 @@ export function initWorkbench(deps) {
         hasTerminal: true,
         hostedHere: true,
       });
-      toast(`${$("#spec-agent").selectedOptions[0].textContent} started on spec ${spec.id}. Recorded in the audit trail.`);
+      if (agent !== "shell") toast(`${agentDisplayName(agent)} started on spec ${spec.id}. Recorded in the audit trail.`);
       refreshSpecs();
     } catch (error) {
       toast(error.message, "error");
     }
+  }
+  const startAgent = () => startOnSpec($("#spec-agent").value);
+
+  function openHandoff() {
+    const spec = selected();
+    if (!spec) return;
+    const from = lastAgent(spec);
+    $("#handoff-from").textContent = from ? agentDisplayName(from) : "nobody yet";
+    $("#handoff-title").textContent = `Hand off spec ${spec.id}`;
+    const to = $("#handoff-to");
+    if (from && to.value === from) to.value = [...to.options].find((o) => o.value !== from).value;
+    $("#handoff-note").value = "";
+    showDialog("handoff-dialog");
+    $("#handoff-note").focus();
   }
 
   async function switchBranch() {
@@ -457,6 +492,7 @@ export function initWorkbench(deps) {
         2,
         0,
         { title: `Start agent on spec ${spec.id}`, hint: spec.title, run: startAgent },
+        { title: `Hand off spec ${spec.id} to another agent`, run: openHandoff },
         { title: `Switch to branch ${spec.branch}`, run: switchBranch },
         { title: `Copy spec file path`, hint: spec.file, run: copySpecPath },
         ...STAGES.filter((s) => s !== spec.stage).map((stage) => ({
@@ -535,8 +571,9 @@ export function initWorkbench(deps) {
       "refresh-git": refreshGit,
       "switch-branch": switchBranch,
       "copy-spec-path": copySpecPath,
-      "spec-terminal": deps.launchQuickTerminal,
+      "spec-terminal": () => startOnSpec("shell"),
       "spec-agent": startAgent,
+      handoff: openHandoff,
       palette: openPalette,
       theme: () => {
         deps.theme.cycle();
@@ -545,6 +582,30 @@ export function initWorkbench(deps) {
     };
     if (handlers[action]) handlers[action]();
   });
+  document.addEventListener("click", (event) => {
+    const focus = event.target.closest("[data-focus-session]");
+    if (focus) deps.selectTerminal?.(focus.dataset.focusSession);
+  });
+
+  $("#handoff-dialog-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const spec = selected();
+    if (!spec) return;
+    const to = $("#handoff-to").value;
+    const from = lastAgent(spec);
+    try {
+      const result = await api("POST", `/api/specs/${spec.id}/handoff`, { to, note: $("#handoff-note").value });
+      closeDialog("handoff-dialog");
+      deps.mountLaunchedSession({ id: result.sessionId, agent: to, isolated: false, state: "live", hasTerminal: true, hostedHere: true });
+      toast(
+        `Handed off to ${agentDisplayName(to)}. The note is in the spec's Handoff notes${from ? `; ${agentDisplayName(from)} is still running, end it when you're ready` : ""}.`,
+      );
+      await Promise.all([refreshSpecs(), refreshGit()]);
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+
   document.addEventListener("change", (event) => {
     const box = event.target.closest("[data-criterion]");
     if (box) toggleCriterion(Number(box.dataset.criterion), box);
@@ -579,7 +640,9 @@ export function initWorkbench(deps) {
   refreshSpecs();
   refreshGit();
   setInterval(() => {
-    if (deps.ui.view === "specs" && !document.hidden) refreshGit();
+    if (deps.ui.view !== "specs" || document.hidden) return;
+    refreshGit();
+    renderSessions(); // live/ended follows the workspace poll
   }, 5000);
 
   return {
