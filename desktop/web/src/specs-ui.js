@@ -669,6 +669,9 @@ export function initWorkbench(deps) {
 
   return {
     selectSpec,
+    switchBranch,
+    openHandoff,
+    current: () => ({ spec: selected(), git: state.git, meters: state.meters }),
     onShowView(view) {
       if (view === "specs") {
         refreshMeters();

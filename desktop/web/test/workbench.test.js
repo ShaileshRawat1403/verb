@@ -153,3 +153,20 @@ test("context meter labels: percentages only when the window is known", () => {
   assert.equal(claude.percent, null);
   assert.equal(meterLabel({ note: "No reply recorded yet." }).text, "No reply recorded yet.");
 });
+
+import { clientSignals } from "../src/workbench.js";
+
+test("client-side observer signals: context pressure and wrong branch", () => {
+  const meters = { a: { percent: 84, tokens: 640000, window: 760000 }, b: { percent: 20 }, c: { percent: null, tokens: 9 } };
+  const sessions = [{ id: "a", agent: "Codex" }];
+  const s = clientSignals({ meters, sessions });
+  assert.deepEqual(s.map((x) => [x.kind, x.key, x.title]), [["context", "context:a:80", "Codex context is 84% full"]]);
+  assert.equal(clientSignals({ meters, sessions, muted: ["context"] }).length, 0);
+
+  const spec = { id: "002", branch: "spec/002-x", stage: "build" };
+  const git = { branch: "main", changes: [{ path: "a" }] };
+  assert.equal(clientSignals({ git, spec })[0].kind, "branch");
+  assert.equal(clientSignals({ git: { ...git, changes: [] }, spec }).length, 0, "nothing to protect");
+  assert.equal(clientSignals({ git, spec: { ...spec, stage: "spec" } }).length, 0, "not building yet");
+  assert.equal(clientSignals({ git: { ...git, branch: "spec/002-x" }, spec }).length, 0, "already there");
+});

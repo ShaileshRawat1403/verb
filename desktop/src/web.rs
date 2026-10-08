@@ -36,6 +36,10 @@ struct WebTerminal {
     final_screen: Vec<u8>,
     exit_seen_at: Option<Instant>,
     failure: Option<String>,
+    /// For the observer, in memory only: when this terminal last produced output, and recent
+    /// failed commands (shell integration's volatile label, never written anywhere).
+    last_output: Instant,
+    failures: VecDeque<(String, Instant)>,
 }
 
 impl WebTerminal {
@@ -51,6 +55,8 @@ impl WebTerminal {
             final_screen: Vec::new(),
             exit_seen_at: None,
             failure: None,
+            last_output: Instant::now(),
+            failures: VecDeque::new(),
         }
     }
 
@@ -82,9 +88,25 @@ impl WebTerminal {
         };
         let (exit, _) = hosted.poll()?;
         // The TUI consumes structural notices for its activity view. The browser reads the
-        // durable ledger instead, so these volatile notices must not accumulate here.
-        let _ = hosted.take_structural();
+        // durable ledger instead; here only failed commands are kept, briefly and in memory, for
+        // the observer's failing-loop signal.
+        for notice in hosted.take_structural() {
+            if let crate::pty::Structural::CommandFinished {
+                exit_code,
+                label: Some(label),
+                ..
+            } = notice
+            {
+                if exit_code != 0 {
+                    self.failures.push_back((label, Instant::now()));
+                    while self.failures.len() > 20 {
+                        self.failures.pop_front();
+                    }
+                }
+            }
+        }
         for chunk in hosted.take_web_output() {
+            self.last_output = Instant::now();
             self.push(chunk);
         }
         if let Some(code) = exit {
@@ -370,6 +392,14 @@ struct LaunchRequest {
     #[serde(default)]
     args: Vec<String>,
     resume_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObserverRequest {
+    enabled: Option<bool>,
+    mute: Option<String>,
+    unmute: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1237,6 +1267,76 @@ impl WebHost {
             }));
             return Ok(reply);
         }
+        if path == "/api/observer" && (method == &Method::Get || method == &Method::Post) {
+            let store = self.identity.store.clone();
+            let mut settings = crate::observer::load(&store);
+            if method == &Method::Post {
+                let input: ObserverRequest = read_json(request)?;
+                if let Some(enabled) = input.enabled {
+                    settings.enabled = enabled;
+                }
+                if let Some(kind) = input.mute {
+                    if !crate::observer::KINDS.contains(&kind.as_str()) {
+                        return Err("unknown signal".to_owned());
+                    }
+                    if !settings.muted.contains(&kind) {
+                        settings.muted.push(kind);
+                    }
+                }
+                if let Some(kind) = input.unmute {
+                    settings.muted.retain(|k| *k != kind);
+                }
+                crate::observer::save(&store, &settings)?;
+            }
+            let signals = if settings.enabled {
+                let terminals = self.terminals.lock().unwrap();
+                let owned: Vec<_> = terminals
+                    .iter()
+                    .filter_map(|(id, terminal)| {
+                        let hosted = terminal.hosted.as_ref()?;
+                        let session = &hosted.session;
+                        let is_agent = !matches!(
+                            session.agent.as_ref(),
+                            None | Some(Agent::Shell) | Some(Agent::Custom(_))
+                        );
+                        let failures: Vec<(String, u64)> = terminal
+                            .failures
+                            .iter()
+                            .map(|(label, at)| (label.clone(), at.elapsed().as_secs()))
+                            .collect();
+                        Some((
+                            id.clone(),
+                            session.display_agent().to_owned(),
+                            is_agent,
+                            terminal.last_output.elapsed().as_secs(),
+                            hosted.screen().contents(),
+                            failures,
+                        ))
+                    })
+                    .collect();
+                drop(terminals);
+                let facts: Vec<crate::observer::TerminalFacts> = owned
+                    .iter()
+                    .map(|(id, agent, is_agent, idle, screen, failures)| {
+                        crate::observer::TerminalFacts {
+                            id,
+                            agent,
+                            is_agent: *is_agent,
+                            idle_secs: *idle,
+                            screen,
+                            failures,
+                        }
+                    })
+                    .collect();
+                crate::observer::evaluate(&facts, &settings.muted)
+            } else {
+                Vec::new()
+            };
+            return Ok(Reply::json(
+                200,
+                json!({"enabled": settings.enabled, "muted": settings.muted, "kinds": crate::observer::KINDS, "signals": signals}),
+            ));
+        }
         if method == &Method::Get && path == "/api/meters" {
             // For each running Claude or Codex session: what to read, gathered under the lock and
             // read on a background thread, since it touches the agents' log files.
@@ -1983,6 +2083,8 @@ mod tests {
             final_screen: b"last screen".to_vec(),
             exit_seen_at: None,
             failure: None,
+            last_output: Instant::now(),
+            failures: VecDeque::new(),
         };
         terminal.push(b"hello".to_vec());
         terminal.push(b" world".to_vec());

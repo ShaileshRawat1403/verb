@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=handoff-20261008" />
-    <script src="/app.js?v=handoff-20261008" defer></script>
+    <link rel="stylesheet" href="/app.css?v=observer-20261008" />
+    <script src="/app.js?v=observer-20261008" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -211,6 +211,8 @@
             </div>
             <button
               class="theme-toggle"
+              disabled
+              data-ready-gate
               type="button"
               data-action="theme"
               id="theme-toggle"
@@ -220,7 +222,20 @@
               <span class="theme-icon" aria-hidden="true">◐</span><span id="theme-label">System</span>
             </button>
             <button
+              class="observer-pill"
+              disabled
+              data-ready-gate
+              type="button"
+              data-action="observer"
+              id="observer-pill"
+              title="Observer: quiet badges about your terminals, only when you turn it on"
+            >
+              <span class="observer-eye" aria-hidden="true">◉</span><span id="observer-label">Observer off</span>
+            </button>
+            <button
               class="ask-button"
+              disabled
+              data-ready-gate
               type="button"
               data-action="ask"
               title="Ask Verb about this project (Alt+A)"
@@ -229,6 +244,8 @@
             </button>
             <button
               class="palette-hint"
+              disabled
+              data-ready-gate
               type="button"
               data-action="palette"
               title="Command palette"
@@ -1119,6 +1136,14 @@
           ><button class="primary-button" type="submit" id="handoff-submit">Hand off</button>
         </div>
       </form>
+    </dialog>
+
+    <dialog id="observer-panel" class="observer-panel" aria-label="Observer">
+      <div class="observer-head">
+        <div><span class="section-kicker">OBSERVER</span><h3 id="observer-heading">Quiet help, when you want it</h3></div>
+        <button class="modal-close" type="button" data-action="observer-close" aria-label="Close">×</button>
+      </div>
+      <div id="observer-body"></div>
     </dialog>
 
     <dialog id="task-dialog" class="modal">

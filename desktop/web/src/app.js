@@ -12,6 +12,7 @@ import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
 import { initHost } from "./host-ui.js";
 import { initAsk } from "./ask-ui.js";
+import { initObserver } from "./observer-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -1949,6 +1950,11 @@ async function bootstrap() {
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
   extras.selectSpec = workbench.selectSpec;
   extras.openFile = project.openFile;
+  extras.workbench = workbench;
+  extras.observer = initObserver({ api, toast, escapeHtml, $, ui, showView, selectTerminal, extras });
+  // These controls are in the page before their handlers exist; they stay disabled until now, so an
+  // early click reads as "not yet" instead of silently doing nothing.
+  document.querySelectorAll("[data-ready-gate]").forEach((el) => (el.disabled = false));
   showView(ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);

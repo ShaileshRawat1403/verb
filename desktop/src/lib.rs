@@ -28,6 +28,7 @@ mod meter;
 #[cfg(unix)]
 mod mobile;
 mod observe;
+mod observer;
 #[cfg(unix)]
 mod phone;
 mod project;

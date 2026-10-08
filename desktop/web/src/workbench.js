@@ -270,3 +270,38 @@ export function meterLabel(meter) {
     title: tone === "ok" ? "" : "Context is getting full. A handoff keeps the work going with a fresh session.",
   };
 }
+
+/**
+ * Observer signals the browser can evaluate itself: context pressure (from the meters) and work on
+ * the wrong branch (from Git and the selected spec). Same shape as the server's signals.
+ */
+export function clientSignals({ meters = {}, sessions = [], git = null, spec = null, muted = [] }) {
+  const on = (kind) => !muted.includes(kind);
+  const out = [];
+  if (on("context")) {
+    for (const [id, meter] of Object.entries(meters)) {
+      if (meter?.percent == null || meter.percent < 80) continue;
+      const agent = sessions.find((s) => s.id === id)?.agent ?? "An agent";
+      const level = meter.percent >= 95 ? 95 : 80;
+      out.push({
+        key: `context:${id}:${level}`,
+        kind: "context",
+        terminal: id,
+        title: `${agent} context is ${meter.percent}% full`,
+        why: `Its own log records ${meter.tokens} tokens in a ${meter.window}-token window. Near the limit, agents start forgetting earlier work; a handoff continues with a fresh session and a written note.`,
+        action: "handoff",
+      });
+    }
+  }
+  if (on("branch") && spec?.branch && git?.branch && git.branch !== spec.branch && git.changes?.length && ["build", "verify", "review"].includes(spec.stage)) {
+    out.push({
+      key: `branch:${spec.id}:${git.branch}`,
+      kind: "branch",
+      terminal: null,
+      title: `Working on ${git.branch}, but spec ${spec.id} has its own branch`,
+      why: `${git.changes.length} uncommitted change(s) are on ${git.branch} while spec ${spec.id} is in ${spec.stage} and its branch is ${spec.branch}. Commit or set them aside, then switch, so the work stays separate.`,
+      action: "switch-branch",
+    });
+  }
+  return out;
+}

@@ -4088,3 +4088,112 @@ kbd {
 .meter-bar[data-tone="hot"] span {
   background: var(--danger);
 }
+
+/* ===================================================================== Observer */
+.observer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  transition:
+    border-color 200ms var(--ease-out),
+    color 200ms var(--ease-out),
+    background-color 200ms var(--ease-out);
+}
+.observer-pill[data-state="on"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.observer-pill[data-state="alert"] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 50%, transparent);
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+.observer-pill[data-state="alert"] .observer-eye {
+  animation: observer-breathe 2.4s ease-in-out infinite;
+}
+@keyframes observer-breathe {
+  50% {
+    opacity: 0.45;
+  }
+}
+.observer-panel {
+  position: fixed;
+  inset: 84px 24px auto auto;
+  margin: 0;
+  width: min(420px, 92vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 16px;
+  box-shadow: 0 24px 60px -20px color-mix(in srgb, var(--shadow) 60%, transparent);
+  z-index: 40;
+  animation: palette-in 220ms var(--ease-out) both;
+}
+.observer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+.observer-head h3 {
+  margin: 4px 0 0;
+  font-size: 15px;
+}
+.observer-promises {
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.observer-badge {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--warning);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  animation: rise-in 260ms var(--ease-out) both;
+}
+.observer-badge[data-kind="secret"] {
+  border-left-color: var(--danger);
+}
+.observer-badge[data-kind="waiting"] {
+  border-left-color: var(--accent);
+}
+.badge-title {
+  font-weight: 600;
+}
+.observer-badge details {
+  margin: 6px 0;
+  color: var(--text-muted);
+}
+.observer-badge summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+.badge-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.secondary-button.small {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.observer-calm {
+  padding: 10px 0;
+}
+[data-ready-gate]:disabled {
+  opacity: 0.45;
+  cursor: progress;
+}

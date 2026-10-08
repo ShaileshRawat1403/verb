@@ -264,3 +264,59 @@ test("session board and handoff with a written note", async ({ page }) => {
   expect(await meters.json()).toEqual({ meters: {} });
   expect(errors).toEqual([]);
 });
+
+test("observer: opt-in badges from real terminal activity, secrets by kind only", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  const api = (path, body) =>
+    page.request[body ? "post" : "get"](url.replace(/#.*/, path), {
+      headers: { "X-Verb-Token": TOKEN, ...(body ? { "Content-Type": "application/json" } : {}) },
+      ...(body ? { data: body } : {}),
+    });
+  await page.goto(url);
+  await expect(page.locator("#spec-title")).toBeVisible();
+
+  // Off until chosen, and it explains its boundaries before asking.
+  await expect(page.locator("#observer-label")).toHaveText("Observer off");
+  await page.locator("#observer-pill").click();
+  await expect(page.locator("#observer-panel")).toContainText("never acts on its own");
+  await page.locator('[data-observer="enable"]').click();
+  // Earlier tests left uncommitted work on main while spec 001 (in Build) has its own branch, so
+  // the browser-side wrong-branch signal is correctly the first thing it notices.
+  await expect(page.locator("#observer-label")).toHaveText("1 to look at");
+  await expect(page.locator('.observer-badge[data-kind="branch"]')).toContainText("spec 001 has its own branch");
+  await page.locator('[data-action="observer-close"]').click();
+
+  // Real terminal activity: a fake token on screen, and the same command failing three times.
+  await page.locator('[data-action="spec-terminal"]').click();
+  const tile = page.locator("#spec-work .terminal-tile").last();
+  await tile.locator(".terminal-mount").click();
+  const fake = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
+  await page.keyboard.type(`echo ${fake}\n`);
+  for (let i = 0; i < 3; i += 1) await page.keyboard.type("ls /verb-e2e-missing\n");
+
+  await expect
+    .poll(async () => (await (await api("api/observer")).json()).signals.map((s) => s.kind).sort(), { timeout: 15_000 })
+    .toEqual(["failing", "secret"]);
+  const raw = await (await api("api/observer")).text();
+  expect(raw).not.toContain(fake.slice(4)); // the value never leaves the server
+
+  await page.locator("#observer-pill").click();
+  await expect(page.locator("#observer-label")).toHaveText("3 to look at");
+  await expect(page.locator(".observer-badge")).toHaveCount(3);
+  await expect(page.locator('.observer-badge[data-kind="secret"]')).toContainText("Possible secret on screen");
+  await expect(page.locator('.observer-badge[data-kind="failing"] .badge-title')).toHaveText("`ls /verb-e2e-missing` failed 3 times");
+
+  // Dismiss hides one; muting a kind hides the rest of it and is remembered server-side.
+  await page.locator('.observer-badge[data-kind="secret"] [data-observer="dismiss"]').click();
+  await expect(page.locator(".observer-badge")).toHaveCount(2);
+  await page.locator('.observer-badge[data-kind="failing"] [data-observer="mute"]').click();
+  await expect(page.locator(".observer-badge")).toHaveCount(1);
+  await expect(page.locator('.observer-badge[data-kind="branch"]')).toBeVisible();
+  expect((await (await api("api/observer")).json()).muted).toEqual(["failing"]);
+
+  await page.locator('[data-observer="disable"]').click();
+  await expect(page.locator("#observer-label")).toHaveText("Observer off");
+  await api("api/observer", { unmute: "failing" });
+  expect(errors).toEqual([]);
+});
