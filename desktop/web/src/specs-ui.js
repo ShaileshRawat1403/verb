@@ -19,11 +19,11 @@ const SHORTCUTS = [
   ["Alt+N", "New spec"],
   ["Alt+T", "New terminal"],
   ["Alt+C", "Commit changes"],
-  ["Alt+1 … Alt+6", "Specs, Project, Sessions, Overview, Tasks, Memory"],
+  ["Alt+1 … Alt+7", "Specs, Project, Sessions, Overview, Tasks, Memory, Host"],
   ["?", "This list"],
   ["Esc", "Close a dialog"],
 ];
-const VIEWS = ["specs", "project", "sessions", "overview", "tasks", "memory"];
+const VIEWS = ["specs", "project", "sessions", "overview", "tasks", "memory", "host"];
 
 export function initWorkbench(deps) {
   const { api, toast, showDialog, closeDialog, escapeHtml, $ } = deps;
@@ -559,7 +559,7 @@ export function initWorkbench(deps) {
     if (document.querySelector("dialog[open]")) return;
     if (event.altKey && !event.metaKey && !event.ctrlKey) {
       const map = { KeyN: openNewSpec, KeyT: deps.launchQuickTerminal, KeyC: openCommit };
-      const digit = /^Digit([1-6])$/.exec(event.code);
+      const digit = /^Digit([1-7])$/.exec(event.code);
       if (map[event.code] || digit) {
         event.preventDefault();
         return digit ? deps.showView(VIEWS[Number(digit[1]) - 1]) : map[event.code]();

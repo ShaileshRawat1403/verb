@@ -187,3 +187,43 @@ export function filterFiles(files, query, limit = 200) {
     .slice(0, limit)
     .map((entry) => entry.file);
 }
+
+/** "3d 4h", "2h 5m", "4m", "12s": the two largest units, for uptimes. */
+export function formatDuration(secs) {
+  if (secs == null) return "—";
+  const units = [
+    ["d", 86400],
+    ["h", 3600],
+    ["m", 60],
+    ["s", 1],
+  ];
+  const parts = [];
+  let rest = Math.max(0, Math.floor(secs));
+  for (const [label, size] of units) {
+    const n = Math.floor(rest / size);
+    rest -= n * size;
+    if (n || (label === "s" && !parts.length)) parts.push(`${n}${label}`);
+    if (parts.length === 2) break;
+  }
+  return parts.join(" ");
+}
+
+/** Share of a resource in use, 0–100, rounded. */
+export function usedPercent(usage) {
+  if (!usage || !usage.total_kb) return null;
+  return Math.round(((usage.total_kb - usage.available_kb) / usage.total_kb) * 100);
+}
+
+/** KB → "2.4 GB" / "512 MB". */
+export function formatKb(kb) {
+  if (kb == null) return "—";
+  if (kb >= 1024 * 1024) return `${(kb / 1024 / 1024).toFixed(1)} GB`;
+  return `${Math.round(kb / 1024)} MB`;
+}
+
+/** Phone-friendly thresholds: comfortable, warm (watch it), hot (throttling likely). */
+export function temperatureTone(celsius) {
+  if (celsius >= 45) return "hot";
+  if (celsius >= 40) return "warm";
+  return "ok";
+}

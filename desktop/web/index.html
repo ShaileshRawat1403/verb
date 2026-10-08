@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=project-hub-20261007" />
-    <script src="/app.js?v=project-hub-20261007" defer></script>
+    <link rel="stylesheet" href="/app.css?v=host-20261008" />
+    <script src="/app.js?v=host-20261008" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -157,8 +157,29 @@
                 /></svg></span
             ><span>Memory</span>
           </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="host"
+            aria-label="Host"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="4" y="3" width="16" height="7" rx="1.5" />
+                <rect x="4" y="14" width="16" height="7" rx="1.5" />
+                <path d="M8 6.5h.01M8 17.5h.01" /></svg></span
+            ><span>Host</span
+            ><span class="nav-count host-dot" id="nav-host-alert" hidden>!</span>
+          </button>
         </nav>
-        <div class="sidebar-bottom">
+        <div class="sidebar-bottom" data-view="host" role="button" tabindex="0" title="Open the Host page">
           <span class="connection-dot"></span
           ><span id="deployment-name">Connecting to Verb…</span
           ><span class="local-pill" id="deployment-mode"></span>
@@ -509,6 +530,28 @@
                   </div>
                 </div>
               </section>
+            </div>
+          </section>
+
+          <section id="view-host" class="view">
+            <div class="page-heading compact-heading host-heading">
+              <div>
+                <span class="section-kicker">HOST</span>
+                <h1 id="host-title">This machine</h1>
+                <p>Read-only health of the machine Verb runs on. Refreshes every 10 seconds while open.</p>
+              </div>
+              <span class="preview-meta" id="host-updated"></span>
+            </div>
+            <div id="host-notes" class="host-notes"></div>
+            <div class="host-grid">
+              <article class="panel host-card"><h3>Verb</h3><dl id="host-verb" class="host-facts"></dl></article>
+              <article class="panel host-card"><h3>Machine</h3><dl id="host-machine" class="host-facts"></dl></article>
+              <article class="panel host-card"><h3>Memory</h3><div id="host-memory"></div></article>
+              <article class="panel host-card"><h3>Storage</h3><div id="host-storage"></div></article>
+              <article class="panel host-card"><h3>Temperatures</h3><div id="host-temps" class="temp-list"></div></article>
+              <article class="panel host-card"><h3>Battery</h3><div id="host-battery"></div></article>
+              <article class="panel host-card wide"><h3>Services</h3><div id="host-services"></div></article>
+              <article class="panel host-card wide"><h3>Restarts and crashes</h3><ol id="host-events" class="host-events"></ol></article>
             </div>
           </section>
 

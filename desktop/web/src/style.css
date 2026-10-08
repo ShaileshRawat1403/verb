@@ -3678,3 +3678,185 @@ kbd {
     max-height: 50vh;
   }
 }
+
+/* ===================================================================== Host view */
+.sidebar-bottom[data-view] {
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background-color 150ms var(--ease-out);
+}
+.sidebar-bottom[data-view]:hover {
+  background: color-mix(in srgb, var(--overlay) 5%, transparent);
+}
+.host-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+.host-notes {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+.host-note {
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 12px;
+  background: color-mix(in srgb, var(--info) 6%, transparent);
+}
+.host-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+}
+.host-card {
+  padding: 16px;
+  animation: rise-in 300ms var(--ease-out) both;
+}
+.host-card.wide {
+  grid-column: 1 / -1;
+}
+.host-card h3 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.host-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 7px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+.host-facts dt {
+  color: var(--text-dim);
+}
+.host-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.usage-number {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.usage-number small {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.usage-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  margin: 10px 0 8px;
+}
+.usage-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 70%, var(--accent)));
+  transition: width 600ms var(--ease-out);
+}
+.usage-bar[data-tone="warm"] span {
+  background: var(--warning);
+}
+.usage-bar[data-tone="hot"] span {
+  background: var(--danger);
+}
+.temp-list {
+  display: grid;
+  gap: 8px;
+}
+.temp {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--success) 9%, transparent);
+}
+.temp b {
+  color: var(--success);
+}
+.temp[data-tone="warm"] {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.temp[data-tone="warm"] b {
+  color: var(--warning);
+}
+.temp[data-tone="hot"] {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+.temp[data-tone="hot"] b {
+  color: var(--danger);
+}
+.host-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.host-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-dim);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.host-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent);
+}
+.state-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
+}
+.state-dot[data-state="warn"] {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 20%, transparent);
+}
+.state-dot[data-state="bad"] {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent);
+}
+.host-events {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.host-events li {
+  display: flex;
+  gap: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--success);
+}
+.host-events li[data-kind="crash"] {
+  border-left-color: var(--danger);
+  color: var(--danger-text);
+}
+.host-events li[data-kind="stop"] {
+  border-left-color: var(--line-strong);
+}
+.host-events time {
+  font: 12px ui-monospace, monospace;
+  color: var(--text-dim);
+  min-width: 170px;
+}
+.host-dot {
+  background: var(--danger) !important;
+  color: var(--text-strong) !important;
+}

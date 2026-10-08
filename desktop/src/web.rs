@@ -467,6 +467,9 @@ struct ResizeRequest {
     cols: u16,
 }
 
+/// Read-only work that produces a reply body on a background thread.
+type DeferredWork = Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send>;
+
 struct Reply {
     status: u16,
     mime: &'static str,
@@ -474,6 +477,8 @@ struct Reply {
     set_cookie: Option<String>,
     cache_control: Option<&'static str>,
     state_job: Option<StateJob>,
+    /// Slow, read-only work answered off the request loop, which also pumps live terminals.
+    deferred: Option<DeferredWork>,
 }
 
 impl Reply {
@@ -485,6 +490,7 @@ impl Reply {
             set_cookie: None,
             cache_control: None,
             state_job: None,
+            deferred: None,
         }
     }
 
@@ -500,6 +506,7 @@ impl Reply {
             set_cookie: None,
             cache_control: None,
             state_job: None,
+            deferred: None,
         }
     }
 
@@ -511,6 +518,7 @@ impl Reply {
             set_cookie: None,
             cache_control: None,
             state_job: None,
+            deferred: None,
         }
     }
 }
@@ -534,6 +542,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         _ => (secure_token()?, false),
     };
     let identity = project::identity(project)?;
+    crate::host::mark_started();
     let mut host = WebHost {
         project: project.to_path_buf(),
         project_id: identity.id.clone(),
@@ -984,6 +993,19 @@ impl WebHost {
 
     fn respond(&mut self, mut request: Request) {
         let mut reply = self.dispatch(&mut request);
+        if let Some(work) = reply.deferred.take() {
+            std::thread::spawn(move || {
+                match work() {
+                    Ok(body) => reply.body = body,
+                    Err(error) => {
+                        reply.status = 400;
+                        reply.body = json!({"error": error}).to_string().into_bytes();
+                    }
+                }
+                send_reply(request, reply);
+            });
+            return;
+        }
         if let Some(job) = reply.state_job.take() {
             // Only secondary state work leaves the PTY loop. Authentication remains in dispatch.
             std::thread::spawn(move || {
@@ -1174,6 +1196,13 @@ impl WebHost {
             let session = self.launch(input)?;
             self.invalidate_state();
             return Ok(Reply::json(201, json!({"sessionId": session})));
+        }
+        if method == &Method::Get && path == "/api/host" {
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(|| {
+                serde_json::to_vec(&crate::host::report()).map_err(|e| e.to_string())
+            }));
+            return Ok(reply);
         }
         if method == &Method::Get && path == "/api/hub" {
             return Ok(Reply::json(200, json!(crate::hub::hub(&self.project))));

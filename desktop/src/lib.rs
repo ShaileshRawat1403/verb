@@ -19,6 +19,7 @@ mod exec;
 mod fsutil;
 mod gitstate;
 mod good;
+mod host;
 mod hub;
 mod integration;
 mod json;

@@ -10,6 +10,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
+import { initHost } from "./host-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -37,6 +38,8 @@ let streamSocket = null;
 let workbench = null;
 // The Project view (project-ui.js): file tree, preview and context hub.
 let project = null;
+// The Host view (host-ui.js): read-only machine health.
+let host = null;
 // Light/dark theme; open terminals are recoloured in place when it changes.
 const theme = createThemeController({
   onChange(resolved) {
@@ -400,6 +403,7 @@ function showView(view) {
   if (view === "tasks" || view === "memory") refreshState(true);
   workbench?.onShowView(view);
   project?.onShowView(view);
+  host?.onShowView(view);
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -1920,6 +1924,7 @@ async function bootstrap() {
   }
   refreshState(true);
   connectTerminalStream();
+  host = initHost({ api, escapeHtml, $ });
   project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
   workbench = initWorkbench({
     project,

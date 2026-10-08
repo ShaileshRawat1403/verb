@@ -100,3 +100,18 @@ test("file filter needs every word and prefers file-name hits", () => {
   assert.deepEqual(filterFiles(files, "src login").map((f) => f.path), ["src/auth/login.js"]);
   assert.deepEqual(filterFiles(files, ""), []);
 });
+
+import { formatDuration, formatKb, temperatureTone, usedPercent } from "../src/workbench.js";
+
+test("host formatting", () => {
+  assert.equal(formatDuration(43270), "12h 1m");
+  assert.equal(formatDuration(86400 * 3 + 3600 * 4 + 5), "3d 4h");
+  assert.equal(formatDuration(12), "12s");
+  assert.equal(formatDuration(0), "0s");
+  assert.equal(formatDuration(null), "—");
+  assert.equal(usedPercent({ total_kb: 7439804, available_kb: 2462520 }), 67);
+  assert.equal(usedPercent(null), null);
+  assert.equal(formatKb(7439804), "7.1 GB");
+  assert.equal(formatKb(524288), "512 MB");
+  assert.deepEqual([38, 40, 44.9, 45].map(temperatureTone), ["ok", "warm", "warm", "hot"]);
+});

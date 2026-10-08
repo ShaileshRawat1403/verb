@@ -166,3 +166,22 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await page.keyboard.press("Escape");
   expect(errors).toEqual([]);
 });
+
+test("host view: read-only machine health", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(url);
+  await expect(page.locator("#spec-title:visible, #spec-empty h1:visible").first()).toBeVisible();
+  await page.keyboard.press("Alt+Digit7");
+  await expect(page.locator("#view-host")).toHaveClass(/active/);
+  await expect(page.locator("#host-verb")).toContainText("Version");
+  await expect(page.locator("#host-verb")).toContainText("Running for");
+  await expect(page.locator("#host-memory .usage-number")).toContainText("%");
+  await expect(page.locator("#host-storage .usage-bar")).toBeVisible();
+  await expect(page.locator("#host-updated")).toContainText("Updated");
+  // The sidebar footer opens the same page.
+  await page.keyboard.press("Alt+Digit1");
+  await page.locator(".sidebar-bottom").click();
+  await expect(page.locator("#view-host")).toHaveClass(/active/);
+  expect(errors).toEqual([]);
+});
