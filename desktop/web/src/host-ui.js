@@ -18,6 +18,15 @@ export function initHost(deps) {
     return `<div class="usage-number">${pct}%<small> used</small></div><div class="usage-bar" data-tone="${tone}"><span style="width:${pct}%"></span></div><p class="muted">${formatKb(usage.available_kb)} free of ${formatKb(usage.total_kb)}</p>`;
   }
 
+  const serviceTone = (state) =>
+    state === "not supervised"
+      ? "idle"
+      : state.startsWith("run")
+        ? state.includes("stopping")
+          ? "warn"
+          : "ok"
+        : "bad";
+
   function render(r) {
     const v = r.verb;
     $("#host-title").textContent = r.machine.model || "This machine";
@@ -53,7 +62,7 @@ export function initHost(deps) {
       ? `<table class="host-table"><thead><tr><th>Service</th><th>State</th><th>Up for</th></tr></thead><tbody>${r.services
           .map(
             (s) =>
-              `<tr><td><code>${escapeHtml(s.name)}</code></td><td><span class="state-dot" data-state="${s.state.startsWith("run") ? (s.state.includes("stopping") ? "warn" : "ok") : "bad"}"></span>${escapeHtml(s.state)}</td><td>${formatDuration(s.uptime_secs)}</td></tr>`,
+              `<tr><td><code>${escapeHtml(s.name)}</code></td><td><span class="state-dot" data-state="${serviceTone(s.state)}"></span>${escapeHtml(s.state)}</td><td>${formatDuration(s.uptime_secs)}</td></tr>`,
           )
           .join("")}</tbody></table>`
       : '<p class="muted">No service supervisor detected. Verb is running as an ordinary process here.</p>';

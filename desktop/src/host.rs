@@ -123,7 +123,11 @@ pub(crate) fn parse_sv(line: &str) -> Option<Service> {
         .split_whitespace()
         .find_map(|w| w.strip_suffix('s').and_then(|n| n.parse().ok()));
     let mut state = state.trim().to_owned();
-    if line.contains("got TERM") {
+    if line.contains("runsv not running") {
+        // A service directory exists but nothing supervises it: the process may still be running,
+        // started some other way. "fail" would claim more than runit knows.
+        state = "not supervised".to_owned();
+    } else if line.contains("got TERM") {
         state.push_str(" (stopping)");
     }
     Some(Service {
@@ -236,12 +240,26 @@ fn binary_sha() -> Option<String> {
 /// Matches this binary against `$HOME/verb-deployments/*/manifest.json`, which the deploy scripts
 /// write, to say which commit is running.
 fn deployment(sha: &str) -> Option<(String, Option<String>)> {
-    let dir = PathBuf::from(std::env::var_os("HOME")?).join("verb-deployments");
+    deployment_in(
+        &PathBuf::from(std::env::var_os("HOME")?).join("verb-deployments"),
+        sha,
+    )
+}
+
+fn deployment_in(dir: &Path, sha: &str) -> Option<(String, Option<String>)> {
     for entry in fs::read_dir(dir).ok()?.flatten() {
-        let raw = fs::read_to_string(entry.path().join("manifest.json")).ok()?;
-        let manifest: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        // Older deployment folders have no manifest, or one in another shape: skip them.
+        let Ok(raw) = fs::read_to_string(entry.path().join("manifest.json")) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
         if manifest.get("sha256").and_then(|v| v.as_str()) == Some(sha) {
-            let commit = manifest.get("git").and_then(|v| v.as_str())?.to_owned();
+            let Some(commit) = manifest.get("git").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let commit = commit.to_owned();
             let installed = manifest
                 .get("installed")
                 .and_then(|v| v.as_str())
@@ -515,6 +533,30 @@ mod tests {
             t.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             ["Battery", "Back of phone", "CPU"]
         );
+    }
+
+    #[test]
+    fn deployments_without_a_manifest_do_not_hide_later_ones() {
+        let home = std::env::temp_dir().join(format!("verb-host-home-{}", std::process::id()));
+        let dirs = home.join("verb-deployments");
+        fs::create_dir_all(dirs.join("old-no-manifest")).unwrap();
+        fs::create_dir_all(dirs.join("other-shape")).unwrap();
+        fs::write(dirs.join("other-shape/manifest.json"), r#"{"commit":"x"}"#).unwrap();
+        fs::create_dir_all(dirs.join("abc1234")).unwrap();
+        fs::write(
+            dirs.join("abc1234/manifest.json"),
+            r#"{"git":"abc1234","sha256":"feed","installed":"2026-10-08T00:00:00+00:00"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            deployment_in(&dirs, "feed"),
+            Some((
+                "abc1234".to_owned(),
+                Some("2026-10-08T00:00:00+00:00".to_owned())
+            ))
+        );
+        assert_eq!(deployment_in(&dirs, "nope"), None);
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]
