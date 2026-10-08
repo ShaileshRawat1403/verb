@@ -48,7 +48,7 @@ Network/Cloudflare/tunnel latency was not measured or attributed. The read-only 
 
 ## OnePlus Node 1 verification
 
-The node is a OnePlus 9 running Termux supervision and Debian PRoot. SSH administration used the user-provided existing key and port 8022. Verb, sshd, and cloudflared were running. No service configuration, Cloudflare route, DNS, AdGuard, LanguageOps, Android APK, or tunnel was changed. The Mac is a build/admin client; production remains independent of it.
+The node is a OnePlus 9 running Termux supervision and Debian PRoot. SSH administration used the owner's existing key. Verb, sshd, and cloudflared were running. No service configuration, Cloudflare route, DNS, AdGuard, LanguageOps, Android APK, or tunnel was changed. The Mac is a build/admin client; production remains independent of it.
 
 The existing `/usr/local/bin/verb` was measured against an ARM64 Linux release candidate at `/tmp/verb-ux-candidate`. The candidate SHA-256 is `de47275acd4ecf0b1e518f49f4164aaaac86de5aeae20266d52095198505ead0`, verified on both machines. Cross-compilation used the already installed rustup ARM64 target and cargo-zigbuild. A harmless deprecated linker optimization warning was emitted. Both binaries executed on the OnePlus, sequentially, in separate disposable Git projects and homes/state directories. Each workload launched eleven `cat` terminals and explicitly closed ten, leaving ten historical sessions and one active terminal. Production sessions and `/root/.verb` were not used for the benchmark.
 

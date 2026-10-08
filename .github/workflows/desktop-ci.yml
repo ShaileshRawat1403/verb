@@ -1,6 +1,6 @@
 name: Desktop CI
 
-# Verb Desktop (desktop/), which also runs on the OnePlus node (ops/node1/). Runs only when desktop
+# Verb Desktop (desktop/), which also runs on remote hosts such as the owner's OnePlus node. Runs only when desktop
 # sources change, so an Android-only change never waits on Rust. See docs/AREAS.md.
 
 on:

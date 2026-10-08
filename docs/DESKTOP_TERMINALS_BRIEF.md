@@ -185,7 +185,7 @@ is still open.
   - Verified on the Mac: 256 Rust tests (3 ignored by design: the 60 s `yes` memory test passes when
     run, 214 MB streamed with flat RSS), 11 web tests, fmt and clippy clean.
   - Owner decisions recorded: Node 1 (OnePlus 9 behind Cloudflare Access) is an approved
-    deployment of Desktop. It is operated from `ops/node1/` and is not the Phase 4 remote-host
+    deployment of Desktop. It is operated from its private ops repository and is not the Phase 4 remote-host
     feature, which stays gated. The areas are separated as described in `docs/AREAS.md`.
   - Still open from Phase 2: IME, tmux mouse and Shift-drag selection not evidenced; typing
     latency over Wi-Fi not measured. (Correction, same day: multi-line paste confirmation does

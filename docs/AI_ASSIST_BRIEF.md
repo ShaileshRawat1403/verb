@@ -90,7 +90,7 @@ badges and never pop-ups.
 Inside Verb, behind the same login; not a separate app. Read-only in v1: battery and charging,
 temperature, memory, storage, uptime, service states, deployed commit, and recent crashes from the
 service log (for example, the unexplained SIGBUS on 2026-10-07). Restart and deploy stay in
-`ops/node1/` until a helper outside the Verb process can do them safely.
+the node's private operations repository until a helper outside the Verb process can do them safely.
 
 ## 7. Modern terminal
 
