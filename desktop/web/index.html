@@ -6,35 +6,19 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=polish-20261008" />
-    <script src="/app.js?v=polish-20261008" defer></script>
+    <link rel="stylesheet" href="/app.css?v=flagship-20261008" />
+    <script src="/app.js?v=flagship-20261008" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
       <aside class="sidebar" id="workspace-navigation">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">v<span>.</span></div>
-          <div><strong>verb</strong><small>PROJECT WORKBENCH</small></div>
-        </div>
-        <div class="project-switcher">
-          <div class="project-avatar" aria-hidden="true">
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.7"
-              stroke-linejoin="round"
-            >
-              <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z" />
-            </svg>
-          </div>
+        <div class="workspace-head">
+          <div class="ws-mark" aria-hidden="true">v</div>
           <div class="project-copy">
             <span id="sidebar-project">Loading project</span
             ><small id="sidebar-branch">Reading local state…</small>
           </div>
-          <span class="project-label">PROJECT</span>
         </div>
-        <div class="nav-label">WORKSPACE</div>
         <nav class="main-nav" aria-label="Workspace">
           <button
             class="nav-item active"
@@ -186,6 +170,13 @@
             ><span class="nav-count host-dot" id="nav-host-alert" hidden>!</span>
           </button>
         </nav>
+        <section class="sidebar-specs" aria-label="Specs">
+          <div class="sidebar-specs-head">
+            <span>Specs</span>
+            <button class="icon-button small" type="button" data-action="new-spec" title="New spec (Alt+N)" aria-label="New spec"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <div id="spec-list" class="spec-list"></div>
+        </section>
         <div class="sidebar-bottom" data-view="host" role="button" tabindex="0" title="Open the Host page">
           <span class="connection-dot"></span
           ><span id="deployment-name">Connecting to Verb…</span
@@ -266,20 +257,20 @@
               title="Refresh project"
               aria-label="Refresh project"
             >
-              ↻</button
+              <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button
             ><button
               class="secondary-button top-terminal"
               type="button"
               id="quick-terminal-button"
               title="Launch plain shell immediately"
             >
-              &gt;_ Terminal</button
+              <span class="btn-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></span>Terminal</button
             ><button
               class="primary-button top-new"
               type="button"
               data-action="new-session"
             >
-              <span>＋</span> New session
+              <span class="btn-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></span>New session
             </button>
           </div>
         </header>
@@ -372,48 +363,7 @@
 
           <section id="view-specs" class="view active">
             <div class="specs-layout">
-              <aside class="panel specs-rail" aria-label="Specs and Git">
-                <div class="rail-head">
-                  <h2>Specs</h2>
-                  <button
-                    class="primary-button small"
-                    type="button"
-                    data-action="new-spec"
-                    title="New spec (Alt+N)"
-                  >
-                    ＋ New spec
-                  </button>
-                </div>
-                <div id="spec-list" class="spec-list"></div>
-                <div class="git-card">
-                  <div class="git-card-head">
-                    <span class="section-kicker">GIT</span>
-                    <button
-                      class="text-button"
-                      type="button"
-                      data-action="refresh-git"
-                      title="Refresh Git status"
-                      aria-label="Refresh Git status"
-                    >
-                      ↻
-                    </button>
-                  </div>
-                  <div id="git-branch" class="git-branch">Reading…</div>
-                  <div id="git-status" class="git-status"></div>
-                  <button
-                    class="secondary-button full"
-                    type="button"
-                    data-action="commit"
-                    title="Commit changes (Alt+C)"
-                  >
-                    Commit changes…
-                  </button>
-                  <details class="git-recent">
-                    <summary>Recent commits</summary>
-                    <ol id="git-recent"></ol>
-                  </details>
-                </div>
-              </aside>
+              
 
               <section class="spec-main">
                 <div id="spec-empty" class="spec-empty">
@@ -430,7 +380,7 @@
                     type="button"
                     data-action="new-spec"
                   >
-                    ＋ Write your first spec
+                    Write your first spec
                   </button>
                 </div>
                 <div id="spec-detail" class="spec-detail" hidden>
@@ -456,7 +406,7 @@
                       data-action="spec-terminal"
                       title="New terminal (Alt+T)"
                     >
-                      &gt;_ Terminal
+                      <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg> Terminal
                     </button>
                     <span class="agent-picker">
                       <select id="spec-agent" aria-label="AI agent">
@@ -501,6 +451,35 @@
                   <div class="proof-head"><h3>Audit trail</h3></div>
                   <p class="proof-hint">Every change, who made it, and when. Stored in the spec file and in Git.</p>
                   <ol id="audit-list" class="audit-list"></ol>
+                </section>
+                <section class="git-section">
+                  <div class="git-card">
+                  <div class="git-card-head">
+                    <h3>Git</h3>
+                    <button
+                      class="text-button"
+                      type="button"
+                      data-action="refresh-git"
+                      title="Refresh Git status"
+                      aria-label="Refresh Git status"
+                    >
+                      <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+                    </button>
+                  </div>
+                  <div id="git-branch" class="git-branch">Reading…</div>
+                  <div id="git-status" class="git-status"></div>
+                  <button
+                    class="secondary-button full"
+                    type="button"
+                    data-action="commit"
+                    title="Commit changes (Alt+C)"
+                  >
+                    Commit changes…
+                  </button>
+                  <details class="git-recent">
+                    <summary>Recent commits</summary>
+                    <ol id="git-recent"></ol>
+                  </details>
                 </section>
               </aside>
             </div>
@@ -605,14 +584,14 @@
                   id="quick-terminal-sessions"
                   title="Launch plain shell immediately"
                 >
-                  &gt;_ Terminal
+                  <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg> Terminal
                 </button>
                 <button
                   class="primary-button"
                   type="button"
                   data-action="new-session"
                 >
-                  ＋ New session
+                  <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New session
                 </button>
               </div>
             </div>
@@ -652,7 +631,7 @@
                 </div>
                 <div id="terminal-grid" class="terminal-grid">
                   <div class="terminal-empty">
-                    <div class="empty-icon">&gt;_</div>
+                    <div class="empty-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></div>
                     <h3>Start working in this project</h3>
                     <p>
                       Open a Terminal for commands, or choose an agent to help
@@ -665,7 +644,7 @@
                         type="button"
                         id="quick-terminal-empty"
                       >
-                        &gt;_ Open Terminal
+                        Open Terminal
                       </button>
                       <button
                         class="primary-button"
@@ -696,7 +675,7 @@
                 type="button"
                 data-action="new-task"
               >
-                ＋ New task
+                <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New task
               </button>
             </div>
             <div class="task-layout">
@@ -742,7 +721,7 @@
                 type="button"
                 data-action="add-note"
               >
-                ＋ Add note
+                Add note
               </button>
             </div>
             <div class="memory-layout">

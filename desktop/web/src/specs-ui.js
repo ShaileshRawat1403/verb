@@ -109,7 +109,7 @@ export function initWorkbench(deps) {
               `<div class="spec-group"><div class="spec-group-label">${STAGE_GUIDE[stage].label}</div>${specs
                 .map(
                   (spec) =>
-                    `<button type="button" class="spec-item${spec.id === state.selectedId ? " current" : ""}" data-spec-id="${escapeHtml(spec.id)}"><span class="spec-id">${escapeHtml(spec.id)}</span><span class="spec-name">${escapeHtml(spec.title)}</span><small>${escapeHtml(progressLabel(spec))}</small></button>`,
+                    `<button type="button" class="spec-item${spec.id === state.selectedId ? " current" : ""}" data-spec-id="${escapeHtml(spec.id)}" data-stage="${escapeHtml(spec.stage)}"><i class="spec-dot" aria-hidden="true"></i><span class="spec-name">${escapeHtml(spec.title)}</span><small><span class="spec-id">${escapeHtml(spec.id)}</span> · ${escapeHtml(progressLabel(spec))}</small></button>`,
                 )
                 .join("")}</div>`,
           )
@@ -126,7 +126,7 @@ export function initWorkbench(deps) {
         `<li><b>${i + 1}. ${STAGE_GUIDE[stage].label}</b><span>${escapeHtml(STAGE_GUIDE[stage].goal)}</span></li>`,
     ).join("");
     if (!spec) return;
-    $("#spec-kicker").textContent = `SPEC ${spec.id} · ${spec.file}`;
+    $("#spec-kicker").textContent = `Spec ${spec.id} · ${spec.file}`;
     $("#spec-title").textContent = spec.title;
     $("#spec-branch-chip").textContent = spec.branch || "no branch";
     const onBranch = state.git?.branch && state.git.branch === spec.branch;
@@ -146,7 +146,7 @@ export function initWorkbench(deps) {
     const nextStage = STAGES[current + 1];
     $("#stage-guide").innerHTML = `<div><b>${escapeHtml(guide.goal)}.</b> ${escapeHtml(guide.next)}</div>${
       nextStage
-        ? `<button class="text-button" type="button" data-stage="${nextStage}">Ready? Move to ${STAGE_GUIDE[nextStage].label} →</button>`
+        ? `<button class="text-button" type="button" data-stage="${nextStage}">Move to ${STAGE_GUIDE[nextStage].label}</button>`
         : '<span class="done-badge">Shipped</span>'
     }`;
   }

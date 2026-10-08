@@ -472,7 +472,8 @@ function render() {
     (task) => task.needsHelp || task.status === "needs review",
   ).length;
   $("#sidebar-project").textContent = project.name || "Project";
-  $(".project-switcher").title =
+  $(".ws-mark").textContent = (project.name || "v").trim().charAt(0).toLowerCase() || "v";
+  $(".workspace-head").title =
     project.workspace || project.path || project.name || "Current project";
   $("#sidebar-branch").textContent = project.branch ?? "Loading branch…";
   $("#breadcrumb-project").textContent = project.name || "Project";

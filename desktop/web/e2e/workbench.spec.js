@@ -62,7 +62,7 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Start with a spec" })).toBeVisible();
 
   // Create a spec through the guided form.
-  await page.getByRole("button", { name: "＋ Write your first spec" }).click();
+  await page.getByRole("button", { name: "Write your first spec" }).click();
   await page.locator("#spec-title-input").fill("Let people sign in with email");
   await page.locator("#spec-problem").fill("Returning customers cannot sign in.");
   await page.locator("#spec-criteria").fill("A sign-in link arrives\nA bad email shows a message");
