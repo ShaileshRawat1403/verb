@@ -2356,6 +2356,7 @@ mod shell_choice_tests {
     }
 }
 
+#[cfg(test)]
 mod changed_file_tests {
     use super::*;
 
