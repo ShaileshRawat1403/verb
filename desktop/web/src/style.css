@@ -4053,3 +4053,38 @@ kbd {
   padding: 7px 10px;
   font: inherit;
 }
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -2px 0 4px 18px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.meter-row[data-tone="warm"] {
+  color: var(--warning);
+}
+.meter-row[data-tone="hot"] {
+  color: var(--danger);
+}
+.meter-bar {
+  width: 90px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  flex: none;
+}
+.meter-bar span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  border-radius: inherit;
+  transition: width 600ms var(--ease-out);
+}
+.meter-bar[data-tone="warm"] span {
+  background: var(--warning);
+}
+.meter-bar[data-tone="hot"] span {
+  background: var(--danger);
+}

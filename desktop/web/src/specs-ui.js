@@ -10,6 +10,7 @@ import {
   filterCommands,
   groupByStage,
   lastAgent,
+  meterLabel,
   progressLabel,
   skippedStages,
   specSessions,
@@ -36,6 +37,7 @@ export function initWorkbench(deps) {
     git: null,
     selectedId: readSelected(),
     pending: null, // what an open stage/evidence dialog will do on submit
+    meters: {}, // session id -> context meter, for running Claude/Codex sessions
     palette: [],
     paletteIndex: 0,
   };
@@ -159,10 +161,29 @@ export function initWorkbench(deps) {
           .slice(0, 6)
           .map(
             (x) =>
-              `<div class="board-row${x.live ? " live" : ""}"><span class="state-dot" data-state="${x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>`,
+              `<div class="board-row${x.live ? " live" : ""}"><span class="state-dot" data-state="${x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>${x.live && state.meters[x.id] ? meterRow(state.meters[x.id]) : ""}`,
           )
           .join("")}`
       : "";
+  }
+
+  function meterRow(meter) {
+    const m = meterLabel(meter);
+    const bar = m.percent == null ? "" : `<span class="meter-bar" data-tone="${m.tone}"><span style="width:${m.percent}%"></span></span>`;
+    const act = m.tone === "warm" || m.tone === "hot" ? `<button class="text-button" type="button" data-action="handoff">Hand off</button>` : "";
+    return `<div class="meter-row" data-tone="${m.tone}" title="${escapeHtml(m.title ?? "")}">${bar}<span>${escapeHtml(m.text)}</span>${act}</div>`;
+  }
+
+  async function refreshMeters() {
+    const spec = selected();
+    const anyAgentLive = spec && specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && /^(claude|codex)$/.test(x.agent));
+    if (!anyAgentLive) return;
+    try {
+      state.meters = (await api("GET", "/api/meters")).meters ?? {};
+      renderSessions();
+    } catch {
+      // A missing meter is shown as nothing, never as a wrong number.
+    }
   }
 
   function renderProof() {
@@ -644,11 +665,13 @@ export function initWorkbench(deps) {
     refreshGit();
     renderSessions(); // live/ended follows the workspace poll
   }, 5000);
+  setInterval(() => deps.ui.view === "specs" && !document.hidden && refreshMeters(), 15000);
 
   return {
     selectSpec,
     onShowView(view) {
       if (view === "specs") {
+        refreshMeters();
         refreshSpecs();
         refreshGit();
       }

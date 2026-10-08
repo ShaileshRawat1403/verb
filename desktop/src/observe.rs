@@ -373,6 +373,11 @@ impl RecordTail {
         })
     }
 
+    /// The log file this tail follows (read by the context meter).
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Binds a resumed Verb session to the agent conversation it explicitly selected. The old
     /// transcript is history: start at EOF so only work after this resume creates new events.
     pub fn find_existing(record: Record, home: &Path, project: &Path, id: &str) -> Option<Self> {

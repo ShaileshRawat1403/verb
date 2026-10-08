@@ -248,3 +248,25 @@ export function specSessions(spec, liveSessions = []) {
 export function lastAgent(spec) {
   return specSessions(spec)[0]?.agent ?? null;
 }
+
+const compact = (n) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
+
+/**
+ * A context meter as words and a tone. Percentages appear only when the agent records its window;
+ * otherwise the token count is shown with the agent's own reason. Tone follows the observer's
+ * thresholds: "warm" from 80%, "hot" from 95%.
+ */
+export function meterLabel(meter) {
+  if (!meter || meter.tokens == null) return { text: meter?.note ?? "No usage recorded yet.", tone: "idle", percent: null };
+  const limits = (meter.rate_limits ?? []).map((r) => `${r.label} ${r.used_percent}%`).join(" · ");
+  if (meter.percent == null) {
+    return { text: `${compact(meter.tokens)} tokens in context${limits ? ` · ${limits}` : ""}`, tone: "idle", percent: null, title: meter.note ?? "" };
+  }
+  const tone = meter.percent >= 95 ? "hot" : meter.percent >= 80 ? "warm" : "ok";
+  return {
+    text: `${meter.percent}% of ${compact(meter.window)} context${limits ? ` · ${limits}` : ""}`,
+    tone,
+    percent: meter.percent,
+    title: tone === "ok" ? "" : "Context is getting full. A handoff keeps the work going with a fresh session.",
+  };
+}

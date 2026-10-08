@@ -24,6 +24,7 @@ mod host;
 mod hub;
 mod integration;
 mod json;
+mod meter;
 #[cfg(unix)]
 mod mobile;
 mod observe;

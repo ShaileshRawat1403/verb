@@ -139,3 +139,17 @@ test("spec sessions come from the audit trail, joined with live sessions", () =>
   assert.equal(lastAgent(spec), "codex");
   assert.equal(lastAgent({ audit: [] }), null);
 });
+
+import { meterLabel } from "../src/workbench.js";
+
+test("context meter labels: percentages only when the window is known", () => {
+  const codex = meterLabel({ tokens: 185167, window: 760000, percent: 24, rate_limits: [{ label: "5-hour limit", used_percent: 18 }] });
+  assert.equal(codex.text, "24% of 760K context · 5-hour limit 18%");
+  assert.equal(codex.tone, "ok");
+  assert.equal(meterLabel({ tokens: 700000, window: 760000, percent: 92, rate_limits: [] }).tone, "warm");
+  assert.equal(meterLabel({ tokens: 750000, window: 760000, percent: 98, rate_limits: [] }).tone, "hot");
+  const claude = meterLabel({ tokens: 732864, percent: null, rate_limits: [], note: "Claude Code does not record its context window size." });
+  assert.equal(claude.text, "733K tokens in context");
+  assert.equal(claude.percent, null);
+  assert.equal(meterLabel({ note: "No reply recorded yet." }).text, "No reply recorded yet.");
+});

@@ -1237,6 +1237,52 @@ impl WebHost {
             }));
             return Ok(reply);
         }
+        if method == &Method::Get && path == "/api/meters" {
+            // For each running Claude or Codex session: what to read, gathered under the lock and
+            // read on a background thread, since it touches the agents' log files.
+            let wanted: Vec<_> = self
+                .terminals
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|(id, terminal)| {
+                    let session = &terminal.hosted.as_ref()?.session;
+                    let record = match session.agent.as_ref()? {
+                        crate::Agent::Claude => crate::observe::Record::Claude,
+                        crate::Agent::Codex => crate::observe::Record::Codex,
+                        _ => return None,
+                    };
+                    Some((
+                        id.clone(),
+                        record,
+                        session.created_at,
+                        session.resume_identity.clone(),
+                    ))
+                })
+                .collect();
+            let project = self.project.clone();
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_default();
+                let meters: serde_json::Map<String, Value> = wanted
+                    .into_iter()
+                    .map(|(id, record, created, conversation)| {
+                        let meter = crate::meter::for_session(
+                            record,
+                            &home,
+                            &project,
+                            created,
+                            conversation.as_deref(),
+                        );
+                        (id, json!(meter))
+                    })
+                    .collect();
+                serde_json::to_vec(&json!({ "meters": meters })).map_err(|e| e.to_string())
+            }));
+            return Ok(reply);
+        }
         if method == &Method::Get && path == "/api/host" {
             let mut reply = Reply::json(200, Value::Null);
             reply.deferred = Some(Box::new(|| {

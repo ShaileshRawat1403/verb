@@ -257,5 +257,10 @@ test("session board and handoff with a written note", async ({ page }) => {
   expect(file).toContain("handed off from shell to shell — Validation is done; persistence is next.");
   expect(file.indexOf("## Handoff notes")).toBeLessThan(file.indexOf("## Audit trail"));
   await expect(page.locator("#audit-list li").first()).toContainText("started shell on this spec");
+
+  // Context meters cover running Claude/Codex sessions only; plain terminals have none.
+  const meters = await page.request.get(url.replace(/#.*/, "api/meters"), { headers: { "X-Verb-Token": TOKEN } });
+  expect(meters.ok()).toBe(true);
+  expect(await meters.json()).toEqual({ meters: {} });
   expect(errors).toEqual([]);
 });
