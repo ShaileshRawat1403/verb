@@ -581,6 +581,13 @@ impl LocalServer {
             while alive.load(Ordering::Acquire) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // On macOS and the BSDs an accepted socket inherits the listener's
+                        // O_NONBLOCK (Linux does not). Left that way, a request not yet written
+                        // when the read starts fails with WouldBlock and the timeouts below never
+                        // apply: the cause of a once-in-six failure under load.
+                        if stream.set_nonblocking(false).is_err() {
+                            continue;
+                        }
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
                         let caller = classify(&stream, hosted);

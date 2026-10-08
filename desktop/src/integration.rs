@@ -212,6 +212,30 @@ __verb_escape() {
   printf '%s' "$value"
 }
 
+# The command as the user typed it. $BASH_COMMAND has already been through alias expansion, so on
+# most Linux systems `ls` arrives as `ls --color=auto`. The longest alias whose expansion starts the
+# command is folded back to its name. bash 3.2 (macOS) has no BASH_ALIASES and keeps the expanded
+# form, which is still the command that ran.
+__verb_take_typed() {
+  __verb_typed_line=$BASH_COMMAND
+  [ "${BASH_VERSINFO[0]:-0}" -ge 4 ] || return 0
+  local name value best="" best_value=""
+  for name in "${!BASH_ALIASES[@]}"; do
+    value=${BASH_ALIASES[$name]}
+    case "$__verb_typed_line" in
+      "$value" | "$value "*)
+        if [ ${#value} -gt ${#best_value} ]; then
+          best=$name
+          best_value=$value
+        fi
+        ;;
+    esac
+  done
+  if [ -n "$best" ]; then
+    __verb_typed_line=$best${__verb_typed_line#"$best_value"}
+  fi
+}
+
 # DEBUG fires before each command; the guard keeps it to the command the user actually ran rather
 # than every function call inside the prompt.
 #
@@ -234,7 +258,8 @@ __verb_debug() {
     return
   fi
   __verb_running=1
-  __verb_osc "633;E;$(__verb_escape "$BASH_COMMAND")"
+  __verb_take_typed
+  __verb_osc "633;E;$(__verb_escape "$__verb_typed_line")"
   __verb_osc "633;C"
 }
 
@@ -339,5 +364,71 @@ mod tests {
         assert!(!code.iter().any(|line| line.contains("/tmp")));
         assert!(!code.iter().any(|line| line.contains("TMPDIR")));
         assert!(super::BASH_INTEGRATION.contains("-O \"$VERB_SHELL_DIR\""));
+    }
+
+    /// The labels a real bash reports through `OSC 633;E` for the given input.
+    fn bash_labels(bashrc: &str, input: &str) -> Vec<String> {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("verb-bash-labels-{}", std::process::id()));
+        let shell_dir = home.join("shell");
+        std::fs::create_dir_all(&shell_dir).unwrap();
+        std::fs::set_permissions(&shell_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(home.join(".bashrc"), bashrc).unwrap();
+        let rc = shell_dir.join("verb-integration.bash");
+        std::fs::write(&rc, super::BASH_INTEGRATION).unwrap();
+        let mut child = std::process::Command::new("bash")
+            .args(["--init-file", rc.to_str().unwrap(), "-i"])
+            .env("HOME", &home)
+            .env("HISTFILE", "/dev/null")
+            .env("VERB_SHELL_DIR", &shell_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let _ = std::fs::remove_dir_all(&home);
+        String::from_utf8_lossy(&out.stdout)
+            .split("\x1b]633;E;")
+            .skip(1)
+            .map(|rest| rest.split('\x07').next().unwrap_or_default().to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn bash_reports_a_command_as_typed_not_as_its_alias_expansion() {
+        let modern = std::process::Command::new("bash")
+            .args(["-c", "[ \"${BASH_VERSINFO[0]}\" -ge 4 ]"])
+            .status()
+            .is_ok_and(|status| status.success());
+        let labels = bash_labels(
+            "alias ls='ls --color=auto'\nalias ll='ls -alF'\n",
+            "ls /verb-missing\nls /verb-missing\nll /verb-missing\necho done\nexit\n",
+        );
+        if modern {
+            // Ubuntu's default ~/.bashrc has exactly this alias; the expanded `--color=auto` would
+            // read as a variable assignment and the command would go unlabelled.
+            assert_eq!(
+                labels,
+                [
+                    "ls /verb-missing",
+                    "ls /verb-missing",
+                    "ls -alF /verb-missing",
+                    "echo done",
+                    "exit"
+                ]
+            );
+        } else {
+            // bash 3.2 has no BASH_ALIASES; it reports the command that ran.
+            assert_eq!(labels.len(), 5, "{labels:?}");
+            assert_eq!(labels[3], "echo done");
+        }
     }
 }

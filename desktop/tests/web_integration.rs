@@ -1448,6 +1448,10 @@ fn cf_access_non_blocking_jwks_reliability_and_offline_responsiveness() {
         "Cf-Access-Authenticated-User-Email: {allowed_email}\r\nCf-Access-Jwt-Assertion: {unknown_kid_jwt}\r\n"
     );
 
+    // Blocking on the dead endpoint would take its full 5 s network timeout. The bounds below sit
+    // well under that but leave room for a loaded machine: the parallel suite once pushed an RSA
+    // check past a 500 ms bound with nothing blocked at all.
+    let fast = Duration::from_millis(2500);
     let start_unknown = std::time::Instant::now();
     let (status, _) =
         server.request_with_headers("GET", "/api/state", None, false, &unknown_headers);
@@ -1455,7 +1459,7 @@ fn cf_access_non_blocking_jwks_reliability_and_offline_responsiveness() {
 
     assert_eq!(status, 403, "Unknown kid must return 403");
     assert!(
-        duration_unknown < Duration::from_millis(500),
+        duration_unknown < fast,
         "Unknown kid took {:?} - must fail fast without waiting for network timeout",
         duration_unknown
     );
@@ -1479,7 +1483,7 @@ fn cf_access_non_blocking_jwks_reliability_and_offline_responsiveness() {
 
     assert_eq!(status, 200, "Cached valid authentication must succeed");
     assert!(
-        duration_valid < Duration::from_secs(1),
+        duration_valid < fast,
         "Valid request took {:?} - must be fast from in-memory cache",
         duration_valid
     );
@@ -1511,7 +1515,7 @@ fn cf_access_non_blocking_jwks_reliability_and_offline_responsiveness() {
     );
     assert_eq!(status, 200);
     assert!(
-        start_term.elapsed() < Duration::from_secs(2),
+        start_term.elapsed() < Duration::from_secs(4),
         "Terminal creation and polling took {:?} - must remain fully responsive",
         start_term.elapsed()
     );
