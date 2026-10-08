@@ -1632,10 +1632,53 @@ fn default_state_root() -> Option<PathBuf> {
 
 fn default_shell() -> String {
     if cfg!(windows) {
-        env::var("ComSpec").unwrap_or_else(|_| "powershell".to_owned())
-    } else {
-        env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
+        return env::var("ComSpec").unwrap_or_else(|_| "powershell".to_owned());
     }
+    let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+    let uid = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    pick_shell(
+        env::var("SHELL").ok().as_deref(),
+        uid.as_deref().and_then(|uid| login_shell(&passwd, uid)),
+        |path| Path::new(path).is_file(),
+    )
+}
+
+/// The shell for a new terminal: `$SHELL`, else the account's login shell, else bash or zsh, and
+/// only then `/bin/sh`. Services (runit on Node 1, CI runners) start Verb without `$SHELL`; falling
+/// straight to `/bin/sh` gave those terminals dash, which has no shell integration, so they had no
+/// exit codes, no working-directory tracking and no observer failing-loop signal.
+fn pick_shell(
+    env_shell: Option<&str>,
+    login: Option<String>,
+    exists: impl Fn(&str) -> bool,
+) -> String {
+    if let Some(shell) = env_shell.filter(|s| !s.trim().is_empty()) {
+        return shell.to_owned();
+    }
+    login
+        .filter(|s| exists(s) && !s.ends_with("/nologin") && !s.ends_with("/false"))
+        .or_else(|| {
+            ["/bin/bash", "/usr/bin/bash", "/bin/zsh", "/usr/bin/zsh"]
+                .into_iter()
+                .find(|s| exists(s))
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "/bin/sh".to_owned())
+}
+
+/// The login shell recorded for `uid` in an /etc/passwd-format text.
+fn login_shell(passwd: &str, uid: &str) -> Option<String> {
+    passwd
+        .lines()
+        .find_map(|line| {
+            let fields: Vec<&str> = line.split(':').collect();
+            (fields.len() >= 7 && fields[2] == uid).then(|| fields[6].trim().to_owned())
+        })
+        .filter(|shell| !shell.is_empty())
 }
 
 fn shell_args() -> &'static [&'static str] {
@@ -2281,6 +2324,38 @@ mod tests {
 }
 
 #[cfg(test)]
+mod shell_choice_tests {
+    use super::*;
+
+    #[test]
+    fn an_unset_shell_falls_back_to_the_login_shell_then_bash_never_straight_to_sh() {
+        let passwd = "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534::/:/usr/sbin/nologin\n";
+        let all = |_: &str| true;
+        assert_eq!(
+            pick_shell(Some("/bin/zsh"), None, all),
+            "/bin/zsh",
+            "$SHELL wins"
+        );
+        assert_eq!(pick_shell(None, login_shell(passwd, "0"), all), "/bin/bash");
+        assert_eq!(
+            pick_shell(Some(""), login_shell(passwd, "0"), all),
+            "/bin/bash",
+            "empty $SHELL is unset"
+        );
+        assert_eq!(
+            pick_shell(None, login_shell(passwd, "65534"), |p| p == "/usr/bin/zsh"),
+            "/usr/bin/zsh",
+            "nologin is skipped; zsh when bash is absent"
+        );
+        assert_eq!(
+            pick_shell(None, None, |_| false),
+            "/bin/sh",
+            "only as a last resort"
+        );
+        assert_eq!(login_shell(passwd, "1000"), None);
+    }
+}
+
 mod changed_file_tests {
     use super::*;
 
