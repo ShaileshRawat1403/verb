@@ -10,7 +10,7 @@
 2. ✅ Project context hub and agent-context sync (`31d11a8`), with a file tree
 3. ✅ Host page (read-only health) (`78d7b83`, `0dc65b3`)
 4. ✅ Ask Verb v1 (deterministic, cited; the model summary path is still to come)
-5. Session board, handoffs, context meter
+5. ✅ Session board, handoffs, context meter (`65293fd`, this commit's successor)
 6. Observer badges
 7. Modern terminal: command blocks, splits, tabs
 
@@ -99,6 +99,11 @@ status and duration (from OSC 133), "Explain this failure" on a red block (Ask V
 tabs, searchable history, and a notification when a long command finishes in a background tab.
 
 ## Progress log
+
+- 2026-10-08, Claude: session board (from audit-trail session lines), handoff with a dated note in
+  the spec and a brief that points the next agent at it, and a context meter (Codex: % of its
+  recorded window plus rate limits; Claude: tokens only, since its window is not recorded). Found
+  and fixed a CSP rule that had silently disabled terminal images.
 
 - 2026-10-08, Claude: Ask Verb v1. Six evidence-only intents (what's left, what changed, where are we,
   history/why, what is this project, who is working on what), each answer citing specs, files,
