@@ -11,6 +11,7 @@ import "./style.css";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
 import { initHost } from "./host-ui.js";
+import { initAsk } from "./ask-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -1924,9 +1925,12 @@ async function bootstrap() {
   }
   refreshState(true);
   connectTerminalStream();
+  // Late-bound cross-links between views (Ask Verb opens specs and files).
+  const extras = {};
   host = initHost({ api, escapeHtml, $ });
   project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
   workbench = initWorkbench({
+    extras,
     project,
     api,
     toast,
@@ -1941,6 +1945,9 @@ async function bootstrap() {
     mountLaunchedSession,
     theme,
   });
+  extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
+  extras.selectSpec = workbench.selectSpec;
+  extras.openFile = project.openFile;
   showView(ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);

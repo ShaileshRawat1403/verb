@@ -374,6 +374,12 @@ struct LaunchRequest {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AskRequest {
+    question: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BriefRequest {
     #[serde(default)]
     problem: String,
@@ -1196,6 +1202,30 @@ impl WebHost {
             let session = self.launch(input)?;
             self.invalidate_state();
             return Ok(Reply::json(201, json!({"sessionId": session})));
+        }
+        if method == &Method::Post && path == "/api/ask" {
+            let input: AskRequest = read_json(request)?;
+            if input.question.trim().is_empty() || input.question.len() > 500 {
+                return Err("ask a question of up to 500 characters".to_owned());
+            }
+            let live: Vec<crate::ask::LiveSession> = self.workspace()["sessions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| {
+                    Some(crate::ask::LiveSession {
+                        id: s["id"].as_str()?.to_owned(),
+                        agent: s["agent"].as_str().unwrap_or("Session").to_owned(),
+                    })
+                })
+                .collect();
+            let project = self.project.clone();
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                serde_json::to_vec(&crate::ask::answer(&project, &input.question, &live))
+                    .map_err(|e| e.to_string())
+            }));
+            return Ok(reply);
         }
         if method == &Method::Get && path == "/api/host" {
             let mut reply = Reply::json(200, Value::Null);

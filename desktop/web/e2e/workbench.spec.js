@@ -185,3 +185,42 @@ test("host view: read-only machine health", async ({ page }) => {
   await expect(page.locator("#view-host")).toHaveClass(/active/);
   expect(errors).toEqual([]);
 });
+
+test("ask verb answers from evidence and its sources open", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(url);
+  await expect(page.locator("#spec-title:visible, #spec-empty h1:visible").first()).toBeVisible();
+
+  // Alt+A opens Ask Verb with starter questions.
+  await page.keyboard.press("Alt+KeyA");
+  await expect(page.locator("#ask-dialog")).toBeVisible();
+  await expect(page.locator("#ask-suggestions")).toContainText("What's left?");
+
+  // The first test proved criterion 2 of spec 001, so one criterion remains.
+  await page.locator("#ask-input").fill("What's left on spec 1?");
+  await page.keyboard.press("Enter");
+  const answer = page.locator(".ask-turn").last();
+  await expect(answer.locator(".ask-summary")).toHaveText("1 acceptance criterion still to prove across 1 spec.");
+  await expect(answer.locator(".ask-points")).toContainText("criterion 1: A sign-in link arrives");
+  await expect(page.locator(".ask-footnote")).toContainText("No AI model was used");
+
+  // A source opens the spec it cites.
+  await answer.locator('[data-source-kind="spec"]').click();
+  await expect(page.locator("#ask-dialog")).toBeHidden();
+  await expect(page.locator("#view-specs")).toHaveClass(/active/);
+  await expect(page.locator("#spec-title")).toHaveText("Let people sign in with email");
+
+  // A question typed in the palette is offered to Ask Verb first.
+  await page.locator(".palette-hint").click();
+  await page.locator("#palette-input").fill("where are we?");
+  await expect(page.locator("#palette-list li").first()).toContainText("Ask Verb: where are we?");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".ask-turn").last().locator(".ask-summary")).toContainText("acceptance criteria still to prove");
+
+  // An unanswerable question is declined honestly.
+  await page.locator("#ask-input").fill("compose me a sonnet");
+  await page.keyboard.press("Enter");
+  await expect(page.locator(".ask-turn").last()).toContainText("I only answer from evidence");
+  expect(errors).toEqual([]);
+});

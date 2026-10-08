@@ -20,6 +20,7 @@ const SHORTCUTS = [
   ["Alt+T", "New terminal"],
   ["Alt+C", "Commit changes"],
   ["Alt+1 … Alt+7", "Specs, Project, Sessions, Overview, Tasks, Memory, Host"],
+  ["Alt+A", "Ask Verb about this project"],
   ["?", "This list"],
   ["Esc", "Close a dialog"],
 ];
@@ -468,6 +469,10 @@ export function initWorkbench(deps) {
       list.push({ title: `Open spec ${s.id} · ${s.title}`, hint: STAGE_GUIDE[s.stage].label, run: () => selectSpec(s.id) });
     }
     list.push(...(deps.project?.commands(query) ?? []));
+    // A typed question: offer Ask Verb, first when it reads like a question.
+    const askEntries = deps.extras?.ask?.commands(query) ?? [];
+    if (/\?$|^(what|where|who|why|how|which|when)\b/i.test(query.trim())) list.unshift(...askEntries);
+    else list.push(...askEntries);
     return list;
   }
 
@@ -578,6 +583,7 @@ export function initWorkbench(deps) {
   }, 5000);
 
   return {
+    selectSpec,
     onShowView(view) {
       if (view === "specs") {
         refreshSpecs();

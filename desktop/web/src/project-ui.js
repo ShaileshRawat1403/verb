@@ -220,6 +220,7 @@ export function initProject(deps) {
   refreshHub();
 
   return {
+    openFile,
     onShowView(view) {
       if (view !== "project") return;
       refreshHub();

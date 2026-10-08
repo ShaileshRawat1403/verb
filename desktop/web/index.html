@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=host-20261008" />
-    <script src="/app.js?v=host-20261008" defer></script>
+    <link rel="stylesheet" href="/app.css?v=ask-20261008" />
+    <script src="/app.js?v=ask-20261008" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -218,6 +218,14 @@
               aria-label="Change theme"
             >
               <span class="theme-icon" aria-hidden="true">◐</span><span id="theme-label">System</span>
+            </button>
+            <button
+              class="ask-button"
+              type="button"
+              data-action="ask"
+              title="Ask Verb about this project (Alt+A)"
+            >
+              <span aria-hidden="true">✦</span> Ask Verb
             </button>
             <button
               class="palette-hint"
@@ -1055,6 +1063,26 @@
           <button class="secondary-button" type="button" data-close="brief-dialog">Cancel</button
           ><button class="primary-button" type="submit">Create brief</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="ask-dialog" class="modal ask-modal">
+      <form id="ask-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">ASK VERB</span>
+            <h2>Ask about this project</h2>
+            <p>Answers come only from evidence here: specs, the brief, Git and running sessions.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="ask-dialog" aria-label="Close">×</button>
+        </div>
+        <div class="ask-input-row">
+          <input id="ask-input" maxlength="500" autocomplete="off" placeholder="What's left on spec 1?" aria-label="Your question" />
+          <button class="primary-button" type="submit">Ask</button>
+        </div>
+        <div id="ask-suggestions" class="ask-suggestions"></div>
+        <div id="ask-thread" class="ask-thread" aria-live="polite"></div>
+        <p class="ask-footnote">Answered from evidence in this project. No AI model was used.</p>
       </form>
     </dialog>
 

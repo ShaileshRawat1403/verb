@@ -193,6 +193,16 @@ const BRIEF_SECTIONS: [&str; 5] = [
     "Glossary",
 ];
 
+/// The text under `## heading` in the brief (for Ask Verb).
+pub(crate) fn brief_section(raw: &str, heading: &str) -> String {
+    section_text(raw, heading)
+}
+
+/// Whether a brief section has real content rather than its placeholder hint.
+pub(crate) fn brief_section_filled(text: &str) -> bool {
+    filled(text)
+}
+
 fn section_text(raw: &str, heading: &str) -> String {
     let marker = format!("## {heading}");
     let mut lines = raw.lines();
