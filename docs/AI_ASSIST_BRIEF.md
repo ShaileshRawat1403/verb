@@ -11,7 +11,7 @@
 3. ✅ Host page (read-only health) (`78d7b83`, `0dc65b3`)
 4. ✅ Ask Verb v1 (deterministic, cited; the model summary path is still to come)
 5. ✅ Session board, handoffs, context meter (`65293fd`, this commit's successor)
-6. Observer badges
+6. ✅ Observer badges (6 of 7 signals; edit collision deferred, see progress log)
 7. Modern terminal: command blocks, splits, tabs
 
 Browser smoke tests grow with each step: there are none yet, and every UI check so far was manual.
@@ -99,6 +99,10 @@ status and duration (from OSC 133), "Explain this failure" on a red block (Ask V
 tabs, searchable history, and a notification when a long command finishes in a background tab.
 
 ## Progress log
+
+- 2026-10-08, Claude: observer shipped with six signals: waiting, stuck, failing, secret (server, from
+  memory) and context, branch (browser). Edit collision is deferred: in a shared checkout Verb cannot
+  attribute an edit to a session, so it would be a guess. It needs per-session worktrees first.
 
 - 2026-10-08, Claude: session board (from audit-trail session lines), handoff with a dated note in
   the spec and a brief that points the next agent at it, and a context meter (Codex: % of its
