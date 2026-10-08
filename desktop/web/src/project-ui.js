@@ -2,6 +2,7 @@
 // project documents, nudges). Rules that can be tested live in workbench.js.
 
 import { buildTree, changeLabel, filterFiles } from "./workbench.js";
+import { fileIconName, icon } from "./icons.js";
 
 export function initProject(deps) {
   const { api, toast, showDialog, closeDialog, escapeHtml, $ } = deps;
@@ -45,14 +46,14 @@ export function initProject(deps) {
 
   function fileRow(file, depth, showPath = false) {
     const current = file.path === state.selected ? " current" : "";
-    return `<button type="button" role="treeitem" class="tree-row file${current}" style="--depth:${depth}" data-file="${escapeHtml(file.path)}" title="${escapeHtml(file.path)}"><span class="tree-icon" aria-hidden="true">${fileIcon(file.name ?? file.path)}</span><span class="tree-name">${escapeHtml(showPath ? file.path : file.name)}</span>${statusBadge(file.status)}</button>`;
+    return `<button type="button" role="treeitem" class="tree-row file${current}" style="--depth:${depth}" data-file="${escapeHtml(file.path)}" title="${escapeHtml(file.path)}"><span class="tree-icon">${icon(fileIconName(file.name ?? file.path), { size: 14 })}</span><span class="tree-name">${escapeHtml(showPath ? file.path : file.name)}</span>${statusBadge(file.status)}</button>`;
   }
 
   function renderDir(dir, depth) {
     let html = "";
     for (const child of dir.dirs) {
       const open = state.open.has(child.path);
-      html += `<button type="button" role="treeitem" aria-expanded="${open}" class="tree-row dir" style="--depth:${depth}" data-dir="${escapeHtml(child.path)}"><span class="tree-caret" aria-hidden="true">${open ? "▾" : "▸"}</span><span class="tree-icon" aria-hidden="true">📁</span><span class="tree-name">${escapeHtml(child.name)}</span>${child.changed ? `<span class="dir-changed" title="${child.changed} changed">${child.changed}</span>` : ""}</button>`;
+      html += `<button type="button" role="treeitem" aria-expanded="${open}" class="tree-row dir" style="--depth:${depth}" data-dir="${escapeHtml(child.path)}"><span class="tree-caret">${icon(open ? "chevron-down" : "chevron-right", { size: 12 })}</span><span class="tree-icon">${icon(open ? "folder-open" : "folder", { size: 14 })}</span><span class="tree-name">${escapeHtml(child.name)}</span>${child.changed ? `<span class="dir-changed" title="${child.changed} changed">${child.changed}</span>` : ""}</button>`;
       if (open) html += `<div role="group">${renderDir(child, depth + 1)}</div>`;
     }
     for (const file of dir.files) html += fileRow(file, depth);
@@ -71,15 +72,6 @@ export function initProject(deps) {
           .map((f) => fileRow(f, 0, true))
           .join("") || '<p class="muted">No matching file.</p>'
       : renderDir(buildTree(state.files), 0);
-  }
-
-  function fileIcon(name) {
-    const ext = name.split(".").pop().toLowerCase();
-    if (/^(md|txt|rst)$/.test(ext)) return "📝";
-    if (/^(png|jpe?g|gif|svg|webp|ico)$/.test(ext)) return "🖼";
-    if (/^(json|ya?ml|toml|lock|ini|env)$/.test(ext)) return "⚙";
-    if (/^(sh|bash|zsh)$/.test(ext)) return "⌘";
-    return "📄";
   }
 
   async function openFile(path) {
@@ -119,7 +111,7 @@ export function initProject(deps) {
     $("#hub-nudges").innerHTML = nudges
       .map(
         (n) =>
-          `<div class="nudge"><span class="nudge-icon" aria-hidden="true">✦</span><span>${escapeHtml(n.text)}</span><button class="text-button" type="button" data-nudge="${escapeHtml(n.action)}">${nudgeLabel(n.action)} →</button></div>`,
+          `<div class="nudge"><span class="nudge-icon">${icon("info", { size: 15 })}</span><span>${escapeHtml(n.text)}</span><button class="text-button" type="button" data-nudge="${escapeHtml(n.action)}">${nudgeLabel(n.action)} →</button></div>`,
       )
       .join("");
     const sections = hub.brief.sections;
@@ -128,7 +120,7 @@ export function initProject(deps) {
     $("#brief-sections").innerHTML = sections
       .map(
         ([name, ok]) =>
-          `<li class="${ok ? "ok" : ""}"><span aria-hidden="true">${ok ? "●" : "○"}</span>${escapeHtml(name)}</li>`,
+          `<li class="${ok ? "ok" : ""}"><span class="fill-dot" aria-hidden="true"></span>${escapeHtml(name)}</li>`,
       )
       .join("");
     $("#brief-actions").innerHTML = hub.brief.exists
@@ -143,7 +135,7 @@ export function initProject(deps) {
       .join("");
     $("#hub-documents").innerHTML = hub.documents.length
       ? hub.documents
-          .map((d) => `<li><button class="text-button" type="button" data-file="${escapeHtml(d)}">📝 ${escapeHtml(d.split("/").pop())}</button></li>`)
+          .map((d) => `<li><button class="text-button" type="button" data-file="${escapeHtml(d)}">${icon("file-text", { size: 14 })} ${escapeHtml(d.split("/").pop())}</button></li>`)
           .join("")
       : '<li class="muted">None yet. The brief will be the first.</li>';
   }

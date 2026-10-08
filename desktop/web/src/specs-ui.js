@@ -17,6 +17,7 @@ import {
   stageWarnings,
 } from "./workbench.js";
 import { agentDisplayName } from "./view.js";
+import { icon } from "./icons.js";
 
 const SHORTCUTS = [
   ["⌘K / Ctrl+K", "Command palette: search specs and run any action"],
@@ -137,7 +138,7 @@ export function initWorkbench(deps) {
     $("#stage-bar").innerHTML = STAGES.map((stage, i) => {
       const wasSkipped = i < current && skipped.has(stage);
       const status = wasSkipped ? "skipped" : i < current ? "done" : i === current ? "current" : "todo";
-      const dot = wasSkipped ? "–" : i < current ? "✓" : i + 1;
+      const dot = wasSkipped ? "–" : i < current ? icon("check", { size: 12 }) : i + 1;
       const title = wasSkipped ? "Skipped (recorded in the audit trail)" : STAGE_GUIDE[stage].goal;
       return `<li class="${status}"><button type="button" data-stage="${stage}" title="${escapeHtml(title)}" ${i === current ? 'aria-current="step"' : ""}><span class="stage-dot">${dot}</span>${STAGE_GUIDE[stage].label}</button></li>`;
     }).join("");
@@ -227,7 +228,7 @@ export function initWorkbench(deps) {
       $("#git-status").textContent = git.error;
       return;
     }
-    $("#git-branch").innerHTML = `<span class="branch-icon" aria-hidden="true">⑂</span> ${escapeHtml(git.branch ?? "detached")}`;
+    $("#git-branch").innerHTML = `<span class="branch-icon">${icon("branch", { size: 14 })}</span> ${escapeHtml(git.branch ?? "detached")}`;
     const parts = [
       git.changes.length ? `${git.changes.length} unsaved change${git.changes.length === 1 ? "" : "s"}` : "All changes saved",
     ];
@@ -472,13 +473,13 @@ export function initWorkbench(deps) {
   // ------------------------------------------------------------------------------ theme
 
   const THEME_UI = {
-    system: ["◐", "System", "Theme follows your system setting. Click for light."],
-    light: ["☀", "Light", "Light theme. Click for dark."],
-    dark: ["☾", "Dark", "Dark theme. Click to follow your system."],
+    system: ["monitor", "System", "Theme follows your system setting. Click for light."],
+    light: ["sun", "Light", "Light theme. Click for dark."],
+    dark: ["moon", "Dark", "Dark theme. Click to follow your system."],
   };
   function renderThemeToggle() {
-    const [icon, label, title] = THEME_UI[deps.theme.preference] ?? THEME_UI.system;
-    document.querySelector("#theme-toggle .theme-icon").textContent = icon;
+    const [glyph, label, title] = THEME_UI[deps.theme.preference] ?? THEME_UI.system;
+    document.querySelector("#theme-toggle .theme-icon").innerHTML = icon(glyph, { size: 15 });
     $("#theme-label").textContent = label;
     $("#theme-toggle").title = title;
   }

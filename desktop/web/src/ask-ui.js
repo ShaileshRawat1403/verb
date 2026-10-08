@@ -1,5 +1,7 @@
 // Ask Verb: questions answered from evidence (POST /api/ask), with clickable sources.
 
+import { icon } from "./icons.js";
+
 const STARTERS = ["Where are we?", "What's left?", "What changed today?", "Who is working on what?", "What is this project?"];
 
 export function initAsk(deps) {
@@ -13,8 +15,8 @@ export function initAsk(deps) {
   }
 
   function sourceButton(s) {
-    const icon = { spec: "◇", file: "📝", commit: "⑂", session: ">_", audit: "≡" }[s.kind] ?? "•";
-    return `<button type="button" class="source-chip" data-source-kind="${escapeHtml(s.kind)}" data-source-target="${escapeHtml(s.target)}" title="${escapeHtml(s.kind === "commit" ? "Copy commit id" : `Open ${s.label}`)}"><span aria-hidden="true">${icon}</span>${escapeHtml(s.label)}</button>`;
+    const name = { spec: "file-check", file: "file-text", commit: "commit", session: "terminal", audit: "history" }[s.kind] ?? "file";
+    return `<button type="button" class="source-chip" data-source-kind="${escapeHtml(s.kind)}" data-source-target="${escapeHtml(s.target)}" title="${escapeHtml(s.kind === "commit" ? "Copy commit id" : `Open ${s.label}`)}">${icon(name, { size: 13 })}${escapeHtml(s.label)}</button>`;
   }
 
   function render() {

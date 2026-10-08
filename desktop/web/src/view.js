@@ -44,12 +44,13 @@ export function taskName(status) {
   );
 }
 
+/** A neutral two-letter monogram for an agent; no brand glyphs or emoji. */
 export function agentMark(agent) {
-  if (/claude/i.test(agent)) return "✳";
-  if (/codex/i.test(agent)) return "✦";
-  if (/agy|antigravity/i.test(agent)) return "▲";
-  if (/gemini/i.test(agent)) return "♊";
-  if (/opencode/i.test(agent)) return "◇";
+  if (/claude/i.test(agent)) return "CC";
+  if (/codex/i.test(agent)) return "CX";
+  if (/agy|antigravity/i.test(agent)) return "AG";
+  if (/gemini/i.test(agent)) return "GM";
+  if (/opencode/i.test(agent)) return "OC";
   return "&gt;_";
 }
 
@@ -170,7 +171,7 @@ export function checksHtml(report) {
     }
     rows.push(
       checkRow(
-        "◆",
+        "Info",
         "quiet",
         `Last known good ${(good.mark.head || "").slice(0, 12)}: ${parts.join(", ") || "no change"}`,
         d.identical ? "" : "verb good files · lists what differs",
@@ -181,7 +182,7 @@ export function checksHtml(report) {
   if (report.clear) {
     rows.unshift(
       checkRow(
-        "✓",
+        "OK",
         "clear",
         "Nothing observed calls for care.",
         satisfied.length

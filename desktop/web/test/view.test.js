@@ -186,12 +186,12 @@ test("session and task search find the next place to work", () => {
 });
 
 test("agentMark and agentDisplayName recognize Terminal, Claude, Codex, AGY, Gemini, and others", () => {
-  assert.equal(agentMark("claude"), "✳");
-  assert.equal(agentMark("codex"), "✦");
-  assert.equal(agentMark("agy"), "▲");
-  assert.equal(agentMark("antigravity"), "▲");
-  assert.equal(agentMark("gemini"), "♊");
-  assert.equal(agentMark("opencode"), "◇");
+  assert.equal(agentMark("claude"), "CC");
+  assert.equal(agentMark("codex"), "CX");
+  assert.equal(agentMark("agy"), "AG");
+  assert.equal(agentMark("antigravity"), "AG");
+  assert.equal(agentMark("gemini"), "GM");
+  assert.equal(agentMark("opencode"), "OC");
   assert.equal(agentMark("shell"), "&gt;_");
   assert.equal(agentMark("custom"), "&gt;_");
 

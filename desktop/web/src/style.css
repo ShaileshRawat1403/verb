@@ -361,7 +361,7 @@ body {
 .main-content {
   min-width: 0;
   background:
-    radial-gradient(circle at 80% -25%, var(--accent-bg) 0, transparent 42%), var(--bg-1);
+    var(--bg-1);
 }
 .topbar {
   height: 77px;
@@ -442,12 +442,10 @@ body {
   color: var(--on-accent);
   padding: 11px 17px;
   font-size: 12px;
-  box-shadow: 0 7px 20px color-mix(in srgb, var(--accent) 19%, transparent);
   white-space: nowrap;
 }
 .primary-button:hover {
   background: var(--accent-text);
-  transform: translateY(-1px);
 }
 .primary-button span {
   font-size: 16px;
@@ -1119,8 +1117,7 @@ body {
   border-radius: 50%;
   background: var(--accent-text);
   margin-left: 8px;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--accent-text) 63%, transparent);
-  animation: pulse-dot 1.5s infinite;
+
 }
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -1717,7 +1714,7 @@ body {
   justify-content: center;
   text-align: center;
   padding: 28px;
-  background: radial-gradient(circle at center, var(--accent-bg), var(--bg-1) 55%);
+  background: var(--bg-1);
 }
 .locked h1 {
   font-size: 30px;
@@ -3128,40 +3125,6 @@ kbd {
     fill 300ms var(--ease-out) !important;
 }
 
-/* Ambient depth: two slow, soft glows behind the content. */
-.main-content {
-  position: relative;
-  isolation: isolate;
-}
-.main-content::before,
-.main-content::after {
-  content: "";
-  position: fixed;
-  z-index: -1;
-  width: 46vmax;
-  height: 46vmax;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.55;
-  pointer-events: none;
-  animation: drift 26s ease-in-out infinite alternate;
-}
-.main-content::before {
-  top: -22vmax;
-  right: -12vmax;
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-}
-.main-content::after {
-  bottom: -26vmax;
-  left: 8vmax;
-  background: color-mix(in srgb, var(--info) 12%, transparent);
-  animation-delay: -13s;
-}
-@keyframes drift {
-  to {
-    transform: translate3d(-6vmax, 5vmax, 0) scale(1.12);
-  }
-}
 
 /* Glass top bar that stays put while the workbench scrolls. */
 .topbar {
@@ -3202,24 +3165,6 @@ kbd {
 .palette-list li {
   animation: rise-in 300ms var(--ease-out) both;
 }
-.spec-group .spec-item:nth-child(2),
-.criteria-list li:nth-child(2),
-.audit-list li:nth-child(2),
-.palette-list li:nth-child(2) {
-  animation-delay: 30ms;
-}
-.spec-group .spec-item:nth-child(3),
-.criteria-list li:nth-child(3),
-.audit-list li:nth-child(3),
-.palette-list li:nth-child(3) {
-  animation-delay: 60ms;
-}
-.spec-group .spec-item:nth-child(n + 4),
-.criteria-list li:nth-child(n + 4),
-.audit-list li:nth-child(n + 4),
-.palette-list li:nth-child(n + 4) {
-  animation-delay: 90ms;
-}
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -3253,40 +3198,19 @@ kbd {
     background-color 200ms var(--ease-out),
     border-color 200ms var(--ease-out);
 }
-.primary-button:hover,
-.secondary-button:hover,
-.stage-bar button:hover {
-  transform: translateY(-1px);
-}
-.primary-button:hover {
-  box-shadow: 0 10px 26px -10px var(--glow);
-}
 .primary-button:active,
 .secondary-button:active,
 .stage-bar button:active,
 .spec-item:active {
   transform: translateY(0) scale(0.98);
 }
-.spec-item:hover {
-  transform: translateX(2px);
-}
 
 /* Stage bar: a progress track, and a gentle pulse on the stage you are in. */
 .stage-bar {
   position: relative;
 }
-.stage-bar .current button {
-  box-shadow: 0 0 0 0 var(--glow);
-  animation: stage-pulse 2.6s ease-in-out infinite;
-}
-@keyframes stage-pulse {
-  50% {
-    box-shadow: 0 0 0 6px transparent, 0 8px 26px -8px var(--glow);
-  }
-}
 .stage-bar .done .stage-dot {
   background: color-mix(in srgb, var(--success) 18%, transparent);
-  animation: pop 360ms var(--ease-spring) both;
 }
 
 /* Proving a criterion pops the box and warms the row. */
@@ -3314,12 +3238,11 @@ kbd {
   border-bottom: 2px solid var(--on-accent);
   transform: rotate(-45deg) scale(0);
   margin-top: -2px;
-  transition: transform 220ms var(--ease-spring);
+  transition: transform 160ms var(--ease-out);
 }
 .criterion input:checked {
   background: var(--success);
   border-color: var(--success);
-  animation: pop 360ms var(--ease-spring);
 }
 .criterion input:checked::after {
   transform: rotate(-45deg) scale(1);
@@ -3345,7 +3268,7 @@ kbd {
 
 /* Dialogs and the palette spring in over a blurred backdrop. */
 .modal[open] {
-  animation: modal-in 260ms var(--ease-spring) both;
+  animation: modal-in 180ms var(--ease-out) both;
 }
 .modal[open]::backdrop {
   backdrop-filter: blur(6px);
@@ -3358,7 +3281,7 @@ kbd {
 @keyframes modal-in {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.97);
+    transform: translateY(4px);
   }
 }
 @keyframes palette-in {
@@ -3377,7 +3300,7 @@ kbd {
 .toast {
   transition:
     opacity 220ms var(--ease-out),
-    transform 380ms var(--ease-spring) !important;
+    transform 220ms var(--ease-out) !important;
 }
 
 /* The terminal you are typing in gets a soft ring. */
@@ -3412,12 +3335,6 @@ kbd {
 }
 
 /* The light theme's main surfaces. */
-:root[data-resolved-theme="light"] .main-content::before {
-  opacity: 0.35;
-}
-:root[data-resolved-theme="light"] .main-content::after {
-  opacity: 0.25;
-}
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -3603,12 +3520,9 @@ kbd {
   gap: 10px;
   padding: 11px 14px;
   border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--accent) 12%, transparent),
-    color-mix(in srgb, var(--accent) 3%, transparent)
-  );
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
   font-size: 13px;
   animation: rise-in 300ms var(--ease-out) both;
 }
@@ -3761,7 +3675,7 @@ kbd {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--success), color-mix(in srgb, var(--success) 70%, var(--accent)));
+  background: var(--success);
   transition: width 600ms var(--ease-out);
 }
 .usage-bar[data-tone="warm"] span {
@@ -3870,13 +3784,9 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
-  background: linear-gradient(
-    120deg,
-    color-mix(in srgb, var(--accent) 22%, transparent),
-    color-mix(in srgb, var(--info) 12%, transparent)
-  );
-  color: var(--text-strong);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
   border-radius: 10px;
   padding: 8px 12px;
   font-size: 12px;
@@ -3886,8 +3796,8 @@ kbd {
     box-shadow 200ms var(--ease-out);
 }
 .ask-button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 22px -10px var(--glow);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--text-strong);
 }
 .ask-button span {
   color: var(--accent);
@@ -4114,14 +4024,6 @@ kbd {
   border-color: color-mix(in srgb, var(--warning) 50%, transparent);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
 }
-.observer-pill[data-state="alert"] .observer-eye {
-  animation: observer-breathe 2.4s ease-in-out infinite;
-}
-@keyframes observer-breathe {
-  50% {
-    opacity: 0.45;
-  }
-}
 .observer-panel {
   position: fixed;
   inset: 84px 24px auto auto;
@@ -4196,4 +4098,215 @@ kbd {
 [data-ready-gate]:disabled {
   opacity: 0.45;
   cursor: progress;
+}
+
+
+/* ===================================================================== Refinement
+   Minimal and calm: hierarchy from type and spacing, one accent used sparingly, flat surfaces,
+   motion only when it explains a change. No emoji anywhere (enforced by test/no-emoji.test.js). */
+
+.icon {
+  flex: none;
+  vertical-align: -0.2em;
+}
+button .icon + *,
+button .icon {
+  vertical-align: middle;
+}
+.git-icon,
+.theme-icon,
+.observer-eye,
+.branch-icon,
+.tree-icon,
+.tree-caret,
+.nudge-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-dim);
+}
+.ask-button .icon {
+  color: var(--accent);
+}
+
+/* Status dots drawn by CSS, so status text stays words. */
+.terminal-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.terminal-state::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.terminal-state[data-tone="warn"] {
+  color: var(--warning);
+}
+.terminal-state[data-tone="warn"]::before {
+  background: var(--warning);
+}
+.terminal-tile.ended .terminal-state::before {
+  background: var(--text-faint);
+}
+.fill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  margin-top: 5px;
+  flex: none;
+}
+.brief-sections li.ok .fill-dot {
+  background: var(--success);
+  border-color: var(--success);
+}
+.empty-glyph,
+.empty-icon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+/* Agent monograms: neutral tiles, distinguished by letters, not colour or pictures. */
+.agent-icon,
+.agent-icon.terminal,
+.agent-icon.codex,
+.agent-icon.agy,
+.agent-icon.gemini,
+.agent-icon.open,
+.agent-icon.custom,
+.agent-icon.claude {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-muted);
+  font: 600 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.02em;
+}
+.pane-agent {
+  font: 600 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+/* Numbers line up in columns. */
+.usage-number,
+.count-chip,
+.nav-count,
+.host-table td,
+.spec-id,
+.meter-row,
+.audit-list time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Panels: a hairline and almost no shadow. */
+.panel {
+  box-shadow: none;
+}
+:root[data-resolved-theme="light"] .panel {
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--shadow) 6%, transparent);
+}
+.stage-bar .current button {
+  box-shadow: none;
+}
+
+/* A hidden attribute always wins over a layout display. */
+[hidden] {
+  display: none !important;
+}
+
+/* The accent marks only the one thing that matters on screen. */
+.stage-bar .current button {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--text-strong);
+}
+.stage-bar .current .stage-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.nudge-dot {
+  background: var(--surface-2) !important;
+  color: var(--text-muted) !important;
+  border: 1px solid var(--line);
+}
+.theme-toggle #theme-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+.theme-toggle {
+  padding: 8px 9px;
+}
+
+/* Laptop widths: the app navigation becomes an icon rail so the workbench keeps three columns. */
+@media (max-width: 1440px) and (min-width: 901px) {
+  .app-shell {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+  .sidebar {
+    padding: 18px 10px 14px;
+    align-items: center;
+  }
+  .brand {
+    padding: 0 0 18px;
+  }
+  .brand > div:not(.brand-mark),
+  .project-copy,
+  .project-label,
+  .nav-label,
+  .nav-item > span:not(.nav-icon):not(.nav-count),
+  .sidebar-bottom > span:not(.connection-dot) {
+    display: none !important;
+  }
+  .project-switcher {
+    padding: 8px;
+    justify-content: center;
+  }
+  .main-nav {
+    width: 100%;
+  }
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+    position: relative;
+  }
+  .nav-item .nav-count {
+    position: absolute;
+    top: 5px;
+    right: 6px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    font-size: 9px;
+    line-height: 15px;
+  }
+  .sidebar-bottom {
+    justify-content: center;
+  }
+  .specs-layout {
+    grid-template-columns: 220px minmax(0, 1fr) 280px;
+  }
+  .spec-proof {
+    grid-column: auto;
+    position: sticky;
+    max-height: calc(100dvh - 120px);
+  }
+}
+.stage-guide {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
 }
