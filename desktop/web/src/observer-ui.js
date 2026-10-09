@@ -59,6 +59,10 @@ export function initObserver(deps) {
     }
     const pill = $("#observer-pill");
     pill.dataset.state = !state.enabled ? "off" : signals.length ? "alert" : "on";
+    pill.setAttribute(
+      "aria-label",
+      !state.enabled ? "Observer off" : signals.length ? `Observer: ${signals.length} to look at` : "Observer on",
+    );
     $("#observer-label").textContent = !state.enabled
       ? "Observer off"
       : signals.length

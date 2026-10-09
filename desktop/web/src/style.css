@@ -3079,33 +3079,6 @@ kbd {
   color: var(--muted);
 }
 
-@media (max-width: 1250px) {
-  .specs-layout {
-    grid-template-columns: 230px minmax(0, 1fr);
-  }
-  .spec-proof {
-    grid-column: 2;
-    position: static;
-    max-height: none;
-  }
-}
-@media (max-width: 900px) {
-  .specs-layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .specs-rail,
-  .spec-proof {
-    position: static;
-    max-height: none;
-    grid-column: auto;
-  }
-  .stage-bar {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .flow-explainer {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
 /* In the spec workbench the spec's own buttons start work; don't repeat them. */
 .spec-work .terminal-empty {
   display: none;
@@ -5230,9 +5203,12 @@ select:focus-visible,
 }
 
 /* ---------------------------------------------------------------- responsive */
-@media (max-width: 1180px) {
+/* The spec answers to the work panel's width: below about 1040px the proof rail moves under the
+   document instead of squeezing it. */
+@container work (max-width: 1040px) {
   .specs-layout {
     grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
   }
   .main-content .spec-proof.panel {
     position: static;
@@ -5240,6 +5216,19 @@ select:focus-visible,
     width: 100%;
     max-width: 780px;
     justify-self: center;
+  }
+}
+@container work (max-width: 640px) {
+  .stage-bar {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    row-gap: 10px;
+  }
+  .flow-explainer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .stage-guide {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 @media (max-width: 900px) {
@@ -5494,5 +5483,104 @@ select:focus-visible,
   .top-actions {
     width: auto;
     flex: none;
+  }
+}
+
+/* ---------------------------------------------------------------- responsive top bar
+   The bar answers to the width of the work panel, not the window: a narrow window, a wide sidebar
+   or browser zoom all shrink it the same way. Labels give way to icons in steps; nothing wraps. */
+.main-content {
+  container: work / inline-size;
+}
+.topbar {
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+.topbar button,
+.topbar .git-indicator,
+.topbar .breadcrumb {
+  white-space: nowrap;
+  flex-wrap: nowrap;
+}
+.workspace-location {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.breadcrumb {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+}
+#breadcrumb-project {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.top-actions {
+  flex: none;
+  flex-wrap: nowrap;
+}
+.palette-hint .icon {
+  color: var(--text-dim);
+}
+@container work (max-width: 1120px) {
+  .palette-hint .btn-label,
+  .ask-button .btn-label,
+  .git-changes {
+    display: none;
+  }
+  .ask-button {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+@container work (max-width: 940px) {
+  .top-terminal .btn-label,
+  .top-new .btn-label,
+  #observer-label {
+    display: none;
+  }
+  .top-terminal,
+  .top-new {
+    width: 32px;
+    padding: 0;
+  }
+  .observer-pill {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+@container work (max-width: 760px) {
+  .git-indicator,
+  #breadcrumb-project,
+  .breadcrumb-separator,
+  .panel-toggle {
+    display: none;
+  }
+}
+.observer-pill {
+  position: relative;
+}
+.observer-pill[data-state="alert"] {
+  color: var(--text-strong);
+}
+@container work (max-width: 940px) {
+  .observer-pill[data-state="alert"]::after {
+    content: "";
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warning);
+  }
+}
+@media (max-width: 900px) and (min-width: 641px) {
+  .sidebar-bottom .connection-dot {
+    display: inline-block;
   }
 }

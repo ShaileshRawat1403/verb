@@ -1228,6 +1228,10 @@ function addTerminal(session) {
       if (mount.clientWidth < 30 || mount.clientHeight < 30 || terminal.closed)
         return;
       fit.fit();
+      // The WebGL renderer can keep stale glyph tiles after a resize or after being hidden;
+      // a full redraw costs one frame and only happens once the resize settles.
+      term.clearTextureAtlas?.();
+      term.refresh(0, term.rows - 1);
       sendStreamResize(session.id, term.rows, term.cols);
       api("POST", `/api/terminals/${session.id}/resize`, {
         rows: term.rows,
