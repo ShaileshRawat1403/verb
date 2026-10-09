@@ -17,6 +17,9 @@
 //! messages, tool arguments, tool output, file contents and diffs are never read, so they can never
 //! be written into a Verb event, shown in an overlay, or handed to an assistant.
 //!
+//! (The one exception lives elsewhere on purpose: `crate::transcript`, the agent stream, reads
+//! content only after the person turns it on for a project, and never feeds anything here.)
+//!
 //! That is enforced by construction rather than by discipline. `crate::json` reads a named scalar
 //! and nothing else; there is no parse step here that produces a document a later change could
 //! start reaching into. Its own doc comment says it: anything that needed real parsing would be a

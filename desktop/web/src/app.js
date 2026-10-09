@@ -15,6 +15,7 @@ import { initAsk } from "./ask-ui.js";
 import { initObserver } from "./observer-ui.js";
 import { icon } from "./icons.js";
 import { attachCommandBlocks } from "./blocks.js";
+import { attachStream } from "./stream-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -376,6 +377,25 @@ document.addEventListener("keydown", (event) => {
   $("#terminal-grid").querySelector(`[data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
 });
 
+/** The project's agent-stream opt-in, read once and shared by every terminal. */
+const streamSettings = {
+  value: null,
+  async get() {
+    if (this.value === null) {
+      try {
+        this.value = (await api("GET", "/api/stream")).enabled;
+      } catch {
+        this.value = false;
+      }
+    }
+    return this.value;
+  },
+  async set(enabled) {
+    this.value = (await api("POST", "/api/stream", { enabled })).enabled;
+    return this.value;
+  },
+};
+
 /** The open agent terminal that should receive a hand-off from `fromId`: the most recent one. */
 function agentTerminalFor(fromId) {
   const agents = [...ui.terminals.entries()].filter(
@@ -679,6 +699,7 @@ function removeTerminal(id) {
   clearTimeout(terminal.ackTimer);
   terminal.observer.disconnect();
   terminal.blocks?.dispose();
+  terminal.stream?.dispose();
   terminal.term.dispose();
   terminal.tile.remove();
   ui.terminals.delete(id);
@@ -984,6 +1005,15 @@ function addTerminal(session) {
       target.term.focus();
       toast(`Pasted into ${agentDisplayName(target.agent)}. Review it, then press Enter to send.`);
     },
+  });
+  terminal.stream = attachStream(tile, session, terminal, {
+    api,
+    escapeHtml,
+    icon,
+    toast,
+    agentDisplayName,
+    agentMark,
+    settings: streamSettings,
   });
   sendStreamAttach(session.id, term.rows, term.cols);
 

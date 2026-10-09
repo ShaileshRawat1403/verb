@@ -395,6 +395,11 @@ struct LaunchRequest {
 }
 
 #[derive(Deserialize)]
+struct StreamRequest {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ObserverRequest {
     enabled: Option<bool>,
@@ -1267,6 +1272,16 @@ impl WebHost {
             }));
             return Ok(reply);
         }
+        if path == "/api/stream" && (method == &Method::Get || method == &Method::Post) {
+            let store = self.identity.store.clone();
+            let mut settings = crate::transcript::load(&store);
+            if method == &Method::Post {
+                let input: StreamRequest = read_json(request)?;
+                settings.enabled = input.enabled;
+                crate::transcript::save(&store, &settings)?;
+            }
+            return Ok(Reply::json(200, json!({"enabled": settings.enabled})));
+        }
         if path == "/api/observer" && (method == &Method::Get || method == &Method::Post) {
             let store = self.identity.store.clone();
             let mut settings = crate::observer::load(&store);
@@ -1608,6 +1623,52 @@ impl WebHost {
             ["api", "inbox", id] if method == &Method::Get => {
                 let inbox = workbench::inbox_snapshot(&self.project, id)?;
                 Ok(Reply::json(200, json!(inbox)))
+            }
+            ["api", "terminals", id, "stream"] if method == &Method::Get => {
+                // Content from the agent's own log, and only with the project's opt-in: see
+                // `crate::transcript` for the rules. Nothing here is stored or sent elsewhere.
+                if !crate::transcript::load(&self.identity.store).enabled {
+                    return Ok(Reply::json(200, json!({"enabled": false, "items": []})));
+                }
+                let (record, created, conversation) = {
+                    let terminals = self.terminals.lock().unwrap();
+                    let terminal = terminals.get(*id).ok_or("terminal is not hosted here")?;
+                    let session = &terminal
+                        .hosted
+                        .as_ref()
+                        .ok_or("terminal is not hosted here")?
+                        .session;
+                    let record = match session.agent.as_ref() {
+                        Some(crate::Agent::Claude) => crate::observe::Record::Claude,
+                        Some(crate::Agent::Codex) => crate::observe::Record::Codex,
+                        _ => {
+                            return Ok(Reply::json(
+                                200,
+                                json!({"enabled": true, "items": [], "note": "Verb can read the stream of Claude Code and Codex sessions."}),
+                            ))
+                        }
+                    };
+                    (record, session.created_at, session.resume_identity.clone())
+                };
+                let project = self.project.clone();
+                let mut reply = Reply::json(200, Value::Null);
+                reply.deferred = Some(Box::new(move || {
+                    let home = std::env::var_os("HOME")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_default();
+                    let stream = crate::transcript::for_session(
+                        record,
+                        &home,
+                        &project,
+                        created,
+                        conversation.as_deref(),
+                    );
+                    serde_json::to_vec(
+                        &json!({"enabled": true, "items": stream.items, "note": stream.note}),
+                    )
+                    .map_err(|e| e.to_string())
+                }));
+                Ok(reply)
             }
             ["api", "terminals", id, "output"] if method == &Method::Get => {
                 let after = url

@@ -98,7 +98,31 @@ A real PTY always (`vim`, `tmux` and `ssh` keep working). On top of it: command 
 status and duration (from OSC 133), "Explain this failure" on a red block (Ask Verb), splits and
 tabs, searchable history, and a notification when a long command finishes in a background tab.
 
+## Agent stream (opt-in content), decided 2026-10-09
+
+The owner chose to show agent sessions as a conversation (the flagship mockup's Mode 1). Until now
+Verb read agent logs for structure only (`observe`, `meter`). The rule is now: **structure by
+default; content only when the person turns the stream on for a project.** `desktop/src/transcript.rs`
+is the only reader of content, and it:
+
+- is off until turned on per project (`stream.json` in the identity store), and can be turned off
+  from any stream;
+- reads on demand (the tail of the agent's own log), stores nothing, writes nothing to the audit
+  trail, and returns only to the authenticated browser, never to a model;
+- redacts keys, tokens, private keys and `password=`-style values before anything leaves it;
+- is bounded (2 MB of log, 300 items, 6000 characters per message).
+
+The composer types into the agent's own terminal (a bracketed paste and Enter): nothing is read to
+send. Claude Code and Codex are supported, including Codex's newer `exec` script tool; other agents
+keep their terminal only.
+
 ## Progress log
+
+- 2026-10-09, Claude: inline diffs (`777d0c8`) and the agent stream with its composer. Verified end
+  to end with a stand-in agent and a realistic Claude log in a temporary home: requests, replies and
+  folded steps render, a fake token in a command came back redacted, and the composer's message
+  reached the agent's input. Parsers were also checked against real Claude and Codex logs on the
+  Mac (counts only).
 
 - 2026-10-09, Claude: step 7 done. Command blocks from Verb's OSC 633 marks (edge per command, time
   over 0.1 s, exit code on failure, Copy, and "Ask agent", which pastes a factual note into an open

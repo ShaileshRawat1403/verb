@@ -33,6 +33,7 @@ const PATHS = {
   list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
   split: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 4v16"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  "arrow-up": '<path d="M12 19V5M5 12l7-7 7 7"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
 };
 

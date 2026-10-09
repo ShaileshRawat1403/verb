@@ -39,6 +39,7 @@ mod shell;
 mod specs;
 #[cfg(unix)]
 pub mod stream;
+mod transcript;
 #[cfg(unix)]
 mod tui;
 #[cfg(unix)]
