@@ -1837,10 +1837,13 @@ impl WebHost {
     /// how the session board and Ask Verb know who worked on what.
     fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<String, String> {
         let (path, spec) = crate::specs::find(&self.project, id)?;
-        // Agents whose CLI takes an opening prompt as its first argument get the spec brief.
+        // Every agent whose CLI can take an opening prompt gets the spec brief: as the first
+        // argument for Claude, Codex and Gemini, through `-i` (run it, then stay interactive) for
+        // Antigravity. OpenCode has no such option, so it starts empty and the spec view says so.
         let args = match agent {
             "claude" | "codex" | "gemini" => vec![crate::specs::agent_brief(&spec)],
-            "agy" | "opencode" | "shell" => Vec::new(),
+            "agy" => vec!["-i".to_owned(), crate::specs::agent_brief(&spec)],
+            "opencode" | "shell" => Vec::new(),
             _ => return Err("choose a supported agent".to_owned()),
         };
         let session = self.launch(LaunchRequest {

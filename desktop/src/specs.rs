@@ -610,8 +610,19 @@ pub(crate) fn agent_brief(spec: &Spec) -> String {
     } else {
         ""
     };
+    // Without this an agent spends its first minutes in `git branch` and `git reflog` working out
+    // where the work belongs (seen in a user test with Antigravity).
+    let branch = Some(spec.branch.as_str())
+        .filter(|b| !b.is_empty())
+        .map(|b| {
+            format!(
+                " The work belongs on branch `{b}`: if you are not on it, switch first (`git switch {b}`, \
+                 or `git switch -c {b}` if it does not exist yet)."
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "Work on spec {id}, \"{title}\", described in {file}. Read that file first.{handoff} \
+        "Work on spec {id}, \"{title}\", described in {file}. Read that file first.{branch}{handoff} \
          Implement it so each acceptance criterion is met, one at a time, and stay within its \
          'Out of scope' section. Commit with messages that start with \"spec:{id}\". \
          Do not edit the spec's Audit trail or Handoff notes sections; Verb maintains them. When a \

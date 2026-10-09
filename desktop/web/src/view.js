@@ -58,7 +58,8 @@ export function agentDisplayName(agent) {
   if (/^shell$/i.test(agent)) return "Terminal";
   if (/^claude$/i.test(agent)) return "Claude Code";
   if (/^codex$/i.test(agent)) return "Codex";
-  if (/^agy|antigravity$/i.test(agent)) return "AGY";
+  if (/^(agy|antigravity)$/i.test(agent)) return "Antigravity";
+  if (/^opencode$/i.test(agent)) return "OpenCode";
   if (/^gemini$/i.test(agent)) return "Gemini";
   return agent;
 }

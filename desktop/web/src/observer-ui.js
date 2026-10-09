@@ -114,6 +114,10 @@ export function initObserver(deps) {
   function render() {
     renderPill();
     if ($("#observer-panel").open) renderPanel();
+    // Terminal tabs show "Needs you" from the same signals; they are not a second watcher.
+    document.dispatchEvent(
+      new CustomEvent("verb:observer", { detail: { enabled: state.enabled, signals: visibleSignals() } }),
+    );
   }
 
   async function refresh() {
@@ -175,7 +179,8 @@ export function initObserver(deps) {
   });
 
   refresh();
-  setInterval(() => !document.hidden && state.enabled && refresh(), 10000);
+  // Every 4 s while on: an agent asking permission should not wait long to be noticed.
+  setInterval(() => !document.hidden && state.enabled && refresh(), 4000);
   setInterval(() => !document.hidden && state.enabled && renderPill(), 5000);
   return { refresh };
 }

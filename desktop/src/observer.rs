@@ -21,6 +21,7 @@ use std::path::Path;
 pub(crate) const KINDS: [&str; 6] = ["waiting", "stuck", "failing", "secret", "context", "branch"];
 
 const WAITING_AFTER_SECS: u64 = 60;
+const PERMISSION_AFTER_SECS: u64 = 3;
 const STUCK_AFTER_SECS: u64 = 10 * 60;
 const FAILING_WINDOW_SECS: u64 = 15 * 60;
 const FAILING_COUNT: usize = 3;
@@ -76,8 +77,14 @@ fn tail(screen: &str, lines: usize) -> String {
 
 /// Prompts that mean an agent or program is waiting for the person.
 pub(crate) fn waiting_prompt(screen: &str) -> Option<&'static str> {
-    let t = tail(screen, 8).to_lowercase();
-    const PATTERNS: [(&str, &str); 9] = [
+    // Fourteen lines: Antigravity's permission prompt lists four wrapped options and a footer under
+    // its question, which pushed the question out of a shorter window (seen in a user test).
+    let t = tail(screen, 14).to_lowercase();
+    const PATTERNS: [(&str, &str); 13] = [
+        ("requesting permission for", "a permission question"),
+        ("run this command?", "a permission question"),
+        ("do you trust the contents", "a permission question"),
+        ("do you trust the files", "a permission question"),
         ("do you want to proceed", "a permission question"),
         ("do you want to make this edit", "a permission question"),
         ("do you want to create", "a permission question"),
@@ -163,14 +170,26 @@ pub(crate) fn evaluate(terminals: &[TerminalFacts], muted: &[String]) -> Vec<Sig
     for t in terminals {
         let short = &t.id[..t.id.len().min(8)];
         let prompt = waiting_prompt(t.screen);
-        if on("waiting") && t.idle_secs >= WAITING_AFTER_SECS {
+        // An agent asking permission is waiting from the moment it asks; anything vaguer gets a
+        // minute's grace so a prompt that is only passing by never raises a badge.
+        let asking = prompt == Some("a permission question");
+        let after = if asking {
+            PERMISSION_AFTER_SECS
+        } else {
+            WAITING_AFTER_SECS
+        };
+        if on("waiting") && t.idle_secs >= after {
             if let Some(what) = prompt {
                 out.push(Signal {
                     key: format!("waiting:{}", t.id),
                     kind: "waiting",
                     terminal: Some(t.id.to_owned()),
                     title: format!("{} is waiting for you", t.agent),
-                    why: format!("Its screen has shown {what} for over a minute with no new output ({short})."),
+                    why: if asking {
+                        format!("It is asking {what} and will not continue until you answer ({short}).")
+                    } else {
+                        format!("Its screen has shown {what} for over a minute with no new output ({short}).")
+                    },
                     action: Some("show-terminal"),
                 });
             }
@@ -247,18 +266,29 @@ mod tests {
     }
 
     #[test]
-    fn waiting_needs_a_prompt_and_a_minute_of_silence() {
-        let screen = "Edit src/app.js\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
+    fn a_permission_question_is_waiting_at_once_anything_vaguer_after_a_minute() {
+        let claude = "Edit src/app.js\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
+        let agy = "Requesting permission for:\n   node -e \"import('./greet.js')\"\n\nRun this command?\n> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start with 'node -e\n\"import('./greet.js')\"'\n  3. Yes, and always allow for commands that start with 'node -e \"import('./greet.js')\"'\n(Persist to settings.json)\n  4. No, cancel\n\n esc to cancel                         Gemini 3.8 Flash · high";
+        for screen in [claude, agy] {
+            assert!(
+                evaluate(&[facts(screen, 1, true, &[])], &[]).is_empty(),
+                "still drawing"
+            );
+            let s = evaluate(&[facts(screen, 5, true, &[])], &[]);
+            assert_eq!(s.len(), 1, "{screen}");
+            assert_eq!(s[0].kind, "waiting");
+            assert!(s[0].why.contains("will not continue until you answer"));
+        }
+        let vague = "Overwrite config? (y/n)";
         assert!(
-            evaluate(&[facts(screen, 30, true, &[])], &[]).is_empty(),
+            evaluate(&[facts(vague, 30, true, &[])], &[]).is_empty(),
             "too soon"
         );
-        let s = evaluate(&[facts(screen, 90, true, &[])], &[]);
-        assert_eq!(s.len(), 1);
-        assert_eq!(s[0].kind, "waiting");
-        assert!(s[0].why.contains("a permission question"));
+        assert!(evaluate(&[facts(vague, 90, true, &[])], &[])[0]
+            .why
+            .contains("over a minute"));
         assert!(
-            evaluate(&[facts(screen, 90, true, &[])], &["waiting".into()]).is_empty(),
+            evaluate(&[facts(claude, 90, true, &[])], &["waiting".into()]).is_empty(),
             "muted"
         );
     }

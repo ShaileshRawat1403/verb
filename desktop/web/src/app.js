@@ -16,6 +16,7 @@ import { initObserver } from "./observer-ui.js";
 import { icon } from "./icons.js";
 import { attachCommandBlocks } from "./blocks.js";
 import { attachStream } from "./stream-ui.js";
+import { makeResizer } from "./resize.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -311,6 +312,8 @@ const ui = {
   sessionRevision: 0,
   toastTimer: null,
   focusedTerminal: null,
+  waitingTerminals: new Set(),
+  observerOn: false,
   splitTerminals: false,
   launchingTerminal: false,
   navigationCollapsed: panelPreference("navigation"),
@@ -361,6 +364,15 @@ for (const name of ["navigation", "sessions"]) {
   });
 }
 applyPanelLayout();
+
+document.addEventListener("verb:observer", (event) => {
+  const { enabled, signals } = event.detail;
+  ui.observerOn = enabled;
+  ui.waitingTerminals = new Set(
+    enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : [],
+  );
+  renderTerminalTabs();
+});
 
 // Arrow keys move between terminal tabs, as in any tab list; Home and End jump to the ends.
 document.addEventListener("keydown", (event) => {
@@ -883,22 +895,64 @@ async function activateSession(id) {
   }
   try {
     const inbox = await api("GET", `/api/inbox/${encodeURIComponent(id)}`);
-    $("#inbox-title").textContent = `${session.agent} · ${id.slice(0, 8)}`;
+    const name = agentDisplayName(session.agent);
+    $("#inbox-title").textContent = `${name} session ${id.slice(0, 8)}`;
     $("#inbox-subtitle").textContent =
-      `${stateName(session.state)} · ${inbox.contextState.replaceAll("_", " ")}`;
-    $("#inbox-content").innerHTML = inbox.items.length
-      ? inbox.items
+      session.state === "interrupted"
+        ? "It stopped when Verb last restarted, so its terminal is gone."
+        : "This session has ended.";
+    const items = inbox.items.length
+      ? `<p class="inbox-lead">It left these for you:</p>${inbox.items
           .map(
             (item) =>
-              `<div class="inbox-item"><span class="inbox-kind">${escapeHtml(item.kind.replaceAll("_", " "))}</span><strong>${escapeHtml(item.title)}</strong><small>${item.newSinceFetch ? "New since last context fetch" : "Recorded attention"}</small></div>`,
+              `<div class="inbox-item"><span class="inbox-kind">${escapeHtml(item.kind.replaceAll("_", " "))}</span><strong>${escapeHtml(item.title)}</strong></div>`,
           )
-          .join("")
-      : `<div class="list-empty"><span class="empty-glyph">${icon("check", { size: 18 })}</span><strong>Nothing needs attention</strong><p>The session’s recorded work is still in the project task history.</p></div>`;
+          .join("")}`
+      : `<p class="inbox-lead">Nothing was left waiting. Its work stays where it was: in your files, in Git, and in the audit trail of any spec it worked on.</p>`;
+    const continueArgs = CONTINUE_ARGS[session.agent];
+    const actions = `<div class="inbox-actions">${
+      continueArgs
+        ? `<button type="button" class="primary-button" data-inbox-launch="${escapeHtml(session.agent)}" data-inbox-continue="1">Continue ${escapeHtml(name)}'s latest conversation</button>`
+        : ""
+    }<button type="button" class="${continueArgs ? "secondary-button" : "primary-button"}" data-inbox-launch="${escapeHtml(session.agent)}">Start a new ${escapeHtml(name)} session</button></div>${
+      continueArgs
+        ? `<p class="inbox-note">Continuing picks up ${escapeHtml(name)}'s most recent conversation in this project, which is usually this one.</p>`
+        : ""
+    }`;
+    $("#inbox-content").innerHTML = items + actions;
     showDialog("inbox-dialog");
   } catch (error) {
     toast(error.message, "error");
   }
 }
+
+/** How each agent's own CLI continues its most recent conversation in the current directory. */
+const CONTINUE_ARGS = {
+  agy: ["-c"],
+  claude: ["--continue"],
+  codex: ["resume", "--last"],
+};
+
+$("#inbox-content")?.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-inbox-launch]");
+  if (!button) return;
+  const agent = button.dataset.inboxLaunch;
+  const args = button.dataset.inboxContinue ? CONTINUE_ARGS[agent] : [];
+  closeDialog("inbox-dialog");
+  try {
+    const result = await api("POST", "/api/terminals", { agent, isolated: false, args });
+    mountLaunchedSession({
+      id: result.sessionId,
+      agent,
+      isolated: false,
+      state: "live",
+      hasTerminal: true,
+      hostedHere: true,
+    });
+  } catch (error) {
+    toast(error.message, "error");
+  }
+});
 
 function addTerminal(session) {
   if (ui.terminals.has(session.id)) return;
@@ -1332,8 +1386,9 @@ function addTerminal(session) {
 }
 
 /** The status a terminal's tab shows: its words for screen readers, its tone for the dot. */
-function terminalTabStatus(terminal) {
+function terminalTabStatus(terminal, id) {
   if (terminal.ended || terminal.closed) return { tone: "ended", words: "ended" };
+  if (ui.waitingTerminals.has(id)) return { tone: "waiting", words: "waiting for you to answer" };
   if (terminal.inCommand) return { tone: "running", words: "running a command" };
   if (terminal.lastCommandExitCode > 0)
     return { tone: "failed", words: `last command failed (exit ${terminal.lastCommandExitCode})` };
@@ -1355,12 +1410,17 @@ function renderTerminalTabs() {
   const split = ui.splitTerminals && ui.terminals.size > 1;
   const tabs = [...ui.terminals.entries()]
     .map(([id, terminal]) => {
-      const status = terminalTabStatus(terminal);
+      const status = terminalTabStatus(terminal, id);
       const selected = id === ui.focusedTerminal;
-      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small></button>`;
+      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  strip.innerHTML = `${tabs}<span class="tabs-spacer"></span>${
+  const agentOpen = [...ui.terminals.values()].some((t) => t.agent && t.agent !== "shell" && !t.closed);
+  const hint =
+    agentOpen && !ui.observerOn
+      ? `<button type="button" class="tabs-hint" data-action="observer" title="The observer is off, so Verb does not show when an agent stops to ask you something">See when an agent needs you</button>`
+      : "";
+  strip.innerHTML = `${tabs}<span class="tabs-spacer"></span>${hint}${
     ui.terminals.size > 1
       ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
       : ""
@@ -2054,6 +2114,47 @@ $("#paste-confirm-button")?.addEventListener("click", () => {
   }
 });
 
+/** The three adjustable panels. Sizes live in this browser only. */
+function initResizers() {
+  const app = $("#app");
+  makeResizer({
+    handle: $("#resize-sidebar"),
+    target: app,
+    name: "--sidebar-w",
+    key: "verb.layout.sidebar",
+    min: 200,
+    max: 400,
+    initial: () => $(".sidebar").getBoundingClientRect().width,
+    axis: "x",
+  });
+  makeResizer({
+    handle: $("#resize-proof"),
+    target: $(".specs-layout"),
+    name: "--proof-w",
+    key: "verb.layout.proof",
+    min: 240,
+    max: 520,
+    initial: () => $(".spec-proof").getBoundingClientRect().width,
+    axis: "x",
+    direction: -1,
+  });
+  const grid = $("#terminal-grid");
+  const termHandle = document.createElement("span");
+  termHandle.className = "resize-handle term-resize";
+  termHandle.setAttribute("aria-label", "Resize the terminals");
+  grid.append(termHandle);
+  makeResizer({
+    handle: termHandle,
+    target: grid,
+    name: "--term-h",
+    key: "verb.layout.terminal",
+    min: 220,
+    max: 1400,
+    initial: () => grid.querySelector(".terminal-tile:not([hidden]) .terminal-mount")?.getBoundingClientRect().height || 480,
+    axis: "y",
+  });
+}
+
 async function bootstrap() {
   await refreshWorkspace();
   if (!ui.state) {
@@ -2064,6 +2165,14 @@ async function bootstrap() {
       toast("Could not connect to Verb session", "error");
     }
     return;
+  }
+  initResizers();
+  // Sessions still running in this Verb come back with the page: after a reload the spec said
+  // "1 running" while its work area said nothing was open (found in a user test).
+  for (const session of (ui.state.sessions ?? [])
+    .filter((s) => s.hostedHere && s.state === "live")
+    .slice(0, 6)) {
+    addTerminal(session);
   }
   refreshState(true);
   connectTerminalStream();

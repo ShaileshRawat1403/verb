@@ -294,8 +294,12 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await page.locator('[data-action="observer-close"]').click();
 
   // Real terminal activity: a fake token on screen, and the same command failing three times.
+  // Terminals still running from earlier tests come back with the page, so "the new one" is the
+  // selected tab once one more terminal exists, not necessarily the last in the page.
+  const before = await page.locator("#spec-work .terminal-tile").count();
   await page.locator('[data-action="spec-terminal"]').click();
-  const tile = page.locator("#spec-work .terminal-tile").last();
+  await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(before + 1);
+  const tile = page.locator("#spec-work .terminal-tile.focused");
   await tile.locator(".terminal-mount").click();
   const fake = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
   await page.keyboard.type(`echo ${fake}\n`);

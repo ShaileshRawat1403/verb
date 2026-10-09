@@ -198,8 +198,9 @@ test("agentMark and agentDisplayName recognize Terminal, Claude, Codex, AGY, Gem
   assert.equal(agentDisplayName("shell"), "Terminal");
   assert.equal(agentDisplayName("claude"), "Claude Code");
   assert.equal(agentDisplayName("codex"), "Codex");
-  assert.equal(agentDisplayName("agy"), "AGY");
-  assert.equal(agentDisplayName("antigravity"), "AGY");
+  assert.equal(agentDisplayName("agy"), "Antigravity");
+  assert.equal(agentDisplayName("agyfoo"), "agyfoo");
+  assert.equal(agentDisplayName("antigravity"), "Antigravity");
   assert.equal(agentDisplayName("gemini"), "Gemini");
   assert.equal(agentDisplayName("custom-tool"), "custom-tool");
 });
