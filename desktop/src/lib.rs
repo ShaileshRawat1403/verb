@@ -16,6 +16,7 @@ mod ask;
 mod checks;
 mod context;
 mod continuity;
+mod diff;
 mod exec;
 mod fsutil;
 mod gitstate;

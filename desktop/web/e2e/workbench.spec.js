@@ -84,6 +84,12 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
   await page.getByRole("button", { name: "Move to Build" }).click();
   await expect(page.locator("#stage-bar li.skipped")).toHaveCount(1);
 
+  // The new spec file is reviewable as a diff before committing: every line added.
+  const card = page.locator('.diff-card[data-diff-path="specs/001-let-people-sign-in-with-email.md"]');
+  await card.locator("summary").click();
+  await expect(card.locator(".diff-line.add").first()).toBeVisible();
+  await expect(card.locator(".diff-line.del")).toHaveCount(0);
+
   // Commit from the dialog; the audit line lands in the same commit.
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-message")).toHaveValue(/^spec:001 /);

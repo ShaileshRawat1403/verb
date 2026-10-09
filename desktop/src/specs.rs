@@ -51,6 +51,11 @@ pub(crate) struct Spec {
 pub(crate) struct Change {
     pub code: String,
     pub path: String,
+    /// Lines added and removed against the last commit; absent for binary files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub removed: Option<u32>,
 }
 
 #[derive(Serialize, Debug)]
@@ -486,7 +491,18 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
             summary.changes.push(Change {
                 code: line[..2].trim().to_owned(),
                 path: line[3..].to_owned(),
+                added: None,
+                removed: None,
             });
+        }
+    }
+    if !summary.changes.is_empty() {
+        let counts = crate::diff::numstat(project, &summary.changes);
+        for change in &mut summary.changes {
+            if let Some(&(added, removed)) = counts.get(&change.path) {
+                change.added = Some(added);
+                change.removed = Some(removed);
+            }
         }
     }
     if let Ok(log) = git(project, &["log", "-8", "--format=%h%x1f%s%x1f%an%x1f%cI"]) {

@@ -79,6 +79,7 @@ export function initWorkbench(deps) {
     }
     renderGit();
     renderProof();
+    renderChanges();
   }
   const normalize = (spec) => ({ ...spec, criteriaDone: spec.criteria_done ?? spec.criteriaDone ?? 0 });
   function replaceSpec(spec) {
@@ -96,6 +97,7 @@ export function initWorkbench(deps) {
     renderDetail();
     renderSessions();
     renderProof();
+    renderChanges();
     renderGit();
     placeTerminals();
   }
@@ -205,7 +207,7 @@ export function initWorkbench(deps) {
           .slice(0, 60)
           .map(
             (c) =>
-              `<li><span class="change-kind" data-kind="${escapeHtml(c.code)}">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></li>`,
+              `<li><span class="change-kind" data-kind="${escapeHtml(c.code)}">${escapeHtml(changeLabel(c.code))}</span><button type="button" class="change-link" data-open-diff="${escapeHtml(c.path)}" title="Show the changes in ${escapeHtml(c.path)}"><code>${escapeHtml(c.path)}</code></button>${diffStat(c)}</li>`,
           )
           .join("")
       : '<li class="muted">No unsaved changes.</li>';
@@ -243,6 +245,79 @@ export function initWorkbench(deps) {
           `<li title="${escapeHtml(`${c.author}, ${c.when}`)}"><code>${escapeHtml(c.sha)}</code> ${escapeHtml(c.subject)}</li>`,
       )
       .join("");
+  }
+
+  // ---------------------------------------------------------------------------- changes (diffs)
+
+  function diffStat(c) {
+    if (c.added === undefined) return "";
+    return `<span class="diff-stat"><span class="plus">+${c.added}</span><span class="minus">−${c.removed}</span></span>`;
+  }
+
+  const diffCache = new Map(); // "path|added|removed" → rendered HTML
+  const openDiffs = new Set();
+  let changesSignature = "";
+
+  /** One collapsible row per changed file, in the spec document. Rebuilt only when the list changes. */
+  function renderChanges() {
+    const section = $("#spec-changes");
+    const changes = state.git?.changes ?? [];
+    section.hidden = !selected() || changes.length === 0;
+    const signature = changes.map((c) => `${c.path}|${c.added}|${c.removed}|${c.code}`).join("\n");
+    if (signature === changesSignature) return;
+    changesSignature = signature;
+    const added = changes.reduce((n, c) => n + (c.added ?? 0), 0);
+    const removed = changes.reduce((n, c) => n + (c.removed ?? 0), 0);
+    $("#spec-changes-total").innerHTML = `${changes.length} file${changes.length === 1 ? "" : "s"} <span class="diff-stat"><span class="plus">+${added}</span><span class="minus">−${removed}</span></span>`;
+    const shown = changes.slice(0, 40);
+    $("#spec-changes-list").innerHTML =
+      shown
+        .map(
+          (c) =>
+            `<details class="diff-card" data-diff-path="${escapeHtml(c.path)}"${openDiffs.has(c.path) ? " open" : ""}><summary><span class="diff-chevron" aria-hidden="true">${icon("chevron-right", { size: 14 })}</span><code class="diff-path">${escapeHtml(c.path)}</code><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span>${diffStat(c)}</summary><div class="diff-body"></div></details>`,
+        )
+        .join("") +
+      (changes.length > shown.length
+        ? `<p class="muted">and ${changes.length - shown.length} more; the commit dialog lists every file.</p>`
+        : "");
+    for (const card of section.querySelectorAll(".diff-card[open]")) loadDiff(card);
+  }
+
+  async function loadDiff(card) {
+    const path = card.dataset.diffPath;
+    const change = (state.git?.changes ?? []).find((c) => c.path === path);
+    const key = `${path}|${change?.added}|${change?.removed}`;
+    const body = card.querySelector(".diff-body");
+    if (diffCache.has(key)) {
+      body.innerHTML = diffCache.get(key);
+      return;
+    }
+    body.innerHTML = '<p class="diff-note">Reading the diff…</p>';
+    try {
+      const diff = await api("GET", `/api/git/diff?path=${encodeURIComponent(path)}`);
+      const html = renderDiff(diff);
+      diffCache.set(key, html);
+      body.innerHTML = html;
+    } catch (error) {
+      body.innerHTML = `<p class="diff-note">${escapeHtml(error.message)}</p>`;
+    }
+  }
+
+  function renderDiff(diff) {
+    const note = diff.reason ? `<p class="diff-note">${escapeHtml(diff.reason)}</p>` : "";
+    const rows = diff.hunks
+      .map(
+        (h) =>
+          `<div class="diff-hunk">${escapeHtml(h.header)}</div>` +
+          h.lines
+            .map(
+              (l) =>
+                `<div class="diff-line ${l.kind}"><span class="ln">${l.old ?? ""}</span><span class="ln">${l.new ?? ""}</span><span class="sign">${l.kind === "add" ? "+" : l.kind === "del" ? "−" : ""}</span><span class="code">${escapeHtml(l.text) || " "}</span></div>`,
+            )
+            .join(""),
+      )
+      .join("");
+    return note + (rows ? `<div class="diff-lines">${rows}</div>` : "");
   }
 
   /** The live terminals belong to the spec you are working on: show them in its work area. */
@@ -603,6 +678,31 @@ export function initWorkbench(deps) {
       },
     };
     if (handlers[action]) handlers[action]();
+  });
+  // A diff loads when its row opens; the rail's file names open (and scroll to) their row.
+  document.addEventListener(
+    "toggle",
+    (event) => {
+      const card = event.target.closest?.(".diff-card");
+      if (!card) return;
+      if (card.open) {
+        openDiffs.add(card.dataset.diffPath);
+        loadDiff(card);
+      } else {
+        openDiffs.delete(card.dataset.diffPath);
+      }
+    },
+    true,
+  );
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("[data-open-diff]");
+    if (!link) return;
+    const card = [...document.querySelectorAll(".diff-card")].find(
+      (c) => c.dataset.diffPath === link.dataset.openDiff,
+    );
+    if (!card) return;
+    card.open = true;
+    card.scrollIntoView({ behavior: "smooth", block: "start" });
   });
   document.addEventListener("click", (event) => {
     const focus = event.target.closest("[data-focus-session]");

@@ -1476,6 +1476,18 @@ impl WebHost {
                 json!(crate::specs::git_summary(&self.project)?),
             ));
         }
+        if method == &Method::Get && path == "/api/git/diff" {
+            let wanted = url
+                .split('?')
+                .nth(1)
+                .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("path=")))
+                .map(crate::shell::percent_decode)
+                .ok_or("which file?")?;
+            return Ok(Reply::json(
+                200,
+                json!(crate::diff::file_diff(&self.project, &wanted)?),
+            ));
+        }
         if method == &Method::Post && path == "/api/git/commit" {
             let input: CommitRequest = read_json(request)?;
             let sha = crate::specs::commit(

@@ -5774,3 +5774,173 @@ select:focus-visible,
   background: var(--term-bg);
   padding-left: 6px;
 }
+
+/* ---------------------------------------------------------------- changes (diffs)
+   One row per changed file; an open row is the page's one raised surface, as in the mockup. */
+.spec-changes {
+  margin: 4px 0 22px;
+  scroll-margin-top: 70px;
+}
+.spec-changes-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.spec-changes-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.spec-changes-list {
+  display: grid;
+  gap: 6px;
+}
+.diff-stat {
+  display: inline-flex;
+  gap: 6px;
+  font: 500 11.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.diff-stat .plus {
+  color: var(--success);
+}
+.diff-stat .minus {
+  color: var(--danger);
+}
+.diff-card {
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  scroll-margin-top: 70px;
+  overflow: hidden;
+}
+.diff-card[open] {
+  background: var(--raised);
+  box-shadow: var(--shadow-raised);
+}
+.diff-card summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.diff-card summary::-webkit-details-marker {
+  display: none;
+}
+.diff-card summary:hover {
+  color: var(--text-strong);
+}
+.diff-chevron {
+  display: inline-flex;
+  color: var(--text-faint);
+  transition: transform 160ms var(--ease-out);
+}
+.diff-card[open] .diff-chevron {
+  transform: rotate(90deg);
+}
+.diff-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.diff-card .change-kind {
+  min-width: 0;
+}
+.diff-body {
+  border-top: 1px solid var(--line);
+  max-height: 560px;
+  overflow: auto;
+}
+.diff-note {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.diff-lines {
+  font: 12px/1.65 var(--mono);
+  min-width: max-content;
+}
+.diff-hunk {
+  padding: 4px 14px;
+  color: var(--text-faint);
+  background: var(--bg-2);
+  white-space: pre;
+}
+.diff-line {
+  display: grid;
+  grid-template-columns: 3.2em 3.2em 1.4em auto;
+  white-space: pre;
+  color: var(--text);
+}
+.diff-line .ln {
+  padding-right: 8px;
+  text-align: right;
+  color: var(--text-faint);
+  user-select: none;
+}
+.diff-line .sign {
+  user-select: none;
+  text-align: center;
+}
+.diff-line .code {
+  padding-right: 16px;
+}
+.diff-line.add {
+  background: var(--success-bg);
+}
+.diff-line.add .sign,
+.diff-line.add .code {
+  color: var(--success-text);
+}
+.diff-line.del {
+  background: var(--danger-bg);
+}
+.diff-line.del .sign,
+.diff-line.del .code {
+  color: var(--danger-text);
+}
+:root[data-theme="light"] .diff-line.add .code,
+:root[data-theme="light"] .diff-line.del .code {
+  color: var(--text-strong);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .diff-line.add .code,
+  :root:not([data-theme]) .diff-line.del .code {
+    color: var(--text-strong);
+  }
+}
+.change-link {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.change-link code {
+  color: var(--text);
+}
+.change-link:hover code {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.changes-list li .diff-stat {
+  flex: none;
+  font-size: 11px;
+}
