@@ -12,7 +12,7 @@
 4. ✅ Ask Verb v1 (deterministic, cited; the model summary path is still to come)
 5. ✅ Session board, handoffs, context meter (`65293fd`, this commit's successor)
 6. ✅ Observer badges (6 of 7 signals; edit collision deferred, see progress log)
-7. Modern terminal: command blocks, splits, tabs
+7. ✅ Modern terminal: command blocks, splits, tabs (`717aea9`, `8c3da16`)
 
 Browser smoke tests grow with each step: there are none yet, and every UI check so far was manual.
 
@@ -99,6 +99,15 @@ status and duration (from OSC 133), "Explain this failure" on a red block (Ask V
 tabs, searchable history, and a notification when a long command finishes in a background tab.
 
 ## Progress log
+
+- 2026-10-09, Claude: step 7 done. Command blocks from Verb's OSC 633 marks (edge per command, time
+  over 0.1 s, exit code on failure, Copy, and "Ask agent", which pastes a factual note into an open
+  agent's prompt and never presses Enter); Cmd/Ctrl+Up/Down between commands; a tab strip with
+  status dots, Split/Single, and + for a new terminal. Changed from the plan: no "Explain this
+  failure", because Ask Verb uses no model; the hand-off to an agent the user already runs replaces
+  it. Not yet: a notification when a long command ends in a background tab. Also: the new monochrome
+  design, a responsive top bar and spec layout by panel width, and three flaky tests fixed (bash
+  alias labels, macOS non-blocking accept, timing bounds).
 
 - 2026-10-08, Claude: observer shipped with six signals: waiting, stuck, failing, secret (server, from
   memory) and context, branch (browser). Edit collision is deferred: in a shared checkout Verb cannot
