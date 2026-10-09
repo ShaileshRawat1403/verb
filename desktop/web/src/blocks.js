@@ -92,6 +92,10 @@ export function attachCommandBlocks(term, actions) {
       layer: "top",
     });
     meta?.onRender((el) => {
+      // Re-checked on every render (resizes re-render): when the command line leaves too little
+      // room, the label shrinks to its words and shows its buttons only on hover.
+      const free = term.cols - lineText(prompt.line).trimEnd().length;
+      el.classList.toggle("compact", free < metaWidth + 2);
       if (el.dataset.ready) return;
       el.dataset.ready = "1";
       el.classList.add("cmd-meta", status);

@@ -361,6 +361,21 @@ for (const name of ["navigation", "sessions"]) {
 }
 applyPanelLayout();
 
+// Arrow keys move between terminal tabs, as in any tab list; Home and End jump to the ends.
+document.addEventListener("keydown", (event) => {
+  const tab = event.target.closest?.(".terminal-tab");
+  if (!tab || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  const tabs = [...tab.parentElement.querySelectorAll(".terminal-tab")];
+  const i = tabs.indexOf(tab);
+  const next =
+    event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (i + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+  event.preventDefault();
+  ui.focusedTerminal = tabs[next].dataset.tabTerminal;
+  updateTerminalFocus();
+  renderListResults();
+  $("#terminal-grid").querySelector(`[data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
+});
+
 /** The open agent terminal that should receive a hand-off from `fromId`: the most recent one. */
 function agentTerminalFor(fromId) {
   const agents = [...ui.terminals.entries()].filter(
@@ -1041,6 +1056,7 @@ function addTerminal(session) {
         terminal.lastCommandExitCode = parseInt(code, 10);
       }
     }
+    if (mark === "C" || mark === "D") renderTerminalTabs();
     // Not consumed: the command blocks (src/blocks.js) read the same marks.
     return false;
   };
@@ -1285,6 +1301,42 @@ function addTerminal(session) {
   pollTerminal(session.id);
 }
 
+/** The status a terminal's tab shows: its words for screen readers, its tone for the dot. */
+function terminalTabStatus(terminal) {
+  if (terminal.ended || terminal.closed) return { tone: "ended", words: "ended" };
+  if (terminal.inCommand) return { tone: "running", words: "running a command" };
+  if (terminal.lastCommandExitCode > 0)
+    return { tone: "failed", words: `last command failed (exit ${terminal.lastCommandExitCode})` };
+  return { tone: "ok", words: "ready" };
+}
+
+function renderTerminalTabs() {
+  const grid = $("#terminal-grid");
+  let strip = grid.querySelector(".terminal-tabs");
+  if (!strip) {
+    // Not a div: the grid's CSS uses `.terminal-tile:only-of-type` to mean "the only terminal".
+    strip = document.createElement("nav");
+    strip.className = "terminal-tabs";
+    strip.setAttribute("role", "tablist");
+    strip.setAttribute("aria-label", "Terminals");
+    grid.prepend(strip);
+  }
+  strip.hidden = ui.terminals.size === 0;
+  const split = ui.splitTerminals && ui.terminals.size > 1;
+  const tabs = [...ui.terminals.entries()]
+    .map(([id, terminal]) => {
+      const status = terminalTabStatus(terminal);
+      const selected = id === ui.focusedTerminal;
+      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small></button>`;
+    })
+    .join("");
+  strip.innerHTML = `${tabs}<span class="tabs-spacer"></span>${
+    ui.terminals.size > 1
+      ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
+      : ""
+  }<button type="button" class="tabs-action icon-only" data-terminal-new aria-label="New terminal" title="New terminal (Alt+T)">${icon("plus", { size: 14 })}</button>`;
+}
+
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
   if (!ui.terminals.size && !grid.querySelector(".terminal-empty"))
@@ -1298,21 +1350,13 @@ function updateTerminalFocus() {
   ui.terminals.forEach(({ tile, fit, mount }, id) => {
     const focused = id === ui.focusedTerminal && !ui.splitTerminals;
     tile.classList.toggle("focused", focused);
-    const button = tile.querySelector("[data-focus-terminal]");
-    button.setAttribute("aria-pressed", String(focused));
-    button.setAttribute(
-      "aria-label",
-      focused ? "Split panes" : "Focus this session",
-    );
-    button.hidden = ui.terminals.size < 2;
-    button.title = focused
-      ? "Show sessions side by side"
-      : "Use the full workspace for this session";
-    button.textContent = focused ? "Split panes" : "Focus";
+    // The tab strip chooses and splits terminals now; the old per-pane button stays hidden.
+    tile.querySelector("[data-focus-terminal]").hidden = true;
     requestAnimationFrame(() => {
       if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
     });
   });
+  renderTerminalTabs();
 }
 
 async function pollTerminal(id) {
@@ -1592,6 +1636,24 @@ document.addEventListener("click", async (event) => {
   }
   const action = event.target.closest("[data-task-action]");
   if (action) return openAction(action.dataset.taskAction);
+  const tab = event.target.closest("[data-tab-terminal]");
+  if (tab) {
+    ui.focusedTerminal = tab.dataset.tabTerminal;
+    updateTerminalFocus();
+    renderListResults();
+    ui.terminals.get(ui.focusedTerminal)?.term.focus();
+    return;
+  }
+  if (event.target.closest("[data-terminal-split]")) {
+    ui.splitTerminals = !ui.splitTerminals;
+    updateTerminalFocus();
+    return;
+  }
+  if (event.target.closest("[data-terminal-new]")) {
+    const inSpec = ui.view === "specs" && document.querySelector('[data-action="spec-terminal"]');
+    (inSpec || $("#quick-terminal-button")).click();
+    return;
+  }
   const focus = event.target.closest("[data-focus-terminal]");
   if (focus) {
     ui.splitTerminals =

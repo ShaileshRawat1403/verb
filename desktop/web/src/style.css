@@ -5648,3 +5648,129 @@ select:focus-visible,
   color: var(--text-strong);
   background: var(--surface-2);
 }
+
+/* ---------------------------------------------------------------- terminal tabs and splits */
+.terminal-tabs {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 0 2px;
+}
+.terminal-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.terminal-tab small {
+  font: 500 10.5px var(--mono);
+  color: var(--text-faint);
+}
+.terminal-tab:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.terminal-tab[aria-selected="true"] {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+.tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+.tab-dot[data-tone="running"] {
+  background: var(--text-muted);
+  animation: tab-pulse 1.2s ease-in-out infinite;
+}
+.tab-dot[data-tone="failed"] {
+  background: var(--danger);
+}
+.tab-dot[data-tone="ended"] {
+  background: var(--text-faint);
+}
+@keyframes tab-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.tabs-spacer {
+  flex: 1;
+}
+.tabs-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+.tabs-action.icon-only {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+.tabs-action:hover,
+.tabs-action[aria-pressed="true"] {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+.terminal-focus {
+  display: none !important;
+}
+/* Split: the panes side by side, two to a row, sharing the height a single pane would have. */
+.terminal-grid:not(.focused):has(> .terminal-tile + .terminal-tile) {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.terminal-grid:not(.focused):has(> .terminal-tile + .terminal-tile) .terminal-mount {
+  height: clamp(360px, 60vh, 820px);
+}
+@container work (max-width: 760px) {
+  .terminal-grid:not(.focused):has(> .terminal-tile + .terminal-tile) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.cmd-meta.compact {
+  background: none;
+  padding-left: 0;
+}
+.cmd-meta.compact > span {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--term-bg);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.cmd-meta.compact > button {
+  display: none;
+}
+.cmd-meta.compact:hover > button,
+.cmd-meta.compact:focus-within > button {
+  display: inline-flex;
+  align-items: center;
+}
+.cmd-meta.compact:hover,
+.cmd-meta.compact:focus-within {
+  background: var(--term-bg);
+  padding-left: 6px;
+}

@@ -304,6 +304,9 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await expect(tile.locator(".cmd-meta.failed").first()).toContainText(/exit [12]/);
   await expect(tile.locator(".cmd-meta.failed").first().getByRole("button", { name: "Copy" })).toBeVisible();
   await expect(tile.getByRole("button", { name: "Ask agent" })).toHaveCount(0);
+  // Its tab shows the failure too, and is the selected one.
+  const selectedTab = page.locator('#spec-work .terminal-tab[aria-selected="true"]');
+  await expect(selectedTab.locator(".tab-dot")).toHaveAttribute("data-tone", "failed");
   const raw = await (await api("api/observer")).text();
   expect(raw).not.toContain(fake.slice(4)); // the value never leaves the server
 
