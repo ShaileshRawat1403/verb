@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { groupStream, hasStream, renderProse, stepWords, workSummary } from "../src/stream-ui.js";
+import { groupStream, hasStream, hasStreamView, renderProse, stepWords, workSummary } from "../src/stream-ui.js";
 
 const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -9,6 +9,9 @@ test("only agents with a readable log get a stream", () => {
   assert.ok(hasStream("codex"));
   assert.ok(!hasStream("shell"));
   assert.ok(!hasStream("opencode"));
+  assert.ok(!hasStream("agy"), "its log is not readable");
+  assert.ok(hasStreamView("agy"), "but it gets the composer");
+  assert.ok(!hasStreamView("shell"));
 });
 
 test("consecutive steps fold into one block of work", () => {
@@ -37,4 +40,18 @@ test("prose is escaped first; only code, bold and paragraphs are interpreted", (
   assert.ok(html.includes("&lt;script&gt;"));
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("<pre>a &lt; b</pre>"));
+});
+
+test("an agent's claim about a criterion is found with its sentence", async () => {
+  const { claimedCriterion, compactTokens } = await import("../src/stream-ui.js");
+  assert.deepEqual(claimedCriterion("Updated the test. Criterion 2 is met: the expiry test passes now."), {
+    number: 2,
+    sentence: "Criterion 2 is met: the expiry test passes now.",
+  });
+  assert.equal(claimedCriterion("criterion #1 now passes")?.number, 1);
+  assert.equal(claimedCriterion("Next I will work on criterion 3."), null, "intent is not a claim");
+  assert.equal(claimedCriterion("All tests pass."), null);
+  assert.equal(compactTokens(4210), "4.2k");
+  assert.equal(compactTokens(722195), "722k");
+  assert.equal(compactTokens(800), "800");
 });

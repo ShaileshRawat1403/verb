@@ -6377,3 +6377,102 @@ select:focus-visible,
 .sidebar-bottom .local-pill {
   flex: none;
 }
+.composer-row {
+  gap: 6px;
+}
+.composer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px 0 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.composer-chip .stream-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 7.5px;
+  background: var(--surface);
+}
+.composer-spec {
+  padding: 0 9px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+.composer-hint {
+  padding-left: 4px;
+}
+.composer-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ring {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: conic-gradient(var(--text-muted) calc(var(--p) * 1%), var(--line-strong) 0);
+  display: grid;
+  place-items: center;
+}
+.ring::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--raised);
+}
+.stream-suggest {
+  margin-left: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--success-bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.stream-suggest > .icon {
+  color: var(--success);
+  flex: none;
+}
+.stream-suggest > span {
+  flex: 1;
+}
+.stream-suggest b {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.top-commit {
+  min-height: 30px;
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+.app-shell:not(:has(#view-specs.active)) #top-commit {
+  display: none;
+}
+@container work (max-width: 940px) {
+  .top-commit .btn-label {
+    font-size: 0;
+  }
+  .top-commit .btn-label::before {
+    content: "Commit";
+    font-size: 12.5px;
+  }
+}
+.topbar .top-commit,
+.topbar .top-commit .btn-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+}

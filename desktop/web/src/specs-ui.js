@@ -239,6 +239,9 @@ export function initWorkbench(deps) {
     $("#git-status").textContent = parts.join(" · ");
     // The top bar's count comes from a slower poll; keep it in step with what this card shows.
     $("#top-changes").textContent = `${git.changes.length} changed`;
+    const commit = $("#top-commit");
+    commit.hidden = git.changes.length === 0;
+    commit.querySelector(".btn-label").textContent = `Commit ${git.changes.length} file${git.changes.length === 1 ? "" : "s"}`;
     $("#git-recent").innerHTML = git.recent
       .map(
         (c) =>
@@ -773,6 +776,19 @@ export function initWorkbench(deps) {
     switchBranch,
     openHandoff,
     current: () => ({ spec: selected(), git: state.git, meters: state.meters }),
+    meterFor: (id) => state.meters?.[id] ?? null,
+    /** Opens the evidence dialog for a criterion of the selected spec, prefilled; the person decides. */
+    suggestProof(index, evidence) {
+      const spec = selected();
+      const criterion = spec?.criteria[index];
+      if (!criterion || criterion.done) return false;
+      state.pending = { kind: "criterion", index };
+      $("#evidence-dialog-sub").textContent = criterion.text;
+      $("#evidence-text").value = evidence;
+      showDialog("evidence-dialog");
+      $("#evidence-text").focus();
+      return true;
+    },
     onShowView(view) {
       if (view === "specs") {
         refreshMeters();

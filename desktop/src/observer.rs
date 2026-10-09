@@ -164,6 +164,20 @@ pub(crate) fn short_label(label: &str) -> Option<String> {
     Some(words.join(" "))
 }
 
+/// Agent terminals that are explicitly asking the person for permission right now. Reported with or
+/// without the observer: it is the agent asking, and the tab says "Needs you".
+pub(crate) fn asking(terminals: &[TerminalFacts]) -> Vec<String> {
+    terminals
+        .iter()
+        .filter(|t| {
+            t.is_agent
+                && t.idle_secs >= PERMISSION_AFTER_SECS
+                && waiting_prompt(t.screen) == Some("a permission question")
+        })
+        .map(|t| t.id.to_owned())
+        .collect()
+}
+
 pub(crate) fn evaluate(terminals: &[TerminalFacts], muted: &[String]) -> Vec<Signal> {
     let on = |kind: &str| !muted.iter().any(|m| m == kind);
     let mut out = Vec::new();
@@ -290,6 +304,24 @@ mod tests {
         assert!(
             evaluate(&[facts(claude, 90, true, &[])], &["waiting".into()]).is_empty(),
             "muted"
+        );
+    }
+
+    #[test]
+    fn asking_is_only_agents_with_a_permission_question() {
+        let prompt = "Requesting permission for:\n  rm -rf build\n\nRun this command?\n> 1. Yes";
+        assert_eq!(asking(&[facts(prompt, 5, true, &[])]).len(), 1);
+        assert!(
+            asking(&[facts(prompt, 1, true, &[])]).is_empty(),
+            "still drawing"
+        );
+        assert!(
+            asking(&[facts(prompt, 5, false, &[])]).is_empty(),
+            "a shell is not an agent"
+        );
+        assert!(
+            asking(&[facts("Overwrite? (y/n)", 90, true, &[])]).is_empty(),
+            "only permission questions"
         );
     }
 

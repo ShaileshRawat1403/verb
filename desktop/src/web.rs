@@ -1303,9 +1303,13 @@ impl WebHost {
                 }
                 crate::observer::save(&store, &settings)?;
             }
-            let signals = if settings.enabled {
+            // Facts are gathered for every terminal, but only one thing is reported without the
+            // observer: which agents are explicitly asking permission ("Needs you" on their tab).
+            // That is the agent addressing the person, not Verb watching; every other signal still
+            // needs the observer turned on.
+            let owned: Vec<_> = {
                 let terminals = self.terminals.lock().unwrap();
-                let owned: Vec<_> = terminals
+                terminals
                     .iter()
                     .filter_map(|(id, terminal)| {
                         let hosted = terminal.hosted.as_ref()?;
@@ -1314,6 +1318,9 @@ impl WebHost {
                             session.agent.as_ref(),
                             None | Some(Agent::Shell) | Some(Agent::Custom(_))
                         );
+                        if !settings.enabled && !is_agent {
+                            return None;
+                        }
                         let failures: Vec<(String, u64)> = terminal
                             .failures
                             .iter()
@@ -1328,28 +1335,30 @@ impl WebHost {
                             failures,
                         ))
                     })
-                    .collect();
-                drop(terminals);
-                let facts: Vec<crate::observer::TerminalFacts> = owned
-                    .iter()
-                    .map(|(id, agent, is_agent, idle, screen, failures)| {
-                        crate::observer::TerminalFacts {
-                            id,
-                            agent,
-                            is_agent: *is_agent,
-                            idle_secs: *idle,
-                            screen,
-                            failures,
-                        }
-                    })
-                    .collect();
+                    .collect()
+            };
+            let facts: Vec<crate::observer::TerminalFacts> = owned
+                .iter()
+                .map(|(id, agent, is_agent, idle, screen, failures)| {
+                    crate::observer::TerminalFacts {
+                        id,
+                        agent,
+                        is_agent: *is_agent,
+                        idle_secs: *idle,
+                        screen,
+                        failures,
+                    }
+                })
+                .collect();
+            let asking = crate::observer::asking(&facts);
+            let signals = if settings.enabled {
                 crate::observer::evaluate(&facts, &settings.muted)
             } else {
                 Vec::new()
             };
             return Ok(Reply::json(
                 200,
-                json!({"enabled": settings.enabled, "muted": settings.muted, "kinds": crate::observer::KINDS, "signals": signals}),
+                json!({"enabled": settings.enabled, "muted": settings.muted, "kinds": crate::observer::KINDS, "signals": signals, "asking": asking}),
             ));
         }
         if method == &Method::Get && path == "/api/meters" {

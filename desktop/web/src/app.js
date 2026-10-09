@@ -366,11 +366,12 @@ for (const name of ["navigation", "sessions"]) {
 applyPanelLayout();
 
 document.addEventListener("verb:observer", (event) => {
-  const { enabled, signals } = event.detail;
+  const { enabled, signals, asking } = event.detail;
   ui.observerOn = enabled;
-  ui.waitingTerminals = new Set(
-    enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : [],
-  );
+  ui.waitingTerminals = new Set([
+    ...asking,
+    ...(enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : []),
+  ]);
   renderTerminalTabs();
 });
 
@@ -1068,6 +1069,7 @@ function addTerminal(session) {
     agentDisplayName,
     agentMark,
     settings: streamSettings,
+    workbench: () => workbench,
   });
   sendStreamAttach(session.id, term.rows, term.cols);
 
@@ -1415,12 +1417,7 @@ function renderTerminalTabs() {
       return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  const agentOpen = [...ui.terminals.values()].some((t) => t.agent && t.agent !== "shell" && !t.closed);
-  const hint =
-    agentOpen && !ui.observerOn
-      ? `<button type="button" class="tabs-hint" data-action="observer" title="The observer is off, so Verb does not show when an agent stops to ask you something">See when an agent needs you</button>`
-      : "";
-  strip.innerHTML = `${tabs}<span class="tabs-spacer"></span>${hint}${
+  strip.innerHTML = `${tabs}<span class="tabs-spacer"></span>${
     ui.terminals.size > 1
       ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
       : ""

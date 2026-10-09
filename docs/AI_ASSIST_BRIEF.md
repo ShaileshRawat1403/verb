@@ -118,6 +118,15 @@ keep their terminal only.
 
 ## Progress log
 
+- 2026-10-09, Claude: closing the mockup and the user-test gaps. "Needs you" on agent tabs now works
+  without the observer (owner's direction): it is the agent explicitly asking permission, so only
+  that is reported for everyone; every other observer signal stays opt-in. A "Commit N files"
+  primary in the top bar; the composer shows agent, spec and context; when an agent says a criterion
+  is met, the stream offers "Mark proven", which opens the evidence dialog prefilled with its words
+  (never automatic). Antigravity gets the composer but no stream: its conversations are protobuf
+  blobs inside SQLite databases agy holds open, undocumented and liable to change, so reading them
+  would be guessing. A future option is driving agy through its `--output-format stream-json` mode.
+
 - 2026-10-09, Claude: inline diffs (`777d0c8`) and the agent stream with its composer. Verified end
   to end with a stand-in agent and a realistic Claude log in a temporary home: requests, replies and
   folded steps render, a fake token in a command came back redacted, and the composer's message
