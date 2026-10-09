@@ -14,6 +14,7 @@ import { initHost } from "./host-ui.js";
 import { initAsk } from "./ask-ui.js";
 import { initObserver } from "./observer-ui.js";
 import { icon } from "./icons.js";
+import { attachCommandBlocks } from "./blocks.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -360,6 +361,14 @@ for (const name of ["navigation", "sessions"]) {
 }
 applyPanelLayout();
 
+/** The open agent terminal that should receive a hand-off from `fromId`: the most recent one. */
+function agentTerminalFor(fromId) {
+  const agents = [...ui.terminals.entries()].filter(
+    ([id, t]) => id !== fromId && !t.closed && !t.ended && t.agent && t.agent !== "shell",
+  );
+  return agents.length ? agents[agents.length - 1][1] : null;
+}
+
 function toast(message, tone = "info") {
   const element = $("#toast");
   element.textContent = message;
@@ -654,6 +663,7 @@ function removeTerminal(id) {
   clearTimeout(terminal.pollTimer);
   clearTimeout(terminal.ackTimer);
   terminal.observer.disconnect();
+  terminal.blocks?.dispose();
   terminal.term.dispose();
   terminal.tile.remove();
   ui.terminals.delete(id);
@@ -867,7 +877,7 @@ function addTerminal(session) {
   const term = new Terminal({
     cursorBlink: true,
     cursorStyle: "bar",
-    fontFamily: "SFMono-Regular, Menlo, Consolas, monospace",
+    fontFamily: '"JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace',
     fontSize: 13,
     lineHeight: 1.22,
     letterSpacing: 0.2,
@@ -927,6 +937,7 @@ function addTerminal(session) {
     search,
     mount,
     tile,
+    agent: session.agent,
     cursor: 0,
     closed: false,
     streaming: false,
@@ -939,6 +950,26 @@ function addTerminal(session) {
     pollTimer: null,
   };
   ui.terminals.set(session.id, terminal);
+  terminal.blocks = attachCommandBlocks(term, {
+    copy(text) {
+      navigator.clipboard
+        .writeText(text)
+        .then(() => toast("Copied the command and its output."))
+        .catch(() => toast("Could not copy to the clipboard.", "error"));
+    },
+    canHandOff: () => Boolean(agentTerminalFor(session.id)),
+    handOff(note) {
+      const target = agentTerminalFor(session.id);
+      if (!target) {
+        toast("No agent is open to hand this to.", "error");
+        return;
+      }
+      // A bracketed paste through the agent's own input: it lands in its prompt, unsent.
+      target.term.paste(note);
+      target.term.focus();
+      toast(`Pasted into ${agentDisplayName(target.agent)}. Review it, then press Enter to send.`);
+    },
+  });
   sendStreamAttach(session.id, term.rows, term.cols);
 
   term.onTitleChange((title) => {
@@ -1010,7 +1041,8 @@ function addTerminal(session) {
         terminal.lastCommandExitCode = parseInt(code, 10);
       }
     }
-    return true;
+    // Not consumed: the command blocks (src/blocks.js) read the same marks.
+    return false;
   };
   term.parser.registerOscHandler(133, handleShellMark);
   term.parser.registerOscHandler(633, handleShellMark);
@@ -1113,6 +1145,14 @@ function addTerminal(session) {
     if (mod && event.code === "KeyC" && term.hasSelection()) {
       if (event.type === "keydown") {
         navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+      }
+      return false;
+    }
+
+    if (mod && (event.key === "ArrowUp" || event.key === "ArrowDown") && !event.shiftKey) {
+      if (event.type === "keydown") {
+        if (event.key === "ArrowUp") terminal.blocks?.previous();
+        else terminal.blocks?.next();
       }
       return false;
     }

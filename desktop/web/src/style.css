@@ -5584,3 +5584,67 @@ select:focus-visible,
     display: inline-block;
   }
 }
+
+/* ---------------------------------------------------------------- command blocks
+   Drawn by xterm decorations from Verb's shell-integration markers (src/blocks.js): a thin edge in
+   the left margin for every command, and its time (and exit code, when it failed) on the right. */
+.terminal-mount .xterm-screen {
+  overflow: visible;
+}
+.cmd-edge {
+  pointer-events: none;
+  background: none !important;
+}
+.cmd-edge::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: -8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--text-faint);
+  opacity: 0.55;
+}
+.cmd-edge.passed::before {
+  background: var(--success);
+  opacity: 0.7;
+}
+.cmd-edge.failed::before {
+  background: var(--danger);
+  opacity: 1;
+}
+/* xterm places a decoration by column from the left; the label belongs at the right edge whatever
+   the width, so CSS pins it there and lets it size to its words. */
+.cmd-meta {
+  left: auto !important;
+  right: 0 !important;
+  width: auto !important;
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding-left: 18px;
+  font: 500 11px/1 Inter, -apple-system, sans-serif;
+  color: var(--text-faint);
+  background: linear-gradient(to right, transparent, var(--term-bg) 16px);
+  white-space: nowrap;
+}
+.cmd-meta.failed {
+  color: var(--danger);
+}
+.cmd-meta button {
+  height: 18px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--text-muted);
+  font: 500 11px/1 Inter, -apple-system, sans-serif;
+  cursor: pointer;
+}
+.cmd-meta button:hover {
+  color: var(--text-strong);
+  background: var(--surface-2);
+}

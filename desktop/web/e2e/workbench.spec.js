@@ -298,6 +298,12 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await expect
     .poll(async () => (await (await api("api/observer")).json()).signals.map((s) => s.kind).sort(), { timeout: 15_000 })
     .toEqual(["failing", "secret"]);
+  // The same commands are blocks in the terminal: a red edge and the exit code on each failure,
+  // and no "Ask agent" while no agent is open to hand to.
+  await expect(tile.locator(".cmd-edge.failed")).toHaveCount(3);
+  await expect(tile.locator(".cmd-meta.failed").first()).toContainText(/exit [12]/);
+  await expect(tile.locator(".cmd-meta.failed").first().getByRole("button", { name: "Copy" })).toBeVisible();
+  await expect(tile.getByRole("button", { name: "Ask agent" })).toHaveCount(0);
   const raw = await (await api("api/observer")).text();
   expect(raw).not.toContain(fake.slice(4)); // the value never leaves the server
 
