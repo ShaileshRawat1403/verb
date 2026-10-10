@@ -6723,3 +6723,29 @@ select:focus-visible,
 #commit-branch-note code {
   font: 12px var(--mono);
 }
+
+/* "More": the older views (Overview, Tasks, Shared notes), one click away, out of the main path. */
+.nav-more > summary {
+  list-style: none;
+  cursor: pointer;
+}
+.nav-more > summary::-webkit-details-marker {
+  display: none;
+}
+.nav-more[open] > summary {
+  color: var(--text);
+}
+.nav-more > .nav-item:not(summary) {
+  padding-left: 22px;
+}
+@media (max-width: 640px) {
+  .nav-more {
+    display: contents;
+  }
+  .nav-more > summary {
+    display: none;
+  }
+  .nav-more > .nav-item {
+    padding-left: 0;
+  }
+}

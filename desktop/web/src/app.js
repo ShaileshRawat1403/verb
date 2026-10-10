@@ -532,8 +532,10 @@ function showView(view) {
     if (active) element.setAttribute("aria-current", "page");
     else element.removeAttribute("aria-current");
   });
+  // Overview, Tasks and Shared notes live under "More"; show the group open when one is in use.
+  if (["overview", "tasks", "memory"].includes(view)) $("#nav-more").open = true;
   $("#breadcrumb-view").textContent =
-    view.charAt(0).toUpperCase() + view.slice(1);
+    view === "memory" ? "Shared notes" : view.charAt(0).toUpperCase() + view.slice(1);
   if (view === "overview") refreshChecks();
   if (view === "tasks" || view === "memory") refreshState(true);
   workbench?.onShowView(view);

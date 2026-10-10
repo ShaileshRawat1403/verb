@@ -87,6 +87,30 @@
           <button
             class="nav-item"
             type="button"
+            data-view="host"
+            aria-label="Host"
+            title="Host"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="4" y="3" width="16" height="7" rx="1.5" />
+                <rect x="4" y="14" width="16" height="7" rx="1.5" />
+                <path d="M8 6.5h.01M8 17.5h.01" /></svg></span
+            ><span>Host</span
+            ><span class="nav-count host-dot" id="nav-host-alert" hidden>!</span>
+          </button>
+          <details class="nav-more" id="nav-more">
+            <summary class="nav-item nav-more-toggle" title="Overview, tasks and shared notes"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></span><span>More</span></summary>
+            <button
+            class="nav-item"
+            type="button"
             data-view="overview"
             aria-label="Overview"
             title="Overview"
@@ -104,7 +128,7 @@
                 <path d="M9 3v18M9 9h12" /></svg></span
             ><span>Overview</span>
           </button>
-          <button
+            <button
             class="nav-item"
             type="button"
             data-view="tasks"
@@ -126,12 +150,12 @@
             ><span>Tasks</span
             ><span class="nav-count" id="nav-task-count">0</span>
           </button>
-          <button
+            <button
             class="nav-item"
             type="button"
             data-view="memory"
-            aria-label="Memory"
-            title="Memory"
+            aria-label="Shared notes"
+            title="Shared notes"
           >
             <span class="nav-icon" aria-hidden="true"
               ><svg
@@ -145,30 +169,13 @@
                 <path
                   d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"
                 /></svg></span
-            ><span>Memory</span>
+            ><span>Shared notes</span>
           </button>
-          <button
-            class="nav-item"
-            type="button"
-            data-view="host"
-            aria-label="Host"
-            title="Host"
-          >
-            <span class="nav-icon" aria-hidden="true"
-              ><svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <rect x="4" y="3" width="16" height="7" rx="1.5" />
-                <rect x="4" y="14" width="16" height="7" rx="1.5" />
-                <path d="M8 6.5h.01M8 17.5h.01" /></svg></span
-            ><span>Host</span
-            ><span class="nav-count host-dot" id="nav-host-alert" hidden>!</span>
-          </button>
+          </details>
+          
+          
+          
+          
         </nav>
         <section class="sidebar-specs" aria-label="Specs">
           <div class="sidebar-specs-head">
@@ -561,6 +568,13 @@
                       <ul id="agent-files" class="agent-files"></ul>
                       <div class="hub-actions">
                         <button class="secondary-button" type="button" data-action="sync-agents">Sync agent context</button>
+                      </div>
+                    </article>
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Shared notes</h3></div>
+                      <p class="proof-hint">Short decisions and facts every agent session can read, such as a constraint or a handoff fact.</p>
+                      <div class="hub-actions">
+                        <button class="secondary-button" type="button" data-view="memory">Open shared notes</button>
                       </div>
                     </article>
                     <article class="panel hub-card">
