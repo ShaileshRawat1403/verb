@@ -96,11 +96,60 @@ const TIOCSWINSZ: u64 = 0x5414;
 #[cfg(target_os = "linux")]
 const TIOCGWINSZ: u64 = 0x5413;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RLimit {
+    current: u64,
+    max: u64,
+}
+#[cfg(target_os = "macos")]
+const RLIMIT_NOFILE: c_int = 8;
+#[cfg(not(target_os = "macos"))]
+const RLIMIT_NOFILE: c_int = 7;
+
+/// The open-file limit hosted children get under proot (Android's Termux, Node 1).
+///
+/// proot intercepts every system call. Programs that close every descriptor up to the limit before
+/// starting a subprocess (Bun, so Claude Code) then take minutes per spawn at Termux's 32768: Claude
+/// hung before drawing anything and looked broken. Measured on Node 1: `claude -p` answers in ~5 s
+/// at 1024, ~9 s at 4096, ~12 s at 8192, and not within minutes at 32768. 4096 leaves room for
+/// builds and file watchers. `VERB_CHILD_NOFILE` overrides it; elsewhere nothing changes.
+const PROOT_CHILD_NOFILE: u64 = 4096;
+
+fn under_proot() -> bool {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let tracer = status
+        .lines()
+        .find_map(|l| l.strip_prefix("TracerPid:"))
+        .map(str::trim)
+        .unwrap_or("0");
+    tracer != "0"
+        && std::fs::read_to_string(format!("/proc/{tracer}/comm"))
+            .is_ok_and(|comm| comm.trim() == "proot")
+}
+
+/// The soft open-file limit to give children, if Verb should lower it. Decided before the fork.
+fn child_nofile() -> Option<u64> {
+    let wanted = std::env::var("VERB_CHILD_NOFILE")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .or_else(|| under_proot().then_some(PROOT_CHILD_NOFILE))?;
+    let mut limit = RLimit { current: 0, max: 0 };
+    if unsafe { getrlimit(RLIMIT_NOFILE, &mut limit) } != 0 {
+        return None;
+    }
+    // Only ever lower the soft limit, never past what the hard limit allows.
+    let target = wanted.min(limit.max).max(64);
+    (target < limit.current).then_some(target)
+}
+
 unsafe extern "C" {
     fn ioctl(fd: c_int, request: u64, ...) -> c_int;
     fn chdir(path: *const c_char) -> c_int;
     fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int;
     fn unsetenv(name: *const c_char) -> c_int;
+    fn getrlimit(resource: c_int, rlim: *mut RLimit) -> c_int;
+    fn setrlimit(resource: c_int, rlim: *const RLimit) -> c_int;
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
     fn _exit(status: c_int) -> !;
     fn waitpid(pid: PidT, status: *mut c_int, options: c_int) -> PidT;
@@ -454,6 +503,7 @@ fn fork_pty(
         .collect::<Result<Vec<_>, String>>()?;
     let child_env = child_environment(session_id, project, child_env)?;
     let child_unset = launcher_only_variables(std::env::vars_os().map(|(name, _)| name));
+    let child_nofile = child_nofile();
 
     let window = size.map(|(rows, cols)| WinSize {
         rows,
@@ -485,6 +535,13 @@ fn fork_pty(
             }
             for name in &child_unset {
                 unsetenv(name.as_ptr());
+            }
+            if let Some(soft) = child_nofile {
+                let mut limit = RLimit { current: 0, max: 0 };
+                if getrlimit(RLIMIT_NOFILE, &mut limit) == 0 {
+                    limit.current = soft;
+                    setrlimit(RLIMIT_NOFILE, &limit);
+                }
             }
             set_child_environment(&child_env);
             execvp(command_value.as_ptr(), argument_pointers.as_ptr());

@@ -1869,3 +1869,33 @@ fn a_missing_agent_is_refused_before_a_terminal_starts() {
         serde_json::from_slice(&server.request("GET", "/api/agents", None, true).1).unwrap();
     assert_eq!(agents["installed"]["agy"], json!(false));
 }
+
+/// Hosted terminals can get a lower open-file limit (`VERB_CHILD_NOFILE`, automatic under proot,
+/// where a high limit made Claude Code hang before drawing anything).
+#[cfg(unix)]
+#[test]
+fn hosted_terminals_get_the_configured_open_file_limit() {
+    let server = WebServer::start_with_env(&[("VERB_CHILD_NOFILE", "200")]);
+    let out = server.root.join("nofile.txt");
+    let started = server.json(
+        "POST",
+        "/api/terminals",
+        Some(json!({"agent": "shell", "isolated": false})),
+    );
+    let id = started["sessionId"].as_str().unwrap().to_owned();
+    std::thread::sleep(Duration::from_millis(800));
+    server.json(
+        "POST",
+        &format!("/api/terminals/{id}/input"),
+        Some(json!({"data": format!("ulimit -n > '{}'\n", out.display())})),
+    );
+    let mut seen = String::new();
+    for _ in 0..50 {
+        seen = fs::read_to_string(&out).unwrap_or_default();
+        if !seen.trim().is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(seen.trim(), "200");
+}
