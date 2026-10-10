@@ -118,6 +118,21 @@ keep their terminal only.
 
 ## Progress log
 
+- 2026-10-10, Claude: a real Claude Code run from an empty folder to Ship. Fixed what it found:
+  hosted terminals no longer inherit `VERB_TOKEN` or the session markers of an agent that launched
+  Verb (a Claude in Verb started from inside Claude Code ran as a child session with transcripts off,
+  the parent's permission mode and its messaging token); "Needs you" catches Claude's reworded folder
+  trust question; Ship warns about uncommitted work and an unmerged branch, and the badge says
+  "Shipped" only when both are done. Also: Commit leads only once there is work beyond the spec file.
+  Not yet run on Node 1: driving the node's Verb from this Mac is blocked by permission policy, so
+  the owner runs that pass (LAN via `ops/verb/local.sh`, or the public URL).
+
+- 2026-10-10, Claude: navigation and the older views. Sidebar is Specs, Project, Sessions, Host;
+  Overview, Tasks and Shared notes (was Memory) sit under "More" (a menu on phones). Those three views
+  and the Sessions list now use the flagship language; Host fills its row and reads the battery on a
+  Mac. Every page checked at phone width: More was unreachable, Commit read "CommitCommit", spec
+  actions took three rows, the session list clipped itself; all fixed.
+
 - 2026-10-10, Claude: Antigravity Talk, optional. agy's JSON mode gives a clean conversation stream,
   but headless agy cannot ask permission (auto-denies, even with --sandbox), so Verb drives it in
   plan mode with --add-dir and offers "Continue in terminal to approve" (same conversation via

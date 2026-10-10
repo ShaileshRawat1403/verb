@@ -566,7 +566,6 @@
           <section id="view-sessions" class="view">
             <div class="page-heading">
               <div>
-                <span class="section-kicker">SESSIONS</span>
                 <h1>Sessions</h1>
                 <p>Open a terminal or agent and get to work.</p>
               </div>
@@ -590,26 +589,15 @@
             </div>
             <div class="sessions-layout">
               <div class="panel sessions-list-panel" id="sessions-panel">
-                <div class="panel-heading compact">
-                  <h2>Sessions</h2>
+                <div class="task-search-row">
+                  <input id="session-search" class="list-search" type="search" placeholder="Find a session by agent, state or ID" aria-label="Find a session" autocomplete="off" />
                   <span class="count-chip" id="session-count">0</span>
                 </div>
-                <label class="list-search-label" for="session-search"
-                  >Find a session</label
-                >
-                <input
-                  id="session-search"
-                  class="list-search"
-                  type="search"
-                  placeholder="Agent, state, or ID…"
-                  autocomplete="off"
-                />
                 <div id="session-list" class="session-list"></div>
               </div>
               <div class="terminal-area">
                 <div class="terminal-toolbar">
                   <div>
-                    <span class="section-kicker">LIVE WORKSPACE</span>
                     <h2>Workspace</h2>
                   </div>
                   <button

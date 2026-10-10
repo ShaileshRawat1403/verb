@@ -6941,3 +6941,38 @@ select:focus-visible,
   color: var(--warning);
   font-weight: 500;
 }
+/* Status reads as a word, like everywhere else, not an all-caps stamp. */
+.status-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+/* Narrow work area: choosing and starting the agent leads on its own row; Terminal and Hand off
+   share the next one (they wrapped onto three rows on a phone). */
+@container work (max-width: 560px) {
+  .spec-actions .agent-picker {
+    order: -1;
+    display: flex;
+    flex: 1 1 100%;
+    gap: 8px;
+  }
+  .spec-actions .agent-picker select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .spec-actions > .secondary-button,
+  .spec-actions > .text-button {
+    flex: 1 1 0;
+  }
+}
+/* Phones: the page scrolls, so the session list should not scroll inside a 210px box (it clipped
+   its own history row). */
+@media (max-width: 640px) {
+  #view-sessions .sessions-list-panel {
+    max-height: none;
+    overflow: visible;
+  }
+}
