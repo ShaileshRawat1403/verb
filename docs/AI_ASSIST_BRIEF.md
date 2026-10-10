@@ -118,6 +118,13 @@ keep their terminal only.
 
 ## Progress log
 
+- 2026-10-10, Claude: Antigravity Talk, optional. agy's JSON mode gives a clean conversation stream,
+  but headless agy cannot ask permission (auto-denies, even with --sandbox), so Verb drives it in
+  plan mode with --add-dir and offers "Continue in terminal to approve" (same conversation via
+  --conversation) when a turn ends on a refused action. Never --dangerously-skip-permissions, never
+  allow-rules written for the person. Live result was weak (agy claimed success without changes), so
+  agy starts in its terminal like every CLI agent and Talk is a secondary "Plan in Talk".
+
 - 2026-10-09, Claude: closing the mockup and the user-test gaps. "Needs you" on agent tabs now works
   without the observer (owner's direction): it is the agent explicitly asking permission, so only
   that is reported for everyone; every other observer signal stays opt-in. A "Commit N files"
