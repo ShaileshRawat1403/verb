@@ -6976,3 +6976,18 @@ select:focus-visible,
     overflow: visible;
   }
 }
+.access-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warning) 10%, var(--surface));
+  color: var(--text);
+  font-size: 12.5px;
+}
+.access-banner[hidden] {
+  display: none;
+}

@@ -129,6 +129,28 @@ that have not been committed in the source checkout are not copied. The worktree
 remain after the agent exits so its files can be inspected; remove them with Git when finished.
 These worktrees live under `~/.verb/worktrees` (or `VERB_STATE_DIR/worktrees`).
 
+## Access tokens for agents and automation
+
+The token `verb web` prints is the owner's and can do everything. To let an agent or a script drive
+Verb, issue it its own token instead:
+
+```sh
+verb token create --name claude --scope drive --expires 8h   # prints the token once
+verb token list
+verb token revoke claude
+```
+
+- **read**: specs, Git, files, host, hub and Ask Verb. Not terminal screens, which can show secrets.
+- **drive**: also terminals, agents, stages, proofs and commits.
+- **owner only**: issuing tokens, the agent-stream and observer privacy settings, phone sharing.
+
+Each token expires (at most 30 days), can be revoked at once, and is recorded by name in audit trails
+("claude (access token) via Verb web"). Verb stores only a hash. A browser opened with an access token
+shows a banner with its name, scope and expiry on every page.
+
+`drive` is not containment: a terminal runs as the same operating-system user as Verb. Use it for
+agents you would let use your shell anyway; it buys a name, an expiry and revocation.
+
 ## Current guarantees
 
 - `verb status` reports the project root, branch, changed-file count, and latest session, including

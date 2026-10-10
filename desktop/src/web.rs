@@ -306,6 +306,8 @@ struct WebHost {
     state_cache: Arc<std::sync::Mutex<Option<StateCache>>>,
     state_generation: Arc<AtomicU64>,
     talks: crate::talk::Talks,
+    /// Who is making the request being handled: the owner, or a named access token.
+    access: crate::tokens::Access,
 }
 
 struct StateCache {
@@ -631,6 +633,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         state_cache: Arc::default(),
         state_generation: Arc::new(AtomicU64::new(0)),
         talks: crate::talk::Talks::default(),
+        access: crate::tokens::Access::owner(),
     };
     if let Some(jwks) = load_initial_jwks() {
         if let Ok(mut w) = host.jwks_cache.write() {
@@ -857,6 +860,20 @@ fn background_jwks_refresh(
 }
 
 impl WebHost {
+    /// The owner's token, compared in equal time.
+    fn is_owner_token(&self, presented: Option<&str>) -> bool {
+        presented
+            .is_some_and(|p| crate::tokens::constant_time_eq(p.as_bytes(), self.token.as_bytes()))
+    }
+
+    /// Who the audit trail names for this request: the owner, or the access token by name.
+    fn actor(&self) -> String {
+        match &self.access.token {
+            Some(name) => format!("{name} (access token) via Verb web"),
+            None => crate::specs::actor(&self.project, "Verb web"),
+        }
+    }
+
     fn authenticate_cf_access(&mut self, request: &Request) -> bool {
         let (Some(expected_email), Some(expected_iss), Some(expected_aud)) = (
             self.allowed_email.clone(),
@@ -1008,11 +1025,20 @@ impl WebHost {
                 .get(tok)
                 .is_some_and(|expiry| *expiry > Instant::now())
         });
-        let is_authorized = header(&request, "X-Verb-Token") == Some(self.token.as_str())
-            || token_in_query == Some(self.token.as_str())
+        // A terminal stream carries keystrokes: it needs drive scope.
+        let access = if self.is_owner_token(header(&request, "X-Verb-Token"))
+            || self.is_owner_token(token_in_query)
             || session_valid
             || has_valid_session
-            || cf_authenticated;
+            || cf_authenticated
+        {
+            Some(crate::tokens::Access::owner())
+        } else {
+            header(&request, "X-Verb-Token")
+                .or(token_in_query)
+                .and_then(crate::tokens::verify)
+        };
+        let is_authorized = access.is_some_and(|a| a.allows(crate::tokens::Scope::Drive));
 
         if !is_authorized {
             send_reply(
@@ -1159,12 +1185,27 @@ impl WebHost {
         if !path.starts_with("/api/") {
             return Reply::error(404, "not found");
         }
-        let is_authorized = header(request, "X-Verb-Token") == Some(self.token.as_str())
-            || has_valid_session
-            || cf_authenticated;
-        if !is_authorized {
+        let presented = header(request, "X-Verb-Token");
+        let access = if self.is_owner_token(presented) || has_valid_session || cf_authenticated {
+            crate::tokens::Access::owner()
+        } else if let Some(access) = presented.and_then(crate::tokens::verify) {
+            access
+        } else {
             return Reply::error(403, "open the URL printed by verb web");
+        };
+        let needed = crate::tokens::required_scope(request.method().as_str(), path);
+        if !access.allows(needed) {
+            return Reply::error(
+                403,
+                format!(
+                    "the access token `{}` has {} scope; this needs {}",
+                    access.token.as_deref().unwrap_or("?"),
+                    access.scope.name(),
+                    needed.name()
+                ),
+            );
         }
+        self.access = access;
         let method = request.method().clone();
         let mut reply = match self.api(&method, &url, path, request) {
             Ok(reply) => reply,
@@ -1183,6 +1224,9 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if method == &Method::Get && path == "/api/whoami" {
+            return Ok(Reply::json(200, json!(self.access)));
+        }
         if method == &Method::Get && path == "/api/state" {
             if let Ok(cache) = self.state_cache.try_lock() {
                 if let Some(cache) = cache.as_ref().filter(|cache| {
@@ -1450,7 +1494,7 @@ impl WebHost {
                     constraints: input.constraints,
                     glossary: input.glossary,
                 },
-                &crate::specs::actor(&self.project, "Verb web"),
+                &self.actor(),
             )?;
             self.invalidate_state();
             return Ok(Reply::json(
@@ -1459,10 +1503,7 @@ impl WebHost {
             ));
         }
         if method == &Method::Post && path == "/api/hub/sync" {
-            let changed = crate::hub::sync_agent_files(
-                &self.project,
-                &crate::specs::actor(&self.project, "Verb web"),
-            )?;
+            let changed = crate::hub::sync_agent_files(&self.project, &self.actor())?;
             self.invalidate_state();
             return Ok(Reply::json(
                 200,
@@ -1496,7 +1537,7 @@ impl WebHost {
                     criteria: input.criteria,
                     out_of_scope: input.out_of_scope,
                 },
-                &crate::specs::actor(&self.project, "Verb web"),
+                &self.actor(),
             )?;
             self.invalidate_state();
             return Ok(Reply::json(201, json!(spec)));
@@ -1525,7 +1566,7 @@ impl WebHost {
                 &self.project,
                 &input.message,
                 input.spec_id.as_deref(),
-                &crate::specs::actor(&self.project, "Verb web"),
+                &self.actor(),
             )?;
             self.invalidate_state();
             return Ok(Reply::json(
@@ -1566,7 +1607,7 @@ impl WebHost {
                     id,
                     &input.stage,
                     &input.note,
-                    &crate::specs::actor(&self.project, "Verb web"),
+                    &self.actor(),
                 )?;
                 self.invalidate_state();
                 Ok(Reply::json(
@@ -1585,17 +1626,13 @@ impl WebHost {
                     index,
                     input.done,
                     &input.evidence,
-                    &crate::specs::actor(&self.project, "Verb web"),
+                    &self.actor(),
                 )?;
                 self.invalidate_state();
                 Ok(Reply::json(200, json!(spec)))
             }
             ["api", "specs", id, "branch"] if method == &Method::Post => {
-                let branch = crate::specs::switch_to_branch(
-                    &self.project,
-                    id,
-                    &crate::specs::actor(&self.project, "Verb web"),
-                )?;
+                let branch = crate::specs::switch_to_branch(&self.project, id, &self.actor())?;
                 self.invalidate_state();
                 Ok(Reply::json(
                     200,
@@ -1615,7 +1652,7 @@ impl WebHost {
                 self.talks.create(talk.clone(), Some(spec.id.clone()));
                 crate::specs::record(
                     &path,
-                    &crate::specs::actor(&self.project, "Verb web"),
+                    &self.actor(),
                     &format!("started a talk with agy on this spec ({talk})"),
                 )?;
                 let opening = format!(
@@ -1687,7 +1724,7 @@ impl WebHost {
                     id,
                     &input.to,
                     &input.note,
-                    &crate::specs::actor(&self.project, "Verb web"),
+                    &self.actor(),
                 )?;
                 let session = self.start_on_spec(id, &input.to)?;
                 self.invalidate_state();
@@ -1970,7 +2007,7 @@ impl WebHost {
         })?;
         crate::specs::record(
             &path,
-            &crate::specs::actor(&self.project, "Verb web"),
+            &self.actor(),
             &format!(
                 "started {agent} on this spec (session {}){}",
                 &session[..session.len().min(8)],

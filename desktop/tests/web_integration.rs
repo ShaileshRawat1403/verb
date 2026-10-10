@@ -1700,3 +1700,128 @@ fn the_agent_stream_is_off_until_turned_on_and_shells_have_none() {
     );
     server.request("DELETE", &format!("/api/terminals/{id}"), None, true);
 }
+
+/// Access tokens: a read token reads and cannot act, a drive token works under its own name, neither
+/// reaches owner-only settings, and a revoked token stops at once.
+#[test]
+fn access_tokens_are_scoped_named_and_revocable() {
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["config", "user.name", "Owner Person"],
+        vec!["config", "user.email", "owner@example.com"],
+        vec!["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        assert!(Command::new("git")
+            .arg("-C")
+            .arg(&project)
+            .args(&args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let issue = |name: &str, scope: &str| -> String {
+        let out = Command::new(env!("CARGO_BIN_EXE_verb"))
+            .args([
+                "token",
+                "create",
+                "--name",
+                name,
+                "--scope",
+                scope,
+                "--expires",
+                "1h",
+            ])
+            .current_dir(&project)
+            .env("VERB_STATE_DIR", server.root.join("state"))
+            .env("HOME", server.root.join("home"))
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    };
+    let call = |token: &str, method: &str, path: &str, body: Option<Value>| {
+        server.request_with_headers(
+            method,
+            path,
+            body,
+            false,
+            &format!("X-Verb-Token: {token}\r\n"),
+        )
+    };
+
+    let reader = issue("dashboard", "read");
+    assert_eq!(call(&reader, "GET", "/api/specs", None).0, 200);
+    let (status, body) = call(&reader, "GET", "/api/whoami", None);
+    let who: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        (status, who["token"].as_str(), who["scope"].as_str()),
+        (200, Some("dashboard"), Some("read"))
+    );
+    let (status, body) = call(
+        &reader,
+        "POST",
+        "/api/terminals",
+        Some(json!({"agent": "shell"})),
+    );
+    assert_eq!(status, 403, "read cannot open a terminal");
+    assert!(String::from_utf8_lossy(&body).contains("has read scope; this needs drive"));
+
+    let agent = issue("claude", "drive");
+    let (status, body) = call(
+        &agent,
+        "POST",
+        "/api/specs",
+        Some(json!({"title": "Tokens", "problem": "p", "criteria": ["works"]})),
+    );
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    let spec: Value = serde_json::from_slice(&body).unwrap();
+    let actor = spec["audit"][0]["actor"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        actor.starts_with("claude (access token)"),
+        "audit names the token: {actor}"
+    );
+    assert_eq!(
+        call(
+            &agent,
+            "POST",
+            "/api/stream",
+            Some(json!({"enabled": true}))
+        )
+        .0,
+        403,
+        "privacy setting"
+    );
+    assert_eq!(
+        call(&agent, "POST", "/api/tokens", Some(json!({}))).0,
+        403,
+        "no token mints a token"
+    );
+
+    let revoked = Command::new(env!("CARGO_BIN_EXE_verb"))
+        .args(["token", "revoke", "claude"])
+        .current_dir(&project)
+        .env("VERB_STATE_DIR", server.root.join("state"))
+        .env("HOME", server.root.join("home"))
+        .status()
+        .unwrap();
+    assert!(revoked.success());
+    assert_eq!(
+        call(&agent, "GET", "/api/specs", None).0,
+        403,
+        "revoked at once"
+    );
+    assert_eq!(
+        server.request("GET", "/api/whoami", None, true).0,
+        200,
+        "the owner is unaffected"
+    );
+}

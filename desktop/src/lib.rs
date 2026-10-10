@@ -40,6 +40,7 @@ mod specs;
 #[cfg(unix)]
 pub mod stream;
 mod talk;
+mod tokens;
 mod transcript;
 #[cfg(unix)]
 mod tui;
@@ -449,6 +450,7 @@ fn run() -> Result<(), Failure> {
         "ui" => tui::run(&project)?,
         #[cfg(unix)]
         "web" => web::run(&project, &rest)?,
+        "token" => tokens::command(&rest)?,
         "resume" => {
             if rest.len() > 1 {
                 return Err(Failure::new(exit::USAGE, "usage: verb resume [SESSION_ID]"));

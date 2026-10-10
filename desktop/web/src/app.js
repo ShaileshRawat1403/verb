@@ -2281,6 +2281,20 @@ function initResizers() {
   });
 }
 
+/** Driven with an access token (an agent, a script): say so on every page, with its scope and expiry. */
+async function showAccess() {
+  try {
+    const access = await api("GET", "/api/whoami");
+    const banner = $("#access-banner");
+    banner.hidden = !access.token;
+    if (!access.token) return;
+    const until = new Date(access.expires * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+    banner.innerHTML = `${icon("info", { size: 14 })}<span>Signed in with the access token <b>${escapeHtml(access.token)}</b> · ${escapeHtml(access.scope)} scope · until ${escapeHtml(until)}. Actions are recorded under its name.</span>`;
+  } catch {
+    /* older server: no banner */
+  }
+}
+
 async function bootstrap() {
   await refreshWorkspace();
   if (!ui.state) {
@@ -2336,6 +2350,7 @@ async function bootstrap() {
   // These controls are in the page before their handlers exist; they stay disabled until now, so an
   // early click reads as "not yet" instead of silently doing nothing.
   document.querySelectorAll("[data-ready-gate]").forEach((el) => (el.disabled = false));
+  showAccess();
   showView(ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);
