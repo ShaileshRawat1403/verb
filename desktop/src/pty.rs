@@ -176,7 +176,8 @@ fn under_proot() -> bool {
             .is_ok_and(|comm| comm.trim() == "proot")
 }
 
-/// The soft open-file limit to give children, if Verb should lower it. Decided before the fork.
+/// The open-file limit (soft and hard) to give children, if Verb should lower it. Decided before
+/// the fork.
 fn child_nofile() -> Option<u64> {
     let wanted = std::env::var("VERB_CHILD_NOFILE")
         .ok()
@@ -186,7 +187,7 @@ fn child_nofile() -> Option<u64> {
     if unsafe { getrlimit(RLIMIT_NOFILE, &mut limit) } != 0 {
         return None;
     }
-    // Only ever lower the soft limit, never past what the hard limit allows.
+    // Only ever lower, never past what the hard limit allows.
     let target = wanted.min(limit.max).max(64);
     (target < limit.current).then_some(target)
 }
@@ -600,7 +601,10 @@ fn fork_pty(
             if let Some(soft) = child_nofile {
                 let mut limit = RLimit { current: 0, max: 0 };
                 if getrlimit(RLIMIT_NOFILE, &mut limit) == 0 {
+                    // Both limits: Bun (so Claude Code) raises its soft limit to the hard one at
+                    // start, which undid a soft-only change on Node 1.
                     limit.current = soft;
+                    limit.max = soft;
                     setrlimit(RLIMIT_NOFILE, &limit);
                 }
             }

@@ -1887,7 +1887,7 @@ fn hosted_terminals_get_the_configured_open_file_limit() {
     server.json(
         "POST",
         &format!("/api/terminals/{id}/input"),
-        Some(json!({"data": format!("ulimit -n > '{}'\n", out.display())})),
+        Some(json!({"data": format!("echo $(ulimit -Sn) $(ulimit -Hn) > '{}'\n", out.display())})),
     );
     let mut seen = String::new();
     for _ in 0..50 {
@@ -1897,5 +1897,9 @@ fn hosted_terminals_get_the_configured_open_file_limit() {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert_eq!(seen.trim(), "200");
+    assert_eq!(
+        seen.trim(),
+        "200 200",
+        "soft and hard: Bun raises soft to hard"
+    );
 }
