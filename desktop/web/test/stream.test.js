@@ -10,7 +10,7 @@ test("only agents with a readable log get a stream", () => {
   assert.ok(!hasStream("shell"));
   assert.ok(!hasStream("opencode"));
   assert.ok(!hasStream("agy"), "its log is not readable");
-  assert.ok(hasStreamView("agy"), "but it gets the composer");
+  assert.ok(!hasStreamView("agy"), "and no composer-only view that would hide its prompts");
   assert.ok(!hasStreamView("shell"));
 });
 

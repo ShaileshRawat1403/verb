@@ -372,6 +372,11 @@ document.addEventListener("verb:observer", (event) => {
     ...asking,
     ...(enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : []),
   ]);
+  // Seen from anywhere: the Sessions nav and the browser tab's title.
+  const waiting = ui.waitingTerminals.size;
+  $('.nav-item[data-view="sessions"]')?.classList.toggle("needs-you", waiting > 0);
+  const base = document.title.replace(/^\(\d+\) Needs you · /, "");
+  document.title = waiting ? `(${waiting}) Needs you · ${base}` : base;
   renderTerminalTabs();
 });
 
@@ -1240,6 +1245,14 @@ function addTerminal(session) {
     }
   };
 
+  // In a full-screen app that has not asked for the mouse, xterm turns the wheel into arrow keys.
+  // On a scrolling page that silently moved an agent's selection: scrolling past Antigravity's
+  // "trust this folder?" prompt changed its answer to "No, exit" (found in a user test). Here the
+  // wheel scrolls the page instead; apps that ask for the mouse still get it.
+  term.attachCustomWheelEventHandler(
+    () => !(term.buffer.active.type === "alternate" && term.modes.mouseTrackingMode === "none"),
+  );
+
   term.attachCustomKeyEventHandler((event) => {
     const isMac = navigator.platform.includes("Mac");
     const mod = isMac ? event.metaKey : event.ctrlKey;
@@ -1728,7 +1741,13 @@ document.addEventListener("click", async (event) => {
     ui.focusedTerminal = tab.dataset.tabTerminal;
     updateTerminalFocus();
     renderListResults();
-    ui.terminals.get(ui.focusedTerminal)?.term.focus();
+    const chosen = ui.terminals.get(ui.focusedTerminal);
+    chosen?.term.focus();
+    // An agent waiting for an answer: bring its prompt (the bottom of the pane) into view.
+    if (chosen && ui.waitingTerminals.has(ui.focusedTerminal)) {
+      chosen.term.scrollToBottom();
+      chosen.tile.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
     return;
   }
   if (event.target.closest("[data-terminal-split]")) {

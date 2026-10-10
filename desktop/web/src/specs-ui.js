@@ -111,7 +111,7 @@ export function initWorkbench(deps) {
               `<div class="spec-group"><div class="spec-group-label">${STAGE_GUIDE[stage].label}</div>${specs
                 .map(
                   (spec) =>
-                    `<button type="button" class="spec-item${spec.id === state.selectedId ? " current" : ""}" data-spec-id="${escapeHtml(spec.id)}" data-stage="${escapeHtml(spec.stage)}"><i class="spec-dot" aria-hidden="true"></i><span class="spec-name">${escapeHtml(spec.title)}</span><small><span class="spec-id">${escapeHtml(spec.id)}</span> · ${escapeHtml(progressLabel(spec))}</small></button>`,
+                    `<button type="button" class="spec-item${spec.id === state.selectedId ? " current" : ""}${specNeedsYou(spec) ? " needs-you" : ""}" data-spec-id="${escapeHtml(spec.id)}" data-stage="${escapeHtml(spec.stage)}"><i class="spec-dot" aria-hidden="true"></i><span class="spec-name">${escapeHtml(spec.title)}</span><small>${specNeedsYou(spec) ? '<em class="needs-text">An agent needs you</em>' : `<span class="spec-id">${escapeHtml(spec.id)}</span> · ${escapeHtml(progressLabel(spec))}`}</small></button>`,
                 )
                 .join("")}</div>`,
           )
@@ -146,25 +146,43 @@ export function initWorkbench(deps) {
     }).join("");
     const guide = STAGE_GUIDE[spec.stage];
     const nextStage = STAGES[current + 1];
-    $("#stage-guide").innerHTML = `<div><b>${escapeHtml(guide.goal)}.</b> ${escapeHtml(guide.next)}</div>${
-      nextStage
-        ? `<button class="text-button" type="button" data-stage="${nextStage}">Move to ${STAGE_GUIDE[nextStage].label}</button>`
-        : '<span class="done-badge">Shipped</span>'
-    }`;
+    const agentLive = specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent !== "shell");
+    // An agent building a spec that still says Spec or Plan: offer to make the record match the
+    // work (a nudge, never a block; moving still shows its usual warnings).
+    $("#stage-guide").innerHTML =
+      agentLive && current < STAGES.indexOf("build")
+        ? `<div><b>An agent is working on this spec while it is still in ${escapeHtml(guide.label)}.</b> Move it to Build so the record matches the work.</div><button class="text-button" type="button" data-stage="build">Move to Build</button>`
+        : `<div><b>${escapeHtml(guide.goal)}.</b> ${escapeHtml(guide.next)}</div>${
+            nextStage
+              ? `<button class="text-button" type="button" data-stage="${nextStage}">Move to ${STAGE_GUIDE[nextStage].label}</button>`
+              : '<span class="done-badge">Shipped</span>'
+          }`;
+    // One primary at a time: starting an agent until one is working, then committing its work.
+    const start = document.querySelector('[data-action="spec-agent"]');
+    start.classList.toggle("primary-button", !agentLive);
+    start.classList.toggle("secondary-button", agentLive);
+    const commit = $("#top-commit");
+    commit.classList.toggle("primary-button", agentLive);
+    commit.classList.toggle("secondary-button", !agentLive);
   }
 
   /** Who has worked on this spec, from its audit trail, and which of them are running now. */
+  /** Whether a session is an agent waiting for the person's answer (from the observer reply). */
+  const needsYou = (id) => deps.ui.waitingTerminals?.has(id) ?? false;
+  const specNeedsYou = (spec) =>
+    specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && needsYou(x.id));
+
   function renderSessions() {
     const spec = selected();
     const board = $("#spec-sessions");
     const sessions = spec ? specSessions(spec, deps.ui.state?.sessions ?? []) : [];
     board.hidden = !sessions.length;
     board.innerHTML = sessions.length
-      ? `<div class="board-head"><span class="section-kicker">WORKED ON THIS SPEC</span><span class="muted">${sessions.filter((x) => x.live).length} running</span></div>${sessions
+      ? `<div class="board-head"><span class="section-kicker">SESSIONS ON THIS SPEC</span><span class="muted">${sessions.filter((x) => x.live).length} running</span></div>${sessions
           .slice(0, 6)
           .map(
             (x) =>
-              `<div class="board-row${x.live ? " live" : ""}"><span class="state-dot" data-state="${x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>${x.live && state.meters[x.id] ? meterRow(state.meters[x.id]) : ""}`,
+              `<div class="board-row${x.live ? " live" : ""}${needsYou(x.id) ? " needs-you" : ""}"><span class="state-dot" data-state="${needsYou(x.id) ? "warn" : x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${needsYou(x.id) ? "<em>needs you</em>" : x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>${x.live && state.meters[x.id] ? meterRow(state.meters[x.id]) : ""}`,
           )
           .join("")}`
       : "";
@@ -682,6 +700,11 @@ export function initWorkbench(deps) {
     };
     if (handlers[action]) handlers[action]();
   });
+  document.addEventListener("verb:observer", () => {
+    renderList();
+    renderSessions();
+  });
+
   // A diff loads when its row opens; the rail's file names open (and scroll to) their row.
   document.addEventListener(
     "toggle",
@@ -729,6 +752,17 @@ export function initWorkbench(deps) {
     } catch (error) {
       toast(error.message, "error");
     }
+  });
+
+  // The agent picker remembers the last choice in this browser.
+  try {
+    const saved = localStorage.getItem("verb.agent");
+    if (saved && $("#spec-agent").querySelector(`option[value="${CSS.escape(saved)}"]`)) $("#spec-agent").value = saved;
+  } catch {}
+  $("#spec-agent").addEventListener("change", () => {
+    try {
+      localStorage.setItem("verb.agent", $("#spec-agent").value);
+    } catch {}
   });
 
   document.addEventListener("change", (event) => {

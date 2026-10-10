@@ -6,7 +6,9 @@
 
 const STREAM_AGENTS = new Set(["claude", "codex"]);
 // Agents that get the Stream view for its composer, though Verb cannot read their conversation.
-const COMPOSER_ONLY = new Set(["agy"]);
+// None for now: a composer over an unreadable agent hid the terminal where it was asking for
+// approval (found testing Antigravity in the browser), so such agents keep the terminal only.
+const COMPOSER_ONLY = new Set();
 
 /** Whether a session's agent has a stream Verb can read. */
 export function hasStream(agent) {

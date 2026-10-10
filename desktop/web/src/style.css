@@ -6476,3 +6476,36 @@ select:focus-visible,
   font-weight: 500;
   line-height: 1;
 }
+/* "Needs you", wherever the person might be looking. */
+.spec-item.needs-you .spec-dot {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 22%, transparent);
+}
+.needs-text,
+.board-row em {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--warning);
+}
+.board-row .state-dot[data-state="warn"] {
+  background: var(--warning);
+}
+.nav-item.needs-you .nav-count {
+  color: var(--warning);
+  font-weight: 700;
+}
+.nav-item.needs-you .nav-icon {
+  color: var(--warning);
+}
+/* Dialog actions stay in reach on short windows: the footer is pinned while the form scrolls. */
+.modal .modal-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--raised);
+  margin-bottom: -1px;
+  padding-bottom: 4px;
+}
+.topbar .top-commit.secondary-button {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}

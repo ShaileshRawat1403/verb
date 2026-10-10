@@ -622,7 +622,8 @@ pub(crate) fn agent_brief(spec: &Spec) -> String {
         })
         .unwrap_or_default();
     format!(
-        "Work on spec {id}, \"{title}\", described in {file}. Read that file first.{branch}{handoff} \
+        "Work on spec {id}, \"{title}\", described in {file}. Read that file first. Stay inside this \
+         project folder: everything you need is here.{branch}{handoff} \
          Implement it so each acceptance criterion is met, one at a time, and stay within its \
          'Out of scope' section. Commit with messages that start with \"spec:{id}\". \
          Do not edit the spec's Audit trail or Handoff notes sections; Verb maintains them. When a \
