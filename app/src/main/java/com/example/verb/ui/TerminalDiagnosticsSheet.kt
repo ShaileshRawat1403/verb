@@ -179,7 +179,16 @@ fun TerminalDiagnosticsSheet(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Weighted so the label gets what the Reconnect button leaves, and wraps
+                        // inside it. Unweighted, it measured at full width and ran underneath the
+                        // button: on a Vivo I2202 "Connected (Native PTY)" lost its closing
+                        // parenthesis behind the purple fill.
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("diagnostics_state_label"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Box(
                                 modifier = Modifier
                                     .size(10.dp)
@@ -193,6 +202,7 @@ fun TerminalDiagnosticsSheet(
                                 color = MaterialTheme.colorScheme.onSurface
                             )
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
 
                         Button(
                             onClick = { terminalRuntime?.restartSession() },
@@ -360,8 +370,11 @@ fun TerminalDiagnosticsSheet(
                 OutlinedButton(
                     onClick = { TerminalSessionLogger.clear() },
                     shape = RoundedCornerShape(8.dp),
+                    // Neutral. Red in this vocabulary means an observed failure, and clearing a
+                    // log is not one -- it read as an error state on a screen people open when
+                    // something has gone wrong.
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
+                        contentColor = toneColor(clearLogsTone())
                     ),
                     modifier = Modifier.testTag("btn_clear_diagnostics_logs")
                 ) {
@@ -386,7 +399,11 @@ fun TerminalDiagnosticsSheet(
                         copyNoticeVisible = true
                     },
                     shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = VerbStatus.confirmed),
+                    // Green only once the copy has actually happened. It used to be green at rest,
+                    // claiming a success before anything was done.
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = toneContainer(copyReportTone(copied = copyNoticeVisible))
+                    ),
                     modifier = Modifier.testTag("btn_copy_diagnostics_report")
                 ) {
                     Icon(
@@ -395,7 +412,7 @@ fun TerminalDiagnosticsSheet(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text(if (copyNoticeVisible) "Report Copied!" else "Copy Report", fontSize = 12.sp)
+                    Text(if (copyNoticeVisible) "Report copied" else "Copy Report", fontSize = 12.sp)
                 }
             }
         }
@@ -477,4 +494,30 @@ private fun LogEntryRow(entry: TerminalLogEntry) {
             color = MaterialTheme.colorScheme.onSurface
         )
     }
+}
+
+
+/**
+ * What a Diagnostics action's colour is allowed to say. `docs/UX_FOUNDATION.md` gives colour four
+ * meanings and none of them is decoration: green is confirmed, red is an observed failure.
+ */
+internal enum class DiagnosticsTone { NEUTRAL, CONFIRMED }
+
+/** Copy Report is neutral at rest and confirmed only after the copy has happened. */
+internal fun copyReportTone(copied: Boolean): DiagnosticsTone =
+    if (copied) DiagnosticsTone.CONFIRMED else DiagnosticsTone.NEUTRAL
+
+/** Clearing the log is a plain action, not a failure. */
+internal fun clearLogsTone(): DiagnosticsTone = DiagnosticsTone.NEUTRAL
+
+@Composable
+private fun toneColor(tone: DiagnosticsTone): Color = when (tone) {
+    DiagnosticsTone.NEUTRAL -> MaterialTheme.colorScheme.onSurfaceVariant
+    DiagnosticsTone.CONFIRMED -> VerbStatus.confirmed
+}
+
+@Composable
+private fun toneContainer(tone: DiagnosticsTone): Color = when (tone) {
+    DiagnosticsTone.NEUTRAL -> MaterialTheme.colorScheme.primary
+    DiagnosticsTone.CONFIRMED -> VerbStatus.confirmed
 }

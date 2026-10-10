@@ -41,6 +41,9 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
   observers are bound strictly to their originating concrete PTY session. Switching active UI
   selection, running commands in concurrent shell sessions, and Activity/ViewModel recreation produce
   zero false lifecycle transitions or misrouted commands.
+  Android now keeps separate durable records for multiple sessions of the same agent type. If its
+  local evidence cannot uniquely identify a conversation, that record remains interrupted rather
+  than resuming the agent's latest conversation.
 * **One session lifecycle, three recovery-capable agents.** `LIVE -> INTERRUPTED -> RECOVERABLE ->
   ENDED` is implemented for Claude Code, Codex CLI and OpenCode. Each contributes only an adapter
   that reads its own evidence; Hermes and Antigravity currently have verified launch support.
@@ -49,6 +52,11 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
 * **Manual, evidence-only continuity.** A checksummed `.vcont` file moves structural session history
   between Android and desktop. Imported state is dated, read-only evidence - not a live-process or
   cross-device resume claim. Physically accepted in both directions on 26 August.
+* **Live desktop control from Verb Mobile.** A desktop web terminal can show a short-lived pairing
+  QR code; Android verifies a pinned TLS identity, displays the current screen, and can take input
+  control of that exact desktop PTY. `verb mobile share SESSION_ID` enables the same path for a TUI
+  session. The process, files, and CLI credentials stay on the desktop. The same-network protocol
+  and input lease have an automated end-to-end test; physical-phone acceptance is still pending.
 * **Structural memory, not surveillance.** Durable records hold identity, context and state. Never a
   PID, process handle, command text, terminal bytes, prompts, transcripts or credentials.
 * **Ask about your own work, without explaining it.** One assistant, reachable from Ask Verb and
@@ -58,6 +66,12 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
   What it cannot receive: command text, terminal output, file contents, transcripts, credentials,
   absolute paths, or even a branch name. A model provider is optional and replaceable; the context
   is the product.
+
+* **Reasons for care, observed rather than guessed (desktop).** `verb check` reports an unfinished
+  rebase or merge, conflicts, a detached HEAD, a diverged upstream, and a runtime the project
+  declares (`.nvmrc`, `pyproject.toml`, `rust-toolchain.toml`, `go.mod`, …) that is missing or the
+  wrong version here. `verb good mark` records a state you say works; after that, a failed command
+  says how far the tree has moved from it. Each warning names the safe next step; Verb runs none.
 
 Working World archives protect allowlisted agent state and Verb metadata. They do **not** contain
 project source trees; keep projects in Git or another independent backup. If you made an archive
@@ -69,7 +83,7 @@ re-exported.
 
 ```text
 app/       Android application (Kotlin, Compose)
-desktop/   Desktop host, CLI and Ratatui workspace (Rust)
+desktop/   Desktop host, CLI, Ratatui workspace and local web UI (Rust)
 runtime/   Termux-derived userland components for Android
 docs/      Product and implementation documentation
 ```
@@ -91,10 +105,18 @@ cargo build --release --manifest-path desktop/Cargo.toml
 cargo test --manifest-path desktop/Cargo.toml
 cargo install --path desktop              # install from source
 ./desktop/target/release/verb          # the session UI, on a terminal
+./desktop/target/release/verb web      # local browser workbench
+./launch-web.sh                        # build and launch the browser workbench
 ./desktop/target/release/verb help
 ```
 
-The developer preview does not yet publish prebuilt desktop binaries.
+Prebuilt desktop binaries for macOS and Linux are produced by
+[`release-desktop.yml`](.github/workflows/release-desktop.yml) on `desktop-vX.Y.Z` tags, as a draft
+release that is published by hand after acceptance. None has been published yet.
+The web assets are bundled into the Rust binary. To change them, run `npm ci --prefix desktop/web`
+and `npm run build --prefix desktop/web` before building Rust. See
+[`desktop/README.md`](desktop/README.md) for the browser host's local access and PTY ownership
+boundary.
 
 ## Documentation
 

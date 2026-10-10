@@ -141,7 +141,20 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all {
+        // Robolectric installs Conscrypt as the TLS provider wherever its native library loads:
+        // on CI's linux-x86_64, but not on Apple silicon, which has no build of it. Conscrypt's
+        // server socket reflects into java.net.InetAddress, which JDK 17 refuses unless the
+        // package is opened -- so DesktopBridgeClientTest's in-process TLS desktop failed its
+        // handshake on every CI run and passed on every Mac. Android itself has no module system;
+        // this only lets the test JVM do what the device already allows.
+        it.jvmArgs("--add-opens", "java.base/java.net=ALL-UNNAMED")
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
@@ -192,6 +205,7 @@ dependencies {
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.okhttp.mockwebserver)
+  testImplementation(libs.okhttp.tls)
   testImplementation(libs.robolectric)
   testImplementation(libs.roborazzi)
   testImplementation(libs.roborazzi.compose)

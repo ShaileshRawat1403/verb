@@ -28,7 +28,7 @@ permissions:
 
 jobs:
   verify:
-    uses: ./.github/workflows/ci.yml
+    uses: ./.github/workflows/android-ci.yml
 
   release:
     needs: verify
@@ -52,9 +52,13 @@ jobs:
       # explicitly, so a release never inherits whatever version happened to be committed.
       - name: Resolve the release version
         id: version
+        env:
+          # Read through the environment, never pasted into the script: a tag name can contain
+          # `$(...)`, and this job holds the signing key.
+          REQUESTED_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="$REQUESTED_TAG"
           TAG_VERSION="${TAG#v}"
           FILE_NAME="$(sed -n 's/^versionName=//p' version.properties | tr -d '[:space:]')"
           FILE_CODE="$(sed -n 's/^versionCode=//p' version.properties | tr -d '[:space:]')"

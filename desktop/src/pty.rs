@@ -14,35 +14,103 @@ use std::thread;
 use std::time::Duration;
 
 const STDIN_FILENO: c_int = 0;
-const POLLIN: CShort = 0x001;
-const POLLERR: CShort = 0x008;
-const POLLHUP: CShort = 0x010;
-const EIO: i32 = 5;
-const EINTR: i32 = 4;
+pub(crate) const POLLIN: CShort = 0x001;
+pub(crate) const POLLOUT: CShort = 0x004;
+pub(crate) const POLLERR: CShort = 0x008;
+pub(crate) const POLLHUP: CShort = 0x010;
+const EPERM: i32 = 1;
 const ESRCH: i32 = 3;
+const EINTR: i32 = 4;
+const EIO: i32 = 5;
+const ECHILD: i32 = 10;
+// Same values on Linux and macOS.
+const F_GETFD: c_int = 1;
+const F_SETFD: c_int = 2;
+const F_GETFL: c_int = 3;
+const F_SETFL: c_int = 4;
+const FD_CLOEXEC: c_int = 1;
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly"
+))]
+const O_NONBLOCK: c_int = 4;
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: c_int = 0o4000;
 const WNOHANG: c_int = 1;
 const SIGHUP: c_int = 1;
 const SIGTERM: c_int = 15;
 const SIGKILL: c_int = 9;
 
-type CShort = i16;
+pub(crate) type CShort = i16;
 type PidT = c_int;
 
 #[repr(C)]
-struct PollFd {
-    fd: c_int,
-    events: CShort,
-    revents: CShort,
+pub(crate) struct PollFd {
+    pub fd: c_int,
+    pub events: CShort,
+    pub revents: CShort,
 }
 
-#[link(name = "util")]
+// The PTY is opened by hand rather than with `forkpty`: `forkpty` opens the child's end inside
+// Verb's process without close-on-exec, so a program started on another thread in that instant
+// (git, another terminal) inherited it. The terminal then never saw its last reader go and never
+// reported its end (a CI test hung for 40 minutes on exactly this). Here both ends are opened with
+// O_CLOEXEC, so nothing but the child ever holds them.
 unsafe extern "C" {
-    fn forkpty(
-        amaster: *mut c_int,
-        name: *mut c_char,
-        termp: *const c_void,
-        winp: *const c_void,
-    ) -> PidT;
+    fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+    fn grantpt(fd: c_int) -> c_int;
+    fn unlockpt(fd: c_int) -> c_int;
+    fn ptsname_r(fd: c_int, buffer: *mut c_char, length: usize) -> c_int;
+    fn fork() -> PidT;
+    fn setsid() -> PidT;
+    fn dup2(from: c_int, to: c_int) -> c_int;
+}
+const O_RDWR: c_int = 2;
+#[cfg(target_os = "macos")]
+const O_NOCTTY: c_int = 0x20000;
+#[cfg(not(target_os = "macos"))]
+const O_NOCTTY: c_int = 0o400;
+#[cfg(target_os = "macos")]
+const O_CLOEXEC: c_int = 0x0100_0000;
+#[cfg(not(target_os = "macos"))]
+const O_CLOEXEC: c_int = 0o2_000_000;
+#[cfg(target_os = "macos")]
+const TIOCSCTTY: u64 = 0x2000_7461;
+#[cfg(not(target_os = "macos"))]
+const TIOCSCTTY: u64 = 0x540E;
+
+/// Opens a PTY pair, both ends close-on-exec, the child's end sized to `window`.
+fn open_pty(window: Option<&WinSize>) -> Result<(c_int, c_int), String> {
+    let fail = |what: &str| format!("could not {what}: {}", io::Error::last_os_error());
+    unsafe {
+        let master = open(c"/dev/ptmx".as_ptr(), O_RDWR | O_NOCTTY | O_CLOEXEC);
+        if master < 0 {
+            return Err(fail("open a terminal"));
+        }
+        let mut name = [0 as c_char; 128];
+        if grantpt(master) != 0
+            || unlockpt(master) != 0
+            || ptsname_r(master, name.as_mut_ptr(), name.len()) != 0
+        {
+            let error = fail("prepare the terminal");
+            close(master);
+            return Err(error);
+        }
+        let slave = open(name.as_ptr(), O_RDWR | O_NOCTTY | O_CLOEXEC);
+        if slave < 0 {
+            let error = fail("open the terminal's other end");
+            close(master);
+            return Err(error);
+        }
+        if let Some(size) = window {
+            ioctl(slave, TIOCSWINSZ, size);
+        }
+        Ok((master, slave))
+    }
 }
 
 #[repr(C)]
@@ -76,16 +144,136 @@ const TIOCSWINSZ: u64 = 0x5414;
 #[cfg(target_os = "linux")]
 const TIOCGWINSZ: u64 = 0x5413;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RLimit {
+    current: u64,
+    max: u64,
+}
+#[cfg(target_os = "macos")]
+const RLIMIT_NOFILE: c_int = 8;
+#[cfg(not(target_os = "macos"))]
+const RLIMIT_NOFILE: c_int = 7;
+
+/// The open-file limit hosted children get under proot (Android's Termux, Node 1).
+///
+/// proot intercepts every system call. Programs that close every descriptor up to the limit before
+/// starting a subprocess (Bun, so Claude Code) then take minutes per spawn at Termux's 32768: Claude
+/// hung before drawing anything and looked broken. Measured on Node 1: `claude -p` answers in ~5 s
+/// at 1024, ~9 s at 4096, ~12 s at 8192, and not within minutes at 32768. 4096 leaves room for
+/// builds and file watchers. `VERB_CHILD_NOFILE` overrides it; elsewhere nothing changes.
+const PROOT_CHILD_NOFILE: u64 = 4096;
+
+fn under_proot() -> bool {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    let tracer = status
+        .lines()
+        .find_map(|l| l.strip_prefix("TracerPid:"))
+        .map(str::trim)
+        .unwrap_or("0");
+    tracer != "0"
+        && std::fs::read_to_string(format!("/proc/{tracer}/comm"))
+            .is_ok_and(|comm| comm.trim() == "proot")
+}
+
+/// The open-file limit (soft and hard) to give children, if Verb should lower it. Decided before
+/// the fork.
+fn child_nofile() -> Option<u64> {
+    let wanted = std::env::var("VERB_CHILD_NOFILE")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .or_else(|| under_proot().then_some(PROOT_CHILD_NOFILE))?;
+    let mut limit = RLimit { current: 0, max: 0 };
+    if unsafe { getrlimit(RLIMIT_NOFILE, &mut limit) } != 0 {
+        return None;
+    }
+    // Only ever lower, never past what the hard limit allows.
+    let target = wanted.min(limit.max).max(64);
+    (target < limit.current).then_some(target)
+}
+
 unsafe extern "C" {
     fn ioctl(fd: c_int, request: u64, ...) -> c_int;
     fn chdir(path: *const c_char) -> c_int;
     fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int;
+    fn unsetenv(name: *const c_char) -> c_int;
+    fn getrlimit(resource: c_int, rlim: *mut RLimit) -> c_int;
+    fn setrlimit(resource: c_int, rlim: *const RLimit) -> c_int;
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
     fn _exit(status: c_int) -> !;
     fn waitpid(pid: PidT, status: *mut c_int, options: c_int) -> PidT;
     fn kill(pid: PidT, signal: c_int) -> c_int;
+    fn getsid(pid: PidT) -> PidT;
     fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int;
     fn read(fd: c_int, buffer: *mut c_void, count: usize) -> isize;
+    fn dup(fd: c_int) -> c_int;
+    fn fcntl(fd: c_int, command: c_int, ...) -> c_int;
+    fn pipe(pipefd: *mut c_int) -> c_int;
+    fn write(fd: c_int, buffer: *const c_void, count: usize) -> isize;
+    fn close(fd: c_int) -> c_int;
+}
+
+pub(crate) fn poll_fds(fds: &mut [PollFd], timeout_ms: c_int) -> io::Result<c_int> {
+    let res = unsafe { poll(fds.as_mut_ptr(), fds.len(), timeout_ms) };
+    if res < 0 {
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(EINTR) {
+            Ok(0)
+        } else {
+            Err(err)
+        }
+    } else {
+        Ok(res)
+    }
+}
+
+pub(crate) fn make_pipe() -> io::Result<(c_int, c_int)> {
+    let mut fds = [0 as c_int; 2];
+    let res = unsafe { pipe(fds.as_mut_ptr()) };
+    if res != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    set_nonblocking(fds[0])?;
+    set_nonblocking(fds[1])?;
+    set_cloexec(fds[0])?;
+    set_cloexec(fds[1])?;
+    Ok((fds[0], fds[1]))
+}
+
+pub(crate) fn set_nonblocking(fd: c_int) -> io::Result<()> {
+    let flags = unsafe { fcntl(fd, F_GETFL) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { fcntl(fd, F_SETFL, flags | O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn set_cloexec(fd: c_int) -> io::Result<()> {
+    let flags = unsafe { fcntl(fd, F_GETFD) };
+    if flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { fcntl(fd, F_SETFD, flags | FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+pub(crate) fn close_fd(fd: c_int) {
+    unsafe {
+        close(fd);
+    }
+}
+
+pub(crate) fn write_fd(fd: c_int, bytes: &[u8]) -> isize {
+    unsafe { write(fd, bytes.as_ptr() as *const c_void, bytes.len()) }
+}
+
+pub(crate) fn read_fd(fd: c_int, buf: &mut [u8]) -> isize {
+    unsafe { read(fd, buf.as_mut_ptr() as *mut c_void, buf.len()) }
 }
 
 /// A process running on its own PTY, with the master side handed back to the caller.
@@ -105,8 +293,17 @@ pub(super) fn spawn(
     args: &[String],
     env: &[(String, String)],
     size: Option<(u16, u16)>,
+    session_lock_fd: Option<c_int>,
 ) -> Result<PtyProcess, String> {
-    let (master, pid) = fork_pty(project, session_id, command, args, env, size)?;
+    let (master, pid) = fork_pty(
+        project,
+        session_id,
+        command,
+        args,
+        env,
+        size,
+        session_lock_fd,
+    )?;
     Ok(PtyProcess { master, pid })
 }
 
@@ -156,6 +353,48 @@ pub(super) fn reap(pid: PidT) -> Result<Option<i32>, String> {
 /// child a session leader, so its pid is also the process-group id. The bounded escalation keeps a
 /// cooperative shell graceful while ensuring an agent that ignores hangup cannot outlive its host.
 pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
+    let code = terminate_leader(pid)?;
+    // The leader being gone is not the group being gone: a child that ignored SIGHUP kept running
+    // (and kept the PTY open) after `terminate` returned. Keep signalling the group until the kernel
+    // says it is empty. A process-group id cannot be reused while any member is alive.
+    drain_group(pid);
+    // Process groups are not enough: a job-control shell (dash, bash with `set -m`) puts each
+    // background job in its own group, and some shells neither kill nor hang up those jobs when the
+    // terminal closes. Every one of them still carries the shell's session id, because forkpty made
+    // the shell a session leader. End the whole session.
+    drain_session(pid);
+    Ok(code)
+}
+
+/// Kills every remaining process in the session `leader` started. A session id cannot be reused
+/// while any member is alive, so matching on it never reaches an unrelated process.
+fn drain_session(leader: PidT) {
+    for signal in [SIGHUP, SIGTERM, SIGKILL] {
+        let members = session_members(leader);
+        if members.is_empty() {
+            return;
+        }
+        for member in members {
+            unsafe {
+                kill(member, signal);
+            }
+        }
+        thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn session_members(leader: PidT) -> Vec<PidT> {
+    let Ok(out) = Command::new("ps").args(["-A", "-o", "pid="]).output() else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .filter_map(|p| p.parse::<PidT>().ok())
+        .filter(|&p| p != leader && p > 1 && unsafe { getsid(p) } == leader)
+        .collect()
+}
+
+fn terminate_leader(pid: PidT) -> Result<i32, String> {
     if let Some(code) = wait_nonblocking(pid)? {
         return Ok(code);
     }
@@ -175,14 +414,26 @@ pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
     wait_blocking(pid)
 }
 
-fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
+fn drain_group(pid: PidT) {
+    for signal in [SIGTERM, SIGKILL] {
+        for _ in 0..20 {
+            if unsafe { kill(-pid, signal) } != 0 {
+                // ESRCH: no member left. Anything else (EPERM) is not ours to keep trying.
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+pub(crate) fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
     let result = unsafe { kill(-pid, signal) };
     if result == 0 {
         return Ok(());
     }
 
     let group_error = io::Error::last_os_error();
-    if group_error.raw_os_error() != Some(ESRCH) {
+    if group_error.raw_os_error() != Some(ESRCH) && group_error.raw_os_error() != Some(EPERM) {
         return Err(format!("could not signal PTY process group: {group_error}"));
     }
 
@@ -209,13 +460,15 @@ pub(super) fn run(
     args: &[String],
     env: &[(String, String)],
     is_new_session: bool,
+    session_lock: &File,
 ) -> Result<i32, String> {
     // Capture the observation boundary before the process can create its record. Creating the
     // watch after `forkpty` races a fast agent: its new record then appears older than the watch and
     // Verb permanently misses both its structural events and its positive resume identity.
-    let mut watch = crate::observe::AgentWatch::for_agent(
+    let mut watch = crate::observe::AgentWatch::for_session(
         session.agent.as_ref().map(|agent| agent.label()),
         project,
+        session.resume_identity.as_deref(),
     );
     let (mut master, pid) = fork_pty(
         project,
@@ -224,7 +477,9 @@ pub(super) fn run(
         args,
         env,
         terminal_window_size(),
+        Some(session_lock.as_raw_fd()),
     )?;
+    let mut reaper = ReapOnDrop(Some(pid));
 
     let mut logger = EventLogger::new(session)?;
     if is_new_session {
@@ -233,13 +488,28 @@ pub(super) fn run(
         logger.agent_started(agent.label())?;
     }
     logger.process_started()?;
+    session.state = super::SessionState::Live;
+    session.last_seen_at = super::now_millis();
     super::save_session(session)?;
 
     let _terminal_mode = TerminalMode::new()?;
     // The CLI proxy observes an agent exactly as the workspace does: same reader, same events, same
     // wording. Only the surface differs -- there is no band here to raise, so a failure is recorded
     // and left for `verb context` to report.
-    proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)
+    let result = proxy_terminal(&mut master, pid, session, &mut logger, &mut watch)?;
+    reaper.0 = None;
+    Ok(result)
+}
+
+/// A PTY spawned during CLI setup must not survive an error before the proxy takes over.
+struct ReapOnDrop(Option<PidT>);
+
+impl Drop for ReapOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0.take() {
+            let _ = terminate(pid);
+        }
+    }
 }
 
 fn fork_pty(
@@ -249,6 +519,7 @@ fn fork_pty(
     args: &[String],
     env: &[(String, String)],
     size: Option<(u16, u16)>,
+    session_lock_fd: Option<c_int>,
 ) -> Result<(File, PidT), String> {
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
@@ -279,6 +550,9 @@ fn fork_pty(
             Ok((name, value))
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let child_env = child_environment(session_id, project, child_env)?;
+    let child_unset = launcher_only_variables(std::env::vars_os().map(|(name, _)| name));
+    let child_nofile = child_nofile();
 
     let window = size.map(|(rows, cols)| WinSize {
         rows,
@@ -286,28 +560,65 @@ fn fork_pty(
         x_pixels: 0,
         y_pixels: 0,
     });
-    let window_pointer = window
-        .as_ref()
-        .map(|size| std::ptr::from_ref(size).cast::<c_void>())
-        .unwrap_or(ptr::null());
-
-    let mut master_fd = -1;
-    let pid = unsafe { forkpty(&mut master_fd, ptr::null_mut(), ptr::null(), window_pointer) };
+    let (master_fd, slave_fd) = open_pty(window.as_ref())?;
+    let pid = unsafe { fork() };
     if pid < 0 {
-        return Err(io::Error::last_os_error().to_string());
+        let error = io::Error::last_os_error().to_string();
+        unsafe {
+            close(master_fd);
+            close(slave_fd);
+        }
+        return Err(error);
     }
 
     if pid == 0 {
         unsafe {
+            // What `login_tty` does: a new session, the PTY as its controlling terminal, and the
+            // PTY as stdin, stdout and stderr (dup2 clears close-on-exec on those three).
+            if setsid() < 0 || ioctl(slave_fd, TIOCSCTTY, 0) < 0 {
+                _exit(126);
+            }
+            for fd in 0..3 {
+                if dup2(slave_fd, fd) < 0 {
+                    _exit(126);
+                }
+            }
+            if slave_fd > 2 {
+                close(slave_fd);
+            }
+            // File::lock uses flock on Unix. A dup has CLOEXEC cleared, so the agent inherits
+            // the same open-file-description lock if Verb itself dies before the agent exits.
+            // The host still owns and closes its original handle on the normal path.
+            if session_lock_fd.is_some_and(|fd| dup(fd) < 0) {
+                _exit(126);
+            }
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
             }
-            set_child_environment(session_id, project, &child_env);
+            for name in &child_unset {
+                unsetenv(name.as_ptr());
+            }
+            if let Some(soft) = child_nofile {
+                let mut limit = RLimit { current: 0, max: 0 };
+                if getrlimit(RLIMIT_NOFILE, &mut limit) == 0 {
+                    // Both limits: Bun (so Claude Code) raises its soft limit to the hard one at
+                    // start, which undid a soft-only change on Node 1.
+                    limit.current = soft;
+                    limit.max = soft;
+                    setrlimit(RLIMIT_NOFILE, &limit);
+                }
+            }
+            set_child_environment(&child_env);
             execvp(command_value.as_ptr(), argument_pointers.as_ptr());
             _exit(127);
         }
     }
 
+    // The child holds its end now; Verb keeps only the master, which is close-on-exec from birth,
+    // so no later program can write into this session (one agent answering another's prompt).
+    unsafe {
+        close(slave_fd);
+    }
     Ok((unsafe { File::from_raw_fd(master_fd) }, pid))
 }
 
@@ -425,18 +736,72 @@ impl ShellIntegration {
     }
 }
 
-unsafe fn set_child_environment(session_id: &str, project: &Path, extra: &[(CString, CString)]) {
-    let Ok(session_id) = CString::new(session_id) else {
-        _exit(126);
-    };
-    let Ok(project) = CString::new(project.to_string_lossy().as_bytes()) else {
-        _exit(126);
-    };
-    let verb_session_id = CString::new("VERB_SESSION_ID").expect("literal has no NUL");
-    let verb_project_root = CString::new("VERB_PROJECT_ROOT").expect("literal has no NUL");
-    setenv(verb_session_id.as_ptr(), session_id.as_ptr(), 1);
-    setenv(verb_project_root.as_ptr(), project.as_ptr(), 1);
-    for (name, value) in extra {
+/// Whether a variable belongs only to whatever launched Verb, so hosted terminals must not see it:
+/// Verb's own access token (`VERB_TOKEN` is a startup option; a program in a terminal that read it
+/// could drive Verb's API), and the session markers of an agent that launched Verb.
+///
+/// Started from a terminal inside Claude Code, Verb used to pass that session's markers to every
+/// terminal: a Claude started in Verb then believed it was a child session (transcript saving off,
+/// which also blinds Verb's agent stream), ran in the parent's permission mode, and received the
+/// parent's messaging token. Every agent Verb starts is its own top-level session. User settings
+/// (`ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, …) are kept.
+pub(crate) fn is_launcher_only_variable(name: &str) -> bool {
+    const EXACT: [&str; 5] = [
+        "VERB_TOKEN",
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+    ];
+    const CLAUDE_SESSION: [&str; 9] = [
+        "SESSION_ID",
+        "BRIDGE_SESSION_ID",
+        "CHILD_SESSION",
+        "SESSION_ATTENDED",
+        "ENTRYPOINT",
+        "EXECPATH",
+        "MESSAGING_SOCKET",
+        "MESSAGING_TOKEN",
+        "SSE_PORT",
+    ];
+    EXACT.contains(&name)
+        || name
+            .strip_prefix("CLAUDE_CODE_")
+            .is_some_and(|rest| CLAUDE_SESSION.contains(&rest))
+}
+
+fn launcher_only_variables(names: impl Iterator<Item = std::ffi::OsString>) -> Vec<CString> {
+    names
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| is_launcher_only_variable(name))
+        .filter_map(|name| CString::new(name).ok())
+        .collect()
+}
+
+/// The variables every hosted child gets, converted before the fork: the child of a fork in a
+/// multi-threaded process must not allocate, and `CString::new` does.
+fn child_environment(
+    session_id: &str,
+    project: &Path,
+    extra: Vec<(CString, CString)>,
+) -> Result<Vec<(CString, CString)>, String> {
+    let session_id =
+        CString::new(session_id).map_err(|_| "session id contains a NUL byte".to_owned())?;
+    let project = CString::new(project.to_string_lossy().as_bytes())
+        .map_err(|_| "project path contains a NUL byte".to_owned())?;
+    let mut all = vec![
+        (c"VERB_SESSION_ID".to_owned(), session_id),
+        (c"VERB_PROJECT_ROOT".to_owned(), project.clone()),
+        (c"PWD".to_owned(), project),
+        (c"TERM".to_owned(), c"xterm-256color".to_owned()),
+        (c"COLORTERM".to_owned(), c"truecolor".to_owned()),
+    ];
+    all.extend(extra);
+    Ok(all)
+}
+
+unsafe fn set_child_environment(variables: &[(CString, CString)]) {
+    for (name, value) in variables {
         setenv(name.as_ptr(), value.as_ptr(), 1);
     }
 }
@@ -550,7 +915,12 @@ fn wait_nonblocking(pid: PidT) -> Result<Option<i32>, String> {
     } else if result == pid {
         Ok(Some(decode_wait_status(status)))
     } else {
-        Err(format!("waitpid failed: {}", io::Error::last_os_error()))
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ECHILD) {
+            Ok(Some(0))
+        } else {
+            Err(format!("waitpid failed: {err}"))
+        }
     }
 }
 
@@ -560,7 +930,12 @@ fn wait_blocking(pid: PidT) -> Result<i32, String> {
     if result == pid {
         Ok(decode_wait_status(status))
     } else {
-        Err(format!("waitpid failed: {}", io::Error::last_os_error()))
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ECHILD) {
+            Ok(0)
+        } else {
+            Err(format!("waitpid failed: {err}"))
+        }
     }
 }
 
@@ -616,6 +991,40 @@ impl Drop for TerminalMode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn variables_meant_for_verbs_launcher_are_not_inherited() {
+        for name in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "AI_AGENT",
+            "VERB_TOKEN",
+        ] {
+            assert!(
+                super::is_launcher_only_variable(name),
+                "{name} should be dropped"
+            );
+        }
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "GEMINI_API_KEY",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "PATH",
+            "HOME",
+            "VERB_SESSION_ID",
+            "VERB_PROJECT_ROOT",
+        ] {
+            assert!(
+                !super::is_launcher_only_variable(name),
+                "{name} is configuration"
+            );
+        }
+    }
+
     use super::*;
     use crate::{Agent, Session};
     use std::path::PathBuf;
@@ -691,6 +1100,7 @@ mod tests {
             &["-c".to_owned(), "sleep 30".to_owned()],
             &[],
             None,
+            None,
         )
         .unwrap();
         let started = std::time::Instant::now();
@@ -712,8 +1122,18 @@ mod tests {
             &["-c".to_owned(), "stty size".to_owned()],
             &[],
             Some((7, 33)),
+            None,
         )
         .unwrap();
+        // A watchdog: if the PTY never reports its end (an inherited child end once kept it open),
+        // fail in seconds instead of hanging the test run.
+        let pid = process.pid;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            unsafe {
+                kill(pid, SIGKILL);
+            }
+        });
         let mut master = process.master;
         let mut bytes = Vec::new();
         let mut buffer = [0_u8; 128];

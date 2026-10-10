@@ -1,0 +1,1259 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Verb — Project workbench</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/app.css?v=flagship-20261008" />
+    <script src="/app.js?v=flagship-20261008" defer></script>
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <aside class="sidebar" id="workspace-navigation">
+        <div class="workspace-head">
+          <div class="ws-mark" aria-hidden="true">v</div>
+          <div class="project-copy">
+            <span id="sidebar-project">Loading project</span
+            ><small id="sidebar-branch">Reading local state…</small>
+          </div>
+        </div>
+        <nav class="main-nav" aria-label="Workspace">
+          <button
+            class="nav-item active"
+            type="button"
+            data-view="specs"
+            aria-label="Specs"
+            title="Specs"
+            aria-current="page"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M7 3h7l4 4v14H7z" />
+                <path d="M14 3v4h4M10 12l1.5 1.5L14 11M10 17h4" /></svg></span
+            ><span>Specs</span
+            ><span class="nav-count" id="nav-spec-count">0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="project"
+            aria-label="Project"
+            title="Project"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" />
+                <path d="M8 13h8M8 16.5h5" /></svg></span
+            ><span>Project</span
+            ><span class="nav-count nudge-dot" id="nav-nudge-count" hidden>0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="sessions"
+            aria-label="Sessions"
+            title="Sessions"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="m7 9 3 3-3 3m6 0h4" /></svg></span
+            ><span>Sessions</span
+            ><span class="nav-count" id="nav-session-count">0</span>
+          </button>
+          <button
+            class="nav-item"
+            type="button"
+            data-view="host"
+            aria-label="Host"
+            title="Host"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="4" y="3" width="16" height="7" rx="1.5" />
+                <rect x="4" y="14" width="16" height="7" rx="1.5" />
+                <path d="M8 6.5h.01M8 17.5h.01" /></svg></span
+            ><span>Host</span
+            ><span class="nav-count host-dot" id="nav-host-alert" hidden>!</span>
+          </button>
+          <details class="nav-more" id="nav-more">
+            <summary class="nav-item nav-more-toggle" title="Overview, tasks and shared notes"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></span><span>More</span></summary>
+            <div class="nav-more-items">
+            <button
+            class="nav-item"
+            type="button"
+            data-view="overview"
+            aria-label="Overview"
+            title="Overview"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M9 3v18M9 9h12" /></svg></span
+            ><span>Overview</span>
+          </button>
+            <button
+            class="nav-item"
+            type="button"
+            data-view="tasks"
+            aria-label="Tasks"
+            title="Tasks"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="m3 6 1 1 2-2m-3 7 1 1 2-2m-3 7 1 1 2-2M10 6h11M10 12h11M10 18h11"
+                /></svg></span
+            ><span>Tasks</span
+            ><span class="nav-count" id="nav-task-count">0</span>
+          </button>
+            <button
+            class="nav-item"
+            type="button"
+            data-view="memory"
+            aria-label="Shared notes"
+            title="Shared notes"
+          >
+            <span class="nav-icon" aria-hidden="true"
+              ><svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M12 5c-3-2-6-2-9-1v15c3-1 6-1 9 1 3-2 6-2 9-1V4c-3-1-6-1-9 1Zm0 0v15"
+                /></svg></span
+            ><span>Shared notes</span>
+          </button>
+            </div>
+          </details>
+          
+          
+          
+          
+        </nav>
+        <section class="sidebar-specs" aria-label="Specs">
+          <div class="sidebar-specs-head">
+            <span>Specs</span>
+            <button class="icon-button small" type="button" data-action="new-spec" title="New spec (Alt+N)" aria-label="New spec"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <div id="spec-list" class="spec-list"></div>
+        </section>
+        <div class="sidebar-bottom" data-view="host" role="button" tabindex="0" title="Open the Host page">
+          <span class="connection-dot"></span
+          ><span id="deployment-name">Connecting to Verb…</span
+          ><span class="local-pill" id="deployment-mode"></span>
+        </div>
+      </aside>
+
+      <div class="resize-handle resize-sidebar" id="resize-sidebar" aria-label="Resize the navigation"></div>
+      <main class="main-content">
+        <div class="access-banner" id="access-banner" role="status" hidden></div>
+        <header class="topbar">
+          <div class="workspace-location">
+            <button
+              class="panel-toggle"
+              id="toggle-navigation"
+              type="button"
+              aria-controls="workspace-navigation"
+              aria-expanded="true"
+            >
+              Hide navigation
+            </button>
+            <div class="breadcrumb">
+              <span id="breadcrumb-project">Project</span
+              ><span class="breadcrumb-separator">/</span
+              ><strong id="breadcrumb-view">Sessions</strong>
+            </div>
+          </div>
+          <div class="top-actions">
+            <div class="git-indicator">
+              <span class="git-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M18 10c0 4-6 3-10 6"/></svg></span><span id="top-branch">—</span
+              ><span class="git-changes" id="top-changes">0 changed</span>
+            </div>
+            <button
+              class="theme-toggle"
+              disabled
+              data-ready-gate
+              type="button"
+              data-action="theme"
+              id="theme-toggle"
+              title="Theme: follows your system. Click to change."
+              aria-label="Change theme"
+            >
+              <span class="theme-icon" aria-hidden="true"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span><span id="theme-label">System</span>
+            </button>
+            <button
+              class="observer-pill"
+              disabled
+              data-ready-gate
+              type="button"
+              data-action="observer"
+              id="observer-pill"
+              title="Observer: quiet badges about your terminals, only when you turn it on"
+            >
+              <span class="observer-eye" aria-hidden="true"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></span><span id="observer-label">Observer off</span>
+            </button>
+            <button
+              class="ask-button"
+              disabled
+              data-ready-gate
+              type="button"
+              data-action="ask"
+              title="Ask Verb about this project (Alt+A)"
+              aria-label="Ask Verb"
+            >
+              <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4M12 16h.01"/></svg><span class="btn-label">Ask Verb</span>
+            </button>
+            <button
+              class="palette-hint"
+              disabled
+              data-ready-gate
+              type="button"
+              data-action="palette"
+              title="Command palette"
+              aria-label="Search or run"
+            >
+              <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span class="btn-label">Search or run…</span> <kbd>⌘K</kbd>
+            </button>
+            <button
+              class="primary-button top-commit"
+              id="top-commit"
+              type="button"
+              data-action="commit"
+              title="Commit the changes (Alt+C)"
+              hidden
+            >
+              <span class="btn-label">Commit</span>
+            </button>
+            <button
+              class="icon-button"
+              id="refresh-button"
+              type="button"
+              title="Refresh project"
+              aria-label="Refresh project"
+            >
+              <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button
+            ><button
+              class="secondary-button top-terminal"
+              type="button"
+              id="quick-terminal-button"
+              title="Launch plain shell immediately"
+              aria-label="Terminal"
+            >
+              <span class="btn-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></span><span class="btn-label">Terminal</span></button
+            ><button
+              class="primary-button top-new"
+              type="button"
+              data-action="new-session"
+              aria-label="New session"
+              title="New session"
+            >
+              <span class="btn-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></span><span class="btn-label">New session</span>
+            </button>
+          </div>
+        </header>
+
+        <div class="page-content">
+          <section id="view-overview" class="view">
+            <div class="page-heading">
+              <div>
+                <h1>Overview</h1>
+                <p>Running sessions, open tasks and the project's health checks.</p>
+              </div>
+            </div>
+            <div class="panel stat-strip">
+              <button type="button" class="stat" data-view="sessions"><strong id="stat-sessions">0</strong><span>Running sessions</span></button>
+              <button type="button" class="stat" data-view="tasks"><strong id="stat-tasks">0</strong><span>Open tasks</span></button>
+              <button type="button" class="stat" data-view="sessions"><strong id="stat-attention">0</strong><span>Need attention</span></button>
+            </div>
+            <article class="panel checks-panel">
+              <div class="proof-head">
+                <h3>Project checks</h3>
+                <div class="checks-actions">
+                  <button class="text-button" type="button" data-action="refresh-checks">Check again</button>
+                  <button class="text-button" type="button" data-action="mark-good" title="Record this state as one that works, to compare against later">Mark as good</button>
+                </div>
+              </div>
+              <div id="checks-list" class="list-stack" aria-live="polite">
+                <p class="check-empty">Reading the repository and runtimes…</p>
+              </div>
+            </article>
+            <div class="overview-columns">
+              <article class="panel overview-card">
+                <div class="proof-head"><h3>Running sessions</h3><button class="text-button" type="button" data-view="sessions">All sessions →</button></div>
+                <div id="overview-sessions" class="list-stack"></div>
+              </article>
+              <article class="panel overview-card">
+                <div class="proof-head"><h3>Open tasks</h3><button class="text-button" type="button" data-view="tasks">All tasks →</button></div>
+                <div id="overview-tasks" class="list-stack"></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="view-specs" class="view active">
+            <div class="specs-layout">
+              
+
+              <section class="spec-main">
+                <div id="spec-empty" class="spec-empty">
+                  <span class="section-kicker">SPEC-DRIVEN WORKBENCH</span>
+                  <h1>Start with a spec</h1>
+                  <p>
+                    A spec says what to build and how you will know it works.
+                    Every piece of work in Verb follows the same six steps, and
+                    each step is recorded.
+                  </p>
+                  <ol class="flow-explainer" id="flow-explainer"></ol>
+                  <button
+                    class="primary-button"
+                    type="button"
+                    data-action="new-spec"
+                  >
+                    Write your first spec
+                  </button>
+                </div>
+                <div id="spec-detail" class="spec-detail" hidden>
+                  <header class="spec-header">
+                    <span class="section-kicker" id="spec-kicker">SPEC</span>
+                    <h1 id="spec-title"></h1>
+                    <div class="spec-meta">
+                      <span class="chip" id="spec-branch-chip" title="This spec's branch"></span>
+                      <button class="text-button" type="button" data-action="switch-branch">
+                        Switch to this branch
+                      </button>
+                      <button class="text-button" type="button" data-action="copy-spec-path">
+                        Copy file path
+                      </button>
+                    </div>
+                  </header>
+                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
+                  <div class="stage-guide" id="stage-guide"></div>
+                  <div class="spec-actions">
+                    <button
+                      class="secondary-button"
+                      type="button"
+                      data-action="spec-terminal"
+                      title="New terminal (Alt+T)"
+                    >
+                      <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg> Terminal
+                    </button>
+                    <span class="agent-picker">
+                      <select id="spec-agent" aria-label="AI agent">
+                        <option value="claude">Claude Code</option>
+                        <option value="codex">Codex</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="agy">Antigravity</option>
+                        <option value="opencode">OpenCode</option>
+                      </select>
+                      <button class="primary-button" type="button" data-action="spec-agent">
+                        Start agent on this spec
+                      </button>
+                    </span>
+                    <button class="text-button" type="button" id="spec-talk" data-action="spec-talk" hidden title="A read-only conversation with Antigravity about this spec. It can read and plan; anything it would change continues in its terminal.">Plan in Talk</button>
+                    <button class="secondary-button" type="button" data-action="handoff" title="Pass this spec to another agent with a written note">
+                      Hand off…
+                    </button>
+                  </div>
+                  <div id="spec-work" class="spec-work">
+                    <p class="work-hint">Terminals and agents you open for this spec appear here. Agents start by reading the spec.</p>
+                  </div>
+                  <section id="spec-changes" class="spec-changes" aria-labelledby="spec-changes-title" hidden>
+                    <div class="spec-changes-head">
+                      <h3 id="spec-changes-title">Changes</h3>
+                      <span id="spec-changes-total" class="count-chip"></span>
+                    </div>
+                    <div id="spec-changes-list" class="spec-changes-list"></div>
+                  </section>
+                  <div id="spec-sessions" class="spec-sessions" hidden></div>
+                </div>
+              </section>
+
+              <div class="resize-handle resize-proof" id="resize-proof" aria-label="Resize the proof column"></div>
+              <aside class="panel spec-proof" aria-label="Proof">
+                <section>
+                  <div class="proof-head">
+                    <h3>Acceptance criteria</h3>
+                    <span id="criteria-progress" class="count-chip"></span>
+                  </div>
+                  <p class="proof-hint">Tick one when you can show it works. Verb asks how you know.</p>
+                  <ul id="criteria-list" class="criteria-list"></ul>
+                </section>
+                <section>
+                  <div class="proof-head">
+                    <h3>Changed files</h3>
+                    <span id="changes-count" class="count-chip"></span>
+                  </div>
+                  <ul id="changes-list" class="changes-list"></ul>
+                </section>
+                <section>
+                  <div class="proof-head"><h3>Audit trail</h3></div>
+                  <p class="proof-hint">Every change, who made it, and when. Stored in the spec file and in Git.</p>
+                  <ol id="audit-list" class="audit-list"></ol>
+                </section>
+                <section class="git-section">
+                  <div class="git-card">
+                  <div class="git-card-head">
+                    <h3>Git</h3>
+                    <button
+                      class="text-button"
+                      type="button"
+                      data-action="refresh-git"
+                      title="Refresh Git status"
+                      aria-label="Refresh Git status"
+                    >
+                      <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+                    </button>
+                  </div>
+                  <div id="git-branch" class="git-branch">Reading…</div>
+                  <div id="git-status" class="git-status"></div>
+                  <button
+                    class="secondary-button full"
+                    type="button"
+                    data-action="commit"
+                    title="Commit changes (Alt+C)"
+                  >
+                    Commit changes…
+                  </button>
+                  <details class="git-recent">
+                    <summary>Recent commits</summary>
+                    <ol id="git-recent"></ol>
+                  </details>
+                </section>
+              </aside>
+            </div>
+          </section>
+
+          <section id="view-project" class="view">
+            <div class="project-layout">
+              <aside class="panel files-panel" aria-label="Project files">
+                <div class="rail-head">
+                  <h2>Files</h2>
+                  <span class="count-chip" id="file-count"></span>
+                </div>
+                <input
+                  id="file-filter"
+                  class="list-search"
+                  type="search"
+                  placeholder="Find a file…"
+                  autocomplete="off"
+                  aria-label="Find a file"
+                />
+                <div id="file-tree" class="file-tree" role="tree"></div>
+                <p class="files-note">Shows what Git tracks or would track. Ignored files such as <code>.env</code> stay hidden.</p>
+              </aside>
+              <section class="project-main">
+                <div id="file-preview" class="panel file-preview" hidden>
+                  <div class="preview-head">
+                    <code id="preview-path"></code>
+                    <span class="preview-meta" id="preview-meta"></span>
+                    <button class="text-button" type="button" id="preview-mode" data-action="preview-mode" hidden>Raw</button>
+                    <button class="text-button" type="button" data-action="copy-file-path">Copy path</button>
+                    <button class="modal-close" type="button" data-action="close-preview" aria-label="Close preview">×</button>
+                  </div>
+                  <div id="preview-body" class="preview-body"></div>
+                </div>
+                <div id="hub" class="hub">
+                  <div class="page-heading compact-heading">
+                    <div>
+                      <span class="section-kicker">PROJECT CONTEXT</span>
+                      <h1 id="hub-title">Project</h1>
+                      <p>What this project is, what is in it, and the context every agent shares.</p>
+                    </div>
+                  </div>
+                  <div id="hub-nudges" class="hub-nudges"></div>
+                  <div class="hub-grid">
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Project brief</h3><span class="count-chip" id="brief-progress"></span></div>
+                      <p class="proof-hint">A short, living description. Specs link to it and agents read it.</p>
+                      <ul id="brief-sections" class="brief-sections"></ul>
+                      <div class="hub-actions" id="brief-actions"></div>
+                    </article>
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Agent context</h3></div>
+                      <p class="proof-hint">Verb keeps one marked section of these files in step with your brief and specs. Your own text in them is never changed.</p>
+                      <ul id="agent-files" class="agent-files"></ul>
+                      <div class="hub-actions">
+                        <button class="secondary-button" type="button" data-action="sync-agents">Sync agent context</button>
+                      </div>
+                    </article>
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Shared notes</h3></div>
+                      <p class="proof-hint">Short decisions and facts every agent session can read, such as a constraint or a handoff fact.</p>
+                      <div class="hub-actions">
+                        <button class="secondary-button" type="button" data-view="memory">Open shared notes</button>
+                      </div>
+                    </article>
+                    <article class="panel hub-card">
+                      <div class="proof-head"><h3>Project documents</h3></div>
+                      <p class="proof-hint">Markdown files in <code>docs/project/</code>. Add a PRD, decisions or notes when they would help.</p>
+                      <ul id="hub-documents" class="hub-documents"></ul>
+                    </article>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section id="view-host" class="view">
+            <div class="page-heading compact-heading host-heading">
+              <div>
+                <span class="section-kicker">HOST</span>
+                <h1 id="host-title">This machine</h1>
+                <p>Read-only health of the machine Verb runs on. Refreshes every 10 seconds while open.</p>
+              </div>
+              <span class="preview-meta" id="host-updated"></span>
+            </div>
+            <div id="host-notes" class="host-notes"></div>
+            <div class="host-grid">
+              <article class="panel host-card"><h3>Verb</h3><dl id="host-verb" class="host-facts"></dl></article>
+              <article class="panel host-card"><h3>Machine</h3><dl id="host-machine" class="host-facts"></dl></article>
+              <article class="panel host-card"><h3>Memory</h3><div id="host-memory"></div></article>
+              <article class="panel host-card"><h3>Storage</h3><div id="host-storage"></div></article>
+              <article class="panel host-card"><h3>Temperatures</h3><div id="host-temps" class="temp-list"></div></article>
+              <article class="panel host-card"><h3>Battery</h3><div id="host-battery"></div></article>
+              <article class="panel host-card wide"><h3>Services</h3><div id="host-services"></div></article>
+              <article class="panel host-card wide"><h3>Restarts and crashes</h3><ol id="host-events" class="host-events"></ol></article>
+            </div>
+          </section>
+
+          <section id="view-sessions" class="view">
+            <div class="page-heading">
+              <div>
+                <h1>Sessions</h1>
+                <p>Open a terminal or agent and get to work.</p>
+              </div>
+              <div class="heading-buttons">
+                <button
+                  class="secondary-button"
+                  type="button"
+                  id="quick-terminal-sessions"
+                  title="Launch plain shell immediately"
+                >
+                  <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg> Terminal
+                </button>
+                <button
+                  class="primary-button"
+                  type="button"
+                  data-action="new-session"
+                >
+                  <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New session
+                </button>
+              </div>
+            </div>
+            <div class="sessions-layout">
+              <div class="panel sessions-list-panel" id="sessions-panel">
+                <div class="task-search-row">
+                  <input id="session-search" class="list-search" type="search" placeholder="Find a session by agent, state or ID" aria-label="Find a session" autocomplete="off" />
+                  <span class="count-chip" id="session-count">0</span>
+                </div>
+                <div id="session-list" class="session-list"></div>
+              </div>
+              <div class="terminal-area">
+                <div class="terminal-toolbar">
+                  <div>
+                    <h2>Workspace</h2>
+                  </div>
+                  <button
+                    class="panel-toggle"
+                    id="toggle-sessions"
+                    type="button"
+                    aria-controls="sessions-panel"
+                    aria-expanded="true"
+                  >
+                    Hide sessions
+                  </button>
+                </div>
+                <div id="terminal-grid" class="terminal-grid">
+                  <div class="terminal-empty">
+                    <div class="empty-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></div>
+                    <h3>Start working in this project</h3>
+                    <p>
+                      Open a Terminal for commands, or choose an agent to help
+                      with your code. Each session stays available when you
+                      close this tab.
+                    </p>
+                    <div class="empty-actions">
+                      <button
+                        class="secondary-button"
+                        type="button"
+                        id="quick-terminal-empty"
+                      >
+                        Open Terminal
+                      </button>
+                      <button
+                        class="primary-button"
+                        type="button"
+                        data-action="new-session"
+                      >
+                        Choose an agent
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-tasks" class="view">
+            <div class="page-heading">
+              <div>
+                <h1>Tasks</h1>
+                <p>Who owns what, requests for help, and handoffs, kept across agent sessions.</p>
+              </div>
+              <button class="primary-button" type="button" data-action="new-task"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New task</button>
+            </div>
+            <div class="task-layout" id="task-layout">
+              <div class="panel task-list-panel">
+                <div class="task-search-row">
+                  <input id="task-search" class="list-search" type="search" placeholder="Find a task by title, owner or status" aria-label="Find a task" autocomplete="off" />
+                  <span class="count-chip" id="task-count">0</span>
+                </div>
+                <div id="task-list" class="task-list"></div>
+              </div>
+              <div class="panel task-detail-panel" id="task-detail">
+                <div class="empty-detail">
+                  <span class="empty-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
+                  <h3>Select a task</h3>
+                  <p>See its brief, owner, and recorded handoffs here.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section id="view-memory" class="view">
+            <div class="page-heading">
+              <div>
+                <h1>Shared notes</h1>
+                <p>Short decisions and facts every agent session can read: a constraint, a choice made, a handoff fact. Conversations stay in each agent's own history.</p>
+              </div>
+              <button class="primary-button" type="button" data-action="add-note">Add note</button>
+            </div>
+            <article class="panel memory-panel">
+              <div class="proof-head"><h3>Notes</h3><span class="small-status" id="memory-meta">Saved with this project</span></div>
+              <div id="memory-content" class="memory-notes"></div>
+            </article>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="phone-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">LIVE DESKTOP SESSION</span>
+            <h2>Continue on your phone</h2>
+            <p>
+              On the same network, scan the code with your phone or paste the
+              link in Verb Mobile. The agent keeps running here.
+            </p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="phone-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div
+          class="phone-status"
+          id="phone-status"
+          role="status"
+          aria-live="polite"
+        >
+          <span class="phone-status-dot" aria-hidden="true"></span
+          ><span id="phone-status-text">Preparing a secure link…</span>
+        </div>
+        <div class="phone-pairing">
+          <img
+            id="phone-qr"
+            alt="Scan this code in your phone camera to open Verb Mobile"
+          />
+          <div>
+            <label class="field-label"
+              >Desktop address
+              <select id="phone-address"></select
+            ></label>
+            <label class="field-label"
+              >Pairing link
+              <textarea id="phone-link" readonly rows="4"></textarea>
+            </label>
+          </div>
+        </div>
+        <p class="small-status">
+          The link is one-use. Keep it private. Your desktop session stays open
+          if you close this window.
+        </p>
+        <div class="modal-footer phone-actions">
+          <button class="secondary-button" type="button" id="phone-stop">
+            Stop sharing
+          </button>
+          <button class="secondary-button" type="button" id="phone-renew">
+            New pairing link
+          </button>
+          <button class="primary-button" type="button" id="phone-copy">
+            Copy link
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      id="end-session-dialog"
+      class="modal"
+      aria-labelledby="end-session-title"
+    >
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">END SESSION</span>
+            <h2 id="end-session-title">End this session?</h2>
+            <p id="end-session-description">
+              Running commands will stop. The session record will remain in
+              History.
+            </p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="end-session-dialog"
+          >
+            Keep working
+          </button>
+          <button
+            class="primary-button danger-button"
+            type="button"
+            id="end-session-confirm"
+          >
+            End session
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog id="session-dialog" class="modal">
+      <form id="session-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">NEW SESSION</span>
+            <h2>Start a session</h2>
+            <p>Choose how you want to work.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="session-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="launch-context">
+          <span>PROJECT</span
+          ><strong id="launch-project">Current project</strong
+          ><small id="launch-node">Runs on your Verb host</small>
+        </div>
+        <div class="agent-choice" role="radiogroup" aria-label="Session type">
+          <label class="full-span"
+            ><input type="radio" name="agent" value="shell" checked /><span
+              class="agent-icon terminal"
+              >&gt;_</span
+            ><strong>Terminal</strong
+            ><small>Plain shell in this project</small></label
+          ><label
+            ><input type="radio" name="agent" value="claude" /><span
+              class="agent-icon claude"
+              >CC</span
+            ><strong>Claude Code</strong><small>AI coding agent</small></label
+          ><label
+            ><input type="radio" name="agent" value="codex" /><span
+              class="agent-icon codex"
+              >CX</span
+            ><strong>Codex</strong><small>AI coding agent</small></label
+          ><label
+            ><input type="radio" name="agent" value="agy" /><span
+              class="agent-icon agy"
+              >AG</span
+            ><strong>AGY</strong
+            ><small>Google Antigravity coding agent</small></label
+          ><label
+            ><input type="radio" name="agent" value="custom" /><span
+              class="agent-icon custom"
+              >&lt;/&gt;</span
+            ><strong>Other CLI</strong><small>Any executable</small></label
+          >
+        </div>
+        <div id="custom-command-fields" class="custom-fields" hidden>
+          <label class="field-label" for="custom-command">Executable</label
+          ><input
+            id="custom-command"
+            name="command"
+            placeholder="Executable name or path"
+            autocomplete="off"
+          /><label class="field-label" for="custom-args"
+            >Arguments <span>(one per line, optional)</span></label
+          ><textarea
+            id="custom-args"
+            name="args"
+            rows="2"
+            placeholder="tui"
+          ></textarea>
+        </div>
+        <label class="isolation-option"
+          ><input type="checkbox" name="isolated" /><span
+            class="checkbox-visual"
+          ></span
+          ><span
+            ><strong>Use an isolated Git checkout</strong
+            ><small
+              >Creates a worktree from committed HEAD. Your current uncommitted
+              edits are not copied.</small
+            ></span
+          ></label
+        >
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="session-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit">
+            Open Terminal <span>→</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="spec-dialog" class="modal">
+      <form id="spec-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">NEW SPEC</span>
+            <h2 id="spec-dialog-title">What should be built?</h2>
+            <p id="spec-dialog-sub">Plain words are best. You can edit the file later.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="spec-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label" for="spec-title-input">Title</label
+        ><input id="spec-title-input" name="title" maxlength="120" required placeholder="Let people sign in with email" />
+        <label class="field-label" for="spec-problem">Problem <span>(what is wrong or missing today)</span></label
+        ><textarea id="spec-problem" name="problem" rows="3" placeholder="People who forgot their password cannot get back in."></textarea>
+        <label class="field-label" for="spec-users">Who it is for <span>(optional)</span></label
+        ><input id="spec-users" name="users" placeholder="Returning customers on mobile" />
+        <label class="field-label" for="spec-criteria">Acceptance criteria <span>(one per line: results anyone can check)</span></label
+        ><textarea id="spec-criteria" name="criteria" rows="4" placeholder="A sign-in link arrives by email within a minute&#10;An expired link shows a clear message"></textarea>
+        <label class="field-label" for="spec-scope">Out of scope <span>(optional)</span></label
+        ><textarea id="spec-scope" name="outOfScope" rows="2" placeholder="Social login"></textarea>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="spec-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="spec-dialog-submit">Create spec</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="stage-dialog" class="modal">
+      <form id="stage-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">CHANGE STAGE</span>
+            <h2 id="stage-dialog-title">Move stage</h2>
+            <p id="stage-dialog-sub"></p>
+          </div>
+          <button class="modal-close" type="button" data-close="stage-dialog" aria-label="Close">×</button>
+        </div>
+        <div id="stage-warnings" class="warning-box" hidden></div>
+        <label class="field-label" for="stage-note">Note for the audit trail <span>(optional)</span></label
+        ><textarea id="stage-note" rows="3" placeholder="Why now? e.g. all tests pass on CI"></textarea>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="stage-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="stage-dialog-submit">Move</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="evidence-dialog" class="modal">
+      <form id="evidence-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">PROVE A CRITERION</span>
+            <h2 id="evidence-dialog-title">How do you know it works?</h2>
+            <p id="evidence-dialog-sub"></p>
+          </div>
+          <button class="modal-close" type="button" data-close="evidence-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label" for="evidence-text">Evidence <span>(recommended: a test name, a link, or what you checked)</span></label
+        ><textarea id="evidence-text" rows="3" placeholder="login.test.ts passes; checked on a phone"></textarea>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="evidence-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Mark as proven</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="commit-dialog" class="modal">
+      <form id="commit-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">COMMIT</span>
+            <h2 id="commit-dialog-title">Save these changes to history</h2>
+            <p id="commit-dialog-sub">A commit is a named snapshot you can always come back to.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="commit-dialog" aria-label="Close">×</button>
+        </div>
+        <ul id="commit-files" class="changes-list compact"></ul>
+        <p id="commit-branch-note" class="warning-box" hidden></p>
+        <label class="field-label" for="commit-message">What changed and why</label
+        ><textarea id="commit-message" rows="3" required placeholder="spec:012 validate email addresses"></textarea>
+        <label class="check-row"><input type="checkbox" id="commit-record" checked /> <span id="commit-record-label">Record this commit in the spec's audit trail</span></label>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="commit-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="commit-dialog-submit">Commit</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="palette-dialog" class="modal palette">
+      <div class="palette-box">
+        <input id="palette-input" type="search" placeholder="Type a command, a spec or a file…" autocomplete="off" aria-label="Command" />
+        <ul id="palette-list" class="palette-list" role="listbox"></ul>
+        <div class="palette-foot">↑↓ choose · Enter run · Esc close · <kbd>?</kbd> all shortcuts</div>
+      </div>
+    </dialog>
+
+    <dialog id="shortcuts-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div><span class="section-kicker">KEYBOARD</span><h2>Shortcuts</h2></div>
+          <button class="modal-close" type="button" data-close="shortcuts-dialog" aria-label="Close">×</button>
+        </div>
+        <dl class="shortcut-list" id="shortcut-list"></dl>
+      </div>
+    </dialog>
+
+    <dialog id="brief-dialog" class="modal">
+      <form id="brief-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">PROJECT BRIEF</span>
+            <h2>Describe the project in a few lines</h2>
+            <p>Two minutes is enough. Every field is optional, and you can edit the file later.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="brief-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label" for="brief-problem">Problem <span>(what it solves, and why now)</span></label
+        ><textarea id="brief-problem" name="problem" rows="3" placeholder="Small shops lose returning customers because sign-in is painful."></textarea>
+        <label class="field-label" for="brief-users">Who it is for</label
+        ><input id="brief-users" name="users" placeholder="Returning shoppers on mobile; shop owners" />
+        <label class="field-label" for="brief-scope">Scope <span>(in, and deliberately out)</span></label
+        ><textarea id="brief-scope" name="scope" rows="2" placeholder="In: email sign-in, order history. Out: payments."></textarea>
+        <label class="field-label" for="brief-constraints">Constraints</label
+        ><input id="brief-constraints" name="constraints" placeholder="Launch by March; must work offline; GDPR" />
+        <label class="field-label" for="brief-glossary">Glossary <span>(words with a special meaning here)</span></label
+        ><input id="brief-glossary" name="glossary" placeholder="Basket = saved order not yet paid" />
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="brief-dialog">Cancel</button
+          ><button class="primary-button" type="submit">Create brief</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="ask-dialog" class="modal ask-modal">
+      <form id="ask-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker kicker-name">Ask Verb</span>
+            <h2>Ask about this project</h2>
+            <p>Answers come only from evidence here: specs, the brief, Git and running sessions.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="ask-dialog" aria-label="Close">×</button>
+        </div>
+        <div class="ask-input-row">
+          <input id="ask-input" maxlength="500" autocomplete="off" placeholder="What's left on spec 1?" aria-label="Your question" />
+          <button class="primary-button" type="submit">Ask</button>
+        </div>
+        <div id="ask-suggestions" class="ask-suggestions"></div>
+        <div id="ask-thread" class="ask-thread" aria-live="polite"></div>
+        <p class="ask-footnote">Answered from evidence in this project. No AI model was used.</p>
+      </form>
+    </dialog>
+
+    <dialog id="handoff-dialog" class="modal">
+      <form id="handoff-dialog-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">HAND OFF</span>
+            <h2 id="handoff-title">Pass this spec to another agent</h2>
+            <p>Verb writes a handoff note into the spec, records it in the audit trail, and starts the next agent reading that note first.</p>
+          </div>
+          <button class="modal-close" type="button" data-close="handoff-dialog" aria-label="Close">×</button>
+        </div>
+        <div class="handoff-route"><span id="handoff-from">nobody yet</span><span aria-hidden="true">→</span>
+          <select id="handoff-to" aria-label="Hand off to">
+            <option value="codex">Codex</option>
+            <option value="claude">Claude Code</option>
+            <option value="gemini">Gemini</option>
+            <option value="agy">Antigravity</option>
+            <option value="opencode">OpenCode</option>
+            <option value="shell">A terminal (you)</option>
+          </select>
+        </div>
+        <p class="proof-hint">The note includes open acceptance criteria, recent <code>spec:</code> commits, uncommitted files and the branch. Add anything they can't see:</p>
+        <label class="field-label" for="handoff-note">Your note <span>(optional)</span></label
+        ><textarea id="handoff-note" rows="3" maxlength="2000" placeholder="Login works; the email test is flaky on CI. Don't touch the session store."></textarea>
+        <p class="proof-hint">The previous agent keeps running. End it yourself when you're ready.</p>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" data-close="handoff-dialog">Cancel</button
+          ><button class="primary-button" type="submit" id="handoff-submit">Hand off</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="observer-panel" class="observer-panel" aria-label="Observer">
+      <div class="observer-head">
+        <div><span class="section-kicker">OBSERVER</span><h3 id="observer-heading">Quiet help, when you want it</h3></div>
+        <button class="modal-close" type="button" data-action="observer-close" aria-label="Close">×</button>
+      </div>
+      <div id="observer-body"></div>
+    </dialog>
+
+    <dialog id="task-dialog" class="modal">
+      <form id="task-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">NEW TASK</span>
+            <h2>Give the work a name</h2>
+            <p>All agents in this project can see it.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="task-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label class="field-label" for="task-title">Task title</label
+        ><input
+          id="task-title"
+          name="title"
+          maxlength="200"
+          required
+          placeholder="Review the session recovery flow"
+        /><label class="field-label" for="task-brief"
+          >Brief <span>(optional)</span></label
+        ><textarea
+          id="task-brief"
+          name="brief"
+          rows="5"
+          placeholder="What should an agent know before starting?"
+        ></textarea>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="task-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit">Create task</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="note-dialog" class="modal">
+      <form id="note-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">PROJECT MEMORY</span>
+            <h2>Add a shared note</h2>
+            <p>Keep decisions and constraints available across sessions.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="note-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label class="field-label" for="note-text">Note</label
+        ><textarea
+          id="note-text"
+          name="note"
+          rows="7"
+          required
+          placeholder="We chose… because…"
+        ></textarea>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="note-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit">Add to memory</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="action-dialog" class="modal">
+      <form id="action-form" class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">TASK ACTION</span>
+            <h2 id="action-title">Update task</h2>
+            <p id="action-description"></p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="action-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <label class="field-label" for="action-agent">Agent session</label
+        ><select id="action-agent" name="session_id" required></select
+        ><label class="field-label" for="action-note">Note</label
+        ><textarea
+          id="action-note"
+          name="note"
+          rows="4"
+          placeholder="What should the next agent know?"
+        ></textarea>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="action-dialog"
+          >
+            Cancel</button
+          ><button class="primary-button" type="submit" id="action-submit">
+            Save action
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="inbox-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">SESSION</span>
+            <h2 id="inbox-title">Recorded attention</h2>
+            <p id="inbox-subtitle"></p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="inbox-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div id="inbox-content" class="inbox-content"></div>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="inbox-dialog"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="paste-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div>
+            <span class="section-kicker">TERMINAL SAFETY</span>
+            <h2>Confirm Multi-Line Paste</h2>
+            <p>You are about to paste <strong id="paste-lines-count">multiple lines</strong> into the terminal shell prompt. This may execute commands immediately.</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close="paste-dialog"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="field">
+          <label class="field-label" for="paste-preview-text">Preview</label>
+          <pre id="paste-preview-text" class="paste-preview"></pre>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="secondary-button"
+            type="button"
+            data-close="paste-dialog"
+          >
+            Cancel
+          </button>
+          <button class="primary-button" type="button" id="paste-confirm-button">
+            Paste Anyway
+          </button>
+        </div>
+      </div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>

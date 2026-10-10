@@ -62,7 +62,8 @@ object VerbTerminalSessionHolder {
 
     data class ForegroundBinding(
         val agentType: String,
-        val commandIdsBeforeLaunch: Set<String>
+        val commandIdsBeforeLaunch: Set<String>,
+        val productSessionId: String? = null
     )
 
     /** One terminal: its runtime, and whatever agent currently occupies it. */
@@ -170,11 +171,17 @@ object VerbTerminalSessionHolder {
     /**
      * Records that [agentType] now occupies [sessionId], and says whether it landed.
      */
-    fun claimForeground(sessionId: String, agentType: String, commandIdsBeforeLaunch: Set<String>): Boolean =
+    fun claimForeground(
+        sessionId: String,
+        agentType: String,
+        commandIdsBeforeLaunch: Set<String>,
+        productSessionId: String? = null
+    ): Boolean =
         synchronized(this) {
             val session = sessions[sessionId]
             if (session != null) {
-                session.foreground = ForegroundBinding(agentType, commandIdsBeforeLaunch.toSet())
+                if (session.foreground != null) return false
+                session.foreground = ForegroundBinding(agentType, commandIdsBeforeLaunch.toSet(), productSessionId)
                 true
             } else if (sessions.isEmpty()) {
                 true
@@ -194,8 +201,18 @@ object VerbTerminalSessionHolder {
     fun claimForeground(agentType: String, commandIdsBeforeLaunch: Set<String>): Boolean =
         synchronized(this) {
             val session = activeSession() ?: return false
+            if (session.foreground != null) return false
             session.foreground = ForegroundBinding(agentType, commandIdsBeforeLaunch.toSet())
             true
+        }
+
+    /** Exact process-scoped binding used when restoring several sessions of the same agent. */
+    fun foregroundBindingForProductSession(productSessionId: String): Pair<String, ForegroundBinding>? =
+        synchronized(this) {
+            sessions.entries.firstNotNullOfOrNull { (terminalId, session) ->
+                session.foreground?.takeIf { it.productSessionId == productSessionId }
+                    ?.let { terminalId to it }
+            }
         }
 
     /** Records that [agentType] has left [sessionId]. */
