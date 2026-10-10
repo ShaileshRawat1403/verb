@@ -15,6 +15,7 @@ use std::time::Duration;
 
 const STDIN_FILENO: c_int = 0;
 pub(crate) const POLLIN: CShort = 0x001;
+pub(crate) const POLLOUT: CShort = 0x004;
 pub(crate) const POLLERR: CShort = 0x008;
 pub(crate) const POLLHUP: CShort = 0x010;
 const EPERM: i32 = 1;

@@ -21,10 +21,12 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use tungstenite::Message;
 
-use crate::pty::{self, PollFd, POLLERR, POLLHUP, POLLIN};
+use crate::pty::{self, PollFd, POLLERR, POLLHUP, POLLIN, POLLOUT};
 
 pub const HIGH_WATER_MARK: usize = 128 * 1024;
 pub const LOW_WATER_MARK: usize = 32 * 1024;
+/// The most one terminal sends before every other terminal (and the reader) gets a turn.
+const SLICE: usize = 32 * 1024;
 
 /// Safe RAII wrapper around a nonblocking Unix pipe for waking poll loops.
 pub struct WakePipe {
@@ -59,23 +61,104 @@ impl Drop for WakePipe {
     }
 }
 
-/// Outgoing message queue for a single WebSocket connection.
+/// Outgoing queue for one WebSocket connection, scheduled fairly.
+///
+/// Output is kept per terminal and coalesced, then sent round-robin in slices of at most `SLICE`, so
+/// a few bytes of echo in one terminal never wait behind another terminal's backlog. (One FIFO of
+/// frames did exactly that: with a second terminal flooding output, a keystroke's echo took ~90 ms
+/// even on a fast machine with no network.) A terminal's control messages, such as `exit`, wait
+/// until its earlier output has gone, so their order relative to that output is kept.
 pub struct WsQueue {
-    pub messages: Mutex<VecDeque<Message>>,
+    inner: Mutex<QueueInner>,
     pub wake: Arc<WakePipe>,
+}
+
+#[derive(Default)]
+struct QueueInner {
+    control: VecDeque<(Option<String>, Message)>,
+    outputs: HashMap<String, Vec<u8>>,
+    order: VecDeque<String>,
 }
 
 impl WsQueue {
     pub fn new(wake: Arc<WakePipe>) -> Self {
         Self {
-            messages: Mutex::new(VecDeque::new()),
+            inner: Mutex::new(QueueInner::default()),
             wake,
         }
     }
 
-    pub fn push(&self, msg: Message) {
-        self.messages.lock().unwrap().push_back(msg);
+    /// A control message, optionally belonging to one terminal.
+    pub fn push_control(&self, id: Option<&str>, msg: Message) {
+        self.inner
+            .lock()
+            .unwrap()
+            .control
+            .push_back((id.map(str::to_owned), msg));
         self.wake.wake();
+    }
+
+    pub fn push(&self, msg: Message) {
+        self.push_control(None, msg);
+    }
+
+    /// PTY bytes for one terminal, appended to whatever of its output is still waiting.
+    pub fn push_output(&self, id: &str, data: &[u8]) {
+        let mut inner = self.inner.lock().unwrap();
+        let buffer = inner.outputs.entry(id.to_owned()).or_default();
+        let was_empty = buffer.is_empty();
+        buffer.extend_from_slice(data);
+        if was_empty {
+            inner.order.push_back(id.to_owned());
+        }
+        drop(inner);
+        self.wake.wake();
+    }
+
+    /// One fair round: a slice of output from each terminal that has some, then the control
+    /// messages that no longer wait on output.
+    pub fn next_round(&self) -> Vec<Message> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut out = Vec::new();
+        for _ in 0..inner.order.len() {
+            let Some(id) = inner.order.pop_front() else {
+                break;
+            };
+            let Some(buffer) = inner.outputs.get_mut(&id) else {
+                continue;
+            };
+            let take = buffer.len().min(SLICE);
+            let chunk: Vec<u8> = buffer.drain(..take).collect();
+            let more = !buffer.is_empty();
+            let id_bytes = id.as_bytes();
+            let mut frame = Vec::with_capacity(1 + id_bytes.len() + chunk.len());
+            frame.push(id_bytes.len() as u8);
+            frame.extend_from_slice(id_bytes);
+            frame.extend_from_slice(&chunk);
+            out.push(Message::Binary(frame));
+            if more {
+                inner.order.push_back(id);
+            } else {
+                inner.outputs.remove(&id);
+            }
+        }
+        let control = std::mem::take(&mut inner.control);
+        for (id, msg) in control {
+            let waits = id
+                .as_deref()
+                .is_some_and(|id| inner.outputs.contains_key(id));
+            if waits {
+                inner.control.push_back((id, msg));
+            } else {
+                out.push(msg);
+            }
+        }
+        out
+    }
+
+    pub fn has_pending(&self) -> bool {
+        let inner = self.inner.lock().unwrap();
+        !inner.order.is_empty() || !inner.control.is_empty()
     }
 }
 
@@ -130,15 +213,8 @@ impl TerminalStreamSink {
             return;
         }
 
-        let id_bytes = self.id.as_bytes();
-        let mut frame = Vec::with_capacity(1 + id_bytes.len() + data.len());
-        frame.push(id_bytes.len() as u8);
-        frame.extend_from_slice(id_bytes);
-        frame.extend_from_slice(data);
-        let msg = Message::Binary(frame);
-
         for queue in listeners.values() {
-            queue.push(msg.clone());
+            queue.push_output(&self.id, data);
         }
 
         let unacked = self.unacked_bytes.fetch_add(data.len(), Ordering::SeqCst) + data.len();
@@ -153,9 +229,10 @@ impl TerminalStreamSink {
         if listeners.is_empty() {
             return;
         }
+        let id = val.get("id").and_then(|v| v.as_str()).map(str::to_owned);
         let msg = Message::Text(val.to_string());
         for queue in listeners.values() {
-            queue.push(msg.clone());
+            queue.push_control(id.as_deref(), msg.clone());
         }
     }
 
@@ -224,27 +301,50 @@ pub trait StreamTerminalHandler: Send + Sync {
     fn signal_terminal(&self, id: &str, signal: &str);
 }
 
-fn drain_outgoing<T: StreamTerminalHandler>(
-    ws: &mut tungstenite::WebSocket<std::net::TcpStream>,
-    queue: &WsQueue,
-    wake: &WakePipe,
-    attached: &HashSet<String>,
-    handler: &Arc<T>,
-    conn_id: u64,
-) -> bool {
-    wake.drain();
-    loop {
-        let next_msg = {
-            let mut msgs = queue.messages.lock().unwrap();
-            msgs.pop_front()
-        };
-        let Some(msg) = next_msg else { break };
-        if ws.send(msg).is_err() {
-            cleanup_attached(attached, handler, conn_id);
-            return false;
+/// What the writer should do next.
+#[derive(PartialEq, Debug)]
+enum Drain {
+    /// Nothing left to send.
+    Idle,
+    /// More is queued: give the reader a turn, then come straight back.
+    More,
+    /// The socket is full: wait until it is writable. Nothing is lost; tungstenite keeps the frames.
+    Blocked,
+    /// The connection is gone.
+    Closed,
+}
+
+fn would_block(error: &tungstenite::Error) -> bool {
+    matches!(error, tungstenite::Error::Io(e) if e.kind() == io::ErrorKind::WouldBlock)
+}
+
+/// Sends one fair round of queued output. A full socket is never treated as a disconnect: the
+/// previous code did, so a burst of output on a slow link dropped the connection and the browser
+/// had to reconnect and repaint.
+fn drain_outgoing(ws: &mut tungstenite::WebSocket<std::net::TcpStream>, queue: &WsQueue) -> Drain {
+    match ws.flush() {
+        Ok(()) => {}
+        Err(e) if would_block(&e) => return Drain::Blocked,
+        Err(_) => return Drain::Closed,
+    }
+    let round = queue.next_round();
+    if round.is_empty() {
+        return Drain::Idle;
+    }
+    for msg in round {
+        match ws.write(msg) {
+            Ok(()) => {}
+            // The frame is kept in tungstenite's write buffer and goes out with the next flush.
+            Err(e) if would_block(&e) => {}
+            Err(_) => return Drain::Closed,
         }
     }
-    true
+    match ws.flush() {
+        Ok(()) if queue.has_pending() => Drain::More,
+        Ok(()) => Drain::Idle,
+        Err(e) if would_block(&e) => Drain::Blocked,
+        Err(_) => Drain::Closed,
+    }
 }
 
 /// Handles an upgraded WebSocket connection on its own background thread.
@@ -275,12 +375,17 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
     let queue = Arc::new(WsQueue::new(Arc::clone(&wake)));
 
     let mut attached: HashSet<String> = HashSet::new();
+    let mut state = Drain::Idle;
 
     loop {
         let mut poll_fds = [
             PollFd {
                 fd,
-                events: POLLIN,
+                events: if state == Drain::Blocked {
+                    POLLIN | POLLOUT
+                } else {
+                    POLLIN
+                },
                 revents: 0,
             },
             PollFd {
@@ -290,16 +395,22 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
             },
         ];
 
-        let poll_res = pty::poll_fds(&mut poll_fds, 5000);
-        if poll_res.is_err() {
+        let timeout = if state == Drain::More { 0 } else { 5000 };
+        if pty::poll_fds(&mut poll_fds, timeout).is_err() {
             break;
         }
 
-        // 1. Drain outgoing messages and write to WebSocket
-        if poll_fds[1].revents & POLLIN != 0
-            && !drain_outgoing(&mut ws, &queue, &wake, &attached, &handler, conn_id)
-        {
-            return;
+        // 1. One fair round of output, when there is something to send and room to send it.
+        let woken = poll_fds[1].revents & POLLIN != 0;
+        if woken {
+            wake.drain();
+        }
+        let writable = poll_fds[0].revents & POLLOUT != 0;
+        if woken || writable || state == Drain::More {
+            state = drain_outgoing(&mut ws, &queue);
+            if state == Drain::Closed {
+                break;
+            }
         }
 
         // 2. Read incoming messages
@@ -349,10 +460,16 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
                                             "controller": info.controller,
                                             "phoneConnected": info.phone_connected,
                                         });
-                                        if ws.send(Message::Text(ack.to_string())).is_err() {
-                                            disconnected = true;
-                                            break;
+                                        match ws.write(Message::Text(ack.to_string())) {
+                                            Ok(()) => {}
+                                            Err(e) if would_block(&e) => {}
+                                            Err(_) => {
+                                                disconnected = true;
+                                                break;
+                                            }
                                         }
+                                        // Sent with the next round's flush.
+                                        state = Drain::More;
                                     }
                                 }
                                 "detach" => {
@@ -383,9 +500,8 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
                             }
                         }
                     }
-                    Ok(Message::Ping(data)) => {
-                        let _ = ws.send(Message::Pong(data));
-                    }
+                    // tungstenite queues the pong itself; the next flush sends it.
+                    Ok(Message::Ping(_)) => state = Drain::More,
                     Ok(Message::Close(_)) => {
                         disconnected = true;
                         break;
@@ -402,9 +518,6 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
             }
             if disconnected {
                 break;
-            }
-            if !drain_outgoing(&mut ws, &queue, &wake, &attached, &handler, conn_id) {
-                return;
             }
         }
     }

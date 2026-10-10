@@ -6585,3 +6585,27 @@ select:focus-visible,
   background: var(--text-muted);
   animation: tab-pulse 1.2s ease-in-out infinite;
 }
+
+/* Local echo on slow links (src/typeahead.js): typed characters, faint, until the real echo lands. */
+.typeahead {
+  display: flex !important;
+  align-items: center;
+  pointer-events: none;
+  background: var(--term-bg);
+  color: var(--text-dim);
+  white-space: pre;
+}
+.typeahead span {
+  display: inline-block;
+  text-align: center;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+.typeahead-caret {
+  display: inline-block;
+  width: 2px;
+  height: 70%;
+  margin-left: 1px;
+  background: var(--text-muted);
+}

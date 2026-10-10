@@ -16,6 +16,7 @@ import { initObserver } from "./observer-ui.js";
 import { icon } from "./icons.js";
 import { attachCommandBlocks } from "./blocks.js";
 import { attachStream } from "./stream-ui.js";
+import { attachTypeahead } from "./typeahead.js";
 import { makeResizer } from "./resize.js";
 import { createTalk, talkTone } from "./talk-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
@@ -214,6 +215,7 @@ function handleStreamBinary(buffer) {
   markTerminalActivity(id);
 
   terminal.term.write(payload, () => {
+    terminal.typeahead?.written();
     terminal.unackedBytes = Math.max(0, terminal.unackedBytes - payload.length);
     terminal.pendingAck = (terminal.pendingAck || 0) + payload.length;
     if (terminal.pendingAck >= 16384) {
@@ -784,6 +786,7 @@ function removeTerminal(id) {
   terminal.observer.disconnect();
   terminal.blocks?.dispose();
   terminal.stream?.dispose();
+  terminal.typeahead?.dispose();
   terminal.term.dispose();
   terminal.tile.remove();
   ui.terminals.delete(id);
@@ -1112,6 +1115,7 @@ function addTerminal(session) {
     pollTimer: null,
   };
   ui.terminals.set(session.id, terminal);
+  terminal.typeahead = attachTypeahead(term);
   terminal.blocks = attachCommandBlocks(term, {
     copy(text) {
       navigator.clipboard
@@ -1207,11 +1211,13 @@ function addTerminal(session) {
     } else if (mark === "C") {
       terminal.inCommand = true;
     } else if (mark === "D") {
-      terminal.inCommand = false;
+      // Only a finish that follows a start is a command's result. The first prompt reports the
+      // status of the shell's startup files, which painted a fresh terminal's tab red.
       const code = parts[1];
-      if (code !== undefined && code !== "") {
+      if (terminal.inCommand && code !== undefined && code !== "") {
         terminal.lastCommandExitCode = parseInt(code, 10);
       }
+      terminal.inCommand = false;
     }
     if (mark === "C" || mark === "D") renderTerminalTabs();
     // Not consumed: the command blocks (src/blocks.js) read the same marks.
@@ -1315,9 +1321,19 @@ function addTerminal(session) {
   // On a scrolling page that silently moved an agent's selection: scrolling past Antigravity's
   // "trust this folder?" prompt changed its answer to "No, exit" (found in a user test). Here the
   // wheel scrolls the page instead; apps that ask for the mouse still get it.
-  term.attachCustomWheelEventHandler(
-    () => !(term.buffer.active.type === "alternate" && term.modes.mouseTrackingMode === "none"),
-  );
+  //
+  // An app that does take the mouse (opencode, for one) redraws its whole screen per wheel step, and
+  // a trackpad swipe fires dozens of steps; over a slow link those redraws queued up and scrolling
+  // lagged behind the finger. Steps are passed at most every 33 ms, so the app keeps up.
+  let lastWheel = 0;
+  term.attachCustomWheelEventHandler(() => {
+    if (term.buffer.active.type !== "alternate") return true;
+    if (term.modes.mouseTrackingMode === "none") return false;
+    const now = performance.now();
+    if (now - lastWheel < 33) return false;
+    lastWheel = now;
+    return true;
+  });
 
   term.attachCustomKeyEventHandler((event) => {
     const isMac = navigator.platform.includes("Mac");
@@ -1429,6 +1445,7 @@ function addTerminal(session) {
 
   term.onData((data) => {
     if (terminal.closed || terminal.ended) return;
+    terminal.typeahead?.input(data);
     if (!sendStreamInput(session.id, data)) {
       terminal.inputBuffer += data;
       sendInputBatch();
