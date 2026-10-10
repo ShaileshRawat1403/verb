@@ -149,9 +149,11 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await expect(page.locator('#file-tree [data-file=".env"]')).toHaveCount(0);
   await page.locator("#file-filter").fill("");
 
-  // Read-only preview with line numbers.
+  // Markdown reads formatted, with Raw for the exact lines; everything stays read-only.
   await page.locator('#file-tree [data-file="README.md"]').click();
   await expect(page.locator("#preview-path")).toHaveText("README.md");
+  await expect(page.locator(".md-preview h1")).toHaveText("e2e");
+  await page.locator("#preview-mode").click();
   await expect(page.locator(".code-lines li")).toHaveText(["# e2e"]);
 
   // Nudges point at the next useful step; nothing is forced.

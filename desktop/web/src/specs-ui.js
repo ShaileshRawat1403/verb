@@ -6,6 +6,7 @@ import {
   STAGES,
   STAGE_GUIDE,
   changeLabel,
+  suggestCommitMessage,
   commitPrefix,
   filterCommands,
   groupByStage,
@@ -181,14 +182,21 @@ export function initWorkbench(deps) {
     const sessions = spec ? specSessions(spec, deps.ui.state?.sessions ?? []) : [];
     board.hidden = !sessions.length;
     board.innerHTML = sessions.length
-      ? `<div class="board-head"><span class="section-kicker">SESSIONS ON THIS SPEC</span><span class="muted">${sessions.filter((x) => x.live).length} running</span></div>${sessions
-          .slice(0, 6)
-          .map(
-            (x) =>
-              `<div class="board-row${x.live ? " live" : ""}${needsYou(x.id) ? " needs-you" : ""}"><span class="state-dot" data-state="${needsYou(x.id) ? "warn" : x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${needsYou(x.id) ? "<em>needs you</em>" : x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>${x.live && state.meters[x.id] ? meterRow(state.meters[x.id]) : ""}`,
-          )
-          .join("")}`
+      ? `<div class="board-head"><span class="section-kicker">SESSIONS ON THIS SPEC</span><span class="muted">${sessions.filter((x) => x.live).length} running</span></div>${boardRows(sessions)}`
       : "";
+  }
+
+  /** Running sessions and the two latest ended ones; older ones fold into "N earlier sessions". */
+  function boardRows(sessions) {
+    const live = sessions.filter((x) => x.live);
+    const ended = sessions.filter((x) => !x.live);
+    const row = (x) =>
+              `<div class="board-row${x.live ? " live" : ""}${needsYou(x.id) ? " needs-you" : ""}"><span class="state-dot" data-state="${needsYou(x.id) ? "warn" : x.live ? "ok" : "idle"}"></span><b>${escapeHtml(agentDisplayName(x.agent))}</b><code>${escapeHtml(x.short)}</code><span class="muted">${needsYou(x.id) ? "<em>needs you</em>" : x.live ? "running" : "ended"} · started ${escapeHtml(x.at.replace("T", " ").slice(0, 16))} UTC</span>${x.live ? `<button class="text-button" type="button" data-focus-session="${escapeHtml(x.id)}">Show</button>` : ""}</div>${x.live && state.meters[x.id] ? meterRow(state.meters[x.id]) : ""}`;
+    const shown = [...live, ...ended.slice(0, 2)].map(row).join("");
+    const older = ended.slice(2);
+    return older.length
+      ? `${shown}<details class="board-older"><summary>${older.length} earlier session${older.length === 1 ? "" : "s"}</summary>${older.map(row).join("")}</details>`
+      : shown;
   }
 
   function meterRow(meter) {
@@ -418,7 +426,14 @@ export function initWorkbench(deps) {
           .map((c) => `<li><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></li>`)
           .join("")
       : '<li class="muted">No changes to commit.</li>';
-    $("#commit-message").value = commitPrefix(spec);
+    // A suggestion from what changed, selected so typing replaces it; the prefix stays.
+    const prefix = commitPrefix(spec);
+    $("#commit-message").value = suggestCommitMessage(spec, changes);
+    const onOther = spec?.branch && state.git?.branch && state.git.branch !== spec.branch;
+    const note = $("#commit-branch-note");
+    note.hidden = !onOther;
+    if (onOther)
+      note.innerHTML = `You are on <code>${escapeHtml(state.git.branch)}</code>, but spec ${escapeHtml(spec.id)}'s work belongs on <code>${escapeHtml(spec.branch)}</code>. Committing here is allowed; use <b>Switch to this branch</b> first if you meant to keep it separate.`;
     $("#commit-record").checked = Boolean(spec);
     $("#commit-record").disabled = !spec;
     $("#commit-record-label").textContent = spec
@@ -427,7 +442,7 @@ export function initWorkbench(deps) {
     showDialog("commit-dialog");
     const box = $("#commit-message");
     box.focus();
-    box.setSelectionRange(box.value.length, box.value.length);
+    box.setSelectionRange(prefix.length, box.value.length);
   }
 
   /** Starts an agent, or a plain terminal ("shell"), on the selected spec. Recorded server-side. */
@@ -723,6 +738,7 @@ export function initWorkbench(deps) {
     };
     if (handlers[action]) handlers[action]();
   });
+  document.addEventListener("verb:git-changed", () => refreshGit());
   document.addEventListener("verb:observer", () => {
     renderList();
     renderSessions();

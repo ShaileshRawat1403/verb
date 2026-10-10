@@ -185,7 +185,7 @@ export function checksHtml(report) {
       checkRow(
         "OK",
         "clear",
-        "Nothing observed calls for care.",
+        "All checks passed.",
         satisfied.length
           ? satisfied.map((f) => `${f.runtime} ${f.found}`).join(" · ")
           : "",

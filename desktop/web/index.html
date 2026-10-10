@@ -533,6 +533,7 @@
                   <div class="preview-head">
                     <code id="preview-path"></code>
                     <span class="preview-meta" id="preview-meta"></span>
+                    <button class="text-button" type="button" id="preview-mode" data-action="preview-mode" hidden>Raw</button>
                     <button class="text-button" type="button" data-action="copy-file-path">Copy path</button>
                     <button class="modal-close" type="button" data-action="close-preview" aria-label="Close preview">×</button>
                   </div>
@@ -559,7 +560,7 @@
                       <p class="proof-hint">Verb keeps one marked section of these files in step with your brief and specs. Your own text in them is never changed.</p>
                       <ul id="agent-files" class="agent-files"></ul>
                       <div class="hub-actions">
-                        <button class="primary-button" type="button" data-action="sync-agents">Sync agent context</button>
+                        <button class="secondary-button" type="button" data-action="sync-agents">Sync agent context</button>
                       </div>
                     </article>
                     <article class="panel hub-card">
@@ -1043,6 +1044,7 @@
           <button class="modal-close" type="button" data-close="commit-dialog" aria-label="Close">×</button>
         </div>
         <ul id="commit-files" class="changes-list compact"></ul>
+        <p id="commit-branch-note" class="warning-box" hidden></p>
         <label class="field-label" for="commit-message">What changed and why</label
         ><textarea id="commit-message" rows="3" required placeholder="spec:012 validate email addresses"></textarea>
         <label class="check-row"><input type="checkbox" id="commit-record" checked /> <span id="commit-record-label">Record this commit in the spec's audit trail</span></label>
@@ -1102,7 +1104,7 @@
       <form id="ask-form" class="modal-content">
         <div class="modal-heading">
           <div>
-            <span class="section-kicker">ASK VERB</span>
+            <span class="section-kicker kicker-name">Ask Verb</span>
             <h2>Ask about this project</h2>
             <p>Answers come only from evidence here: specs, the brief, Git and running sessions.</p>
           </div>

@@ -170,3 +170,38 @@ test("client-side observer signals: context pressure and wrong branch", () => {
   assert.equal(clientSignals({ git, spec: { ...spec, stage: "spec" } }).length, 0, "not building yet");
   assert.equal(clientSignals({ git: { ...git, branch: "spec/002-x" }, spec }).length, 0, "already there");
 });
+
+import { renderMarkdown, suggestCommitMessage } from "../src/workbench.js";
+
+test("commit messages are suggested from what changed", () => {
+  const spec = { id: "001", file: "specs/001-greet.md" };
+  assert.equal(
+    suggestCommitMessage(spec, [
+      { path: "docs/project/BRIEF.md", code: "??" },
+      { path: "specs/001-greet.md", code: "??" },
+    ]),
+    "spec:001 add the project brief and add the spec",
+  );
+  assert.equal(suggestCommitMessage(spec, [{ path: "src/greet.js", code: "M" }]), "spec:001 update greet.js");
+  assert.equal(
+    suggestCommitMessage(null, [
+      { path: "a.js", code: "M" },
+      { path: "b.js", code: "M" },
+      { path: "c.js", code: "D" },
+    ]),
+    "update 3 files (a.js, b.js, …)",
+  );
+  assert.equal(suggestCommitMessage(spec, []), "spec:001 ");
+});
+
+test("markdown previews are escaped before anything is interpreted", () => {
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const html = renderMarkdown("# Title\n\nSome **bold** and `code`.\n\n- [ ] todo\n- one <script>x</script>\n\n```\n<b>raw</b>\n```\n[ok](https://example.com) [bad](javascript:alert(1))", esc);
+  assert.ok(html.includes("<h1>Title</h1>"));
+  assert.ok(html.includes("<b>bold</b>") && html.includes("<code>code</code>"));
+  assert.ok(html.includes('<ul><li><span class="md-box" aria-hidden="true"></span>todo</li>'));
+  assert.ok(!html.includes("<script>"), "markup in the file stays text");
+  assert.ok(html.includes("<pre><code>&lt;b&gt;raw&lt;/b&gt;</code></pre>"));
+  assert.ok(html.includes('<a href="https://example.com"'));
+  assert.ok(!html.includes("javascript:alert(1)\""), "only http(s) links become links");
+});

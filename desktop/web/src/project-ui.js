@@ -1,7 +1,7 @@
 // The Project view: file tree, read-only preview, and the context hub (brief, agent context sync,
 // project documents, nudges). Rules that can be tested live in workbench.js.
 
-import { buildTree, changeLabel, filterFiles } from "./workbench.js";
+import { buildTree, changeLabel, filterFiles, renderMarkdown } from "./workbench.js";
 import { fileIconName, icon } from "./icons.js";
 
 export function initProject(deps) {
@@ -89,11 +89,10 @@ export function initProject(deps) {
         $("#preview-body").innerHTML = `<p class="muted preview-reason">Not shown: ${escapeHtml(preview.reason)}.</p>`;
         return;
       }
-      const lines = preview.text.split("\n");
-      if (lines.at(-1) === "") lines.pop();
-      $("#preview-body").innerHTML = `<ol class="code-lines">${lines
-        .map((line) => `<li><code>${escapeHtml(line) || " "}</code></li>`)
-        .join("")}</ol>`;
+      state.previewText = preview.text;
+      state.previewMarkdown = /\.(md|mdx|markdown)$/i.test(path);
+      state.previewRaw = false;
+      paintPreview();
     } catch (error) {
       $("#preview-meta").textContent = "";
       $("#preview-body").innerHTML = `<p class="muted preview-reason">${escapeHtml(error.message)}</p>`;
@@ -133,6 +132,11 @@ export function initProject(deps) {
           `<li data-state="${f.state}"><code>${escapeHtml(f.name)}</code><span>${label[f.state]}</span></li>`,
       )
       .join("");
+    // The next useful step leads: writing the brief first, then sharing it with the agents.
+    const syncPending = hub.brief.exists && hub.agent_files.some((f) => f.state !== "current");
+    const sync = document.querySelector('[data-action="sync-agents"]');
+    sync.classList.toggle("primary-button", syncPending);
+    sync.classList.toggle("secondary-button", !syncPending);
     $("#hub-documents").innerHTML = hub.documents.length
       ? hub.documents
           .map((d) => `<li><button class="text-button" type="button" data-file="${escapeHtml(d)}">${icon("file-text", { size: 14 })} ${escapeHtml(d.split("/").pop())}</button></li>`)
@@ -149,11 +153,33 @@ export function initProject(deps) {
     showDialog("brief-dialog");
     $("#brief-problem").focus();
   }
+  /** Markdown reads formatted by default, with a Raw toggle; everything else shows its lines. */
+  function paintPreview() {
+    const formatted = state.previewMarkdown && !state.previewRaw;
+    $("#preview-mode").hidden = !state.previewMarkdown;
+    $("#preview-mode").textContent = formatted ? "Raw" : "Formatted";
+    if (formatted) {
+      $("#preview-body").innerHTML = `<div class="md-preview">${renderMarkdown(state.previewText, escapeHtml)}</div>`;
+      return;
+    }
+    const lines = state.previewText.split("\n");
+    if (lines.at(-1) === "") lines.pop();
+    $("#preview-body").innerHTML = `<ol class="code-lines">${lines
+      .map((line) => `<li><code>${escapeHtml(line) || " "}</code></li>`)
+      .join("")}</ol>`;
+  }
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest('[data-action="preview-mode"]')) return;
+    state.previewRaw = !state.previewRaw;
+    paintPreview();
+  });
+
   async function syncAgents() {
     try {
       const result = await api("POST", "/api/hub/sync");
       toast(`${result.message}${result.changed.length ? ". Recorded in the brief's audit trail." : ""}`);
       await Promise.all([refreshHub(), refreshFiles()]);
+      document.dispatchEvent(new CustomEvent("verb:git-changed"));
     } catch (error) {
       toast(error.message, "error");
     }
@@ -168,6 +194,7 @@ export function initProject(deps) {
       closeDialog("brief-dialog");
       toast(`${result.message}. Sync agent context to share it with every agent.`);
       await Promise.all([refreshHub(), refreshFiles()]);
+      document.dispatchEvent(new CustomEvent("verb:git-changed"));
       openFile(result.path);
     } catch (error) {
       toast(error.message, "error");

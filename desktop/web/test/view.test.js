@@ -43,7 +43,7 @@ test("a clear report says so and lists satisfied runtimes", () => {
       },
     ],
   });
-  assert.match(html, /Nothing observed calls for care\./);
+  assert.match(html, /All checks passed\./);
   assert.match(html, /node 20\.11\.1/);
   assert.match(html, /data-tone="clear"/);
 });

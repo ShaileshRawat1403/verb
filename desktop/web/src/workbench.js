@@ -305,3 +305,108 @@ export function clientSignals({ meters = {}, sessions = [], git = null, spec = n
   }
   return out;
 }
+
+/** A commit message from what changed: "spec:001 add the spec and the project brief". */
+export function suggestCommitMessage(spec, changes) {
+  const prefix = commitPrefix(spec);
+  if (!changes?.length) return prefix;
+  const parts = [];
+  const rest = [];
+  for (const c of changes) {
+    if (spec && c.path === spec.file) parts.push(c.code === "??" || c.code === "A" ? "add the spec" : "update the spec");
+    else if (c.path === "docs/project/BRIEF.md") parts.push(c.code === "??" || c.code === "A" ? "add the project brief" : "update the project brief");
+    else if (/^(AGENTS|CLAUDE)\.md$/.test(c.path)) parts.includes("sync agent context") || parts.push("sync agent context");
+    else rest.push(c);
+  }
+  if (rest.length === 1) {
+    const c = rest[0];
+    const name = c.path.split("/").pop();
+    const verb = c.code === "??" || c.code === "A" ? "add" : c.code === "D" ? "remove" : "update";
+    parts.push(`${verb} ${name}`);
+  } else if (rest.length > 1) {
+    const names = rest.slice(0, 2).map((c) => c.path.split("/").pop());
+    parts.push(`update ${rest.length} files (${names.join(", ")}${rest.length > 2 ? ", …" : ""})`);
+  }
+  const words = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
+  return `${prefix}${words}`;
+}
+
+/**
+ * Markdown for the file preview. Escaped first, so nothing in a file can become markup; then only
+ * headings, lists, quotes, rules, code, bold, italic and http(s) links are interpreted.
+ */
+export function renderMarkdown(text, escapeHtml) {
+  const inline = (s) =>
+    escapeHtml(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>")
+      .replace(/\b_([^_]+)_\b/g, "<i>$1</i>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  const out = [];
+  let list = null;
+  let para = [];
+  let fence = null;
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
+    para = [];
+  };
+  const closeList = () => {
+    if (list) out.push(`</${list}>`);
+    list = null;
+  };
+  for (const line of String(text).split("\n")) {
+    if (fence !== null) {
+      if (/^```/.test(line)) {
+        out.push(`<pre><code>${escapeHtml(fence.join("\n"))}</code></pre>`);
+        fence = null;
+      } else fence.push(line);
+      continue;
+    }
+    if (/^```/.test(line)) {
+      flushPara();
+      closeList();
+      fence = [];
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (heading) {
+      flushPara();
+      closeList();
+      const level = heading[1].length;
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+    } else if (bullet || numbered) {
+      flushPara();
+      const tag = bullet ? "ul" : "ol";
+      if (list !== tag) {
+        closeList();
+        out.push(`<${tag}>`);
+        list = tag;
+      }
+      const raw = (bullet ?? numbered)[1];
+      const task = /^\[([ xX])\]\s+/.exec(raw);
+      const box = task ? `<span class="md-box${task[1] === " " ? "" : " done"}" aria-hidden="true"></span>` : "";
+      out.push(`<li>${box}${inline(task ? raw.slice(task[0].length) : raw)}</li>`);
+    } else if (/^>\s?/.test(line)) {
+      flushPara();
+      closeList();
+      out.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+    } else if (/^\s*(---|\*\*\*)\s*$/.test(line)) {
+      flushPara();
+      closeList();
+      out.push("<hr>");
+    } else if (!line.trim()) {
+      flushPara();
+      closeList();
+    } else {
+      closeList();
+      para.push(line.trim());
+    }
+  }
+  if (fence !== null) out.push(`<pre><code>${escapeHtml(fence.join("\n"))}</code></pre>`);
+  flushPara();
+  closeList();
+  return out.join("");
+}
