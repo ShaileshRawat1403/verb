@@ -22,9 +22,15 @@ app/build/
 debug.keystore.base64
 app/.cxx
 desktop/target/
+desktop/web/node_modules/
 
 # Editor swap files, including ones created while testing full-screen apps inside Verb
 .sw?
 
 # Local agent session checkpoints. Machine-specific and not part of the product.
 .claude/
+
+
+# Playwright output
+desktop/web/test-results/
+desktop/web/playwright-report/

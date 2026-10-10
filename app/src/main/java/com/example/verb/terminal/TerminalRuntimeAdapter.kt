@@ -10,6 +10,7 @@ import java.io.File
  * test double. Shared rather than allocated per read, because callers collect it.
  */
 private val NO_RENDER_TARGET: StateFlow<TermuxTerminalRuntimeAdapter?> = MutableStateFlow(null)
+private val NO_RUNNING_COMMAND: StateFlow<CommandExecutionRecord?> = MutableStateFlow(null)
 
 /**
  * Runtime abstraction interface decoupling Verb UI and product logic from Termux PTY / TTY components.
@@ -58,6 +59,8 @@ interface TerminalRuntimeAdapter {
      * [terminalContextState], never a replacement for it, and never forwarded to any AI provider.
      */
     val commandHistory: StateFlow<List<CommandExecutionRecord>>
+    /** A positive shell command-start boundary, cleared on exit; never inferred from screen text. */
+    val runningCommand: StateFlow<CommandExecutionRecord?> get() = NO_RUNNING_COMMAND
 
     /**
      * True once the one-shot Verb shell-integration handshake (OSC 633;P;Verb=1) has been seen

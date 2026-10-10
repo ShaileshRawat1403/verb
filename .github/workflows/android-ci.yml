@@ -1,16 +1,37 @@
-name: CI
+name: Android CI
+
+# Verb Android (app/). Runs only when Android sources or the build that produces them change, so a
+# desktop-only change can never block an Android release. See docs/AREAS.md.
 
 on:
   push:
     branches: [main]
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - "version.properties"
+      - ".github/workflows/android-ci.yml"
   pull_request:
+    paths:
+      - "app/**"
+      - "gradle/**"
+      - "*.gradle.kts"
+      - "gradle.properties"
+      - "gradlew"
+      - "gradlew.bat"
+      - "version.properties"
+      - ".github/workflows/android-ci.yml"
   workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: android-ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -128,41 +149,3 @@ jobs:
           path: app/build/reports/androidTests/
           if-no-files-found: ignore
           retention-days: 14
-
-  desktop:
-    # The desktop host has 57 unit tests and 6 integration tests that run a real shell on a real
-    # PTY. Until now the only thing running them was whoever happened to be working on the crate.
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: desktop
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      - name: Set up Rust
-        # Each component needs its own flag: rustup reads a bare second word as a toolchain name
-        # and fails with "invalid toolchain name: 'rustfmt'".
-        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
-
-      - name: Cache cargo
-        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            desktop/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
-
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test
-        # Includes tests/shell_integration.rs, which instruments a real bash and zsh. Both exist on
-        # the runner; the tests skip themselves rather than fail if a shell is missing.
-        run: cargo test --all-targets
-
-      - name: Build release
-        run: cargo build --release

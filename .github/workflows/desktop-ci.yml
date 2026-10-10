@@ -1,0 +1,109 @@
+name: Desktop CI
+
+# Verb Desktop (desktop/), which also runs on remote hosts such as the owner's OnePlus node. Runs only when desktop
+# sources change, so an Android-only change never waits on Rust. See docs/AREAS.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop-ci.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop-ci.yml"
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: "1.99.0"
+
+jobs:
+  desktop:
+    # Unit tests plus integration tests that run a real shell on a real PTY, a real Git repository
+    # and the local web host. macOS runs too: PTY, process-group and path behaviour differ there,
+    # and it is the platform the desktop host is mostly used on.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Rust
+        # Pinned: "stable" moved to 1.99 on 2026-09-28 and a new clippy lint failed CI overnight on
+        # code nobody had touched. Bump this deliberately, in its own commit, after running
+        # `cargo clippy --all-targets -- -D warnings` on the new version.
+        # Each component needs its own flag: rustup reads a bare second word as a toolchain name.
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/web/package-lock.json
+
+      - name: Build browser assets embedded by Rust
+        run: |
+          npm ci --prefix web
+          npm test --prefix web
+          npm run build --prefix web
+          git diff --exit-code -- web/dist
+
+      - name: Cache cargo
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
+
+      - name: Format
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --check
+
+      - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        # Includes tests/shell_integration.rs, which instruments a real bash and zsh. Both exist on
+        # the runner; the tests skip themselves rather than fail if a shell is missing.
+        run: cargo test --all-targets
+
+      - name: Browser tests (real verb web + headless Chromium)
+        # Drives the workbench like a person: create a spec, prove a criterion with evidence, commit,
+        # palette, theme, terminal. `cargo test --all-targets` above already built target/debug/verb.
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          npx --prefix web playwright install --with-deps chromium
+          VERB_BIN="$PWD/target/debug/verb" npm run e2e --prefix web
+
+      - name: Upload browser test report
+        if: failure() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: playwright-report
+          path: |
+            desktop/web/playwright-report/
+            desktop/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Build release
+        run: cargo build --release

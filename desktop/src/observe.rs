@@ -17,6 +17,9 @@
 //! messages, tool arguments, tool output, file contents and diffs are never read, so they can never
 //! be written into a Verb event, shown in an overlay, or handed to an assistant.
 //!
+//! (The one exception lives elsewhere on purpose: `crate::transcript`, the agent stream, reads
+//! content only after the person turns it on for a project, and never feeds anything here.)
+//!
 //! That is enforced by construction rather than by discipline. `crate::json` reads a named scalar
 //! and nothing else; there is no parse step here that produces a document a later change could
 //! start reaching into. Its own doc comment says it: anything that needed real parsing would be a
@@ -145,9 +148,18 @@ fn claude_events(line: &str, fallback_at: u128) -> Vec<AgentEvent> {
         events.push(AgentEvent::TurnStarted { at });
         return events;
     }
-    for block in &results {
+    // Claude writes `is_error` *after* `content`, and when `content` is an array of blocks the
+    // slice above ends at the first inner `{"type":` -- before the flag. So outcomes are read from
+    // the parsed line: only `type` and `is_error` of each result are looked at, and nothing is
+    // kept. The slices remain the fallback for a line that does not parse.
+    let outcomes = claude_result_outcomes(line).unwrap_or_else(|| {
+        results
+            .iter()
+            .map(|block| block.contains(r#""is_error":true"#))
+            .collect()
+    });
+    for failed in outcomes {
         // Absent means the tool worked: Claude writes the field only on failure.
-        let failed = block.contains(r#""is_error":true"#);
         events.push(AgentEvent::ToolOutcome {
             at,
             tool: None,
@@ -155,6 +167,18 @@ fn claude_events(line: &str, fallback_at: u128) -> Vec<AgentEvent> {
         });
     }
     events
+}
+
+fn claude_result_outcomes(line: &str) -> Option<Vec<bool>> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let content = value.pointer("/message/content")?.as_array()?;
+    Some(
+        content
+            .iter()
+            .filter(|block| block["type"] == "tool_result")
+            .map(|block| block["is_error"] == true)
+            .collect(),
+    )
 }
 
 /// The slices of `line` that each begin at `marker` and end where the next block begins.
@@ -279,9 +303,14 @@ pub struct RecordTail {
     conversation_id: Option<String>,
     offset: u64,
     /// Kept so a partial final line -- the agent was mid-write -- waits for the rest of itself
-    /// instead of being parsed as a truncated record.
-    partial: String,
+    /// instead of being parsed as a truncated record. Bytes, not text: the write may have stopped
+    /// in the middle of a UTF-8 character.
+    partial: Vec<u8>,
 }
+
+/// At most this much is read per poll; the rest waits for the next one. The offset only ever
+/// advances by what was actually read.
+const MAX_POLL_BYTES: u64 = 4 * 1024 * 1024;
 
 impl RecordTail {
     /// Finds the record an agent has begun writing for work started at `since`, if it has begun one.
@@ -343,7 +372,79 @@ impl RecordTail {
             path,
             conversation_id: None,
             offset: 0,
-            partial: String::new(),
+            partial: Vec::new(),
+        })
+    }
+
+    /// The log file this tail follows (read by the context meter).
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Binds a resumed Verb session to the agent conversation it explicitly selected. The old
+    /// transcript is history: start at EOF so only work after this resume creates new events.
+    pub fn find_existing(record: Record, home: &Path, project: &Path, id: &str) -> Option<Self> {
+        let path = match record {
+            Record::Claude => home
+                .join(".claude")
+                .join("projects")
+                .join(crate::agents::claude_project_dir(project))
+                .join(format!("{id}.jsonl")),
+            Record::Codex => {
+                let root = home.join(".codex").join("sessions");
+                let suffix = format!("-{id}.jsonl");
+                let mut newest: Option<(std::time::SystemTime, PathBuf)> = None;
+                for directory in codex_day_directories(&root) {
+                    let Ok(entries) = std::fs::read_dir(directory) else {
+                        continue;
+                    };
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if !path
+                            .file_name()
+                            .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+                        {
+                            continue;
+                        }
+                        let Ok(mut file) = std::fs::File::open(&path) else {
+                            continue;
+                        };
+                        let mut header = String::new();
+                        if file
+                            .by_ref()
+                            .take(16 * 1024)
+                            .read_to_string(&mut header)
+                            .is_err()
+                        {
+                            continue;
+                        }
+                        let Some(first) = header.lines().next() else {
+                            continue;
+                        };
+                        if json_string(first, "id").as_deref() != Some(id)
+                            || !json_string(first, "cwd")
+                                .is_some_and(|cwd| crate::agents::same_directory(&cwd, project))
+                        {
+                            continue;
+                        }
+                        let Ok(modified) = entry.metadata().and_then(|meta| meta.modified()) else {
+                            continue;
+                        };
+                        if newest.as_ref().is_none_or(|(best, _)| modified > *best) {
+                            newest = Some((modified, path));
+                        }
+                    }
+                }
+                newest?.1
+            }
+        };
+        let offset = std::fs::metadata(&path).ok()?.len();
+        Some(Self {
+            record,
+            path,
+            conversation_id: Some(id.to_owned()),
+            offset,
+            partial: Vec::new(),
         })
     }
 
@@ -362,24 +463,32 @@ impl RecordTail {
             return Vec::new();
         }
 
-        let mut appended = String::new();
-        if file.read_to_string(&mut appended).is_err() {
+        // The file may grow between reading its length and reading its bytes. Advancing the offset
+        // to the old length re-read whatever arrived in between: 200,000 lines produced ~210,000
+        // events under load. The offset moves by exactly the bytes read.
+        let mut appended = Vec::new();
+        let Ok(read) = (&mut file).take(MAX_POLL_BYTES).read_to_end(&mut appended) else {
             return Vec::new();
-        }
-        self.offset = length;
+        };
+        self.offset += read as u64;
 
         let mut buffered = std::mem::take(&mut self.partial);
-        buffered.push_str(&appended);
-        let ends_complete = buffered.ends_with('\n');
-        let mut lines: Vec<&str> = buffered.lines().collect();
-        if !ends_complete {
-            if let Some(last) = lines.pop() {
-                self.partial = last.to_owned();
+        buffered.extend_from_slice(&appended);
+        let complete = match buffered.iter().rposition(|byte| *byte == b'\n') {
+            Some(end) => {
+                self.partial = buffered[end + 1..].to_vec();
+                buffered.truncate(end + 1);
+                buffered
             }
-        }
+            None => {
+                self.partial = buffered;
+                return Vec::new();
+            }
+        };
+        let text = String::from_utf8_lossy(&complete);
 
         let mut events = Vec::new();
-        for line in lines {
+        for line in text.lines() {
             if self.conversation_id.is_none() {
                 self.conversation_id = self.record.conversation_id(line);
             }
@@ -419,6 +528,7 @@ fn codex_day_directories(root: &Path) -> Vec<PathBuf> {
 pub struct AgentWatch {
     record: Option<Record>,
     project: PathBuf,
+    resume_identity: Option<String>,
     /// Anything the agent wrote before this instant belongs to some earlier session, not this one.
     started_at: std::time::SystemTime,
     tail: Option<RecordTail>,
@@ -427,10 +537,16 @@ pub struct AgentWatch {
 
 impl AgentWatch {
     /// A watch for `agent`, which observes nothing when Verb has no reader for that agent.
+    #[cfg(test)]
     pub fn for_agent(agent: Option<&str>, project: &Path) -> Self {
+        Self::for_session(agent, project, None)
+    }
+
+    pub fn for_session(agent: Option<&str>, project: &Path, resume_identity: Option<&str>) -> Self {
         Self {
             record: agent.and_then(Record::for_agent),
             project: project.to_path_buf(),
+            resume_identity: resume_identity.map(str::to_owned),
             started_at: std::time::SystemTime::now(),
             tail: None,
             observed: Observed::default(),
@@ -451,7 +567,10 @@ impl AgentWatch {
             let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
                 return Vec::new();
             };
-            self.tail = RecordTail::find(record, &home, &self.project, self.started_at);
+            self.tail = match self.resume_identity.as_deref() {
+                Some(id) => RecordTail::find_existing(record, &home, &self.project, id),
+                None => RecordTail::find(record, &home, &self.project, self.started_at),
+            };
         }
         let Some(tail) = self.tail.as_mut() else {
             return Vec::new();
@@ -715,7 +834,7 @@ mod tests {
             path: path.clone(),
             conversation_id: None,
             offset: 0,
-            partial: String::new(),
+            partial: Vec::new(),
         };
         assert_eq!(tail.poll(1).len(), 1);
         // Nothing new: silence, not a repeat of what was already reported.
@@ -743,6 +862,65 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_tool_is_seen_when_its_content_is_an_array() {
+        // Claude writes `is_error` after `content`; with array content the flag sits past the first
+        // inner block, where the old slicing stopped reading.
+        let line = r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"boom"}],"is_error":true},{"type":"tool_result","tool_use_id":"t2","content":"fine"}]}}"#;
+        let outcomes: Vec<bool> = claude_events(line, 1)
+            .into_iter()
+            .filter_map(|event| match event {
+                AgentEvent::ToolOutcome { failed, .. } => Some(failed),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outcomes, [true, false]);
+    }
+
+    #[test]
+    fn lines_written_while_reading_are_counted_exactly_once() {
+        use std::io::Write;
+        let directory = std::env::temp_dir().join(format!(
+            "verb-growth-{}-{}",
+            std::process::id(),
+            crate::new_id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("record.jsonl");
+        std::fs::write(&path, "").unwrap();
+        let mut tail = RecordTail {
+            record: Record::Claude,
+            path: path.clone(),
+            conversation_id: None,
+            offset: 0,
+            partial: Vec::new(),
+        };
+        const LINES: usize = 20_000;
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(writer_path)
+                .unwrap();
+            for _ in 0..LINES {
+                // Written in two pieces so a poll can land in the middle of a line.
+                file.write_all(br#"{"type":"user","message":{"cont"#)
+                    .unwrap();
+                file.write_all(b"ent\":\"hi\"}}\n").unwrap();
+            }
+        });
+        let mut seen = 0;
+        while !writer.is_finished() {
+            seen += tail.poll(1).len();
+        }
+        writer.join().unwrap();
+        for _ in 0..100 {
+            seen += tail.poll(1).len();
+        }
+        assert_eq!(seen, LINES);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
     fn a_half_written_line_waits_for_the_rest_of_itself() {
         // The agent is writing while Verb is reading. A record cut in half must not be parsed as a
         // short record -- it is not one, it is the first half of a longer one.
@@ -756,7 +934,7 @@ mod tests {
             path: path.clone(),
             conversation_id: None,
             offset: 0,
-            partial: String::new(),
+            partial: Vec::new(),
         };
         assert!(tail.poll(1).is_empty(), "a partial line produced an event");
 
@@ -797,6 +975,84 @@ mod tests {
             Some("codex-abcd")
         );
         assert_eq!(Record::Codex.conversation_id(later), None);
+    }
+
+    #[test]
+    fn a_resumed_claude_watch_reads_only_new_lines_from_its_exact_conversation() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("verb-resumed-claude-{}", crate::new_id()));
+        let project = root.join("project");
+        let home = root.join("home");
+        std::fs::create_dir_all(&project).unwrap();
+        let directory = home
+            .join(".claude/projects")
+            .join(crate::agents::claude_project_dir(&project));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("ours.jsonl");
+        std::fs::write(&path, "{\"type\":\"user\",\"sessionId\":\"ours\"}\n").unwrap();
+        std::fs::write(
+            directory.join("other.jsonl"),
+            "{\"type\":\"user\",\"sessionId\":\"other\"}\n",
+        )
+        .unwrap();
+
+        let mut tail = RecordTail::find_existing(Record::Claude, &home, &project, "ours").unwrap();
+        assert_eq!(tail.conversation_id.as_deref(), Some("ours"));
+        assert!(tail.poll(1).is_empty(), "historical user turn was replayed");
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap(),
+            "{{\"type\":\"assistant\",\"sessionId\":\"ours\",\"message\":{{\"content\":[]}}}}"
+        )
+        .unwrap();
+        assert_eq!(tail.poll(2), vec![AgentEvent::TurnFinished { at: 2 }]);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn a_resumed_codex_watch_matches_identity_and_project() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("verb-resumed-codex-{}", crate::new_id()));
+        let project = root.join("project");
+        let other = root.join("other");
+        let home = root.join("home");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let directory = home.join(".codex/sessions/2026/09/24");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("rollout-2026-09-24T12-00-00-ours.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"ours\",\"cwd\":\"{}\"}}}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("rollout-2026-09-24T12-00-00-other.jsonl"),
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"other\",\"cwd\":\"{}\"}}}}\n",
+                project.display()
+            ),
+        )
+        .unwrap();
+        assert!(RecordTail::find_existing(Record::Codex, &home, &other, "ours").is_none());
+
+        let mut tail = RecordTail::find_existing(Record::Codex, &home, &project, "ours").unwrap();
+        assert!(tail.poll(1).is_empty());
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap(),
+            "{{\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_started\"}}}}"
+        )
+        .unwrap();
+        assert_eq!(tail.poll(2), vec![AgentEvent::TurnStarted { at: 2 }]);
+        std::fs::remove_dir_all(root).ok();
     }
 
     #[test]
