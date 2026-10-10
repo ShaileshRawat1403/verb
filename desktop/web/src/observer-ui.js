@@ -73,7 +73,7 @@ export function initObserver(deps) {
   function renderPanel() {
     const body = $("#observer-body");
     if (!state.enabled) {
-      body.innerHTML = `<p>The observer watches your running terminals and shows a small badge when something needs you. It never pops up and never acts on its own.</p>
+      body.innerHTML = `<p>An agent that stops to ask your permission is always marked <b>Needs you</b>. The observer adds quiet badges for the rest: a command failing again and again, an agent gone quiet, a key on screen, a full context, work on the wrong branch. It never pops up and never acts on its own.</p>
         <ul class="observer-promises">
           <li><b>Opt-in</b> for this project only.</li>
           <li><b>Local and read-only</b>: it reads screens and exit codes Verb already has, in memory.</li>
@@ -160,6 +160,8 @@ export function initObserver(deps) {
       if (panel.open) return panel.close();
       renderPanel();
       panel.show();
+      // Focus the panel's main action, not its close button (which drew a heavy ring on open).
+      panel.querySelector('[data-observer="enable"], [data-observer="disable"], .primary-button')?.focus({ focusVisible: false });
       refresh(); // show what is true now, not as of the last poll
       return;
     }

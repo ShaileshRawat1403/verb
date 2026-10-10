@@ -328,7 +328,31 @@ fn thermal_zones() -> Vec<(String, i64)> {
         .collect()
 }
 
+/// macOS reports its battery through `pmset -g batt`: "…\t99%; discharging; 9:20 remaining…".
+pub(crate) fn pmset_battery(text: &str) -> Option<Battery> {
+    let line = text.lines().find(|l| l.contains("InternalBattery"))?;
+    let after = line.split('\t').nth(1).unwrap_or(line);
+    let mut fields = after.split(';').map(str::trim);
+    let level = fields.next()?.trim_end_matches('%').parse().ok()?;
+    let state = fields.next().unwrap_or("");
+    Some(Battery {
+        level: Some(level),
+        charging: Some(matches!(state, "charging" | "charged" | "finishing charge")),
+        reason: None,
+    })
+}
+
 fn battery() -> Battery {
+    if cfg!(target_os = "macos") {
+        if let Some(b) = std::process::Command::new("pmset")
+            .args(["-g", "batt"])
+            .output()
+            .ok()
+            .and_then(|o| pmset_battery(&String::from_utf8_lossy(&o.stdout)))
+        {
+            return b;
+        }
+    }
     let base = Path::new("/sys/class/power_supply/battery");
     match fs::read_to_string(base.join("capacity")) {
         Ok(level) => Battery {
@@ -448,6 +472,22 @@ pub(crate) fn report() -> Report {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn macos_battery_reads_from_pmset() {
+        let out = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=23658595)\t99%; discharging; 9:20 remaining present: true\n";
+        let b = super::pmset_battery(out).unwrap();
+        assert_eq!((b.level, b.charging), (Some(99), Some(false)));
+        let charging = super::pmset_battery(
+            " -InternalBattery-0 (id=1)\t42%; charging; 1:02 remaining present: true",
+        )
+        .unwrap();
+        assert_eq!(charging.charging, Some(true));
+        assert!(
+            super::pmset_battery("Now drawing from 'AC Power'\n").is_none(),
+            "a desktop Mac has none"
+        );
+    }
+
     use super::*;
 
     #[test]

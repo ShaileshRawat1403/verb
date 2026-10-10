@@ -6749,3 +6749,21 @@ select:focus-visible,
     padding-left: 0;
   }
 }
+.host-events li.host-empty {
+  border: 0;
+  padding-left: 0;
+}
+/* Host cards fill the row they are given: five readings sit on one line on a wide screen instead of
+   leaving a lone card under four. Services and the restart history always take the full width. */
+.host-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+.host-card.wide {
+  grid-column: 1 / -1;
+}
+/* Wide panels: the two fact cards get room for their values; the three meters need less. */
+@container work (min-width: 1100px) {
+  .host-grid {
+    grid-template-columns: minmax(240px, 1.4fr) minmax(240px, 1.4fr) repeat(var(--meters, 3), minmax(140px, 1fr));
+  }
+}

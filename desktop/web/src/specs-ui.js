@@ -780,12 +780,14 @@ export function initWorkbench(deps) {
     if (!spec) return;
     const to = $("#handoff-to").value;
     const from = lastAgent(spec);
+    // Only say the previous agent is still running when one actually is.
+    const fromLive = specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent === from);
     try {
       const result = await api("POST", `/api/specs/${spec.id}/handoff`, { to, note: $("#handoff-note").value });
       closeDialog("handoff-dialog");
       deps.mountLaunchedSession({ id: result.sessionId, agent: to, isolated: false, state: "live", hasTerminal: true, hostedHere: true });
       toast(
-        `Handed off to ${agentDisplayName(to)}. The note is in the spec's Handoff notes${from ? `; ${agentDisplayName(from)} is still running, end it when you're ready` : ""}.`,
+        `Handed off to ${agentDisplayName(to)}. The note is in the spec's Handoff notes${fromLive ? `; ${agentDisplayName(from)} is still running, end it when you're ready` : ""}.`,
       );
       await Promise.all([refreshSpecs(), refreshGit()]);
     } catch (error) {

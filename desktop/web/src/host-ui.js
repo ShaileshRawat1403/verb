@@ -38,10 +38,22 @@ export function initHost(deps) {
       fact("Running for", formatDuration(v.uptime_secs), v.started ? `since ${v.started}` : "") +
       fact("Memory used", v.rss_kb != null ? formatKb(v.rss_kb) : null) +
       fact("Binary", v.binary_sha256 ? `${v.binary_sha256.slice(0, 12)}…` : null, v.binary_sha256 ?? "");
+    // A reading this machine cannot give is one quiet line here, not an empty card of its own:
+    // half-empty rows of cards read as gaps (found reviewing the page on a Mac).
+    const b = r.battery;
+    const batteryTemp = r.temperatures.find((t) => t.name === "Battery");
+    const hasTemps = r.temperatures.length > 0;
+    const hasBattery = b.level != null || Boolean(batteryTemp);
     $("#host-machine").innerHTML =
       fact("Model", r.machine.model) +
       fact("System", `${r.machine.os} · ${r.machine.arch}`) +
-      fact("Container", r.machine.container);
+      fact("Container", r.machine.container) +
+      (hasTemps ? "" : fact("Temperatures", "not readable here")) +
+      (hasBattery ? "" : fact("Battery", b.reason ?? "not reported"));
+    $("#host-temps").closest(".host-card").hidden = !hasTemps;
+    $("#host-battery").closest(".host-card").hidden = !hasBattery;
+    // Memory and storage, plus temperatures and battery when this machine reports them.
+    $("#host-temps").closest(".host-grid").style.setProperty("--meters", String(2 + hasTemps + hasBattery));
     $("#host-memory").innerHTML = usageBar(r.memory, "Not readable on this machine.");
     $("#host-storage").innerHTML = usageBar(r.storage, "Not readable on this machine.");
     $("#host-temps").innerHTML = r.temperatures.length
@@ -52,8 +64,6 @@ export function initHost(deps) {
           )
           .join("")
       : '<p class="muted">No temperature sensors are readable here.</p>';
-    const b = r.battery;
-    const batteryTemp = r.temperatures.find((t) => t.name === "Battery");
     $("#host-battery").innerHTML =
       b.level != null
         ? `<div class="usage-number">${b.level}%<small>${b.charging ? " charging" : ""}</small></div><div class="usage-bar" data-tone="${b.level < 20 ? "hot" : "ok"}"><span style="width:${b.level}%"></span></div>`
@@ -73,7 +83,7 @@ export function initHost(deps) {
               `<li data-kind="${e.kind}"><time>${escapeHtml(e.at)} UTC</time><span>${escapeHtml(e.detail)}</span></li>`,
           )
           .join("")
-      : '<li class="muted">No restart history available on this machine.</li>';
+      : '<li class="muted host-empty">No restart history available on this machine.</li>';
     const crashedRecently = r.events.some(
       (e) => e.kind === "crash" && Date.now() - Date.parse(`${e.at.replace(" ", "T")}Z`) < 86400000,
     );
