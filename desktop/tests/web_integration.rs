@@ -859,7 +859,7 @@ fn configured_token_is_used_never_logged_and_persists_across_restarts() {
 
 #[test]
 fn allowed_origin_configuration_permits_exact_origin_and_rejects_others() {
-    let allowed = "https://verb.pruningmypothos.com";
+    let allowed = "https://verb.example.com";
     let server = WebServer::start_with_env(&[("VERB_ALLOWED_ORIGIN", allowed)]);
 
     // Standard localhost origin is accepted (passes origin check, reaches route handler)

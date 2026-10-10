@@ -43,6 +43,6 @@ The disposable node host and SSH forwarding were closed afterward. No production
 
 ## Review
 
-Local review preview: `http://127.0.0.1:60937/`. It uses disposable Mac state and simulated deployment labels; it is not the OnePlus runtime. Production acceptance through `https://verb.pruningmypothos.com` remains pending a separately reviewed replacement and restart of Verb. Such a restart would interrupt its live PTYs; no other service needs restarting.
+Local review preview: `http://127.0.0.1:60937/`. It uses disposable Mac state and simulated deployment labels; it is not the OnePlus runtime. Production acceptance through `https://verb.example.com` remains pending a separately reviewed replacement and restart of Verb. Such a restart would interrupt its live PTYs; no other service needs restarting.
 
 Rust test log: `/private/tmp/verb-rust-tests-journey.log`. Temporary fixture scripts and timing instrumentation remain outside the repository. Nothing was committed.
