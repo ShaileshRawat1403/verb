@@ -100,6 +100,7 @@ unsafe extern "C" {
     fn ioctl(fd: c_int, request: u64, ...) -> c_int;
     fn chdir(path: *const c_char) -> c_int;
     fn setenv(name: *const c_char, value: *const c_char, overwrite: c_int) -> c_int;
+    fn unsetenv(name: *const c_char) -> c_int;
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
     fn _exit(status: c_int) -> !;
     fn waitpid(pid: PidT, status: *mut c_int, options: c_int) -> PidT;
@@ -452,6 +453,7 @@ fn fork_pty(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let child_env = child_environment(session_id, project, child_env)?;
+    let child_unset = launcher_only_variables(std::env::vars_os().map(|(name, _)| name));
 
     let window = size.map(|(rows, cols)| WinSize {
         rows,
@@ -480,6 +482,9 @@ fn fork_pty(
             }
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
+            }
+            for name in &child_unset {
+                unsetenv(name.as_ptr());
             }
             set_child_environment(&child_env);
             execvp(command_value.as_ptr(), argument_pointers.as_ptr());
@@ -617,6 +622,48 @@ impl ShellIntegration {
         }
         Ok(structural)
     }
+}
+
+/// Whether a variable belongs only to whatever launched Verb, so hosted terminals must not see it:
+/// Verb's own access token (`VERB_TOKEN` is a startup option; a program in a terminal that read it
+/// could drive Verb's API), and the session markers of an agent that launched Verb.
+///
+/// Started from a terminal inside Claude Code, Verb used to pass that session's markers to every
+/// terminal: a Claude started in Verb then believed it was a child session (transcript saving off,
+/// which also blinds Verb's agent stream), ran in the parent's permission mode, and received the
+/// parent's messaging token. Every agent Verb starts is its own top-level session. User settings
+/// (`ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, …) are kept.
+pub(crate) fn is_launcher_only_variable(name: &str) -> bool {
+    const EXACT: [&str; 5] = [
+        "VERB_TOKEN",
+        "CLAUDECODE",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+    ];
+    const CLAUDE_SESSION: [&str; 9] = [
+        "SESSION_ID",
+        "BRIDGE_SESSION_ID",
+        "CHILD_SESSION",
+        "SESSION_ATTENDED",
+        "ENTRYPOINT",
+        "EXECPATH",
+        "MESSAGING_SOCKET",
+        "MESSAGING_TOKEN",
+        "SSE_PORT",
+    ];
+    EXACT.contains(&name)
+        || name
+            .strip_prefix("CLAUDE_CODE_")
+            .is_some_and(|rest| CLAUDE_SESSION.contains(&rest))
+}
+
+fn launcher_only_variables(names: impl Iterator<Item = std::ffi::OsString>) -> Vec<CString> {
+    names
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| is_launcher_only_variable(name))
+        .filter_map(|name| CString::new(name).ok())
+        .collect()
 }
 
 /// The variables every hosted child gets, converted before the fork: the child of a fork in a
@@ -832,6 +879,40 @@ impl Drop for TerminalMode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn variables_meant_for_verbs_launcher_are_not_inherited() {
+        for name in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "AI_AGENT",
+            "VERB_TOKEN",
+        ] {
+            assert!(
+                super::is_launcher_only_variable(name),
+                "{name} should be dropped"
+            );
+        }
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "GEMINI_API_KEY",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "PATH",
+            "HOME",
+            "VERB_SESSION_ID",
+            "VERB_PROJECT_ROOT",
+        ] {
+            assert!(
+                !super::is_launcher_only_variable(name),
+                "{name} is configuration"
+            );
+        }
+    }
+
     use super::*;
     use crate::{Agent, Session};
     use std::path::PathBuf;

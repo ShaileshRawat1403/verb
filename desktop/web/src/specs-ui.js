@@ -158,15 +158,38 @@ export function initWorkbench(deps) {
         : `<div><b>${escapeHtml(guide.goal)}.</b> ${escapeHtml(guide.next)}</div>${
             nextStage
               ? `<button class="text-button" type="button" data-stage="${nextStage}">Move to ${STAGE_GUIDE[nextStage].label}</button>`
-              : '<span class="done-badge">Shipped</span>'
+              : `<span class="done-badge${state.shipBadge?.id === spec.id && state.shipBadge.pending ? " pending" : ""}" id="ship-badge">${escapeHtml(state.shipBadge?.id === spec.id ? state.shipBadge.text : "Checking…")}</span>`
           }`;
+    if (!nextStage) paintShipBadge(spec);
     // One primary at a time: starting an agent until one is working, then committing its work.
     const start = document.querySelector('[data-action="spec-agent"]');
     start.classList.toggle("primary-button", !agentLive);
     start.classList.toggle("secondary-button", agentLive);
+    // Committing leads once there is work to commit: an agent's changes beyond the spec file itself
+    // (in a user test it turned primary the moment the agent started, with nothing done yet).
+    const work = (state.git?.changes ?? []).some((c) => c.path !== spec.file);
     const commit = $("#top-commit");
-    commit.classList.toggle("primary-button", agentLive);
-    commit.classList.toggle("secondary-button", !agentLive);
+    commit.classList.toggle("primary-button", agentLive && work);
+    commit.classList.toggle("secondary-button", !(agentLive && work));
+  }
+
+  /** "Shipped" only when it is true: the work committed and its branch merged. */
+  async function paintShipBadge(spec) {
+    let ship = null;
+    try {
+      ship = (await api("GET", `/api/specs/${spec.id}/stage-check?to=ship`)).ship;
+    } catch {
+      /* leave the plain label */
+    }
+    const badge = $("#ship-badge");
+    if (!badge || selected()?.id !== spec.id) return;
+    const todo = [];
+    if (ship?.uncommitted) todo.push(`commit ${ship.uncommitted} change${ship.uncommitted === 1 ? "" : "s"}`);
+    if (ship?.unmerged) todo.push(`merge ${ship.unmerged[0]} into ${ship.unmerged[1]}`);
+    const text = !ship ? "Ship" : todo.length ? `To finish: ${todo.join(", then ")}` : "Shipped";
+    state.shipBadge = { id: spec.id, text, pending: todo.length > 0 };
+    badge.classList.toggle("pending", todo.length > 0);
+    badge.textContent = text;
   }
 
   /** Who has worked on this spec, from its audit trail, and which of them are running now. */
@@ -378,10 +401,17 @@ export function initWorkbench(deps) {
     $("#spec-title-input").focus();
   }
 
-  function openStage(stage) {
+  async function openStage(stage) {
     const spec = selected();
     if (!spec || stage === spec.stage) return;
-    const warnings = stageWarnings(spec, stage);
+    // The server's list is the one the move records (it also knows git: uncommitted work, an
+    // unmerged branch); the local rules are the fallback if it cannot be asked.
+    let warnings = stageWarnings(spec, stage);
+    try {
+      warnings = (await api("GET", `/api/specs/${spec.id}/stage-check?to=${encodeURIComponent(stage)}`)).warnings;
+    } catch {
+      /* keep the local warnings */
+    }
     state.pending = { kind: "stage", stage };
     $("#stage-dialog-title").textContent = `Move to ${STAGE_GUIDE[stage].label}`;
     $("#stage-dialog-sub").textContent = `${STAGE_GUIDE[spec.stage].label} → ${STAGE_GUIDE[stage].label}. ${STAGE_GUIDE[stage].next}`;

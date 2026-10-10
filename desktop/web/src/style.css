@@ -6930,3 +6930,14 @@ select:focus-visible,
 .note-list li.md-preview {
   max-width: none;
 }
+.terminal-checkout[hidden] {
+  display: none;
+}
+/* Criteria often quote code: keep their spaces ("'  Café '" lost its leading spaces). */
+.criterion > span {
+  white-space: pre-wrap;
+}
+.done-badge.pending {
+  color: var(--warning);
+  font-weight: 500;
+}

@@ -364,7 +364,28 @@ pub(crate) fn set_stage(
     if target == current {
         return Ok((spec, Vec::new()));
     }
+    let warnings = stage_warnings(project, &spec, target);
+    let mut action = format!("stage {} → {stage}", spec.stage);
+    if !warnings.is_empty() {
+        action.push_str(&format!(" (warning: {})", warnings.join("; ")));
+    }
+    if !note.trim().is_empty() {
+        action.push_str(&format!(" — {}", note.trim()));
+    }
+    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let raw = set_field(&raw, "stage", stage);
+    write_atomic(&path, &append_audit(&raw, &audit_line(actor, &action)))?;
+    Ok((find(project, id)?.1, warnings))
+}
+
+/// What moving `spec` to the stage at `target` should warn about. Never blocks. The browser asks for
+/// these before showing the move, and the same list is recorded with it, so the two cannot differ.
+pub(crate) fn stage_warnings(project: &Path, spec: &Spec, target: usize) -> Vec<String> {
+    let current = STAGES.iter().position(|s| *s == spec.stage).unwrap_or(0);
     let mut warnings = Vec::new();
+    if target == current {
+        return warnings;
+    }
     if target > current + 1 {
         warnings.push(format!(
             "skipped {}",
@@ -378,17 +399,86 @@ pub(crate) fn set_stage(
             spec.criteria.len()
         ));
     }
-    let mut action = format!("stage {} → {stage}", spec.stage);
-    if !warnings.is_empty() {
-        action.push_str(&format!(" (warning: {})", warnings.join("; ")));
+    // Ship means released: say so when the work is not even in history or on the main line yet
+    // (a user test reached "Shipped" with the spec file uncommitted and its branch unmerged).
+    if STAGES[target] == "ship" {
+        let ship = ship_state(project, spec);
+        if ship.uncommitted > 0 {
+            warnings.push(format!(
+                "{} uncommitted change{} in the project",
+                ship.uncommitted,
+                if ship.uncommitted == 1 { "" } else { "s" }
+            ));
+        }
+        if let Some((branch, base)) = ship.unmerged {
+            warnings.push(format!("branch {branch} is not merged into {base}"));
+        }
     }
-    if !note.trim().is_empty() {
-        action.push_str(&format!(" — {}", note.trim()));
+    warnings
+}
+
+/// Whether a spec's work has reached history and the main line.
+#[derive(Serialize, Debug, Default, PartialEq)]
+pub(crate) struct ShipState {
+    pub uncommitted: usize,
+    /// The spec's branch and the branch it has not been merged into.
+    pub unmerged: Option<(String, String)>,
+}
+
+pub(crate) fn ship_state(project: &Path, spec: &Spec) -> ShipState {
+    let uncommitted = git(project, &["status", "--porcelain=v1", "-uall"])
+        .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
+        .unwrap_or(0);
+    let exists = |branch: &str| {
+        git(
+            project,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ],
+        )
+        .is_ok()
+    };
+    let unmerged = default_branch(project)
+        .filter(|base| !spec.branch.is_empty() && *base != spec.branch && exists(&spec.branch))
+        .filter(|base| {
+            git(
+                project,
+                &["merge-base", "--is-ancestor", &spec.branch, base],
+            )
+            .is_err()
+        })
+        .map(|base| (spec.branch.clone(), base));
+    ShipState {
+        uncommitted,
+        unmerged,
     }
-    let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let raw = set_field(&raw, "stage", stage);
-    write_atomic(&path, &append_audit(&raw, &audit_line(actor, &action)))?;
-    Ok((find(project, id)?.1, warnings))
+}
+
+/// The branch work is merged into: the remote's default, else `main` or `master` if present.
+fn default_branch(project: &Path) -> Option<String> {
+    if let Ok(head) = git(
+        project,
+        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    ) {
+        if let Some(name) = head.trim().strip_prefix("origin/") {
+            return Some(name.to_owned());
+        }
+    }
+    ["main", "master"].into_iter().map(str::to_owned).find(|b| {
+        git(
+            project,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{b}"),
+            ],
+        )
+        .is_ok()
+    })
 }
 
 /// Marks criterion `index` proven or reopened. Proving one asks for evidence, kept in the trail.
@@ -811,6 +901,50 @@ mod tests {
         assert!(last
             .action
             .contains("2 of 2 acceptance criteria not yet proven"));
+    }
+
+    #[test]
+    fn shipping_warns_about_uncommitted_work_and_an_unmerged_branch() {
+        let project = temp_repo();
+        let spec = new_spec(&project);
+        let ship = STAGES.iter().position(|s| *s == "ship").unwrap();
+        let warnings = stage_warnings(&project, &spec, ship);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("1 uncommitted change in the project")),
+            "the new spec file: {warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|w| w.contains("not merged")),
+            "no branch yet"
+        );
+
+        git(&project, &["switch", "--quiet", "-c", &spec.branch]).unwrap();
+        git(&project, &["add", "-A"]).unwrap();
+        git(&project, &["commit", "--quiet", "-m", "spec"]).unwrap();
+        let warnings = stage_warnings(&project, &spec, ship);
+        assert!(
+            !warnings.iter().any(|w| w.contains("uncommitted")),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == &format!("branch {} is not merged into main", spec.branch)),
+            "{warnings:?}"
+        );
+
+        git(&project, &["switch", "--quiet", "main"]).unwrap();
+        git(&project, &["merge", "--quiet", "--ff-only", &spec.branch]).unwrap();
+        let merged = ship_state(&project, &spec);
+        assert_eq!(merged, ShipState::default(), "merged and clean");
+        assert!(
+            stage_warnings(&project, &spec, 2)
+                .iter()
+                .all(|w| !w.contains("merged")),
+            "only Ship asks"
+        );
     }
 
     #[test]

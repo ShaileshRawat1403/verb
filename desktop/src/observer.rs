@@ -80,8 +80,12 @@ pub(crate) fn waiting_prompt(screen: &str) -> Option<&'static str> {
     // Fourteen lines: Antigravity's permission prompt lists four wrapped options and a footer under
     // its question, which pushed the question out of a shorter window (seen in a user test).
     let t = tail(screen, 14).to_lowercase();
-    const PATTERNS: [(&str, &str); 13] = [
+    // Agents reword these; "trust this folder" is Claude Code's and Gemini's wording since late 2026
+    // (Claude asks "Is this a project you created or one you trust?", seen in a user test).
+    const PATTERNS: [(&str, &str); 15] = [
         ("requesting permission for", "a permission question"),
+        ("trust this folder", "a permission question"),
+        ("one you trust?", "a permission question"),
         ("run this command?", "a permission question"),
         ("do you trust the contents", "a permission question"),
         ("do you trust the files", "a permission question"),
@@ -305,6 +309,13 @@ mod tests {
             evaluate(&[facts(claude, 90, true, &[])], &["waiting".into()]).is_empty(),
             "muted"
         );
+    }
+
+    #[test]
+    fn claude_codes_folder_trust_question_is_a_permission_question() {
+        let screen = "Accessing workspace:\n/tmp/real\nQuick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team).\nClaude Code'll be able to read, edit, and execute files here.\nSecurity guide\n❯ No, exit\n  Yes, I trust this folder\nEnter to confirm · Esc to cancel";
+        assert_eq!(waiting_prompt(screen), Some("a permission question"));
+        assert_eq!(asking(&[facts(screen, 5, true, &[])]).len(), 1);
     }
 
     #[test]

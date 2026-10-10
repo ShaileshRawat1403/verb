@@ -1539,6 +1539,26 @@ impl WebHost {
                 200,
                 json!(crate::specs::find(&self.project, id)?.1),
             )),
+            ["api", "specs", id, "stage-check"] if method == &Method::Get => {
+                let (_, spec) = crate::specs::find(&self.project, id)?;
+                let to = url
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("to=")))
+                    .unwrap_or(&spec.stage);
+                let target = crate::specs::STAGES
+                    .iter()
+                    .position(|s| *s == to)
+                    .ok_or("unknown stage")?;
+                let ship = crate::specs::ship_state(&self.project, &spec);
+                Ok(Reply::json(
+                    200,
+                    json!({
+                        "warnings": crate::specs::stage_warnings(&self.project, &spec, target),
+                        "ship": ship,
+                    }),
+                ))
+            }
             ["api", "specs", id, "stage"] if method == &Method::Post => {
                 let input: SpecStageRequest = read_json(request)?;
                 let (spec, warnings) = crate::specs::set_stage(
