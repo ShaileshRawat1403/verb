@@ -300,6 +300,7 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                     | "/api/observer"
                     | "/api/stream"
                     | "/api/whoami"
+                    | "/api/agents"
             ) || matches!(
                 parts.as_slice(),
                 ["api", "specs", _] | ["api", "specs", _, "stage-check"]

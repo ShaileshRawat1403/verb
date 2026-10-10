@@ -6991,3 +6991,31 @@ select:focus-visible,
 .access-banner[hidden] {
   display: none;
 }
+/* An agent that has drawn nothing explains itself over its empty screen. */
+.terminal-tile {
+  position: relative;
+}
+.terminal-silent {
+  position: absolute;
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  max-width: min(460px, 80%);
+  margin: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  box-shadow: var(--shadow-raised);
+  z-index: 3;
+}
+.terminal-silent[hidden] {
+  display: none;
+}
+label.not-installed {
+  opacity: 0.5;
+}

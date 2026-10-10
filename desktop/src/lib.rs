@@ -108,6 +108,16 @@ impl Agent {
         }
     }
 
+    /// Whether this agent's program can be started here: found on Verb's own `PATH` (the one a
+    /// hosted terminal is started with), or an executable path. A missing agent used to start a
+    /// terminal that failed at exec and showed an empty tile (Antigravity on Node 1).
+    pub(crate) fn installed(&self) -> bool {
+        if matches!(self, Self::Shell | Self::External | Self::Custom(_)) {
+            return true;
+        }
+        program_on_path(&self.command(), env::var_os("PATH").as_deref())
+    }
+
     /// Flags Verb adds whenever it starts this agent, new session or resumed.
     ///
     /// Codex boots the account's app connectors at startup, which cost tens of seconds before the
@@ -1474,6 +1484,61 @@ fn load_sessions_for_project(project: &Path) -> Result<Vec<Session>, String> {
     Ok(sessions)
 }
 
+/// Whether `program` is an executable file, by path or on `path` (a `PATH` value).
+pub(crate) fn program_on_path(program: &str, path: Option<&std::ffi::OsStr>) -> bool {
+    let executable = |candidate: &Path| {
+        candidate.is_file() && {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                candidate
+                    .metadata()
+                    .is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+            }
+            #[cfg(not(unix))]
+            {
+                true
+            }
+        }
+    };
+    if program.contains('/') {
+        return executable(Path::new(program));
+    }
+    path.is_some_and(|p| env::split_paths(p).any(|dir| executable(&dir.join(program))))
+}
+
+/// For a recorded session: its agent's label, and whether that agent can be started here.
+pub(crate) fn recorded_agent_installed(id: &str) -> Option<(String, bool)> {
+    let agent = load_session_by_id(id).ok()??.agent?;
+    Some((agent.label().to_owned(), agent.installed()))
+}
+
+/// The built-in agents and whether each can be started on this machine.
+pub(crate) fn installed_agents() -> Vec<(&'static str, bool)> {
+    [
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Gemini,
+        Agent::Agy,
+        Agent::OpenCode,
+    ]
+    .into_iter()
+    .map(|agent| {
+        let installed = agent.installed();
+        (
+            match agent {
+                Agent::Claude => "claude",
+                Agent::Codex => "codex",
+                Agent::Gemini => "gemini",
+                Agent::Agy => "agy",
+                _ => "opencode",
+            },
+            installed,
+        )
+    })
+    .collect()
+}
+
 pub(crate) fn load_session_by_id(id: &str) -> Result<Option<Session>, String> {
     Ok(read_session_records()?
         .into_iter()
@@ -2073,6 +2138,30 @@ mod tests {
         let json = session_json(&session);
         assert!(json.contains("\"agent\":null"), "{json}");
         assert!(json.contains("\"runtimeId\":null"), "{json}");
+    }
+
+    #[test]
+    fn an_agent_counts_as_installed_only_when_its_program_is_executable_on_path() {
+        let dir =
+            std::env::temp_dir().join(format!("verb-path-{}-{}", std::process::id(), now_millis()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let tool = dir.join("agy");
+        std::fs::write(&tool, "#!/bin/sh\n").unwrap();
+        let path = std::env::join_paths([dir.clone()]).unwrap();
+        assert!(!program_on_path("agy", Some(&path)), "not executable yet");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(program_on_path("agy", Some(&path)));
+        assert!(
+            program_on_path(tool.to_str().unwrap(), None),
+            "an absolute path"
+        );
+        assert!(!program_on_path("claude", Some(&path)), "not on this PATH");
+        assert!(!program_on_path("agy", None), "no PATH at all");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

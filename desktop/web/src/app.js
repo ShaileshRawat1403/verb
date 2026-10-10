@@ -212,6 +212,7 @@ function handleStreamBinary(buffer) {
   if (!terminal || terminal.closed || terminal.ended) return;
 
   terminal.streaming = true;
+  if (payload.length) markDrawn(terminal);
   terminal.unackedBytes = (terminal.unackedBytes || 0) + payload.length;
   markTerminalActivity(id);
 
@@ -249,6 +250,7 @@ function handleStreamControl(msg) {
       const raw = Uint8Array.from(atob(screen), (c) => c.charCodeAt(0));
       terminal.term.reset();
       terminal.term.write(raw);
+      if (raw.length) markDrawn(terminal);
     }
     const phoneControls = controller === "phone";
     const hasPhone = phoneControls || Boolean(phoneConnected);
@@ -273,6 +275,12 @@ function handleStreamControl(msg) {
       code === 0 ? "Session finished" : `Session exited (${code})`;
     terminal.tile.classList.add("ended");
     terminal.ended = true;
+    if (!hasVisibleText(terminal) && terminal.agent && terminal.agent !== "shell") {
+      showSilent(
+        terminal,
+        `${agentDisplayName(terminal.agent)} exited with code ${code} without printing anything. Open a Terminal here and run it by hand to see why.`,
+      );
+    }
     const titleEl = terminal.tile.querySelector(".terminal-title");
     if (titleEl && !titleEl.querySelector(".terminal-exit-badge")) {
       const badge = document.createElement("span");
@@ -999,7 +1007,7 @@ async function activateSession(id) {
           )
           .join("")}`
       : `<p class="inbox-lead">Nothing was left waiting. Its work stays where it was: in your files, in Git, and in the audit trail of any spec it worked on.</p>`;
-    const continueArgs = CONTINUE_ARGS[session.agent];
+    const continueArgs = ui.installed?.[session.agent] === false ? null : CONTINUE_ARGS[session.agent];
     const actions = `<div class="inbox-actions">${
       continueArgs
         ? `<button type="button" class="primary-button" data-inbox-launch="${escapeHtml(session.agent)}" data-inbox-continue="1">Continue ${escapeHtml(name)}'s latest conversation</button>`
@@ -1009,7 +1017,12 @@ async function activateSession(id) {
         ? `<p class="inbox-note">Continuing picks up ${escapeHtml(name)}'s most recent conversation in this project, which is usually this one.</p>`
         : ""
     }`;
-    $("#inbox-content").innerHTML = items + actions;
+    const notHere = ui.installed?.[session.agent] === false;
+    $("#inbox-content").innerHTML =
+      items +
+      (notHere
+        ? `<p class="inbox-note">${escapeHtml(name)} is not installed on this machine, so this conversation cannot be continued here. Install it on the host, or continue on the machine where it ran.</p>`
+        : actions);
     showDialog("inbox-dialog");
   } catch (error) {
     toast(error.message, "error");
@@ -1051,7 +1064,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><div class="terminal-bottom"><span class="terminal-state">${streamReady ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${streamReady ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -1130,6 +1143,7 @@ function addTerminal(session) {
     pollTimer: null,
   };
   ui.terminals.set(session.id, terminal);
+  watchSilence(terminal);
   terminal.typeahead = attachTypeahead(term);
   terminal.blocks = attachCommandBlocks(term, {
     copy(text) {
@@ -1592,8 +1606,10 @@ async function pollTerminal(id) {
     );
     receivedBytes = bytes.length;
     if (output.reset) terminal.term.reset();
-    if (bytes.length)
+    if (bytes.length) {
+      markDrawn(terminal);
       await new Promise((resolve) => terminal.term.write(bytes, resolve));
+    }
     terminal.cursor = output.cursor;
     if (output.running) {
       const phoneControls = output.controller === "phone";
@@ -2281,6 +2297,68 @@ function initResizers() {
   });
 }
 
+/** An agent that has drawn nothing says so, instead of an empty black tile (Claude on Node 1 hung
+ * before its first frame and looked like a broken Verb). */
+function showSilent(terminal, text) {
+  const note = terminal.tile.querySelector(".terminal-silent");
+  if (!note) return;
+  note.textContent = text;
+  note.hidden = false;
+}
+/** Whether the screen shows any character. Output alone is not enough: an empty screen still
+ * arrives as escape sequences (a reset, a cursor move). */
+function hasVisibleText(terminal) {
+  const buffer = terminal.term.buffer.active;
+  for (let y = 0; y < buffer.length; y += 1) {
+    if (buffer.getLine(y)?.translateToString(true).trim()) return true;
+  }
+  return false;
+}
+function markDrawn(terminal) {
+  if (terminal.drew) return;
+  // Checked once xterm has applied the write.
+  requestAnimationFrame(() => {
+    if (terminal.drew || !hasVisibleText(terminal)) return;
+    terminal.drew = true;
+    clearTimeout(terminal.silentTimer);
+    const note = terminal.tile.querySelector(".terminal-silent");
+    if (note) note.hidden = true;
+  });
+}
+function watchSilence(terminal) {
+  if (!terminal.agent || terminal.agent === "shell") return;
+  terminal.silentTimer = setTimeout(() => {
+    if (terminal.ended || terminal.closed || hasVisibleText(terminal)) return;
+    showSilent(
+      terminal,
+      `${agentDisplayName(terminal.agent)} has not drawn anything for 15 seconds. It may still be starting, be waiting on the network, or be stuck. End it if it stays like this.`,
+    );
+  }, 15000);
+}
+/** Which agents this machine can start (from the server). Unknown means allowed. */
+async function loadInstalledAgents() {
+  try {
+    ui.installed = (await api("GET", "/api/agents")).installed;
+  } catch {
+    ui.installed = {};
+  }
+  const missing = (agent) => ui.installed[agent] === false;
+  document.querySelectorAll("#spec-agent option, #talk-agent option").forEach((option) => {
+    option.disabled = missing(option.value);
+    if (option.disabled && !option.textContent.includes("not installed")) option.textContent += " · not installed";
+  });
+  document.querySelectorAll('input[name="agent"]').forEach((input) => {
+    input.disabled = missing(input.value);
+    input.closest("label")?.classList.toggle("not-installed", input.disabled);
+    input.closest("label")?.setAttribute("title", input.disabled ? "Not installed on this machine" : "");
+  });
+  const picker = $("#spec-agent");
+  if (picker?.selectedOptions[0]?.disabled) {
+    const first = [...picker.options].find((o) => !o.disabled);
+    if (first) picker.value = first.value;
+  }
+}
+
 /** Driven with an access token (an agent, a script): say so on every page, with its scope and expiry. */
 async function showAccess() {
   try {
@@ -2351,6 +2429,7 @@ async function bootstrap() {
   // early click reads as "not yet" instead of silently doing nothing.
   document.querySelectorAll("[data-ready-gate]").forEach((el) => (el.disabled = false));
   showAccess();
+  loadInstalledAgents();
   showView(ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);

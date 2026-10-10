@@ -1224,6 +1224,13 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if method == &Method::Get && path == "/api/agents" {
+            let agents: serde_json::Map<String, Value> = crate::installed_agents()
+                .into_iter()
+                .map(|(name, installed)| (name.to_owned(), json!(installed)))
+                .collect();
+            return Ok(Reply::json(200, json!({ "installed": agents })));
+        }
         if method == &Method::Get && path == "/api/whoami" {
             return Ok(Reply::json(200, json!(self.access)));
         }
@@ -2041,6 +2048,22 @@ impl WebHost {
                 .is_none_or(|command| command.trim().is_empty())
         {
             return Err("enter a CLI executable".to_owned());
+        }
+        // Say plainly when an agent is not on this machine, instead of starting a terminal that
+        // fails at exec and shows an empty tile.
+        let missing = match input.resume_id.as_deref() {
+            Some(id) => crate::recorded_agent_installed(id)
+                .filter(|(_, installed)| !installed)
+                .map(|(agent, _)| agent),
+            None => (input.agent != "shell" && input.agent != "custom")
+                .then(|| crate::Agent::parse(&input.agent))
+                .filter(|agent| !agent.installed())
+                .map(|agent| agent.label().to_owned()),
+        };
+        if let Some(agent) = missing {
+            return Err(format!(
+                "{agent} is not installed on this machine (not found on Verb's PATH). Install it here, or choose another agent."
+            ));
         }
         let start = if let Some(id) = input.resume_id {
             if input.isolated || !input.args.is_empty() || input.command.is_some() {
