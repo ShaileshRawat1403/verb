@@ -55,14 +55,62 @@ pub(crate) struct PollFd {
     pub revents: CShort,
 }
 
-#[link(name = "util")]
+// The PTY is opened by hand rather than with `forkpty`: `forkpty` opens the child's end inside
+// Verb's process without close-on-exec, so a program started on another thread in that instant
+// (git, another terminal) inherited it. The terminal then never saw its last reader go and never
+// reported its end (a CI test hung for 40 minutes on exactly this). Here both ends are opened with
+// O_CLOEXEC, so nothing but the child ever holds them.
 unsafe extern "C" {
-    fn forkpty(
-        amaster: *mut c_int,
-        name: *mut c_char,
-        termp: *const c_void,
-        winp: *const c_void,
-    ) -> PidT;
+    fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+    fn grantpt(fd: c_int) -> c_int;
+    fn unlockpt(fd: c_int) -> c_int;
+    fn ptsname_r(fd: c_int, buffer: *mut c_char, length: usize) -> c_int;
+    fn fork() -> PidT;
+    fn setsid() -> PidT;
+    fn dup2(from: c_int, to: c_int) -> c_int;
+}
+const O_RDWR: c_int = 2;
+#[cfg(target_os = "macos")]
+const O_NOCTTY: c_int = 0x20000;
+#[cfg(not(target_os = "macos"))]
+const O_NOCTTY: c_int = 0o400;
+#[cfg(target_os = "macos")]
+const O_CLOEXEC: c_int = 0x0100_0000;
+#[cfg(not(target_os = "macos"))]
+const O_CLOEXEC: c_int = 0o2_000_000;
+#[cfg(target_os = "macos")]
+const TIOCSCTTY: u64 = 0x2000_7461;
+#[cfg(not(target_os = "macos"))]
+const TIOCSCTTY: u64 = 0x540E;
+
+/// Opens a PTY pair, both ends close-on-exec, the child's end sized to `window`.
+fn open_pty(window: Option<&WinSize>) -> Result<(c_int, c_int), String> {
+    let fail = |what: &str| format!("could not {what}: {}", io::Error::last_os_error());
+    unsafe {
+        let master = open(c"/dev/ptmx".as_ptr(), O_RDWR | O_NOCTTY | O_CLOEXEC);
+        if master < 0 {
+            return Err(fail("open a terminal"));
+        }
+        let mut name = [0 as c_char; 128];
+        if grantpt(master) != 0
+            || unlockpt(master) != 0
+            || ptsname_r(master, name.as_mut_ptr(), name.len()) != 0
+        {
+            let error = fail("prepare the terminal");
+            close(master);
+            return Err(error);
+        }
+        let slave = open(name.as_ptr(), O_RDWR | O_NOCTTY | O_CLOEXEC);
+        if slave < 0 {
+            let error = fail("open the terminal's other end");
+            close(master);
+            return Err(error);
+        }
+        if let Some(size) = window {
+            ioctl(slave, TIOCSWINSZ, size);
+        }
+        Ok((master, slave))
+    }
 }
 
 #[repr(C)]
@@ -511,19 +559,32 @@ fn fork_pty(
         x_pixels: 0,
         y_pixels: 0,
     });
-    let window_pointer = window
-        .as_ref()
-        .map(|size| std::ptr::from_ref(size).cast::<c_void>())
-        .unwrap_or(ptr::null());
-
-    let mut master_fd = -1;
-    let pid = unsafe { forkpty(&mut master_fd, ptr::null_mut(), ptr::null(), window_pointer) };
+    let (master_fd, slave_fd) = open_pty(window.as_ref())?;
+    let pid = unsafe { fork() };
     if pid < 0 {
-        return Err(io::Error::last_os_error().to_string());
+        let error = io::Error::last_os_error().to_string();
+        unsafe {
+            close(master_fd);
+            close(slave_fd);
+        }
+        return Err(error);
     }
 
     if pid == 0 {
         unsafe {
+            // What `login_tty` does: a new session, the PTY as its controlling terminal, and the
+            // PTY as stdin, stdout and stderr (dup2 clears close-on-exec on those three).
+            if setsid() < 0 || ioctl(slave_fd, TIOCSCTTY, 0) < 0 {
+                _exit(126);
+            }
+            for fd in 0..3 {
+                if dup2(slave_fd, fd) < 0 {
+                    _exit(126);
+                }
+            }
+            if slave_fd > 2 {
+                close(slave_fd);
+            }
             // File::lock uses flock on Unix. A dup has CLOEXEC cleared, so the agent inherits
             // the same open-file-description lock if Verb itself dies before the agent exits.
             // The host still owns and closes its original handle on the normal path.
@@ -549,21 +610,11 @@ fn fork_pty(
         }
     }
 
-    // `forkpty` hands back a master without close-on-exec, so every program Verb starts later --
-    // the next agent, a shell in another pane -- inherited it and could write into *this* session:
-    // one agent answering another's permission prompt. Marked now, before anything else is spawned
-    // from this thread. (A spawn on another thread in the instant between `forkpty` and this call
-    // could still inherit it; closing that window needs `posix_openpt(O_CLOEXEC)`.)
+    // The child holds its end now; Verb keeps only the master, which is close-on-exec from birth,
+    // so no later program can write into this session (one agent answering another's prompt).
     unsafe {
-        let flags = fcntl(master_fd, F_GETFD);
-        if flags < 0 || fcntl(master_fd, F_SETFD, flags | FD_CLOEXEC) < 0 {
-            let error = io::Error::last_os_error();
-            let _ = kill(-pid, SIGKILL);
-            let _ = kill(pid, SIGKILL);
-            return Err(format!("could not protect the PTY: {error}"));
-        }
+        close(slave_fd);
     }
-
     Ok((unsafe { File::from_raw_fd(master_fd) }, pid))
 }
 
@@ -1070,6 +1121,15 @@ mod tests {
             None,
         )
         .unwrap();
+        // A watchdog: if the PTY never reports its end (an inherited child end once kept it open),
+        // fail in seconds instead of hanging the test run.
+        let pid = process.pid;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(15));
+            unsafe {
+                kill(pid, SIGKILL);
+            }
+        });
         let mut master = process.master;
         let mut bytes = Vec::new();
         let mut buffer = [0_u8; 128];
