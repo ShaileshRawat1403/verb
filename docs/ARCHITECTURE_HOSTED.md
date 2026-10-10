@@ -37,8 +37,20 @@ scalable architecture"). Nothing here is built yet; this document is for approva
 
 Firecracker is chosen for the VMs: it boots in about a second, restores from snapshot faster, keeps
 memory overhead per VM small, and is what large multi-tenant serverless platforms use for exactly
-this boundary. It needs KVM, so workspace hosts are bare-metal servers or cloud instances with
-nested virtualisation.
+this boundary. It needs KVM.
+
+**Free-only constraint (owner, 2026-10-10): no paid hosting.** Free cloud VMs generally do not
+expose KVM, so the host agent talks to an **isolation driver** with two implementations behind one
+interface (start, stop, snapshot, attach volume, egress policy):
+
+| Driver | Needs | Boundary | Where it runs for free |
+| --- | --- | --- | --- |
+| **Firecracker** | Linux with KVM | Hardware virtualisation (separate kernel) | A Linux machine the owner already has (an old PC or laptop) |
+| **gVisor** (`runsc`, open source) | Any Linux; no KVM (its systrap platform) | A user-space kernel between the workspace and the host kernel | Free-tier cloud VMs (e.g. Oracle Cloud Always Free, Arm, up to 4 cores and 24 GB) |
+
+The architecture does not change with the driver; only the strength of the boundary does. A free
+deployment can start on gVisor and move hosts to Firecracker when KVM hardware is available,
+workspace by workspace.
 
 ## What changes in Verb itself
 
@@ -96,10 +108,16 @@ nested virtualisation.
 
 ## Decisions needed
 
-1. **Hosting for workspace hosts**: bare metal (lowest cost per VM; e.g. dedicated servers) or a
-   cloud with nested virtualisation (more elastic, more expensive).
-2. **Sign-in**: an identity provider (OIDC: Google, GitHub) or our own accounts.
-3. **Where P1 starts**: a rented KVM host, or a Linux machine the owner already has.
+Constraint: free only. Free components throughout: Firecracker or gVisor, Postgres or SQLite,
+MinIO or the host's disk for object storage, Caddy for TLS, Cloudflare Tunnel (free) or Tailscale
+(free tier) for reaching hosts behind home networks.
+
+1. **First workspace host**: a Linux machine the owner already has (Firecracker, if its CPU has
+   virtualisation enabled), or a free-tier cloud VM (gVisor).
+2. **Sign-in**: GitHub or Google sign-in through OIDC (free), or our own accounts. OIDC is
+   recommended: no passwords to store.
+3. **Free-tier limits accepted**: one or two hosts, a handful of concurrent workspaces; the design
+   scales out unchanged when hosts are added.
 
 Until hosted Verb exists, personal nodes like Node 1 keep the single-user model described in
 `docs/SECURITY_MODEL.md`.
