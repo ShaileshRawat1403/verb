@@ -17,6 +17,7 @@ import { icon } from "./icons.js";
 import { attachCommandBlocks } from "./blocks.js";
 import { attachStream } from "./stream-ui.js";
 import { attachTypeahead } from "./typeahead.js";
+import { renderMarkdown } from "./workbench.js";
 import { makeResizer } from "./resize.js";
 import { createTalk, talkTone } from "./talk-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
@@ -533,7 +534,8 @@ function showView(view) {
     else element.removeAttribute("aria-current");
   });
   // Overview, Tasks and Shared notes live under "More"; show the group open when one is in use.
-  if (["overview", "tasks", "memory"].includes(view)) $("#nav-more").open = true;
+  // On phones "More" is a menu: close it once a choice is made.
+  if (["overview", "tasks", "memory"].includes(view)) $("#nav-more").open = !matchMedia("(max-width: 640px)").matches;
   $("#breadcrumb-view").textContent =
     view === "memory" ? "Shared notes" : view.charAt(0).toUpperCase() + view.slice(1);
   if (view === "overview") refreshChecks();
@@ -634,9 +636,8 @@ function render() {
         .join("")
     : emptyState(
         "terminal",
-        "No active sessions",
-        "Open a Terminal or choose an agent to get started.",
-        '<button class="text-button" type="button" data-view="sessions">Open workspace →</button>',
+        "Nothing running",
+        "Open a terminal or start an agent from a spec.",
       );
   $("#overview-tasks").innerHTML = tasks.length
     ? tasks
@@ -656,10 +657,21 @@ function render() {
         '<button class="text-button" type="button" data-action="new-task">Create a task →</button>',
       );
   renderListResults();
-  $("#memory-content").textContent =
-    memory ||
-    "No shared notes yet. Add a decision, constraint, or handoff fact.";
-  $("#memory-content").classList.toggle("empty", !memory);
+  // One note per line (that is how they are appended); each keeps its own inline Markdown.
+  const notes = (memory || "").split("\n").filter((line) => line.trim());
+  $("#memory-meta").textContent = notes.length
+    ? `${notes.length} note${notes.length === 1 ? "" : "s"} · saved with this project`
+    : "Saved with this project";
+  $("#memory-content").innerHTML = notes.length
+    ? `<ol class="note-list">${notes.map((line) => `<li class="md-preview">${renderMarkdown(line, escapeHtml)}</li>`).join("")}</ol>`
+    : emptyState(
+        "file-text",
+        "No shared notes yet",
+        "Add one when a decision or constraint should reach every agent, such as “Use pnpm, not npm.”",
+        '<button class="secondary-button" type="button" data-action="add-note">Add the first note</button>',
+      );
+  // With no tasks there is nothing to select: one empty panel, not a list and a detail pane.
+  $("#task-layout").classList.toggle("no-tasks", tasks.length === 0);
   if (!tasks.some((task) => task.id === ui.selectedTask))
     ui.selectedTask = tasks[0]?.id || null;
   renderTaskDetail();
@@ -719,7 +731,8 @@ function renderListResults() {
         tasks.length ? "No matching tasks" : "No tasks yet",
         tasks.length
           ? "Try a task title, owner, or status."
-          : "Create the first piece of shared work.",
+          : "A task is work that should outlive one agent session: who owns it, where it stands, what was handed off.",
+        tasks.length ? "" : '<button class="secondary-button" type="button" data-action="new-task">Create the first task</button>',
       );
 }
 
@@ -771,7 +784,7 @@ function renderTaskDetail() {
         )
         .join("")
     : '<p class="muted">No actions recorded yet.</p>';
-  panel.innerHTML = `<div class="detail-top"><div class="section-kicker">TASK DETAIL</div><h2>${escapeHtml(task.title)}</h2><div class="detail-meta"><span class="status-pill ${escapeHtml(task.status.replaceAll(" ", "-"))}">${escapeHtml(task.needsHelp ? "Help requested" : taskName(task.status))}</span><span>${task.owner ? `Owned by ${escapeHtml(sessionLabel(task.owner))}` : "Unassigned"}</span></div></div><div class="detail-section"><span class="section-kicker">BRIEF</span><p class="task-brief">${escapeHtml(task.brief || "No brief recorded.")}</p></div><div class="detail-section"><span class="section-kicker">RECORDED HISTORY</span><div class="history-list">${history}</div></div>${buttons ? `<div class="detail-actions">${buttons}</div>` : ""}`;
+  panel.innerHTML = `<div class="detail-top"><h2>${escapeHtml(task.title)}</h2><div class="detail-meta"><span class="status-pill ${escapeHtml(task.status.replaceAll(" ", "-"))}">${escapeHtml(task.needsHelp ? "Help requested" : taskName(task.status))}</span><span>${task.owner ? `Owned by ${escapeHtml(sessionLabel(task.owner))}` : "Unassigned"}</span></div></div><div class="detail-section"><h3>Brief</h3><p class="task-brief">${escapeHtml(task.brief || "No brief recorded.")}</p></div><div class="detail-section"><h3>History</h3><div class="history-list">${history}</div></div>${buttons ? `<div class="detail-actions">${buttons}</div>` : ""}`;
 }
 
 function isActiveSession(session) {
@@ -2332,5 +2345,11 @@ async function bootstrap() {
   setInterval(updatePhoneStatus, 1000);
   setInterval(refreshPhoneStatus, 2500);
 }
+
+// The phone "More" menu closes on a tap anywhere else, like any menu.
+document.addEventListener("click", (event) => {
+  const more = $("#nav-more");
+  if (more.open && matchMedia("(max-width: 640px)").matches && !more.contains(event.target)) more.open = false;
+});
 
 bootstrap();

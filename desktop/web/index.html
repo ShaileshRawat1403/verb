@@ -108,6 +108,7 @@
           </button>
           <details class="nav-more" id="nav-more">
             <summary class="nav-item nav-more-toggle" title="Overview, tasks and shared notes"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></span><span>More</span></summary>
+            <div class="nav-more-items">
             <button
             class="nav-item"
             type="button"
@@ -171,6 +172,7 @@
                 /></svg></span
             ><span>Shared notes</span>
           </button>
+            </div>
           </details>
           
           
@@ -300,87 +302,38 @@
 
         <div class="page-content">
           <section id="view-overview" class="view">
-            <div class="page-heading overview-heading">
+            <div class="page-heading">
               <div>
-                <h1>Project overview</h1>
-                <p>Active work and project checks, in one place.</p>
-              </div>
-              <button
-                class="secondary-button"
-                type="button"
-                data-view="sessions"
-              >
-                Open workspace →
-              </button>
-            </div>
-            <div class="stat-grid">
-              <div class="stat-card">
-                <div>
-                  <strong id="stat-sessions">0</strong
-                  ><span>Active sessions</span>
-                </div>
-              </div>
-              <div class="stat-card">
-                <div>
-                  <strong id="stat-tasks">0</strong><span>Open tasks</span>
-                </div>
-              </div>
-              <div class="stat-card">
-                <div>
-                  <strong id="stat-attention">0</strong
-                  ><span>Need attention</span>
-                </div>
+                <h1>Overview</h1>
+                <p>Running sessions, open tasks and the project's health checks.</p>
               </div>
             </div>
-            <details class="panel checks-panel" open>
-              <summary class="panel-summary">Project checks</summary>
-              <div class="panel-body">
+            <div class="panel stat-strip">
+              <button type="button" class="stat" data-view="sessions"><strong id="stat-sessions">0</strong><span>Running sessions</span></button>
+              <button type="button" class="stat" data-view="tasks"><strong id="stat-tasks">0</strong><span>Open tasks</span></button>
+              <button type="button" class="stat" data-view="sessions"><strong id="stat-attention">0</strong><span>Need attention</span></button>
+            </div>
+            <article class="panel checks-panel">
+              <div class="proof-head">
+                <h3>Project checks</h3>
                 <div class="checks-actions">
-                  <button
-                    class="text-button"
-                    type="button"
-                    data-action="refresh-checks"
-                  >
-                    Check again</button
-                  ><button
-                    class="text-button"
-                    type="button"
-                    data-action="mark-good"
-                    title="Record this state as one that works, to compare against later"
-                  >
-                    Mark as good
-                  </button>
-                </div>
-                <div id="checks-list" class="list-stack" aria-live="polite">
-                  <p class="check-empty">
-                    Reading the repository and runtimes…
-                  </p>
+                  <button class="text-button" type="button" data-action="refresh-checks">Check again</button>
+                  <button class="text-button" type="button" data-action="mark-good" title="Record this state as one that works, to compare against later">Mark as good</button>
                 </div>
               </div>
-            </details>
+              <div id="checks-list" class="list-stack" aria-live="polite">
+                <p class="check-empty">Reading the repository and runtimes…</p>
+              </div>
+            </article>
             <div class="overview-columns">
-              <details class="panel overview-card" open>
-                <summary class="panel-summary">Active sessions</summary>
+              <article class="panel overview-card">
+                <div class="proof-head"><h3>Running sessions</h3><button class="text-button" type="button" data-view="sessions">All sessions →</button></div>
                 <div id="overview-sessions" class="list-stack"></div>
-                <button
-                  class="text-button panel-link"
-                  type="button"
-                  data-view="sessions"
-                >
-                  Open sessions →
-                </button>
-              </details>
-              <details class="panel overview-card" open>
-                <summary class="panel-summary">Tasks</summary>
+              </article>
+              <article class="panel overview-card">
+                <div class="proof-head"><h3>Open tasks</h3><button class="text-button" type="button" data-view="tasks">All tasks →</button></div>
                 <div id="overview-tasks" class="list-stack"></div>
-                <button
-                  class="text-button panel-link"
-                  type="button"
-                  data-view="tasks"
-                >
-                  Open tasks →
-                </button>
-              </details>
+              </article>
             </div>
           </section>
 
@@ -703,37 +656,17 @@
           <section id="view-tasks" class="view">
             <div class="page-heading">
               <div>
-                <span class="section-kicker">PROJECT WORK</span>
                 <h1>Tasks</h1>
-                <p>
-                  Ownership, requests for help, and handoffs stay visible across
-                  agent sessions.
-                </p>
+                <p>Who owns what, requests for help, and handoffs, kept across agent sessions.</p>
               </div>
-              <button
-                class="primary-button"
-                type="button"
-                data-action="new-task"
-              >
-                <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New task
-              </button>
+              <button class="primary-button" type="button" data-action="new-task"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg> New task</button>
             </div>
-            <div class="task-layout">
+            <div class="task-layout" id="task-layout">
               <div class="panel task-list-panel">
-                <div class="panel-heading compact">
-                  <h2>Tasks</h2>
+                <div class="task-search-row">
+                  <input id="task-search" class="list-search" type="search" placeholder="Find a task by title, owner or status" aria-label="Find a task" autocomplete="off" />
                   <span class="count-chip" id="task-count">0</span>
                 </div>
-                <label class="list-search-label" for="task-search"
-                  >Find work</label
-                >
-                <input
-                  id="task-search"
-                  class="list-search"
-                  type="search"
-                  placeholder="Title, owner, or status…"
-                  autocomplete="off"
-                />
                 <div id="task-list" class="task-list"></div>
               </div>
               <div class="panel task-detail-panel" id="task-detail">
@@ -749,43 +682,15 @@
           <section id="view-memory" class="view">
             <div class="page-heading">
               <div>
-                <span class="section-kicker">SHARED CONTEXT</span>
-                <h1>Project memory</h1>
-                <p>
-                  Short decisions and facts available to every agent session
-                  through Verb’s shared read.
-                </p>
+                <h1>Shared notes</h1>
+                <p>Short decisions and facts every agent session can read: a constraint, a choice made, a handoff fact. Conversations stay in each agent's own history.</p>
               </div>
-              <button
-                class="primary-button"
-                type="button"
-                data-action="add-note"
-              >
-                Add note
-              </button>
+              <button class="primary-button" type="button" data-action="add-note">Add note</button>
             </div>
-            <div class="memory-layout">
-              <div class="panel memory-panel">
-                <div class="panel-heading">
-                  <div>
-                    <span class="section-kicker">PROJECT MEMORY</span>
-                    <h2>Shared notes</h2>
-                  </div>
-                  <span class="small-status">Saved with this project</span>
-                </div>
-                <pre id="memory-content" class="memory-content"></pre>
-              </div>
-              <div class="context-tip">
-                <span class="tip-symbol"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg></span>
-                <div>
-                  <strong>Keep it useful, keep it short.</strong>
-                  <p>
-                    Record decisions, constraints, and handoff context. Agent
-                    conversations remain in each agent’s own CLI store.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <article class="panel memory-panel">
+              <div class="proof-head"><h3>Notes</h3><span class="small-status" id="memory-meta">Saved with this project</span></div>
+              <div id="memory-content" class="memory-notes"></div>
+            </article>
           </section>
         </div>
       </main>

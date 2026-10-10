@@ -200,6 +200,27 @@ test("host view: read-only machine health", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("the older views sit under More, on a desktop and on a phone", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto(url);
+  await expect(page.locator("#spec-title:visible, #spec-empty h1:visible").first()).toBeVisible();
+  await page.locator(".nav-more > summary").click();
+  await page.locator('.nav-item[data-view="memory"]').click();
+  await expect(page.locator("#view-memory h1")).toHaveText("Shared notes");
+  await expect(page.locator("#breadcrumb-view")).toHaveText("Shared notes");
+  // On a phone, More is a menu: it must open, lead somewhere, and close behind the choice.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('.nav-item[data-view="specs"]').click();
+  await expect(page.locator("#nav-more")).not.toHaveAttribute("open", "");
+  await page.locator(".nav-more > summary").click();
+  await expect(page.locator('.nav-item[data-view="tasks"]')).toBeVisible();
+  await page.locator('.nav-item[data-view="tasks"]').click();
+  await expect(page.locator("#view-tasks")).toHaveClass(/active/);
+  await expect(page.locator("#nav-more")).not.toHaveAttribute("open", "");
+  expect(errors).toEqual([]);
+});
+
 test("ask verb answers from evidence and its sources open", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
