@@ -529,12 +529,13 @@ mod tests {
         // A stand-in for agy that prints a turn and records its arguments.
         let dir = std::env::temp_dir().join(format!("verb-talk-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        let _ = std::fs::remove_file(dir.join("args"));
         let script = dir.join("agy");
         let args_file = dir.join("args");
         std::fs::write(
             &script,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\necho '---' >> '{}'\n\
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\necho '---' >> '{}'\nsleep 0.3\n\
                  echo '{{\"event\":\"init\",\"conversation_id\":\"conv-9\"}}'\n\
                  echo '{{\"event\":\"result\",\"result\":{{\"conversation_id\":\"conv-9\",\"status\":\"SUCCESS\",\"response\":\"done\"}}}}'\n",
                 args_file.display(),
@@ -548,9 +549,11 @@ mod tests {
         talks.create("t1".into(), Some("001".into()));
         let program = script.to_string_lossy().to_string();
         talks.send("t1", &dir, "first", &program).unwrap();
+        // The stand-in takes 0.3 s, so a message sent now arrives mid-turn (a fast runner once
+        // finished the turn first and ran "too soon" as a real second turn).
         assert!(
-            talks.send("t1", &dir, "too soon", &program).is_err()
-                || talks.view("t1").unwrap().items.len() >= 2
+            talks.send("t1", &dir, "too soon", &program).is_err(),
+            "one turn at a time"
         );
         let wait = || {
             for _ in 0..100 {
