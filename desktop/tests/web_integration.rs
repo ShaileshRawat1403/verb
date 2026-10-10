@@ -1364,7 +1364,9 @@ fn terminal_mode_launches_receives_pty_commands_and_persists() {
 
 #[test]
 fn agy_agent_launch_accepted_by_web_api() {
-    let server = WebServer::start();
+    // Verb checks that an agent is installed before starting it; CI runners have no agy.
+    let path = path_with_fake_agents(&["agy"]);
+    let server = WebServer::start_with_env(&[("PATH", &path)]);
     // Launching agy should be accepted by validation and recorded with agent label agy
     let started = server.json(
         "POST",
@@ -1390,7 +1392,8 @@ fn agy_agent_launch_accepted_by_web_api() {
 
 #[test]
 fn gemini_agent_launch_accepted_by_web_api() {
-    let server = WebServer::start();
+    let path = path_with_fake_agents(&["gemini"]);
+    let server = WebServer::start_with_env(&[("PATH", &path)]);
     // Launching gemini (or mock agent) should be accepted by validation
     let started = server.json(
         "POST",
@@ -1824,4 +1827,45 @@ fn access_tokens_are_scoped_named_and_revocable() {
         200,
         "the owner is unaffected"
     );
+}
+
+/// A `PATH` with stand-in executables for `agents` first, so launches pass Verb's installed check.
+fn path_with_fake_agents(agents: &[&str]) -> String {
+    let dir = std::env::temp_dir().join(format!(
+        "verb-fake-agents-{}-{}",
+        std::process::id(),
+        NEXT_SERVER_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    for agent in agents {
+        let file = dir.join(agent);
+        fs::write(&file, "#!/bin/sh\nsleep 5\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    format!(
+        "{}:{}",
+        dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    )
+}
+
+/// An agent that is not installed is refused with a reason, before any terminal starts.
+#[test]
+fn a_missing_agent_is_refused_before_a_terminal_starts() {
+    let server = WebServer::start_with_env(&[("PATH", "/usr/bin:/bin")]);
+    let (status, body) = server.request(
+        "POST",
+        "/api/terminals",
+        Some(json!({"agent": "agy", "isolated": false})),
+        true,
+    );
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&body).contains("agy is not installed on this machine"));
+    let agents: Value =
+        serde_json::from_slice(&server.request("GET", "/api/agents", None, true).1).unwrap();
+    assert_eq!(agents["installed"]["agy"], json!(false));
 }
