@@ -6509,3 +6509,79 @@ select:focus-visible,
 .topbar .top-commit.secondary-button {
   box-shadow: inset 0 0 0 1px var(--line-strong);
 }
+
+/* ---------------------------------------------------------------- Antigravity talk (src/talk-ui.js) */
+.talk-tile .terminal-titlebar .grow {
+  flex: 1;
+}
+.talk-tile .terminal-titlebar .secondary-button.small {
+  min-height: 26px;
+  font-size: 12px;
+}
+.talk-body {
+  position: relative;
+  inset: auto;
+  height: var(--term-h, clamp(420px, 68vh, 900px));
+}
+.talk-permission {
+  margin-left: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--warning-bg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.talk-permission > .icon {
+  color: var(--warning);
+  flex: none;
+}
+.talk-permission > span {
+  flex: 1;
+}
+.talk-permission b {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.talk-permission code {
+  font: 12px var(--mono);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface);
+}
+.stream-brief {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.stream-brief summary {
+  cursor: pointer;
+  list-style: none;
+}
+.stream-brief summary::-webkit-details-marker {
+  display: none;
+}
+.stream-brief[open] {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.talk-note {
+  margin: 0 auto;
+}
+.talk-thinking {
+  margin: 0 0 0 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.talk-thinking span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: tab-pulse 1.2s ease-in-out infinite;
+}

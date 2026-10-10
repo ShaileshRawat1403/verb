@@ -305,6 +305,7 @@ struct WebHost {
     deployment: Value,
     state_cache: Arc<std::sync::Mutex<Option<StateCache>>>,
     state_generation: Arc<AtomicU64>,
+    talks: crate::talk::Talks,
 }
 
 struct StateCache {
@@ -392,6 +393,11 @@ struct LaunchRequest {
     #[serde(default)]
     args: Vec<String>,
     resume_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TalkMessage {
+    text: String,
 }
 
 #[derive(Deserialize)]
@@ -624,6 +630,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         deployment: deployment_info(),
         state_cache: Arc::default(),
         state_generation: Arc::new(AtomicU64::new(0)),
+        talks: crate::talk::Talks::default(),
     };
     if let Some(jwks) = load_initial_jwks() {
         if let Ok(mut w) = host.jwks_cache.write() {
@@ -1575,6 +1582,72 @@ impl WebHost {
                     json!({"branch": branch, "message": format!("Now on {branch}")}),
                 ))
             }
+            ["api", "specs", id, "talk"] if method == &Method::Post => {
+                // A talk with Antigravity on this spec, through agy's JSON mode (crate::talk).
+                let (path, spec) = crate::specs::find(&self.project, id)?;
+                let talk = format!(
+                    "talk-{:x}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                );
+                self.talks.create(talk.clone(), Some(spec.id.clone()));
+                crate::specs::record(
+                    &path,
+                    &crate::specs::actor(&self.project, "Verb web"),
+                    &format!("started a talk with agy on this spec ({talk})"),
+                )?;
+                let opening = format!(
+                    "{} We are planning first: read the spec and the code, then say how you will meet \
+                     each acceptance criterion.",
+                    crate::specs::agent_brief(&spec)
+                );
+                self.talks.send(
+                    &talk,
+                    &self.project,
+                    &opening,
+                    &crate::talk::program().to_string_lossy(),
+                )?;
+                self.invalidate_state();
+                Ok(Reply::json(201, json!({"talkId": talk})))
+            }
+            ["api", "talk"] if method == &Method::Get => {
+                Ok(Reply::json(200, json!({"talks": self.talks.list()})))
+            }
+            ["api", "talk", id] if method == &Method::Get => {
+                let view = self.talks.view(id).ok_or("no such talk")?;
+                Ok(Reply::json(200, json!(view)))
+            }
+            ["api", "talk", id] if method == &Method::Delete => {
+                self.talks.remove(id);
+                Ok(Reply::json(200, json!({"ok": true})))
+            }
+            ["api", "talk", id, "message"] if method == &Method::Post => {
+                let input: TalkMessage = read_json(request)?;
+                self.talks.send(
+                    id,
+                    &self.project,
+                    &input.text,
+                    &crate::talk::program().to_string_lossy(),
+                )?;
+                Ok(Reply::json(202, json!({"ok": true})))
+            }
+            ["api", "talk", id, "stop"] if method == &Method::Post => {
+                self.talks.stop(id);
+                Ok(Reply::json(200, json!({"ok": true})))
+            }
+            ["api", "talk", id, "terminal"] if method == &Method::Post => {
+                // Continue the same conversation in agy's terminal, where it can ask permission.
+                let view = self.talks.view(id).ok_or("no such talk")?;
+                let conversation = view.conversation_id.ok_or(
+                    "Antigravity has not started this conversation yet; wait for its first reply",
+                )?;
+                let spec = view.spec_id.ok_or("this talk is not on a spec")?;
+                let session = self.start_on_spec_with(&spec, "agy", Some(&conversation))?;
+                self.invalidate_state();
+                Ok(Reply::json(201, json!({"sessionId": session})))
+            }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
                 let session = self.start_on_spec(id, &input.agent)?;
@@ -1845,13 +1918,26 @@ impl WebHost {
     /// Starts an agent (or a shell) on a spec and records it in the spec's audit trail, which is
     /// how the session board and Ask Verb know who worked on what.
     fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<String, String> {
+        self.start_on_spec_with(id, agent, None)
+    }
+
+    /// `conversation`: continue an Antigravity talk in its terminal instead of starting afresh.
+    fn start_on_spec_with(
+        &mut self,
+        id: &str,
+        agent: &str,
+        conversation: Option<&str>,
+    ) -> Result<String, String> {
         let (path, spec) = crate::specs::find(&self.project, id)?;
         // Every agent whose CLI can take an opening prompt gets the spec brief: as the first
         // argument for Claude, Codex and Gemini, through `-i` (run it, then stay interactive) for
         // Antigravity. OpenCode has no such option, so it starts empty and the spec view says so.
         let args = match agent {
             "claude" | "codex" | "gemini" => vec![crate::specs::agent_brief(&spec)],
-            "agy" => vec!["-i".to_owned(), crate::specs::agent_brief(&spec)],
+            "agy" => match conversation {
+                Some(c) => vec!["--conversation".to_owned(), c.to_owned()],
+                None => vec!["-i".to_owned(), crate::specs::agent_brief(&spec)],
+            },
             "opencode" | "shell" => Vec::new(),
             _ => return Err("choose a supported agent".to_owned()),
         };
@@ -1866,8 +1952,13 @@ impl WebHost {
             &path,
             &crate::specs::actor(&self.project, "Verb web"),
             &format!(
-                "started {agent} on this spec (session {})",
-                &session[..session.len().min(8)]
+                "started {agent} on this spec (session {}){}",
+                &session[..session.len().min(8)],
+                if conversation.is_some() {
+                    " to continue the talk"
+                } else {
+                    ""
+                }
             ),
         )?;
         Ok(session)

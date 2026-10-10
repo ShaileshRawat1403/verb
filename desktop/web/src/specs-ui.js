@@ -146,7 +146,9 @@ export function initWorkbench(deps) {
     }).join("");
     const guide = STAGE_GUIDE[spec.stage];
     const nextStage = STAGES[current + 1];
-    const agentLive = specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent !== "shell");
+    const agentLive =
+      specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent !== "shell") ||
+      (deps.ui.talkSpecs?.has(spec.id) ?? false);
     // An agent building a spec that still says Spec or Plan: offer to make the record match the
     // work (a nudge, never a block; moving still shows its usual warnings).
     $("#stage-guide").innerHTML =
@@ -170,7 +172,8 @@ export function initWorkbench(deps) {
   /** Whether a session is an agent waiting for the person's answer (from the observer reply). */
   const needsYou = (id) => deps.ui.waitingTerminals?.has(id) ?? false;
   const specNeedsYou = (spec) =>
-    specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && needsYou(x.id));
+    specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && needsYou(x.id)) ||
+    (deps.ui.waitingTalkSpecs?.has(spec.id) ?? false);
 
   function renderSessions() {
     const spec = selected();
@@ -447,7 +450,26 @@ export function initWorkbench(deps) {
       toast(error.message, "error");
     }
   }
+  /** Antigravity starts as a Talk (src/talk.rs): a conversation view that continues in its terminal. */
+  async function startTalk() {
+    const spec = selected();
+    if (!spec) return;
+    try {
+      const { talkId } = await api("POST", `/api/specs/${spec.id}/talk`);
+      deps.mountTalk(talkId, { focus: true });
+      toast(`Talking with Antigravity about spec ${spec.id}. Recorded in the audit trail.`);
+      refreshSpecs();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  // Every agent, Antigravity included, starts in its own terminal with the spec brief. Talk is an
+  // optional, read-only conversation for Antigravity, offered beside it, never instead of it.
   const startAgent = () => startOnSpec($("#spec-agent").value);
+  const syncTalkButton = () => {
+    $("#spec-talk").hidden = $("#spec-agent").value !== "agy";
+  };
+  $("#spec-agent").addEventListener("change", syncTalkButton);
 
   function openHandoff() {
     const spec = selected();
@@ -691,6 +713,7 @@ export function initWorkbench(deps) {
       "copy-spec-path": copySpecPath,
       "spec-terminal": () => startOnSpec("shell"),
       "spec-agent": startAgent,
+      "spec-talk": startTalk,
       handoff: openHandoff,
       palette: openPalette,
       theme: () => {
@@ -764,6 +787,7 @@ export function initWorkbench(deps) {
       localStorage.setItem("verb.agent", $("#spec-agent").value);
     } catch {}
   });
+  syncTalkButton();
 
   document.addEventListener("change", (event) => {
     const box = event.target.closest("[data-criterion]");
@@ -811,6 +835,7 @@ export function initWorkbench(deps) {
     openHandoff,
     current: () => ({ spec: selected(), git: state.git, meters: state.meters }),
     meterFor: (id) => state.meters?.[id] ?? null,
+    render,
     /** Opens the evidence dialog for a criterion of the selected spec, prefilled; the person decides. */
     suggestProof(index, evidence) {
       const spec = selected();

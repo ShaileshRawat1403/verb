@@ -34,6 +34,7 @@ const PATHS = {
   split: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M12 4v16"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   "arrow-up": '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  square: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
 };
 

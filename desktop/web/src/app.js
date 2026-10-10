@@ -17,6 +17,7 @@ import { icon } from "./icons.js";
 import { attachCommandBlocks } from "./blocks.js";
 import { attachStream } from "./stream-ui.js";
 import { makeResizer } from "./resize.js";
+import { createTalk, talkTone } from "./talk-ui.js";
 import { TERMINAL_THEMES, createThemeController } from "./theme.js";
 import {
   takeInputChunk,
@@ -313,6 +314,9 @@ const ui = {
   toastTimer: null,
   focusedTerminal: null,
   waitingTerminals: new Set(),
+  talks: new Map(),
+  waitingTalkSpecs: new Set(),
+  talkSpecs: new Set(),
   observerOn: false,
   splitTerminals: false,
   launchingTerminal: false,
@@ -373,10 +377,7 @@ document.addEventListener("verb:observer", (event) => {
     ...(enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : []),
   ]);
   // Seen from anywhere: the Sessions nav and the browser tab's title.
-  const waiting = ui.waitingTerminals.size;
-  $('.nav-item[data-view="sessions"]')?.classList.toggle("needs-you", waiting > 0);
-  const base = document.title.replace(/^\(\d+\) Needs you · /, "");
-  document.title = waiting ? `(${waiting}) Needs you · ${base}` : base;
+  updateNeedsYou();
   renderTerminalTabs();
 });
 
@@ -394,6 +395,71 @@ document.addEventListener("keydown", (event) => {
   renderListResults();
   $("#terminal-grid").querySelector(`[data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
 });
+
+/** Mounts the conversation tile for an Antigravity talk (src/talk-ui.js). */
+function mountTalk(id, { focus = false } = {}) {
+  if (!ui.talks.has(id)) {
+    const talk = createTalk(id, {
+      api,
+      escapeHtml,
+      icon,
+      toast,
+      workbench: () => workbench,
+      onChange: () => {
+        refreshTalkSignals();
+        renderTerminalTabs();
+      },
+      openTerminal: (sessionId) =>
+        mountLaunchedSession({ id: sessionId, agent: "agy", isolated: false, state: "live", hasTerminal: true, hostedHere: true }),
+      remove: removeTalk,
+    });
+    ui.talks.set(id, talk);
+    $("#terminal-grid").append(talk.tile);
+  }
+  if (focus || !ui.focusedTerminal) {
+    ui.splitTerminals = false;
+    ui.focusedTerminal = id;
+  }
+  updateTerminalFocus();
+  if (focus) ui.talks.get(id).tile.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function removeTalk(id) {
+  const talk = ui.talks.get(id);
+  if (!talk) return;
+  talk.dispose();
+  talk.tile.remove();
+  ui.talks.delete(id);
+  refreshTalkSignals();
+  updateTerminalFocus();
+}
+
+/** Which specs have a talk, and which talks are stopped on a permission ("Needs you"). */
+function refreshTalkSignals() {
+  ui.talkSpecs = new Set();
+  ui.waitingTalkSpecs = new Set();
+  let waiting = 0;
+  for (const talk of ui.talks.values()) {
+    const data = talk.data();
+    if (!data?.spec_id) continue;
+    ui.talkSpecs.add(data.spec_id);
+    if (talkTone(data) === "waiting") {
+      ui.waitingTalkSpecs.add(data.spec_id);
+      waiting += 1;
+    }
+  }
+  ui.waitingTalks = waiting;
+  updateNeedsYou();
+  workbench?.render?.();
+}
+
+/** The Sessions nav and the tab title count every agent waiting on the person. */
+function updateNeedsYou() {
+  const waiting = ui.waitingTerminals.size + (ui.waitingTalks ?? 0);
+  $('.nav-item[data-view="sessions"]')?.classList.toggle("needs-you", waiting > 0);
+  const base = document.title.replace(/^\(\d+\) Needs you · /, "");
+  document.title = waiting ? `(${waiting}) Needs you · ${base}` : base;
+}
 
 /** The project's agent-stream opt-in, read once and shared by every terminal. */
 const streamSettings = {
@@ -1421,7 +1487,7 @@ function renderTerminalTabs() {
     strip.setAttribute("aria-label", "Terminals");
     grid.prepend(strip);
   }
-  strip.hidden = ui.terminals.size === 0;
+  strip.hidden = ui.terminals.size === 0 && ui.talks.size === 0;
   const split = ui.splitTerminals && ui.terminals.size > 1;
   const tabs = [...ui.terminals.entries()]
     .map(([id, terminal]) => {
@@ -1430,7 +1496,15 @@ function renderTerminalTabs() {
       return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  strip.innerHTML = `${tabs}<span class="tabs-spacer"></span>${
+  const talkTabs = [...ui.talks.entries()]
+    .map(([id, talk]) => {
+      const tone = talkTone(talk.data());
+      const words = tone === "running" ? "answering" : tone === "waiting" ? "wants permission: continue in its terminal" : "ready";
+      const selected = id === ui.focusedTerminal;
+      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
+    })
+    .join("");
+  strip.innerHTML = `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
     ui.terminals.size > 1
       ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
       : ""
@@ -1439,10 +1513,14 @@ function renderTerminalTabs() {
 
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
-  if (!ui.terminals.size && !grid.querySelector(".terminal-empty"))
+  if (!ui.terminals.size && !ui.talks.size && !grid.querySelector(".terminal-empty"))
     grid.append(emptyTerminalTemplate.cloneNode(true));
-  if (!ui.focusedTerminal || !ui.terminals.has(ui.focusedTerminal))
-    ui.focusedTerminal = ui.terminals.keys().next().value || null;
+  if (ui.talks.size) grid.querySelector(".terminal-empty")?.remove();
+  if (!ui.focusedTerminal || (!ui.terminals.has(ui.focusedTerminal) && !ui.talks.has(ui.focusedTerminal)))
+    ui.focusedTerminal = ui.terminals.keys().next().value || ui.talks.keys().next().value || null;
+  ui.talks.forEach(({ tile }, id) => {
+    tile.classList.toggle("focused", id === ui.focusedTerminal && !ui.splitTerminals);
+  });
   grid.classList.toggle(
     "focused",
     Boolean(ui.focusedTerminal) && !ui.splitTerminals,
@@ -2190,6 +2268,10 @@ async function bootstrap() {
     .slice(0, 6)) {
     addTerminal(session);
   }
+  // Talks live on the server for as long as Verb runs; they come back with the page too.
+  api("GET", "/api/talk")
+    .then(({ talks }) => talks.forEach((t) => mountTalk(t.id)))
+    .catch(() => {});
   refreshState(true);
   connectTerminalStream();
   // Late-bound cross-links between views (Ask Verb opens specs and files).
@@ -2210,6 +2292,7 @@ async function bootstrap() {
     fitTerminals,
     launchQuickTerminal,
     mountLaunchedSession,
+    mountTalk,
     selectTerminal,
     theme,
   });
