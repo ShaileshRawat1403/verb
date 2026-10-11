@@ -168,6 +168,19 @@ impl Agent {
         let Some(home) = isolation::agent_home() else {
             return ResumeVerdict::Unknown;
         };
+        if isolation::profile().is_ok_and(|p| p.is_some()) {
+            if identity.is_none() {
+                return ResumeVerdict::Unknown;
+            }
+            return match isolation::recovery_evidence(self.label(), project, None, identity)
+                .map(|e| e.status)
+                .as_deref()
+            {
+                Some("yes") => ResumeVerdict::Yes,
+                Some("no") => ResumeVerdict::No,
+                _ => ResumeVerdict::Unknown,
+            };
+        }
         match (self, identity) {
             (Self::Claude, Some(id)) => agents::claude_verdict_for(project, &home, id),
             (Self::Codex, Some(id)) => agents::codex_verdict_for(project, &home, id),
@@ -443,6 +456,7 @@ fn run() -> Result<(), Failure> {
     match command.as_str() {
         "help" | "--help" | "-h" => print_help(),
         "version" | "--version" | "-V" => println!("{APP_NAME} {}", env!("CARGO_PKG_VERSION")),
+        "__agent-recovery" => isolation::recovery_command(&project, &rest)?,
         "status" => print_status(&project, json)?,
         "sessions" => print_sessions(json)?,
         "context" => print_context(&project, json)?,

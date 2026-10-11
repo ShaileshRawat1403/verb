@@ -43,3 +43,22 @@ Canonical launcher: `desktop/scripts/verb-agent-launch`. Disposable Linux accept
 this fixture on Linux with separate accounts, real sudo and a finite Docker memory cgroup; it
 requires no private node repository or provider credentials. PocketFabric owns Android mount views,
 account provisioning and service installation; its installer consumes this launcher from Verb.
+
+## Recovery with private native records
+
+Claude/Codex may create record files or parent directories the host cannot read. The host now
+runs a bounded `__agent-recovery` metadata check through the same launcher under the agent UID.
+Only identity and yes/no/unknown verdict return; transcript text and credential files do not.
+Discovery filters by project/start time and refuses ambiguous new records. Probing is asynchronous
+so it cannot stall terminal byte delivery. Identity is persisted when discovered so a host
+interruption does not erase it. Exact-ID verdicts are checked under the agent account too.
+
+This does not enable conversation streaming or observation through unreadable files: those remain
+unobserved. AGY's native exact conversation resume has been tested, but automatic Verb recovery
+remains unconfirmed because its interactive binary record format has no supported adapter.
+
+Authenticated candidate acceptance: Claude/Codex/AGY responses and native exact marker recall;
+real Claude/Codex hosted PTYs, private-record recovery and same-session resume. Claude-created
+Python tests passed. Codex command/edit execution failed under its native workspace sandbox on the
+phone: the kernel has CONFIG_USER_NS disabled. No sandbox bypass, privilege increase or security
+setting change was applied. Authentication and chat success do not prove command capability.

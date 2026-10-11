@@ -243,7 +243,7 @@ impl Hosted {
     fn poll_agent_record(&mut self) -> Result<bool, String> {
         let now = crate::now_millis();
         let events = self.watch.poll(now);
-        let changed = !events.is_empty();
+        let mut changed = !events.is_empty();
         for event in events {
             self.logger.agent_observed(&event)?;
             if let AgentEvent::ToolOutcome {
@@ -262,6 +262,10 @@ impl Hosted {
             // Known only once a line has been read, so this follows the poll rather than preceding
             // it.
             self.session.resume_identity = self.watch.conversation_id();
+            if self.session.resume_identity.is_some() {
+                crate::save_session(&self.session)?;
+                changed = true;
+            }
         }
         Ok(changed)
     }

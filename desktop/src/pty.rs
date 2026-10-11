@@ -946,6 +946,9 @@ fn proxy_terminal(
         // rather than a guess about which conversation in the store is newest.
         if session.resume_identity.is_none() {
             session.resume_identity = watch.conversation_id();
+            if session.resume_identity.is_some() {
+                crate::save_session(session)?;
+            }
         }
 
         if child_code.is_none() {

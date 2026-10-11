@@ -33,7 +33,7 @@
 //! these are reported as what they are: observed from the agent's record.
 
 use crate::json::{json_number, json_string};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// One structural thing an agent did, as its own record describes it.
@@ -324,6 +324,16 @@ impl RecordTail {
         project: &Path,
         since: std::time::SystemTime,
     ) -> Option<Self> {
+        Self::find_matching(record, home, project, since, false)
+    }
+
+    fn find_matching(
+        record: Record,
+        home: &Path,
+        project: &Path,
+        since: std::time::SystemTime,
+        unique: bool,
+    ) -> Option<Self> {
         let candidates = match record {
             Record::Claude => vec![home
                 .join(".claude")
@@ -343,6 +353,21 @@ impl RecordTail {
                 if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
                     continue;
                 }
+                if matches!(record, Record::Codex) {
+                    let header = std::fs::File::open(&path)
+                        .ok()
+                        .and_then(|file| {
+                            std::io::BufReader::new(file.take(64 * 1024)).lines().next()
+                        })
+                        .and_then(Result::ok);
+                    if !header
+                        .as_deref()
+                        .and_then(|line| crate::json::json_string(line, "cwd"))
+                        .is_some_and(|cwd| crate::agents::same_directory(&cwd, project))
+                    {
+                        continue;
+                    }
+                }
                 let Ok(metadata) = entry.metadata() else {
                     continue;
                 };
@@ -360,6 +385,9 @@ impl RecordTail {
                 // Born before this session started means it is somebody else's work, not ours.
                 if born < since {
                     continue;
+                }
+                if unique && newest.is_some() {
+                    return None;
                 }
                 if newest.as_ref().is_none_or(|(best, _)| born > *best) {
                     newest = Some((born, path));
@@ -498,6 +526,19 @@ impl RecordTail {
     }
 }
 
+/// Called only by the metadata worker under the agent account; no transcript content leaves it.
+pub(crate) fn recovery_identity(
+    agent: &str,
+    project: &Path,
+    since: std::time::SystemTime,
+) -> Option<String> {
+    let home = crate::isolation::agent_home()?;
+    let mut tail =
+        RecordTail::find_matching(Record::for_agent(agent)?, &home, project, since, true)?;
+    tail.poll(crate::now_millis());
+    tail.conversation_id
+}
+
 /// `sessions/YYYY/MM/DD`, deepest first, so the newest day is looked at before older ones.
 fn codex_day_directories(root: &Path) -> Vec<PathBuf> {
     let mut days = Vec::new();
@@ -533,6 +574,9 @@ pub struct AgentWatch {
     started_at: std::time::SystemTime,
     tail: Option<RecordTail>,
     observed: Observed,
+    remote_identity: Option<String>,
+    next_remote_probe: u128,
+    remote_probe: Option<std::sync::mpsc::Receiver<Option<String>>>,
 }
 
 impl AgentWatch {
@@ -550,6 +594,9 @@ impl AgentWatch {
             started_at: std::time::SystemTime::now(),
             tail: None,
             observed: Observed::default(),
+            remote_identity: None,
+            next_remote_probe: 0,
+            remote_probe: None,
         }
     }
 
@@ -563,6 +610,48 @@ impl AgentWatch {
         let Some(record) = self.record else {
             return Vec::new();
         };
+        // Private agent records stay under that UID. Never treat a listable-but-unreadable
+        // file as an active tail, and never export transcript contents through this worker.
+        if crate::isolation::profile().is_ok_and(|p| p.is_some()) {
+            if let Some(probe) = &self.remote_probe {
+                match probe.try_recv() {
+                    Ok(identity) => {
+                        self.remote_identity = identity;
+                        self.remote_probe = None;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => self.remote_probe = None,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+            }
+            if self.remote_identity.is_none()
+                && self.remote_probe.is_none()
+                && now >= self.next_remote_probe
+            {
+                self.next_remote_probe = now.saturating_add(1000);
+                let agent = match record {
+                    Record::Claude => "claude",
+                    Record::Codex => "codex",
+                };
+                let project = self.project.clone();
+                let since = self.started_at;
+                let identity = self.resume_identity.clone();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                self.remote_probe = Some(receiver);
+                // Metadata I/O must not delay PTY bytes or keyboard echo.
+                std::thread::spawn(move || {
+                    let found = crate::isolation::recovery_evidence(
+                        agent,
+                        &project,
+                        Some(since),
+                        identity.as_deref(),
+                    )
+                    .and_then(|e| e.identity);
+                    let _ = sender.send(found);
+                });
+            }
+            return Vec::new();
+        }
+
         if self.tail.is_none() {
             let Some(home) = crate::isolation::agent_home() else {
                 return Vec::new();
@@ -588,6 +677,9 @@ impl AgentWatch {
     /// The distinction is the point: an empty observation and an absent one mean different things,
     /// and only one of them may ever be shown as "nothing has gone wrong".
     pub fn observed_if_read(&self) -> Option<&Observed> {
+        if self.tail.is_none() && crate::isolation::profile().is_ok_and(|p| p.is_some()) {
+            return None;
+        }
         self.record.map(|_| &self.observed)
     }
 
@@ -606,13 +698,51 @@ impl AgentWatch {
     ///
     /// The record being followed is the one this session created. Its id is evidence, not a guess.
     pub fn conversation_id(&self) -> Option<String> {
-        self.tail.as_ref()?.conversation_id.clone()
+        self.tail
+            .as_ref()
+            .and_then(|tail| tail.conversation_id.clone())
+            .or_else(|| self.remote_identity.clone())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_metadata_filters_projects_and_refuses_ambiguous_records() {
+        let root = std::env::temp_dir().join(format!("verb-private-recovery-{}", crate::new_id()));
+        let home = root.join("home");
+        let project = root.join("project");
+        let directory = home.join(".codex/sessions/2026/10/11");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let write = |name: &str, cwd: &Path| {
+            let header = serde_json::json!({"type":"session_meta","payload":{"id":name,"cwd":cwd}});
+            std::fs::write(
+                directory.join(format!("rollout-{name}.jsonl")),
+                format!("{header}\n"),
+            )
+            .unwrap();
+        };
+        write("other", &root.join("other-project"));
+        write("ours", &project);
+        let mut found =
+            RecordTail::find_matching(Record::Codex, &home, &project, std::time::UNIX_EPOCH, true)
+                .unwrap();
+        found.poll(1);
+        assert_eq!(found.conversation_id.as_deref(), Some("ours"));
+        write("also-ours", &project);
+        assert!(RecordTail::find_matching(
+            Record::Codex,
+            &home,
+            &project,
+            std::time::UNIX_EPOCH,
+            true
+        )
+        .is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_claude_user_record_opens_a_turn() {

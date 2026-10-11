@@ -290,6 +290,96 @@ fn sudo_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/usr/bin/sudo"))
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct RecoveryEvidence {
+    pub identity: Option<String>,
+    pub status: String,
+}
+
+/// Ask the same root-owned executable under the agent UID. Return metadata, never record text.
+pub(crate) fn recovery_evidence(
+    agent: &str,
+    project: &Path,
+    since: Option<std::time::SystemTime>,
+    identity: Option<&str>,
+) -> Option<RecoveryEvidence> {
+    let executable = std::env::current_exe().ok()?;
+    secure_launcher(&executable).ok()?;
+    let since = since
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_millis());
+    let output = command(Path::new("/usr/bin/timeout"), project, "")
+        .ok()?
+        .args([
+            "--kill-after=1s",
+            "2s",
+            executable.to_str()?,
+            "__agent-recovery",
+            agent,
+            &since.to_string(),
+            identity.unwrap_or(""),
+        ])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > 4096 {
+        return None;
+    }
+    let evidence: RecoveryEvidence = serde_json::from_slice(&output.stdout).ok()?;
+    if evidence
+        .identity
+        .as_deref()
+        .is_some_and(|id| crate::valid_resume_identity(id).is_none())
+    {
+        return None;
+    }
+    if identity.is_some() && evidence.identity.as_deref() != identity {
+        return None;
+    }
+    Some(evidence)
+}
+
+pub(crate) fn recovery_command(project: &Path, args: &[String]) -> Result<(), String> {
+    // The launcher clears the isolation flag before exec. Never recurse or read the host's home.
+    if profile()?.is_some()
+        || args.len() != 3
+        || !matches!(args[0].as_str(), "claude" | "codex" | "opencode")
+    {
+        return Err("invalid agent recovery metadata request".into());
+    }
+    let since = args[1]
+        .parse::<u64>()
+        .map_err(|_| "invalid record timestamp")?;
+    let identity = if args[2].is_empty() {
+        crate::observe::recovery_identity(
+            &args[0],
+            project,
+            std::time::UNIX_EPOCH + std::time::Duration::from_millis(since),
+        )
+    } else {
+        Some(
+            crate::valid_resume_identity(&args[2])
+                .ok_or("invalid conversation identity")?
+                .to_owned(),
+        )
+    };
+    let verdict = crate::Agent::parse(&args[0]).resume_verdict(project, identity.as_deref());
+    let status = match verdict {
+        crate::ResumeVerdict::Yes => "yes",
+        crate::ResumeVerdict::No => "no",
+        crate::ResumeVerdict::Unknown => "unknown",
+    };
+    println!(
+        "{}",
+        serde_json::to_string(&RecoveryEvidence {
+            identity,
+            status: status.into()
+        })
+        .map_err(|e| e.to_string())?
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

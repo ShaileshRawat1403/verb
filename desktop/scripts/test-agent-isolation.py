@@ -149,6 +149,54 @@ try:
     raw_attempt = subprocess.run(['runuser','-u','verb-host','--','sudo','-n','-u','verb-agent','--','/usr/local/libexec/verb-agent-launch',str(project),'fixture','--','touch',str(project/'must-not-execute')], capture_output=True)
     run('gpasswd','-d','verb-agent',raw_group)
     assert raw_attempt.returncode != 0 and not (project/'must-not-execute').exists(), 'raw-network group was accepted'
+    # Native-shaped private records: Claude is listable/0600; Codex has a private 0700 tree.
+    for agent_name in ('claude','codex'):
+        stub=Path('/usr/local/bin')/agent_name
+        stub.write_text('''#!/usr/bin/python3
+import json,os,re,sys,uuid
+from pathlib import Path
+name=Path(sys.argv[0]).name
+project=str(Path.cwd())
+identity=sys.argv[sys.argv.index('resume')+1] if 'resume' in sys.argv else (sys.argv[sys.argv.index('--resume')+1] if '--resume' in sys.argv else str(uuid.uuid4()))
+home=Path.home()
+if name=='claude':
+ directory=home/'.claude/projects'/re.sub('[^a-zA-Z0-9]','-',project)
+ directory.mkdir(parents=True,exist_ok=True)
+ record=directory/(identity+'.jsonl')
+ lines=[{'type':'user','sessionId':identity,'cwd':project,'message':{'role':'user','content':'SYNTHETIC_PRIVATE_TRANSCRIPT'}}]
+else:
+ directory=home/'.codex/sessions/2026/10/11'
+ directory.mkdir(parents=True,exist_ok=True)
+ (home/'.codex').chmod(0o700)
+ record=directory/('rollout-fixture-'+identity+'.jsonl')
+ lines=[{'type':'session_meta','payload':{'id':identity,'cwd':project}},{'type':'event_msg','payload':{'type':'user_message','message':'SYNTHETIC_PRIVATE_TRANSCRIPT'}}]
+if not record.exists():
+ record.write_text(''.join(json.dumps(line,separators=(',',':'))+'\\n' for line in lines))
+ record.chmod(0o600)
+print('FIXTURE_READY',flush=True)
+sys.stdin.readline()
+''')
+        stub.chmod(0o755)
+        hosted=api('POST','/api/terminals',{'agent':agent_name,'isolated':False})['sessionId']
+        for _ in range(100):
+            records=json.loads(run('runuser','-u','verb-host','--','env','HOME=/home/verb-host','VERB_AGENT_USER=verb-agent','/usr/local/bin/verb','sessions','--json').stdout)
+            record=next(s for s in records if s['sessionId']==hosted)
+            conversation=record.get('agent',{}).get('resumeIdentity')
+            if conversation: break
+            time.sleep(.1)
+        else: raise AssertionError('private transcript identity was not discovered for '+agent_name)
+        private_record=next(Path('/home/verb-agent').rglob('*'+conversation+'.jsonl'))
+        denied=subprocess.run(['runuser','-u','verb-host','--','test','-r',str(private_record)],capture_output=True)
+        assert denied.returncode!=0, 'fixture transcript was readable by the host'
+        evidence=run('runuser','-u','verb-host','--','sudo','-n','-u','verb-agent','--','/usr/local/libexec/verb-agent-launch',str(project),'','--','/usr/local/bin/verb','__agent-recovery',agent_name,'0',conversation).stdout
+        assert set(json.loads(evidence))=={'identity','status'} and 'SYNTHETIC_PRIVATE_TRANSCRIPT' not in evidence
+        api('DELETE',f'/api/terminals/{hosted}')
+        ended=next(s for s in api('GET','/api/state')['sessions'] if s['id']==hosted)
+        assert ended['state']=='recoverable' and ended['canResume'], ended
+        resumed=api('POST','/api/terminals',{'agent':agent_name,'resume_id':hosted})['sessionId']
+        assert resumed==hosted, 'resume switched the selected Verb session'
+        api('DELETE',f'/api/terminals/{resumed}')
+    print('PASS: private Claude/Codex record metadata, exact resume, unchanged file permissions, no transcript export')
     print("PASS: real Linux PTY/Talk/Git account separation, secret denial, session lock, no-new-privileges, zero capabilities, 512 MiB cgroup, noisy stderr, fail-closed configuration")
 finally:
     server.terminate()
