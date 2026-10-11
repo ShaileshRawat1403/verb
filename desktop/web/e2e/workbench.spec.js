@@ -1,7 +1,7 @@
 // The spec-driven workbench, driven like a person would: through the browser, against the real host.
 import { test, expect } from "@playwright/test";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -22,7 +22,11 @@ const freePort = () =>
 
 test.beforeAll(async () => {
   const bin = resolve(process.env.VERB_BIN ?? "../target/debug/verb");
-  repo = mkdtempSync(join(tmpdir(), "verb-e2e-"));
+  const fixture = mkdtempSync(join(tmpdir(), "verb-e2e-"));
+  repo = join(fixture, "project");
+  const home = join(fixture, "home");
+  mkdirSync(repo);
+  mkdirSync(home, { mode: 0o700 });
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
   git("config", "user.name", "E2E Person");
   git("config", "user.email", "e2e@example.com");
@@ -36,7 +40,8 @@ test.beforeAll(async () => {
   url = `http://127.0.0.1:${port}/#${TOKEN}`;
   server = spawn(bin, ["web", "--port", String(port)], {
     cwd: repo,
-    env: { ...process.env, VERB_TOKEN: TOKEN },
+    // Never load the developer's shell config, tokens, transcripts or durable session store.
+    env: { PATH: process.env.PATH, HOME: home, LANG: "C", VERB_STATE_DIR: join(fixture, "state"), VERB_TOKEN: TOKEN },
     stdio: ["ignore", "pipe", "pipe"],
   });
   await new Promise((ok, fail) => {
@@ -361,4 +366,43 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await expect(page.locator("#observer-label")).toHaveText("Observer off");
   await api("api/observer", { unmute: "failing" });
   expect(errors).toEqual([]);
+});
+
+test("terminal input stays hidden when the real PTY disables echo", async ({ page }) => {
+  const probe = join(repo, "no-echo-probe.py");
+  writeFileSync(probe, `import termios,sys,time\noriginal=termios.tcgetattr(0)\nhidden=original.copy()\nhidden[3] &= ~termios.ECHO\ntermios.tcsetattr(0,termios.TCSANOW,hidden)\nprint('NO_ECHO_READY',flush=True)\ntry:\n line=sys.stdin.readline()\nfinally:\n termios.tcsetattr(0,termios.TCSANOW,original)\nprint('INPUT_ACCEPTED',flush=True)\ntime.sleep(30)\n`);
+  const origin = url.split("/#")[0];
+  const headers = { "X-Verb-Token": TOKEN, Origin: origin };
+  const response = await page.request.post(`${origin}/api/terminals`, {
+    headers, data: { agent: "custom", command: "python3", args: ["-u", probe], isolated: false },
+  });
+  expect(response.status()).toBe(201);
+  const { sessionId } = await response.json();
+  try {
+    // Slow delivery used to activate speculative echo and expose hidden input.
+    await page.route("**/api/terminals/*/output*", async (route) => {
+      await new Promise((ok) => setTimeout(ok, 250));
+      await route.continue();
+    });
+    await page.goto(url);
+    await page.keyboard.press("Alt+Digit3");
+    await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+    await page.locator(`#session-list [data-session-id="${sessionId}"]`).click();
+    const tile = page.locator(`#terminal-${sessionId}`);
+    await expect(tile).toBeVisible();
+    const output = async () => {
+      const response = await page.request.get(`${origin}/api/terminals/${sessionId}/output`, { headers });
+      return Buffer.from((await response.json()).data, "base64").toString();
+    };
+    await expect.poll(output).toContain("NO_ECHO_READY");
+    await tile.locator(".xterm-helper-textarea").focus();
+    await page.keyboard.type("SYNTHETIC_HIDDEN_INPUT", { delay: 80 });
+    await expect(tile).not.toContainText("SYNTHETIC_HIDDEN_INPUT");
+    await expect(tile.locator(".typeahead")).toHaveCount(0);
+    await page.keyboard.press("Enter");
+    await expect.poll(output).toContain("INPUT_ACCEPTED");
+    expect(await output()).not.toContain("SYNTHETIC_HIDDEN_INPUT");
+  } finally {
+    await page.request.delete(`${origin}/api/terminals/${sessionId}`, { headers });
+  }
 });

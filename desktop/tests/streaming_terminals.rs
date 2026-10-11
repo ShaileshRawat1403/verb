@@ -1185,3 +1185,102 @@ fn real_apps_interactive_verification() {
     }
     assert!(tmux_exited, "tmux should exit cleanly");
 }
+
+/// Exercise the OS terminal contract over the same socket used by xterm: no simulated echo.
+#[test]
+fn real_pty_controls_resize_unicode_interrupt_and_hidden_input() {
+    let server = WebServer::start();
+    let probe = server.root.join("project/pty-contract.py");
+    fs::write(
+        &probe,
+        r#"import json, os, signal, sys, termios
+
+def event(kind, **facts):
+    print(json.dumps(dict(kind=kind, **facts), ensure_ascii=False), flush=True)
+def size(*_):
+    s = os.get_terminal_size(0)
+    event('size', rows=s.lines, cols=s.columns)
+signal.signal(signal.SIGWINCH, size)
+signal.signal(signal.SIGINT, lambda *_: event('interrupt'))
+sys.stdin.readline() # handshake after the browser attaches; startup is restored as a screen snapshot
+event('ready', tty=all(os.isatty(fd) for fd in (0,1,2)), foreground=os.tcgetpgrp(0)==os.getpgrp())
+line = sys.stdin.readline().rstrip('\n')
+event('unicode', ok=line=='汉字 é')
+original = termios.tcgetattr(0)
+hidden = original.copy()
+hidden[3] &= ~termios.ECHO
+termios.tcsetattr(0, termios.TCSANOW, hidden)
+event('hidden')
+try:
+    secret = sys.stdin.readline().rstrip('\n')
+finally:
+    termios.tcsetattr(0, termios.TCSANOW, original)
+event('accepted', ok=secret=='SYNTHETIC_NO_ECHO_7421')
+event('eof', ok=sys.stdin.readline()=='')
+"#,
+    )
+    .unwrap();
+    let (status, result) = server.post(
+        "/api/terminals",
+        json!({
+            "agent":"custom", "command":"python3", "args":["-u",probe], "isolated":false
+        }),
+    );
+    assert_eq!(status, 201);
+    let id = result["sessionId"].as_str().unwrap();
+    let mut ws = server.connect_ws();
+    set_timeout(&ws, Duration::from_millis(200));
+    ws.send(Message::Text(
+        json!({"type":"attach","id":id,"rows":24,"cols":80}).to_string(),
+    ))
+    .unwrap();
+    ws.send(encode_input_frame(id, b"go\r")).unwrap();
+    let ready = read_until(&mut ws, id, "\"kind\": \"ready\"");
+    assert!(
+        ready.contains("\"tty\": true") && ready.contains("\"foreground\": true"),
+        "{ready}"
+    );
+    ws.send(Message::Text(
+        json!({"type":"resize","id":id,"rows":37,"cols":101}).to_string(),
+    ))
+    .unwrap();
+    let resized = read_until(&mut ws, id, "\"cols\": 101");
+    assert!(resized.contains("\"rows\": 37"), "{resized}");
+    ws.send(encode_input_frame(id, b"\x03")).unwrap();
+    read_until(&mut ws, id, "\"kind\": \"interrupt\"");
+    ws.send(encode_input_frame(id, "汉字 é\r".as_bytes()))
+        .unwrap();
+    let unicode = read_until(&mut ws, id, "\"kind\": \"hidden\"");
+    assert!(
+        unicode.contains("\"kind\": \"unicode\", \"ok\": true"),
+        "{unicode}"
+    );
+    ws.send(encode_input_frame(id, b"SYNTHETIC_NO_ECHO_7421\r"))
+        .unwrap();
+    let hidden = read_until(&mut ws, id, "\"kind\": \"accepted\"");
+    assert!(
+        !hidden.contains("SYNTHETIC_NO_ECHO_7421"),
+        "PTY echoed hidden input"
+    );
+    assert!(hidden.contains("\"ok\": true"), "{hidden}");
+    ws.send(encode_input_frame(id, b"\x04")).unwrap();
+    assert!(read_until(&mut ws, id, "\"kind\": \"eof\"").contains("\"ok\": true"));
+}
+
+fn read_until(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, id: &str, needle: &str) -> String {
+    let mut output = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if let Ok(Message::Binary(bytes)) = ws.read() {
+            if let Some((terminal, payload)) = decode_output_frame(&bytes) {
+                if terminal == id {
+                    output.push_str(&String::from_utf8_lossy(payload));
+                    if output.contains(needle) && output.ends_with('\n') {
+                        return output;
+                    }
+                }
+            }
+        }
+    }
+    panic!("terminal did not emit {needle}: {output}");
+}

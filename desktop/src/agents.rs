@@ -141,20 +141,21 @@ pub fn codex_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdict
         return ResumeVerdict::Unknown;
     }
     let mut rollouts = Vec::new();
-    collect_files(&root, "jsonl", 5, &mut rollouts);
-    // Codex names each rollout after its conversation, so only files ending in `-<id>.jsonl` can
-    // hold this one. Reading every rollout in full on each check cost ~0.8 s per GiB of history,
-    // and it ran on every reconcile -- which the web page triggers every few seconds.
+    let mut unreadable = collect_files(&root, "jsonl", 5, &mut rollouts).is_err();
+    // Check only the selected conversation; unreadable evidence is Unknown, never No.
     let suffix = format!("-{id}.jsonl");
-    let found = rollouts
-        .iter()
-        .filter(|path| {
-            path.file_name()
-                .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
-        })
-        .any(|path| codex_rollout_is_conversation(path, project, id));
-    if found {
-        ResumeVerdict::Yes
+    for path in rollouts.iter().filter(|path| {
+        path.file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
+    }) {
+        match codex_rollout_is_conversation(path, project, id) {
+            Ok(true) => return ResumeVerdict::Yes,
+            Ok(false) => {}
+            Err(_) => unreadable = true,
+        }
+    }
+    if unreadable {
+        ResumeVerdict::Unknown
     } else {
         ResumeVerdict::No
     }
@@ -162,26 +163,27 @@ pub fn codex_verdict_for(project: &Path, home: &Path, id: &str) -> ResumeVerdict
 
 /// Header names this conversation and project, and a real user turn follows. Streamed, and stops at
 /// the first user turn or after a bounded number of bytes.
-fn codex_rollout_is_conversation(path: &Path, project: &Path, id: &str) -> bool {
+fn codex_rollout_is_conversation(path: &Path, project: &Path, id: &str) -> std::io::Result<bool> {
     use std::io::{BufRead, BufReader, Read};
     const MAX_SCAN_BYTES: u64 = 64 * 1024 * 1024;
-    let Ok(file) = fs::File::open(path) else {
-        return false;
-    };
+    let file = fs::File::open(path)?;
     let mut lines = BufReader::new(file.take(MAX_SCAN_BYTES)).lines();
-    let Some(Ok(header)) = lines.next() else {
-        return false;
+    let Some(header) = lines.next().transpose()? else {
+        return Ok(false);
     };
     let header_matches = json_string(&header, "cwd")
         .is_some_and(|cwd| same_directory(&cwd, project))
         && json_string(&header, "id").as_deref() == Some(id);
-    // Opened is not used: Codex writes the rollout at startup and injects its own
-    // `<environment_context>` as a user-role message, so neither proves a conversation. Only a
-    // user-role record that is not one of those injected blocks does.
-    header_matches
-        && lines
-            .map_while(Result::ok)
-            .any(|line| records_user_turn(&line))
+    if !header_matches {
+        return Ok(false);
+    }
+    // Startup's injected context does not prove a real conversation.
+    for line in lines {
+        if records_user_turn(&line?) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn records_user_turn(line: &str) -> bool {
@@ -291,21 +293,24 @@ fn has_extension(path: &Path, extension: &str) -> bool {
     path.is_file() && path.extension().is_some_and(|value| value == extension)
 }
 
-fn collect_files(directory: &Path, extension: &str, depth: usize, found: &mut Vec<PathBuf>) {
+fn collect_files(
+    directory: &Path,
+    extension: &str,
+    depth: usize,
+    found: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
     if depth == 0 {
-        return;
+        return Ok(());
     }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files(&path, extension, depth - 1, found);
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if fs::metadata(&path)?.is_dir() {
+            collect_files(&path, extension, depth - 1, found)?;
         } else if has_extension(&path, extension) {
             found.push(path);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -444,6 +449,20 @@ mod tests {
     }
 
     // --- Codex ---
+
+    #[test]
+    fn codex_unreadable_history_is_unknown() {
+        let (home, project) = scratch("codex-unreadable");
+        let sessions = home.join(".codex/sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(home.join("missing-history"), sessions.join("2026")).unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            codex_verdict_for(&project, &home, "missing"),
+            ResumeVerdict::Unknown
+        );
+    }
 
     #[test]
     fn codex_rollout_with_a_real_turn_is_recoverable() {

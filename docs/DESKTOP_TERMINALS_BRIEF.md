@@ -249,3 +249,10 @@ is still open.
 
 - 2026-10-04, Claude: brief written from the owner's direction. No code changed. Next: Phase 1.
 
+
+- 2026-10-11, Codex: continued the existing PTY/xterm/streaming implementation during account
+  isolation review. Removed speculative local echo because it could briefly display input to
+  no-echo password prompts; terminal characters now come only from the PTY. Added a real socket
+  regression for controlling-terminal/foreground identity, SIGWINCH geometry, Ctrl-C, Ctrl-D,
+  Unicode and kernel no-echo input. Existing Vim/Python/tmux, backpressure, concurrent throughput
+  and browser reconnect tests remain. No Android-app or transport rewrite.

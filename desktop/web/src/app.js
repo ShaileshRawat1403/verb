@@ -16,7 +16,6 @@ import { initObserver } from "./observer-ui.js";
 import { icon } from "./icons.js";
 import { attachCommandBlocks } from "./blocks.js";
 import { attachStream } from "./stream-ui.js";
-import { attachTypeahead } from "./typeahead.js";
 import { renderMarkdown } from "./workbench.js";
 import { makeResizer } from "./resize.js";
 import { createTalk, talkTone } from "./talk-ui.js";
@@ -217,7 +216,6 @@ function handleStreamBinary(buffer) {
   markTerminalActivity(id);
 
   terminal.term.write(payload, () => {
-    terminal.typeahead?.written();
     terminal.unackedBytes = Math.max(0, terminal.unackedBytes - payload.length);
     terminal.pendingAck = (terminal.pendingAck || 0) + payload.length;
     if (terminal.pendingAck >= 16384) {
@@ -809,7 +807,6 @@ function removeTerminal(id) {
   terminal.observer.disconnect();
   terminal.blocks?.dispose();
   terminal.stream?.dispose();
-  terminal.typeahead?.dispose();
   terminal.term.dispose();
   terminal.tile.remove();
   ui.terminals.delete(id);
@@ -1144,7 +1141,6 @@ function addTerminal(session) {
   };
   ui.terminals.set(session.id, terminal);
   watchSilence(terminal);
-  terminal.typeahead = attachTypeahead(term);
   terminal.blocks = attachCommandBlocks(term, {
     copy(text) {
       navigator.clipboard
@@ -1474,7 +1470,6 @@ function addTerminal(session) {
 
   term.onData((data) => {
     if (terminal.closed || terminal.ended) return;
-    terminal.typeahead?.input(data);
     if (!sendStreamInput(session.id, data)) {
       terminal.inputBuffer += data;
       sendInputBatch();
