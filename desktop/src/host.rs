@@ -12,6 +12,7 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -23,6 +24,7 @@ static BINARY_SHA: OnceLock<Option<String>> = OnceLock::new();
 /// Call once at startup so uptime is measured from launch, not from the first page view.
 pub(crate) fn mark_started() {
     STARTED.get_or_init(|| (Instant::now(), crate::iso8601(crate::now_millis())));
+    let _ = binary_sha();
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -43,6 +45,8 @@ pub(crate) struct VerbFacts {
     pub version: &'static str,
     pub binary_sha256: Option<String>,
     pub commit: Option<String>,
+    pub source_revision: &'static str,
+    pub source_dirty: Option<bool>,
     pub installed: Option<String>,
     pub started: Option<String>,
     pub uptime_secs: Option<u64>,
@@ -221,18 +225,91 @@ pub(crate) fn pick_temperatures(zones: &[(String, i64)]) -> Vec<Temperature> {
 // -------------------------------------------------------------------------------------- probes
 
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(cmd).args(args).output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    let program = crate::exec::trusted_program(cmd, &std::env::current_dir().ok()?)?;
+    let mut command = Command::new(program);
+    command.args(args);
+    bounded_output(&mut command)
+}
+
+fn bounded_output(command: &mut Command) -> Option<String> {
+    use std::process::Stdio;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout
+            .take(128 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map(|_| bytes);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait().ok()? {
+            let bytes = receiver
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .ok()?
+                .ok()?;
+            return (status.success() && bytes.len() <= 128 * 1024)
+                .then(|| String::from_utf8_lossy(&bytes).into_owned());
+        }
+        if Instant::now() >= deadline {
+            #[cfg(unix)]
+            {
+                let _ = crate::pty::signal_group(child.id() as i32, 9);
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn recent_log(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    let length = metadata.len();
+    file.seek(SeekFrom::Start(length.saturating_sub(1024 * 1024)))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.take(1024 * 1024).read_to_end(&mut bytes).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn binary_sha() -> Option<String> {
     BINARY_SHA
         .get_or_init(|| {
-            let exe = std::env::current_exe().ok()?;
-            let bytes = fs::read(exe).ok()?;
-            Some(format!("{:x}", Sha256::digest(bytes)))
+            // Linux keeps this handle on the running inode after an atomic deployment rename.
+            let mut file = if cfg!(target_os = "linux") {
+                fs::File::open("/proc/self/exe").ok()?
+            } else {
+                fs::File::open(std::env::current_exe().ok()?).ok()?
+            };
+            let mut digest = Sha256::new();
+            let mut chunk = [0u8; 64 * 1024];
+            loop {
+                let count = file.read(&mut chunk).ok()?;
+                if count == 0 {
+                    break;
+                }
+                digest.update(&chunk[..count]);
+            }
+            Some(format!("{:x}", digest.finalize()))
         })
         .clone()
 }
@@ -376,16 +453,33 @@ fn battery() -> Battery {
     }
 }
 
-/// The runit service directory, when Verb runs under Termux's runit (directly or inside proot).
+/// Detect standard Linux/chroot runit first, with explicit configuration taking precedence.
 fn runit_dir() -> Option<PathBuf> {
-    std::env::var_os("VERB_RUNIT_SVDIR")
-        .map(PathBuf::from)
-        .or_else(|| Some(PathBuf::from("/data/data/com.termux/files/usr/var/service")))
-        .filter(|p| p.is_dir())
+    if let Some(configured) = std::env::var_os("VERB_RUNIT_SVDIR") {
+        return Some(PathBuf::from(configured)).filter(|path| path.is_dir());
+    }
+    [
+        "/etc/service",
+        "/data/data/com.termux/files/usr/var/service",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .find(|path| path.is_dir())
+}
+
+fn supervisor_program(svdir: &Path) -> Option<PathBuf> {
+    if svdir == Path::new("/etc/service") {
+        return Some(PathBuf::from("/usr/bin/sv"));
+    }
+    let adjacent = svdir.parent()?.parent()?.join("bin/sv");
+    if adjacent.is_file() {
+        return Some(adjacent);
+    }
+    crate::exec::trusted_program("sv", &std::env::current_dir().ok()?)
 }
 
 fn services(svdir: &Path) -> Option<Vec<Service>> {
-    let sv = svdir.parent()?.parent()?.join("bin/sv");
+    let sv = supervisor_program(svdir)?;
     let mut names: Vec<String> = fs::read_dir(svdir)
         .ok()?
         .flatten()
@@ -394,13 +488,12 @@ fn services(svdir: &Path) -> Option<Vec<Service>> {
     names.sort();
     let mut out = Vec::new();
     for name in names {
-        let line = Command::new(&sv)
-            .env("SVDIR", svdir)
-            .args(["status", &name])
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-            .unwrap_or_default();
+        let line = bounded_output(
+            Command::new(&sv)
+                .env("SVDIR", svdir)
+                .args(["status", &name]),
+        )
+        .unwrap_or_default();
         out.push(parse_sv(line.trim()).unwrap_or(Service {
             name,
             state: "unknown".to_owned(),
@@ -438,13 +531,22 @@ pub(crate) fn report() -> Report {
                 .map(|var| var.join("log/sv/verb/current"))
         });
     let events = log
-        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|p| recent_log(&p))
         .map(|raw| parse_service_log(&raw, 12))
         .unwrap_or_default();
     Report {
         verb: VerbFacts {
             version: env!("CARGO_PKG_VERSION"),
-            commit: deployed.as_ref().map(|d| d.0.clone()),
+            commit: deployed.as_ref().map(|d| d.0.clone()).or_else(|| {
+                (env!("VERB_BUILD_REVISION") != "unknown")
+                    .then(|| env!("VERB_BUILD_REVISION").to_owned())
+            }),
+            source_revision: env!("VERB_BUILD_REVISION"),
+            source_dirty: match env!("VERB_BUILD_DIRTY") {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => None,
+            },
             installed: deployed.and_then(|d| d.1),
             binary_sha256: sha,
             started: started.map(|s| s.1.clone()),
@@ -472,6 +574,14 @@ pub(crate) fn report() -> Report {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn standard_runit_uses_the_system_supervisor_binary() {
+        assert_eq!(
+            supervisor_program(Path::new("/etc/service")),
+            Some(PathBuf::from("/usr/bin/sv"))
+        );
+    }
+
     #[test]
     fn macos_battery_reads_from_pmset() {
         let out = "Now drawing from 'Battery Power'\n -InternalBattery-0 (id=23658595)\t99%; discharging; 9:20 remaining present: true\n";

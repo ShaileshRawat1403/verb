@@ -118,6 +118,26 @@ pub use request::{ReadWrite, Request};
 pub use response::{Response, ResponseBox};
 pub use test::TestRequest;
 
+// Bound parser threads for loopback clients that have not reached application authentication.
+struct ConnectionPermit(Arc<std::sync::atomic::AtomicUsize>);
+impl ConnectionPermit {
+    fn acquire(counter: &Arc<std::sync::atomic::AtomicUsize>) -> Option<Self> {
+        let mut count = counter.load(Relaxed);
+        while count < 128 {
+            match counter.compare_exchange_weak(count, count + 1, Relaxed, Relaxed) {
+                Ok(_) => return Some(Self(Arc::clone(counter))),
+                Err(actual) => count = actual,
+            }
+        }
+        None
+    }
+}
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Relaxed);
+    }
+}
+
 mod client;
 mod common;
 mod connection;
@@ -291,10 +311,20 @@ impl Server {
             // a tasks pool is used to dispatch the connections into threads
             let tasks_pool = util::TaskPool::new();
 
+            let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             log::debug!("Running accept thread");
             while !inside_close_trigger.load(Relaxed) {
+                let mut permit = None;
                 let new_client = match server.accept() {
                     Ok((sock, _)) => {
+                        permit = ConnectionPermit::acquire(&connections);
+                        if permit.is_none() {
+                            continue;
+                        }
+                        if let Some(tcp) = sock.try_clone_tcp() {
+                            let _ = tcp.set_read_timeout(Some(Duration::from_secs(10)));
+                            let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
+                        }
                         use util::RefinedTcpStream;
                         let (read_closable, write_closable) = match ssl {
                             None => RefinedTcpStream::new(sock),
@@ -323,6 +353,7 @@ impl Server {
                         let messages = inside_messages.clone();
                         let mut client = Some(client);
                         tasks_pool.spawn(Box::new(move || {
+                            let _permit = permit.take();
                             if let Some(client) = client.take() {
                                 // Synchronization is needed for HTTPS requests to avoid a deadlock
                                 if client.secure() {

@@ -66,6 +66,14 @@ awk '/^Cap(Eff|Prm):/ { if ($2 !~ /^0+$/) exit 1 }' /proc/self/status || fail 'p
 if (printf '%s' -1 > /proc/self/oom_score_adj) 2>/dev/null; then
   fail 'agent can restore OOM protection'
 fi
+# Bound new isolated workloads, including threads; inherited hard limits cannot be raised.
+process_budget=256
+for kind in -S -H; do
+  inherited=$(ulimit "$kind" -u)
+  if [[ "$inherited" =~ ^[0-9]+$ ]] && (( inherited < process_budget )); then process_budget=$inherited; fi
+done
+ulimit -S -u "$process_budget"
+ulimit -H -u "$process_budget"
 ulimit -c 0
 cd -- "$project"
 exec /usr/bin/setpriv --no-new-privs --inh-caps=-all --ambient-caps=-all \

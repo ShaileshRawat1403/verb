@@ -196,26 +196,6 @@ where
     } else if let Some(content_length) = content_length {
         if content_length == 0 {
             Box::new(io::empty()) as Box<dyn Read + Send + 'static>
-        } else if content_length <= 1024 && !expects_continue {
-            // if the content-length is small enough, we just read everything into a buffer
-
-            let mut buffer = vec![0; content_length];
-            let mut offset = 0;
-
-            while offset != content_length {
-                let read = source_data.read(&mut buffer[offset..])?;
-                if read == 0 {
-                    // the socket returned EOF, but we were before the expected content-length
-                    // aborting
-                    let info = "Connection has been closed before we received enough data";
-                    let err = IoError::new(ErrorKind::ConnectionAborted, info);
-                    return Err(RequestCreationError::CreationIoError(err));
-                }
-
-                offset += read;
-            }
-
-            Box::new(Cursor::new(buffer)) as Box<dyn Read + Send + 'static>
         } else {
             let (data_reader, _) = EqualReader::new(source_data, content_length); // TODO:
             Box::new(FusedReader::new(data_reader)) as Box<dyn Read + Send + 'static>

@@ -194,6 +194,7 @@ test("host view: read-only machine health", async ({ page }) => {
   await page.keyboard.press("Alt+Digit7");
   await expect(page.locator("#view-host")).toHaveClass(/active/);
   await expect(page.locator("#host-verb")).toContainText("Version");
+  await expect(page.locator("#host-verb")).toContainText("Build");
   await expect(page.locator("#host-verb")).toContainText("Running for");
   await expect(page.locator("#host-memory .usage-number")).toContainText("%");
   await expect(page.locator("#host-storage .usage-bar")).toBeVisible();

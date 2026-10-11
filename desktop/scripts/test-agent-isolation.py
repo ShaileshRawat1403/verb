@@ -60,13 +60,18 @@ for path in (Path("/root/secret-marker"), Path("/home/verb-host/secret-marker"))
     path.chmod(0o600)
 run("chown", "verb-host:verb-host", "/home/verb-host/secret-marker")
 identity = project / "identity.py"
-identity.write_text('''import json, os
+identity.write_text('''import json, os, resource
 from pathlib import Path
 def denied(path):
     try: Path(path).read_text(); return False
     except PermissionError: return True
+try:
+    resource.setrlimit(resource.RLIMIT_NPROC,(512,512))
+    raise_denied=False
+except (OSError,ValueError):
+    raise_denied=True
 status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
-print(json.dumps({"uid": os.geteuid(), "home": os.environ["HOME"], "root_denied": denied("/root/secret-marker"), "host_denied": denied("/home/verb-host/secret-marker"), "token_absent": "VERB_TOKEN" not in os.environ, "nnp": status["NoNewPrivs"].strip(), "caps": [status[k].strip() for k in ["CapEff", "CapPrm", "CapInh", "CapAmb"]], "limit": Path("/sys/fs/cgroup/memory.max").read_text().strip(), "lock": any(".lock" in os.readlink(fd) for fd in Path("/proc/self/fd").iterdir() if fd.exists())}))
+print(json.dumps({"uid": os.geteuid(), "home": os.environ["HOME"], "root_denied": denied("/root/secret-marker"), "host_denied": denied("/home/verb-host/secret-marker"), "token_absent": "VERB_TOKEN" not in os.environ, "nnp": status["NoNewPrivs"].strip(), "caps": [status[k].strip() for k in ["CapEff", "CapPrm", "CapInh", "CapAmb"]], "nproc": list(resource.getrlimit(resource.RLIMIT_NPROC)), "nproc_raise_denied":raise_denied, "limit": Path("/sys/fs/cgroup/memory.max").read_text().strip(), "lock": any(".lock" in os.readlink(fd) for fd in Path("/proc/self/fd").iterdir() if fd.exists())}))
 ''')
 agy = Path("/usr/local/bin/agy")
 agy.write_text('#!/usr/bin/python3\nimport json, os, sys\nsys.stderr.write("x" * 600000)\nsys.stderr.flush()\nprint(json.dumps({"event":"result", "result":{"status":"SUCCESS", "response":"fixture UID " + str(os.geteuid())}}))\n')
@@ -97,6 +102,7 @@ try:
     assert facts["root_denied"] and facts["host_denied"] and facts["token_absent"], facts
     assert facts["nnp"] == "1" and all(int(mask, 16) == 0 for mask in facts["caps"]), facts
     assert facts["limit"] == "536870912" and facts["lock"], facts
+    assert facts["nproc"] == [256,256] and facts["nproc_raise_denied"], facts
     stubborn = project / "stubborn.py"
     stubborn.write_text('import os, signal, time\nfrom pathlib import Path\nsignal.signal(signal.SIGHUP, signal.SIG_IGN)\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nPath("stubborn.pid").write_text(str(os.getpid()))\nwhile True: time.sleep(.1)\n')
     api("POST", f"/api/terminals/{terminal}/input", {"data":f"python3 {stubborn} &\n"})

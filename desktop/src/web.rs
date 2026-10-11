@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
@@ -20,6 +20,32 @@ use crate::{project, workbench, Agent, SessionState};
 const MAX_BODY: usize = 64 * 1024;
 const MAX_BUFFER: usize = 2 * 1024 * 1024;
 const MAX_REPLY: usize = 128 * 1024;
+
+const MAX_BACKGROUND_REQUESTS: usize = 8;
+const MAX_TERMINAL_CONNECTIONS: usize = 32;
+struct RequestPermit(Arc<AtomicUsize>);
+impl RequestPermit {
+    fn acquire(counter: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
+        let mut count = counter.load(Ordering::Acquire);
+        while count < limit {
+            match counter.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Self(Arc::clone(counter))),
+                Err(actual) => count = actual,
+            }
+        }
+        None
+    }
+}
+impl Drop for RequestPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 struct OutputChunk {
     from: u64,
@@ -297,6 +323,8 @@ impl crate::stream::StreamTerminalHandler for WebTerminalsManager {
 }
 
 struct WebHost {
+    background_requests: Arc<AtomicUsize>,
+    terminal_connections: Arc<AtomicUsize>,
     project: PathBuf,
     project_id: String,
     allowed_origin: Option<String>,
@@ -639,6 +667,8 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         checks: Arc::default(),
         identity,
         deployment: deployment_info(),
+        background_requests: Arc::default(),
+        terminal_connections: Arc::default(),
         state_cache: Arc::default(),
         state_generation: Arc::new(AtomicU64::new(0)),
         talks: crate::talk::Talks::default(),
@@ -1074,6 +1104,15 @@ impl WebHost {
         } else {
             None
         };
+        let Some(permit) =
+            RequestPermit::acquire(&self.terminal_connections, MAX_TERMINAL_CONNECTIONS)
+        else {
+            send_reply(
+                request,
+                Reply::error(503, "too many terminal connections; retry shortly"),
+            );
+            return;
+        };
         let Some(key) = header(&request, "Sec-WebSocket-Key") else {
             send_reply(request, Reply::error(400, "missing Sec-WebSocket-Key"));
             return;
@@ -1099,14 +1138,35 @@ impl WebHost {
         });
 
         std::thread::spawn(move || {
+            let _permit = permit;
             crate::stream::handle_ws_connection(tcp_stream, handler, conn_id);
         });
     }
 
     fn respond(&mut self, mut request: Request) {
+        // A stalled HTTP client must not keep the controller waiting indefinitely.
+        if let Some(stream) = request.tcp_stream() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+        }
         let mut reply = self.dispatch(&mut request);
+        let permit = if reply.deferred.is_some() || reply.state_job.is_some() {
+            let Some(permit) =
+                RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
+            else {
+                send_reply(
+                    request,
+                    Reply::error(503, "desktop host is busy; retry shortly"),
+                );
+                return;
+            };
+            Some(permit)
+        } else {
+            None
+        };
         if let Some(work) = reply.deferred.take() {
             std::thread::spawn(move || {
+                let _permit = permit;
                 match work() {
                     Ok(body) => reply.body = body,
                     Err(error) => {
@@ -1121,6 +1181,7 @@ impl WebHost {
         if let Some(job) = reply.state_job.take() {
             // Only secondary state work leaves the PTY loop. Authentication remains in dispatch.
             std::thread::spawn(move || {
+                let _permit = permit;
                 reply.body = match job.run() {
                     Ok(body) => body,
                     Err(error) => {
@@ -1183,6 +1244,13 @@ impl WebHost {
 
         let url = request.url().to_owned();
         let path = url.split('?').next().unwrap_or("");
+        if request.method() == &Method::Get && path == "/healthz" {
+            // Minimal HTTP readiness after host/origin validation. No project/session or token data.
+            return Reply::json(
+                200,
+                serde_json::json!({"status":"serving","version":env!("CARGO_PKG_VERSION"),"sourceRevision":env!("VERB_BUILD_REVISION"),"sourceDirty":match env!("VERB_BUILD_DIRTY") {"true"=>Some(true),"false"=>Some(false),_=>None}}),
+            );
+        }
         if request.method() == &Method::Get {
             let asset_reply = match path {
                 "/" => Some(Reply::asset(
@@ -2328,6 +2396,22 @@ fn header<'a>(request: &'a Request, name: &'static str) -> Option<&'a str> {
         .map(|header| header.value.as_str())
 }
 
+struct DeadlineReader<'a> {
+    inner: &'a mut dyn Read,
+    until: Instant,
+}
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if Instant::now() >= self.until {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "request body deadline exceeded",
+            ));
+        }
+        self.inner.read(buffer)
+    }
+}
+
 fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, String> {
     if !header(request, "Content-Type").is_some_and(|value| value.starts_with("application/json")) {
         return Err("send application/json".to_owned());
@@ -2336,11 +2420,13 @@ fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, S
         return Err("request body exceeds limit or has no length".to_owned());
     }
     let mut body = Vec::new();
-    request
-        .as_reader()
-        .take((MAX_BODY + 1) as u64)
-        .read_to_end(&mut body)
-        .map_err(|error| format!("could not read request: {error}"))?;
+    DeadlineReader {
+        inner: request.as_reader(),
+        until: Instant::now() + Duration::from_secs(2),
+    }
+    .take((MAX_BODY + 1) as u64)
+    .read_to_end(&mut body)
+    .map_err(|error| format!("could not read request: {error}"))?;
     if body.len() > MAX_BODY {
         return Err("request body exceeds limit".to_owned());
     }
@@ -2350,6 +2436,18 @@ fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn request_capacity_is_bounded_and_recovers_when_work_finishes() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let first = RequestPermit::acquire(&counter, 2).unwrap();
+        let second = RequestPermit::acquire(&counter, 2).unwrap();
+        assert!(RequestPermit::acquire(&counter, 2).is_none());
+        drop(first);
+        assert!(RequestPermit::acquire(&counter, 2).is_some());
+        drop(second);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
 
     #[test]
     fn output_cursor_replays_bytes_and_reports_overflow() {

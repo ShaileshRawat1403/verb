@@ -435,6 +435,13 @@ fn run() -> Result<(), Failure> {
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(default_command);
     let mut rest: Vec<String> = args.collect();
+    if command == "--build-info" {
+        println!(
+            "{}",
+            serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"sourceRevision":env!("VERB_BUILD_REVISION"),"sourceDirty":match env!("VERB_BUILD_DIRTY") {"true"=>Some(true),"false"=>Some(false),_=>None}})
+        );
+        return Ok(());
+    }
     // `--json` belongs only to Verb read commands. Agent arguments are opaque launch input: a
     // harness's own `--json` must reach that harness unchanged.
     let json = matches!(

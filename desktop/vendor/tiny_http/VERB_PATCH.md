@@ -25,3 +25,11 @@ yields a trait-erased `Box<dyn ReadWrite + Send>`, which prevents setting socket
 `TCP_NODELAY` and nonblocking mode) or wrapping the underlying stream with `tungstenite` for
 WebSocket terminal streaming. `upgrade_tcp` provides the raw `TcpStream` while preserving HTTP
 protocol upgrade semantics and disarming automatic connection shutdown upon request drop.
+
+**Patch 3 (Desktop production bounds):** Nonempty bodies are always read lazily, including bodies
+smaller than 1 KiB. Eager small-body reads occurred before Verb could authenticate a request or
+apply its body deadline. Plain TCP connections now have read/write timeouts, parser concurrency
+is capped at 128, header lines at 8 KiB, total headers at 64 KiB/64 fields, and header parsing has
+a total deadline. Verb sets a shorter body-read deadline when dispatching a request. WebSocket
+terminal handlers use nonblocking socket I/O and their own separate connection budget.
+The authenticated stalled-body integration test exercises the former small-body failure.

@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -49,7 +49,11 @@ impl WebServer {
     }
 
     fn start_in_root(root: PathBuf, envs: &[(&str, &str)]) -> Self {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_verb"));
+        Self::start_in_root_with_binary(root, envs, Path::new(env!("CARGO_BIN_EXE_verb")))
+    }
+
+    fn start_in_root_with_binary(root: PathBuf, envs: &[(&str, &str)], binary: &Path) -> Self {
+        let mut cmd = Command::new(binary);
         cmd.args(["web", "--port", "0"])
             .current_dir(root.join("project"))
             .env("VERB_STATE_DIR", root.join("state"))
@@ -2011,4 +2015,85 @@ fn existing_terminal_streams_close_on_access_token_revocation_and_expiry() {
         }
         assert_eq!(server.request("GET", "/api/whoami", None, true).0, 200);
     }
+}
+
+#[test]
+fn host_identifies_running_executable_after_atomic_file_replacement() {
+    let root = std::env::temp_dir().join(format!("verb-running-build-{}", std::process::id()));
+    fs::create_dir_all(root.join("project")).unwrap();
+    fs::create_dir_all(root.join("home")).unwrap();
+    let binary = root.join("verb-original");
+    fs::copy(env!("CARGO_BIN_EXE_verb"), &binary).unwrap();
+    let expected = format!("{:x}", Sha256::digest(fs::read(&binary).unwrap()));
+    let server = WebServer::start_in_root_with_binary(root.clone(), &[], &binary);
+    let replacement = root.join("replacement");
+    fs::write(
+        &replacement,
+        b"replacement is deliberately a different artifact",
+    )
+    .unwrap();
+    fs::rename(replacement, binary).unwrap();
+    let report = server.json("GET", "/api/host", None);
+    assert_eq!(report["verb"]["binary_sha256"], expected);
+    assert!(report["verb"]["source_revision"]
+        .as_str()
+        .is_some_and(|s| s.len() == 40 || s == "unknown"));
+    assert!(report["verb"].get("source_dirty").is_some());
+}
+
+#[test]
+fn readiness_is_minimal_without_granting_api_access() {
+    let server = WebServer::start();
+    let (status, body) = server.request("GET", "/healthz", None, false);
+    assert_eq!(status, 200);
+    let report: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(report["status"], "serving");
+    assert_eq!(report.as_object().unwrap().len(), 4);
+    assert_eq!(server.request("GET", "/api/state", None, false).0, 403);
+}
+
+#[test]
+fn stalled_authenticated_request_body_has_a_deadline() {
+    let server = WebServer::start();
+    let mut slow = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    write!(slow,"POST /api/tasks HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: {}\r\nX-Verb-Token: {}\r\nContent-Type: application/json\r\nContent-Length: 60\r\n\r\n{{",server.port,server.origin,server.token).unwrap();
+    slow.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let started = std::time::Instant::now();
+    let mut response = String::new();
+    BufReader::new(&mut slow).read_line(&mut response).unwrap();
+    assert!(
+        response.contains("400"),
+        "partial body was not rejected: {response}"
+    );
+    assert_eq!(server.request("GET", "/healthz", None, false).0, 200);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "stalled body held the controller indefinitely"
+    );
+}
+
+#[test]
+fn oversized_http_header_is_closed_before_api_dispatch() {
+    let server = WebServer::start();
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let request = format!(
+        "GET /api/state HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Large: {}\r\n\r\n",
+        server.port,
+        "x".repeat(10_000)
+    );
+    let _ = stream.write_all(request.as_bytes());
+    let mut response = [0u8; 64];
+    match stream.read(&mut response) {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) => {}
+        other => panic!("oversized header connection was not closed: {other:?}"),
+    }
+    assert_eq!(server.request("GET", "/healthz", None, false).0, 200);
 }

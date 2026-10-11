@@ -346,3 +346,11 @@ does not advertise a working Continue on phone action. A future mobile receiver 
 authenticated, encrypted transport and render the screen/input states from the bridge. See
 `docs/DESKTOP_MOBILE_CONTINUATION_PRODUCT.md` for the intended interaction and
 `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md` for the versioned local contract.
+
+## Release identity and readiness
+
+`verb --build-info` prints the compiled source revision and dirty-source status. The Host page
+shows those facts and the SHA256 of the running executable, including when its file has been
+atomically replaced by a later installation. `/healthz` is minimal HTTP readiness; project APIs
+still require authentication. See [Desktop production readiness](../docs/DESKTOP_PRODUCTION_READINESS.md)
+for release evidence and remaining deployment gates.

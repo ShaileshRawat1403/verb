@@ -19,7 +19,7 @@ export function initHost(deps) {
   }
 
   const serviceTone = (state) =>
-    state === "not supervised"
+    ["not supervised", "unknown"].includes(state)
       ? "idle"
       : state.startsWith("run")
         ? state.includes("stopping")
@@ -34,7 +34,8 @@ export function initHost(deps) {
     $("#host-notes").innerHTML = r.notes.map((n) => `<div class="host-note">ⓘ ${escapeHtml(n)}</div>`).join("");
     $("#host-verb").innerHTML =
       fact("Version", v.version) +
-      fact("Commit", v.commit ?? "not from a recorded deployment") +
+      fact("Commit", v.commit ?? "not recorded") +
+      fact("Build", v.source_dirty === true ? "Uncommitted source changes" : v.source_dirty === false ? "Committed source" : "Source status unavailable") +
       fact("Running for", formatDuration(v.uptime_secs), v.started ? `since ${v.started}` : "") +
       fact("Memory used", v.rss_kb != null ? formatKb(v.rss_kb) : null) +
       fact("Binary", v.binary_sha256 ? `${v.binary_sha256.slice(0, 12)}…` : null, v.binary_sha256 ?? "");

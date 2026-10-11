@@ -36,6 +36,7 @@ pub struct ClientConnection {
     secure: bool,
 
     tcp_stream: Option<std::net::TcpStream>,
+    header_deadline: std::time::Instant,
     disarmed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -71,6 +72,7 @@ impl ClientConnection {
             no_more_requests: false,
             secure,
             tcp_stream,
+            header_deadline: std::time::Instant::now() + std::time::Duration::from_secs(10),
             disarmed,
         }
     }
@@ -89,6 +91,18 @@ impl ClientConnection {
         let mut prev_byte_was_cr = false;
 
         loop {
+            if buf.len() >= 8192 {
+                return Err(IoError::new(
+                    ErrorKind::InvalidInput,
+                    "HTTP header line exceeds limit",
+                ));
+            }
+            if std::time::Instant::now() >= self.header_deadline {
+                return Err(IoError::new(
+                    ErrorKind::TimedOut,
+                    "HTTP headers deadline exceeded",
+                ));
+            }
             let byte = self.next_header_source.by_ref().bytes().next();
 
             let byte = match byte {
@@ -111,6 +125,7 @@ impl ClientConnection {
     /// Reads a request from the stream.
     /// Blocks until the header has been read.
     fn read(&mut self) -> Result<Request, ReadError> {
+        self.header_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let (method, path, version, headers) = {
             // reading the request line
             let (method, path, version) = {
@@ -124,12 +139,17 @@ impl ClientConnection {
             // getting all headers
             let headers = {
                 let mut headers = Vec::new();
+                let mut header_bytes = 0usize;
                 loop {
                     let line = self.read_next_line().map_err(ReadError::ReadIoError)?;
 
                     if line.is_empty() {
                         break;
                     };
+                    header_bytes = header_bytes.saturating_add(line.len());
+                    if headers.len() >= 64 || header_bytes > 64 * 1024 {
+                        return Err(ReadError::WrongHeader(version));
+                    }
                     headers.push(match FromStr::from_str(line.as_str().trim()) {
                         // TODO: remove this conversion
                         Ok(h) => h,
