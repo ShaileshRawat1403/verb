@@ -97,6 +97,25 @@ fn load(path: &Path) -> Vec<Token> {
         .unwrap_or_default()
 }
 
+/// Serialize all read/modify/write operations, including stream use updates and CLI revocation.
+/// Atomic rename alone does not prevent an older last_used snapshot from resurrecting a token.
+fn store_lock(path: &Path) -> Result<std::fs::File, String> {
+    let parent = path.parent().ok_or("token store has no parent")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path.with_extension("lock"))
+        .map_err(|e| e.to_string())?;
+    file.lock().map_err(|e| e.to_string())?;
+    Ok(file)
+}
+
 fn save(path: &Path, tokens: &[Token]) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("could not create {dir:?}: {e}"))?;
@@ -179,6 +198,7 @@ fn create_in(
     scope: Scope,
     ttl_secs: u64,
 ) -> Result<(Token, String), String> {
+    let _lock = store_lock(store)?;
     let name = name.trim();
     if !valid_name(name) {
         return Err("a token name is 1–40 letters, digits, spaces, '-', '_' or '.'".to_owned());
@@ -230,6 +250,7 @@ pub(crate) fn revoke(which: &str) -> Result<Token, String> {
 }
 
 fn revoke_in(store: &Path, which: &str) -> Result<Token, String> {
+    let _lock = store_lock(store)?;
     let mut tokens = load(store);
     let found = tokens
         .iter_mut()
@@ -248,6 +269,7 @@ pub(crate) fn verify(presented: &str) -> Option<Access> {
 }
 
 fn verify_in(store: &Path, presented: &str) -> Option<Access> {
+    let _lock = store_lock(store).ok()?;
     let rest = presented.strip_prefix(PREFIX)?;
     let (id, secret) = rest.split_once('_')?;
     let mut tokens = load(store);
@@ -391,6 +413,34 @@ pub(crate) fn command(args: &[String]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simultaneous_issuers_do_not_overwrite_each_others_tokens() {
+        let dir = std::env::temp_dir().join(format!("verb-token-race-{}", crate::new_id()));
+        let path = dir.join("tokens.json");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|i| {
+                let path = path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    create_in(&path, &format!("agent-{i}"), Scope::Drive, 3600)
+                        .unwrap()
+                        .1
+                })
+            })
+            .collect();
+        let issued: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert_eq!(load(&path).len(), 8);
+        for token in issued {
+            assert!(verify_in(&path, &token).is_some());
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn scopes_order_and_the_route_policy() {

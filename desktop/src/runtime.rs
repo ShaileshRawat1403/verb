@@ -28,7 +28,7 @@
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// How long one `--version` may take before Verb stops waiting and reports it as failed.
@@ -519,7 +519,8 @@ fn probe(runtime: Runtime, project: &Path) -> Probe {
 /// `Err` when the program does not exist; `Ok(None)` when it ran but failed or timed out.
 fn run_bounded(program: &str, args: &[&str], directory: &Path) -> Result<Option<String>, ()> {
     let program = crate::exec::trusted_program(program, directory).ok_or(())?;
-    let mut child = Command::new(program)
+    let mut child = crate::isolation::command(&program, directory, "")
+        .map_err(|_| ())?
         .args(args)
         .current_dir(directory)
         // A pinned but uninstalled toolchain must be reported as such, not downloaded.

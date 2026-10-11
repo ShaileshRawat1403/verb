@@ -13,7 +13,6 @@
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub(crate) const STAGES: [&str; 6] = ["spec", "plan", "build", "verify", "review", "ship"];
 const CRITERIA_HEADING: &str = "## Acceptance criteria";
@@ -243,9 +242,18 @@ fn audit_line(actor: &str, action: &str) -> String {
 }
 
 fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
-    let tmp = path.with_extension("md.verb-tmp");
-    fs::write(&tmp, contents).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("could not replace {}: {e}", path.display()))
+    crate::fsutil::atomic_write(path, contents.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if crate::isolation::profile()?.is_some() {
+            0o660
+        } else {
+            0o644
+        };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn set_field(raw: &str, key: &str, value: &str) -> String {
@@ -541,7 +549,8 @@ pub(crate) fn set_criterion(
 // ------------------------------------------------------------------------------------------- Git
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::exec::user_git(project)
+        .ok_or("could not prepare isolated git")?
         .arg("-C")
         .arg(project)
         .args(args)

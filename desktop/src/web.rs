@@ -176,9 +176,18 @@ impl WebTerminal {
 
 pub struct WebTerminalsManager {
     terminals: Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
+    access_token: Option<String>,
+    expires_at: Option<Instant>,
 }
 
 impl crate::stream::StreamTerminalHandler for WebTerminalsManager {
+    fn is_authorized(&self) -> bool {
+        self.expires_at.is_none_or(|expiry| Instant::now() < expiry)
+            && self.access_token.as_deref().is_none_or(|token| {
+                crate::tokens::verify(token)
+                    .is_some_and(|access| access.allows(crate::tokens::Scope::Drive))
+            })
+    }
     fn write_terminal_input(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let mut terminals = self.terminals.lock().map_err(|e| e.to_string())?;
         let terminal = terminals.get_mut(id).ok_or("terminal not found")?;
@@ -1038,7 +1047,9 @@ impl WebHost {
                 .or(token_in_query)
                 .and_then(crate::tokens::verify)
         };
-        let is_authorized = access.is_some_and(|a| a.allows(crate::tokens::Scope::Drive));
+        let is_authorized = access
+            .as_ref()
+            .is_some_and(|a| a.allows(crate::tokens::Scope::Drive));
 
         if !is_authorized {
             send_reply(
@@ -1048,6 +1059,21 @@ impl WebHost {
             return;
         }
 
+        let stream_access_token = access
+            .as_ref()
+            .and_then(|access| access.token.as_ref())
+            .and_then(|_| {
+                header(&request, "X-Verb-Token")
+                    .or(token_in_query)
+                    .map(str::to_owned)
+            });
+        let stream_expiry = if session_valid {
+            token_in_query.and_then(|token| self.sessions.get(token).copied())
+        } else if has_valid_session {
+            cookie(&request, "verb_session").and_then(|token| self.sessions.get(token).copied())
+        } else {
+            None
+        };
         let Some(key) = header(&request, "Sec-WebSocket-Key") else {
             send_reply(request, Reply::error(400, "missing Sec-WebSocket-Key"));
             return;
@@ -1068,6 +1094,8 @@ impl WebHost {
         let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::SeqCst);
         let handler = Arc::new(WebTerminalsManager {
             terminals: Arc::clone(&self.terminals),
+            access_token: stream_access_token,
+            expires_at: stream_expiry,
         });
 
         std::thread::spawn(move || {
@@ -1445,9 +1473,7 @@ impl WebHost {
             let project = self.project.clone();
             let mut reply = Reply::json(200, Value::Null);
             reply.deferred = Some(Box::new(move || {
-                let home = std::env::var_os("HOME")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_default();
+                let home = crate::isolation::agent_home().unwrap_or_default();
                 let meters: serde_json::Map<String, Value> = wanted
                     .into_iter()
                     .map(|(id, record, created, conversation)| {
@@ -1799,9 +1825,7 @@ impl WebHost {
                 let project = self.project.clone();
                 let mut reply = Reply::json(200, Value::Null);
                 reply.deferred = Some(Box::new(move || {
-                    let home = std::env::var_os("HOME")
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_default();
+                    let home = crate::isolation::agent_home().unwrap_or_default();
                     let stream = crate::transcript::for_session(
                         record,
                         &home,

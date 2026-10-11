@@ -24,6 +24,7 @@ mod good;
 mod host;
 mod hub;
 mod integration;
+mod isolation;
 mod json;
 mod meter;
 #[cfg(unix)]
@@ -164,7 +165,7 @@ impl Agent {
         if identity.is_some_and(|id| valid_resume_identity(id).is_none()) {
             return ResumeVerdict::Unknown;
         }
-        let Some(home) = home_dir() else {
+        let Some(home) = isolation::agent_home() else {
             return ResumeVerdict::Unknown;
         };
         match (self, identity) {
@@ -417,6 +418,7 @@ pub fn main_entry() {
 }
 
 fn run() -> Result<(), Failure> {
+    isolation::profile()?;
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(default_command);
     let mut rest: Vec<String> = args.collect();
@@ -993,7 +995,12 @@ fn add_shared_bootstrap(agent: &Agent, args: &mut Vec<String>) {
     // Both installed CLIs accept a positional interactive prompt, including after an exact
     // resume ID. Other agents retain their native arguments until their contract is verified.
     if matches!(agent, Agent::Claude | Agent::Codex) {
-        args.push(SHARED_BOOTSTRAP_PROMPT.to_owned());
+        let prompt = if isolation::profile().is_ok_and(|profile| profile.is_some()) {
+            "This session is hosted by Verb under a separate agent account. The host's private session ledger is not readable here; do not use the local CLI shared-memory bridge or claim you fetched it. Use owner-issued scoped HTTP API access when shared task or memory state is needed, and tell the user if that access is unavailable."
+        } else {
+            SHARED_BOOTSTRAP_PROMPT
+        };
+        args.push(prompt.to_owned());
     }
 }
 

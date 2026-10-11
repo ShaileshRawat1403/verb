@@ -1903,3 +1903,112 @@ fn hosted_terminals_get_the_configured_open_file_limit() {
         "soft and hard: Bun raises soft to hard"
     );
 }
+
+#[test]
+fn talk_agents_do_not_inherit_the_owner_token_or_launcher_identity() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let script = server.root.join("agy-fixture");
+    fs::write(
+        &script,
+        "#!/bin/sh\n\
+         if [ -n \"${VERB_TOKEN+x}${CLAUDECODE+x}${CLAUDE_CODE_MESSAGING_TOKEN+x}\" ]; then\n\
+           echo leaked > environment-check\n\
+         elif [ \"$CLAUDE_CONFIG_DIR\" = fixture-config ]; then\n\
+           echo clean > environment-check\n\
+         fi\n\
+         echo '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"done\"}}'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let server = server.restart_with_env(&[
+        ("VERB_AGY_BIN", script.to_str().unwrap()),
+        ("VERB_TOKEN", "synthetic-owner-token"),
+        ("CLAUDECODE", "1"),
+        ("CLAUDE_CODE_MESSAGING_TOKEN", "synthetic-launcher-token"),
+        ("CLAUDE_CONFIG_DIR", "fixture-config"),
+    ]);
+    let spec = server.json(
+        "POST",
+        "/api/specs",
+        Some(json!({"title": "Talk environment", "problem": "p", "criteria": ["works"]})),
+    );
+    let (status, body) = server.request(
+        "POST",
+        &format!("/api/specs/{}/talk", spec["id"].as_str().unwrap()),
+        None,
+        true,
+    );
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    let check = server.root.join("project/environment-check");
+    for _ in 0..50 {
+        if check.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(fs::read_to_string(check).unwrap().trim(), "clean");
+}
+
+#[test]
+fn existing_terminal_streams_close_on_access_token_revocation_and_expiry() {
+    use tungstenite::{handshake::client::generate_key, http::Request, Message};
+    for revoked in [true, false] {
+        let server = WebServer::start();
+        let output = Command::new(env!("CARGO_BIN_EXE_verb"))
+            .args([
+                "token",
+                "create",
+                "--name",
+                "stream",
+                "--scope",
+                "drive",
+                "--expires",
+                "1h",
+            ])
+            .env("VERB_STATE_DIR", server.root.join("state"))
+            .env("HOME", server.root.join("home"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let token = String::from_utf8(output.stdout).unwrap();
+        let request = Request::builder()
+            .uri(format!(
+                "ws://127.0.0.1:{}/api/terminals/ws?token={}",
+                server.port,
+                token.trim()
+            ))
+            .header("Host", format!("127.0.0.1:{}", server.port))
+            .header("Origin", &server.origin)
+            .header("Sec-WebSocket-Key", generate_key())
+            .header("Sec-WebSocket-Version", "13")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .body(())
+            .unwrap();
+        let tcp = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let (mut ws, _) = tungstenite::client(request, tcp).unwrap();
+        assert!(matches!(ws.read().unwrap(), Message::Text(_)));
+        if revoked {
+            let output = Command::new(env!("CARGO_BIN_EXE_verb"))
+                .args(["token", "revoke", "stream"])
+                .env("VERB_STATE_DIR", server.root.join("state"))
+                .env("HOME", server.root.join("home"))
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        } else {
+            let path = server.root.join("state/access-tokens.json");
+            let mut tokens: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            tokens[0]["expires"] = json!(0);
+            fs::write(path, serde_json::to_vec(&tokens).unwrap()).unwrap();
+        }
+        match ws.read() {
+            Ok(Message::Close(_)) | Err(tungstenite::Error::ConnectionClosed) => {}
+            other => panic!("invalidated idle stream did not close: {other:?}"),
+        }
+        assert_eq!(server.request("GET", "/api/whoami", None, true).0, 200);
+    }
+}

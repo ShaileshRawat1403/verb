@@ -1,6 +1,6 @@
 # Verb security model
 
-Status: 2026-10-10. What Verb protects, from whom, what is in place, and the containment decision
+Status: 2026-10-11. What Verb protects, from whom, what is in place, and the containment decision
 that is still open.
 
 ## What Verb is, from a security view
@@ -39,7 +39,9 @@ operating-system user Verb runs as. Everything below follows from that.
   in a banner in the browser. No access token reaches owner-only settings or can mint another
   token. See `desktop/README.md`.
 - **Hosted terminals do not inherit the launcher's secrets**: `VERB_TOKEN` and the session markers
-  and messaging token of an agent that launched Verb are removed from every child's environment.
+  and messaging token of an agent that launched Verb are removed from PTY and Talk agent
+  environments. This does not prevent a same-user process from reading the launcher's environment
+  or token files; containment is still required.
 - **Privacy defaults.** The agent stream (reading agent conversations) and the observer are off
   until the owner turns them on per project; the observer reports a possible secret by kind, never
   by value. The file tree never lists or opens Git-ignored files.
@@ -51,10 +53,11 @@ operating-system user Verb runs as. Everything below follows from that.
 
 ## Residual risks (known, not yet closed)
 
-1. **No containment of terminals.** An agent in a Verb terminal can do anything the Verb account
-   can: read SSH keys, push with the owner's Git credentials, read a token file on disk (Node 1
-   keeps the owner token in a file, readable by its terminals). A `drive` access token therefore
-   buys identity, expiry and revocation, not a boundary.
+1. **Same-user terminals by default.** Without `VERB_AGENT_USER`, an agent can do anything the
+   Verb account can, including reading its credentials and tokens. Opt-in Linux account separation
+   is implemented and tested locally and on a separate Node 1 candidate; it requires a dedicated non-root host, separate agent user,
+   operator-provisioned fixed launcher and memory controller. Production on Node 1 still uses the original root host.
+   See [`AGENT_USER_ISOLATION.md`](AGENT_USER_ISOLATION.md).
 2. **Prompt injection** through content agents read. Verb cannot stop an agent being persuaded;
    it can only keep the agent's own permission prompts in front of the owner and limit the blast
    radius (see containment).
@@ -63,6 +66,29 @@ operating-system user Verb runs as. Everything below follows from that.
 4. **Linux `/proc/<pid>/environ`** shows the environment Verb started with, so `VERB_TOKEN` set in
    the environment is readable by processes of the same user. Prefer letting Verb generate the
    token, or a token file the terminals cannot read (which needs containment).
+5. **Token revocation is not process cancellation.** HTTP and terminal streams recheck scoped
+   credentials; idle streams disconnect within the 250 ms authorization poll after expiry or
+   revocation. Token-store updates are serialized so usage bookkeeping cannot undo revocation.
+   Already-started commands continue until explicitly stopped. Owner session cookies also have
+   their expiration applied to open streams.
+
+## Node 1 after the chroot migration
+
+The private node operations source now provisions a Debian chroot on rooted Android, with private
+mount and hostname namespaces, a Magisk boot entry, runit services, and key-only SSH on port 2222.
+This is an improvement in service independence from Termux, not an agent security boundary. The
+launcher uses root, binds Android's `/dev`, and mounts `/proc` without a PID namespace. Verb and
+its terminals therefore retain root privileges and access to host processes and devices. A chroot
+must not be described as a container or a multi-tenant sandbox.
+
+Separate Linux users are now possible in this environment, unlike the old PRoot setup. The opt-in
+launcher covers PTY, Talk and project-tool subprocesses, including Git hooks. It clears host secrets,
+retains only the session lock, applies no-new-privileges and uses the operator's finite cgroup budget.
+The budget is aggregate across agents; agents still share their own UID, credentials and projects.
+Linux fixture and candidate-device tests cover account separation, teardown, private controller
+exposure and actual memory enforcement. Production cutover remains pending. Root-hosted endpoints and old privileged sessions must be retired at cutover.
+Mount and hostname namespaces alone do not provide any of those guarantees. Source review does
+not verify the phone's installed configuration, reboot recovery, or current network reachability.
 
 ## The open decision: containment
 
@@ -74,7 +100,7 @@ for Verb's. The real options:
 
 | Option | Boundary | Works on | Cost |
 | --- | --- | --- | --- |
-| **A. A separate OS user for agent sessions** | Unix permissions: the owner's home, keys and Verb's tokens are unreadable to agents | macOS, Linux (not Android/proot, which is single-user) | One setup step (create the user, a narrow helper to start PTYs as it); agents need their own logins under that user |
+| **A. A separate OS user for agent sessions** | Unix permissions: the owner's home, keys and Verb's tokens are unreadable to agents | macOS, Linux, rooted Android chroot (not PRoot) | One setup step (create the user, a narrow helper to start agents as it); agents need their own logins under that user |
 | **B. A container per project** (Docker/Podman, dev-container style) | Namespaces; only the project is mounted | Linux natively; macOS through a VM (Docker Desktop, Colima) | A container runtime; images per toolchain; slower start |
 | **C. A VM per workspace** (hosted) | Hardware virtualisation (e.g. Firecracker micro-VMs) | Hosted service | Infrastructure; the standard for a commercial hosted product |
 
@@ -84,9 +110,10 @@ Recommendation:
   for a while. It keeps the agents' own sandboxes working and closes the worst risk (agents reading
   the owner's credentials and Verb's tokens).
 - **Commercial hosted:** C, one micro-VM per workspace, with B for people who self-host on a server.
-- **Node 1 (Android, single user):** accept the single-user model; reach it only through
-  Cloudflare Access and access tokens, keep throwaway projects there, and treat it as a personal
-  device rather than a multi-tenant host.
+- **Node 1 (rooted Android chroot):** implement A before treating it as an isolated agent host;
+  resource limits and reduced privileges also need device verification. Until then, reach it only
+  through Cloudflare Access or trusted SSH and access tokens, keep throwaway projects there, and
+  treat it as a personal root-capable device rather than a multi-tenant host.
 
 Until a containment option ships: give `drive` tokens only to agents you would let use your shell,
 keep real credentials off machines that host Verb for others, and keep the owner in the loop for

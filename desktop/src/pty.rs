@@ -187,9 +187,14 @@ fn child_nofile() -> Option<u64> {
     if unsafe { getrlimit(RLIMIT_NOFILE, &mut limit) } != 0 {
         return None;
     }
-    // Only ever lower, never past what the hard limit allows.
-    let target = wanted.min(limit.max).max(64);
-    (target < limit.current).then_some(target)
+    lowered_nofile(wanted, limit)
+}
+
+fn lowered_nofile(wanted: u64, limit: RLimit) -> Option<u64> {
+    // Lower the hard limit even when the soft limit is already small: Bun can raise soft to hard.
+    // Never raise either inherited limit, including on hosts whose hard limit is below 64.
+    let target = wanted.max(64).min(limit.current).min(limit.max);
+    (target < limit.max).then_some(target)
 }
 
 unsafe extern "C" {
@@ -200,6 +205,8 @@ unsafe extern "C" {
     fn getrlimit(resource: c_int, rlim: *mut RLimit) -> c_int;
     fn setrlimit(resource: c_int, rlim: *const RLimit) -> c_int;
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
+    fn execve(file: *const c_char, argv: *const *const c_char, envp: *const *const c_char)
+        -> c_int;
     fn _exit(status: c_int) -> !;
     fn waitpid(pid: PidT, status: *mut c_int, options: c_int) -> PidT;
     fn kill(pid: PidT, signal: c_int) -> c_int;
@@ -369,6 +376,18 @@ pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
 /// Kills every remaining process in the session `leader` started. A session id cannot be reused
 /// while any member is alive, so matching on it never reaches an unrelated process.
 fn drain_session(leader: PidT) {
+    if crate::isolation::profile().is_ok_and(|profile| profile.is_some()) {
+        // Android hides other UIDs from the host's ps. An empty host-side process list is
+        // therefore not proof that the agent session ended. The fixed launcher enumerates
+        // its own UID and must receive the full escalation even when the host sees nothing.
+        for signal in [SIGHUP, SIGTERM, SIGKILL] {
+            if let Err(error) = crate::isolation::signal_session(leader, signal) {
+                eprintln!("Verb: {error}");
+            }
+            thread::sleep(Duration::from_millis(30));
+        }
+        return;
+    }
     for signal in [SIGHUP, SIGTERM, SIGKILL] {
         let members = session_members(leader);
         if members.is_empty() {
@@ -521,13 +540,16 @@ fn fork_pty(
     size: Option<(u16, u16)>,
     session_lock_fd: Option<c_int>,
 ) -> Result<(File, PidT), String> {
+    let isolated = crate::isolation::profile()?.is_some();
+    let (command, args) =
+        crate::isolation::launch(command, args, project, session_id, env, session_lock_fd)?;
     let project_value = CString::new(project.to_string_lossy().as_bytes())
         .map_err(|_| "project path contains a NUL byte".to_owned())?;
     let command_value =
         CString::new(command).map_err(|_| "command contains a NUL byte".to_owned())?;
     let mut argument_values = Vec::with_capacity(args.len() + 1);
     argument_values.push(command_value.clone());
-    for arg in args {
+    for arg in &args {
         argument_values.push(
             CString::new(arg.as_str())
                 .map_err(|_| "command argument contains a NUL byte".to_owned())?,
@@ -551,6 +573,22 @@ fn fork_pty(
         })
         .collect::<Result<Vec<_>, String>>()?;
     let child_env = child_environment(session_id, project, child_env)?;
+    // Prepare a complete clean envp before the fork for isolated launches. Even a sudo policy
+    // that preserves environment variables must never see the host's startup credentials.
+    let clean_env = child_env
+        .iter()
+        .map(|(key, value)| {
+            let mut entry = key.as_bytes().to_vec();
+            entry.push(b'=');
+            entry.extend_from_slice(value.as_bytes());
+            CString::new(entry).expect("validated environment")
+        })
+        .collect::<Vec<_>>();
+    let mut env_pointers = clean_env
+        .iter()
+        .map(|entry| entry.as_ptr())
+        .collect::<Vec<_>>();
+    env_pointers.push(ptr::null());
     let child_unset = launcher_only_variables(std::env::vars_os().map(|(name, _)| name));
     let child_nofile = child_nofile();
 
@@ -589,14 +627,22 @@ fn fork_pty(
             // File::lock uses flock on Unix. A dup has CLOEXEC cleared, so the agent inherits
             // the same open-file-description lock if Verb itself dies before the agent exits.
             // The host still owns and closes its original handle on the normal path.
-            if session_lock_fd.is_some_and(|fd| dup(fd) < 0) {
+            if session_lock_fd.is_some_and(|fd| {
+                if isolated {
+                    fcntl(fd, F_SETFD, 0) < 0
+                } else {
+                    dup(fd) < 0
+                }
+            }) {
                 _exit(126);
             }
             if chdir(project_value.as_ptr()) != 0 {
                 _exit(126);
             }
-            for name in &child_unset {
-                unsetenv(name.as_ptr());
+            if !isolated {
+                for name in &child_unset {
+                    unsetenv(name.as_ptr());
+                }
             }
             if let Some(soft) = child_nofile {
                 let mut limit = RLimit { current: 0, max: 0 };
@@ -608,8 +654,16 @@ fn fork_pty(
                     setrlimit(RLIMIT_NOFILE, &limit);
                 }
             }
-            set_child_environment(&child_env);
-            execvp(command_value.as_ptr(), argument_pointers.as_ptr());
+            if isolated {
+                execve(
+                    command_value.as_ptr(),
+                    argument_pointers.as_ptr(),
+                    env_pointers.as_ptr(),
+                );
+            } else {
+                set_child_environment(&child_env);
+                execvp(command_value.as_ptr(), argument_pointers.as_ptr());
+            }
             _exit(127);
         }
     }
@@ -991,6 +1045,22 @@ impl Drop for TerminalMode {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn child_nofile_lowers_hard_even_when_soft_is_already_low() {
+        for (wanted, current, max, expected) in [
+            (4096, 4096, 32768, Some(4096)),
+            (4096, 1024, 32768, Some(1024)),
+            (200, 1024, 32768, Some(200)),
+            (4096, 32, 32, None),
+            (4096, 4096, 4096, None),
+        ] {
+            assert_eq!(
+                super::lowered_nofile(wanted, super::RLimit { current, max }),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn variables_meant_for_verbs_launcher_are_not_inherited() {
         for name in [

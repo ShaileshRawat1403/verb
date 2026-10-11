@@ -564,7 +564,7 @@ impl AgentWatch {
             return Vec::new();
         };
         if self.tail.is_none() {
-            let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            let Some(home) = crate::isolation::agent_home() else {
                 return Vec::new();
             };
             self.tail = match self.resume_identity.as_deref() {

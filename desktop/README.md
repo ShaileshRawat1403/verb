@@ -148,8 +148,16 @@ Each token expires (at most 30 days), can be revoked at once, and is recorded by
 ("claude (access token) via Verb web"). Verb stores only a hash. A browser opened with an access token
 shows a banner with its name, scope and expiry on every page.
 
-`drive` is not containment: a terminal runs as the same operating-system user as Verb. Use it for
+`drive` is not containment: by default a terminal runs as the same operating-system user as Verb. Use it for
 agents you would let use your shell anyway; it buys a name, an expiry and revocation.
+
+Linux hosts can opt into separate agent accounts with `VERB_AGENT_USER=verb-agent`. This requires a
+dedicated non-root Verb host account and an operator-provisioned, root-owned
+`/usr/local/libexec/verb-agent-launch` with a narrow sudo rule and a finite memory cgroup.
+Misconfiguration fails closed. PTYs, Talk and project tools (including Git hooks) use the agent
+account; recovery and observation look in its home. No host credentials are forwarded. The
+agent's native CLI bridge cannot access the private host ledger; use scoped HTTP access for
+automation. See [the design and rollout boundaries](../docs/AGENT_USER_ISOLATION.md).
 
 ## Current guarantees
 

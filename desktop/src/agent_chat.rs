@@ -80,7 +80,7 @@ impl ClaudeChatAdapter {
             }
         }
 
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        let home = crate::isolation::agent_home()?;
         let project_slug = crate::agents::claude_project_dir(&self.project);
         let projects_dir = home.join(".claude").join("projects").join(&project_slug);
 
@@ -149,7 +149,7 @@ impl ClaudeChatAdapter {
     }
 
     fn check_session_status(&self) -> Option<String> {
-        let home = std::env::var_os("HOME").map(PathBuf::from)?;
+        let home = crate::isolation::agent_home()?;
         let sessions_dir = home.join(".claude").join("sessions");
         let Ok(entries) = fs::read_dir(sessions_dir) else {
             return None;

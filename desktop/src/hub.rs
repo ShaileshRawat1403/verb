@@ -15,7 +15,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 
 pub(crate) const BRIEF_PATH: &str = "docs/project/BRIEF.md";
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -75,7 +74,8 @@ pub(crate) struct Hub {
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::exec::git(project)
+        .ok_or("could not prepare git")?
         .arg("-C")
         .arg(project)
         .args(args)

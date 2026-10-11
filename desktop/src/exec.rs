@@ -61,7 +61,7 @@ fn is_executable(path: &Path) -> bool {
 /// typically -- are the user's own choice and keep working.
 pub(crate) fn git(project: &Path) -> Option<Command> {
     let program = trusted_program("git", project)?;
-    let mut command = base_git(&program, project);
+    let mut command = base_git(&program, project)?;
     for name in local_filters(&program, project) {
         for key in ["clean", "smudge", "process"] {
             command.arg("-c").arg(format!("filter.{name}.{key}="));
@@ -78,7 +78,7 @@ pub(crate) fn git(project: &Path) -> Option<Command> {
 /// would from the shell.
 pub(crate) fn user_git(project: &Path) -> Option<Command> {
     let program = trusted_program("git", project)?;
-    let mut command = Command::new(program);
+    let mut command = crate::isolation::command(&program, project, "").ok()?;
     command
         .current_dir(project)
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -86,20 +86,23 @@ pub(crate) fn user_git(project: &Path) -> Option<Command> {
     Some(command)
 }
 
-fn base_git(program: &Path, project: &Path) -> Command {
-    let mut command = Command::new(program);
+fn base_git(program: &Path, project: &Path) -> Option<Command> {
+    let mut command = crate::isolation::command(program, project, "").ok()?;
     command
         .args(["-c", "core.fsmonitor=false"])
         .current_dir(project)
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null());
-    command
+    Some(command)
 }
 
 /// Names of filter drivers the repository-local config defines. Reading config runs nothing.
 fn local_filters(program: &Path, project: &Path) -> Vec<String> {
-    let Ok(output) = base_git(program, project)
+    let Some(mut command) = base_git(program, project) else {
+        return Vec::new();
+    };
+    let Ok(output) = command
         .args([
             "config",
             "--local",

@@ -9,6 +9,7 @@ use crate::{hub, specs};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+#[cfg(test)]
 use std::process::Command;
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
@@ -151,7 +152,7 @@ fn spec_source(spec: &specs::Spec) -> Source {
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git")
+    let out = crate::exec::git(project)?
         .arg("-C")
         .arg(project)
         .args(args)

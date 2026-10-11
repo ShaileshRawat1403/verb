@@ -23,12 +23,14 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Arc, Mutex};
 
 const MAX_ITEMS: usize = 400;
 const MAX_TEXT: usize = 12_000;
 const MAX_MESSAGE: usize = 8_000;
+const MAX_LINE: usize = 256 * 1024;
+const MAX_STDERR: usize = 16 * 1024;
 
 /// The framing in front of every Talk turn. Plain and short: agy reads it as the person's words.
 const FRAME: &str = "You are talking with the user through Verb, inside the project folder (your \
@@ -110,6 +112,11 @@ impl Talks {
         };
         if let Some(child) = child {
             if let Some(c) = child.lock().unwrap().as_mut() {
+                let _ = crate::isolation::signal_session(c.id() as i32, 9);
+                #[cfg(unix)]
+                if crate::isolation::profile().is_ok_and(|profile| profile.is_none()) {
+                    let _ = crate::pty::signal_group(c.id() as i32, 9);
+                }
                 let _ = c.kill();
             }
         }
@@ -123,6 +130,12 @@ impl Talks {
         message: &str,
         program: &str,
     ) -> Result<(), String> {
+        let mut command = crate::isolation::command(Path::new(program), project, id)?;
+        #[cfg(unix)]
+        if crate::isolation::profile()?.is_none() {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
         let message = message.trim();
         if message.is_empty() {
             return Err("write a message first".to_owned());
@@ -148,7 +161,16 @@ impl Talks {
             );
             t.conversation_id.clone()
         };
-        let mut command = Command::new(program);
+        // Talk is a hosted agent too: it must not inherit Verb's owner token or the launching
+        // agent's session identity. Keep the same policy as PTY-launched agents.
+        for (name, _) in std::env::vars_os() {
+            if name
+                .to_str()
+                .is_some_and(crate::pty::is_launcher_only_variable)
+            {
+                command.env_remove(name);
+            }
+        }
         command
             .args(["--mode", "plan", "--output-format", "stream-json"])
             // Headless agy does not treat its working directory as its workspace: without this it
@@ -178,6 +200,23 @@ impl Talks {
         };
         let stdout = child.stdout.take().ok_or("no output from Antigravity")?;
         let stderr = child.stderr.take();
+        // Drain stderr concurrently: waiting for stdout EOF first deadlocks a noisy child.
+        let stderr_reader = std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            if let Some(mut stderr) = stderr {
+                let mut chunk = [0; 4096];
+                loop {
+                    match stderr.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let room = MAX_STDERR.saturating_sub(kept.len());
+                            kept.extend_from_slice(&chunk[..n.min(room)]);
+                        }
+                    }
+                }
+            }
+            String::from_utf8_lossy(&kept).into_owned()
+        });
         let handle = Arc::new(Mutex::new(Some(child)));
         if let Some(t) = self.0.lock().unwrap().get_mut(id) {
             t.child = Some(Arc::clone(&handle));
@@ -186,19 +225,16 @@ impl Talks {
         let id = id.to_owned();
         let project = project.to_path_buf();
         std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { break };
-                let Ok(event) = serde_json::from_str::<Value>(&line) else {
+            let mut reader = BufReader::new(stdout);
+            while let Ok(Some(line)) = bounded_line(&mut reader) {
+                let Ok(event) = serde_json::from_slice::<Value>(&line) else {
                     continue;
                 };
                 if let Some(t) = talks.0.lock().unwrap().get_mut(&id) {
                     apply(t, &event, &project);
                 }
             }
-            let mut err = String::new();
-            if let Some(mut s) = stderr {
-                let _ = s.read_to_string(&mut err);
-            }
+            let err = stderr_reader.join().unwrap_or_default();
             let status = handle
                 .lock()
                 .unwrap()
@@ -228,6 +264,37 @@ impl Talks {
             }
         });
         Ok(())
+    }
+}
+
+/// Discard oversized NDJSON records while continuing to drain the pipe; no unbounded read_line.
+fn bounded_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    let mut oversized = false;
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            return Ok((!line.is_empty() && !oversized).then_some(line));
+        }
+        let count = available
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(available.len(), |i| i + 1);
+        let ended = available[count - 1] == b'\n';
+        if line.len().saturating_add(count) > MAX_LINE {
+            oversized = true;
+        }
+        if !oversized {
+            line.extend_from_slice(&available[..count]);
+        }
+        reader.consume(count);
+        if ended {
+            if !oversized {
+                return Ok(Some(line));
+            }
+            oversized = false;
+            line.clear();
+        }
     }
 }
 
@@ -445,6 +512,18 @@ pub(crate) fn program() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_json_lines_are_discarded_without_losing_the_next_event() {
+        let mut bytes = vec![b'x'; MAX_LINE + 1];
+        bytes.extend_from_slice(b"\n{\"event\":\"result\"}\n");
+        let mut reader = BufReader::new(std::io::Cursor::new(bytes));
+        assert_eq!(
+            bounded_line(&mut reader).unwrap().unwrap(),
+            b"{\"event\":\"result\"}\n"
+        );
+        assert!(bounded_line(&mut reader).unwrap().is_none());
+    }
 
     fn run(lines: &[&str]) -> Talk {
         let mut t = Talk::default();

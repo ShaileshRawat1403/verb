@@ -15,7 +15,7 @@ step "rust tests";           cargo test --all-targets
 step "web unit tests";       npm test --prefix web
 step "web bundle is current"
 npm run build --prefix web >/dev/null
-git diff --exit-code --quiet -- web/dist || { echo "web/dist changed: commit the rebuilt bundle"; }
+git diff --exit-code --quiet -- web/dist || { echo "web/dist changed: commit the rebuilt bundle"; exit 1; }
 step "browser tests (SHELL unset, as on CI and Node 1)"
 cargo build --quiet
 (cd web && env -u SHELL VERB_BIN="$PWD/../target/debug/verb" npx playwright test)

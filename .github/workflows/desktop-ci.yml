@@ -107,3 +107,7 @@ jobs:
 
       - name: Build release
         run: cargo build --release
+
+      - name: Linux agent isolation (disposable accounts and cgroup)
+        if: matrix.os == 'ubuntu-latest'
+        run: scripts/test-agent-isolation.sh

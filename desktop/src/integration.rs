@@ -17,7 +17,6 @@
 //! * **Nothing durable learns the command text.** The `E` sequence exists for the screen; see
 //!   `shell.rs` and `docs/VERB_SESSION_SCHEMA.md`.
 
-use crate::fsutil::atomic_write;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -33,7 +32,12 @@ fn private_directory(path: &Path) -> Option<PathBuf> {
         if !metadata.file_type().is_dir() || metadata.uid() != me {
             return None;
         }
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).ok()?;
+        let mode = if crate::isolation::profile().ok()?.is_some() {
+            0o2750
+        } else {
+            0o700
+        };
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).ok()?;
     }
     Some(path.to_path_buf())
 }
@@ -70,17 +74,29 @@ pub(crate) struct Instrumented {
 /// `directory` is Verb's own state directory; everything written lives under it.
 pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
     let kind = Kind::of(shell)?;
-    let root = private_directory(&directory.join("shell"))?;
+    let isolated = crate::isolation::profile().ok()?.is_some();
+    let root = private_directory(&if isolated {
+        PathBuf::from(crate::isolation::SHELL_DIR)
+    } else {
+        directory.join("shell")
+    })?;
 
     match kind {
         Kind::Zsh => {
             // zsh reads its startup files from ZDOTDIR, so Verb points it at a directory of shims
             // that source the user's real files first. Every file zsh might read gets one, or the
             // ones without a shim would simply stop being read.
-            let home = std::env::var("HOME").unwrap_or_default();
-            let original = std::env::var("ZDOTDIR").unwrap_or(home);
+            let home = crate::isolation::agent_home()?.display().to_string();
+            let original = if isolated {
+                home
+            } else {
+                std::env::var("ZDOTDIR").unwrap_or(home)
+            };
             let zdotdir = root.join("zsh");
             fs::create_dir_all(&zdotdir).ok()?;
+            if isolated {
+                private_directory(&zdotdir)?;
+            }
             // Atomic: two Verb processes launching shells at once must not interleave a shim.
             atomic_write(
                 &zdotdir.join("verb-integration.zsh"),
@@ -134,6 +150,16 @@ pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
             })
         }
     }
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    crate::fsutil::atomic_write(path, bytes)?;
+    #[cfg(unix)]
+    if crate::isolation::profile()?.is_some() {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o640)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Emitted by both scripts. `A`/`B`/`C`/`D` are the command-boundary sequence Verb's scanner reads,

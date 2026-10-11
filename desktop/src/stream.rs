@@ -286,6 +286,9 @@ pub struct TerminalAttachInfo {
 }
 
 pub trait StreamTerminalHandler: Send + Sync {
+    fn is_authorized(&self) -> bool {
+        true
+    }
     fn write_terminal_input(&self, id: &str, data: &[u8]) -> Result<(), String>;
     fn attach_terminal(
         &self,
@@ -395,8 +398,12 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
             },
         ];
 
-        let timeout = if state == Drain::More { 0 } else { 5000 };
+        let timeout = if state == Drain::More { 0 } else { 250 };
         if pty::poll_fds(&mut poll_fds, timeout).is_err() {
+            break;
+        }
+        if !handler.is_authorized() {
+            let _ = ws.close(None);
             break;
         }
 
@@ -420,6 +427,10 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
         if poll_fds[0].revents & POLLIN != 0 {
             let mut disconnected = false;
             loop {
+                if !handler.is_authorized() {
+                    disconnected = true;
+                    break;
+                }
                 match ws.read() {
                     Ok(Message::Binary(bytes)) => {
                         if bytes.len() > 1 {
