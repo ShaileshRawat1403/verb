@@ -47,6 +47,12 @@ cover behavior and failure boundaries with real process tests. Do not rewrite te
 implementation. Run `desktop/scripts/check.sh`; the disposable Linux fixture verifies actual UID,
 capability, resource and credential boundaries separately. Keep generated browser assets in sync.
 
+Keep xterm core and add-ons on the same compatible release set, with exact versions in the web
+manifest. The [xterm 5.5 compatibility table](https://github.com/xtermjs/xterm.js/discussions/5022)
+defines the current pins. Newer add-ons can depend on private core internals even when npm accepts
+the combination: WebGL 0.19 threw during disposal with core 5.5. Browser journeys must exercise
+closing a rendered terminal and retaining its history on Linux as well as the local Mac.
+
 The Desktop release workflow validates the selected release ref through the reusable Desktop CI
 before creating a draft. Native artifacts are unpacked and exercised with fresh state using
 `desktop/scripts/test-release.py` before upload. Cross-built Intel Mac artifacts do not have a native
