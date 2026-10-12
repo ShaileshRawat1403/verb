@@ -84,6 +84,8 @@ test("a fresh project opens directly into a native terminal", async ({ page }) =
 });
 
 test("terminal tabs keep keyboard focus and finished output stays readable", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(url);
   await page.locator("#quick-terminal-empty").click();
   await page.locator("[data-terminal-new]").click();
@@ -93,6 +95,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   await page.keyboard.press("ArrowLeft");
   await expect(tabs.first()).toBeFocused();
   await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
+  const closedId = await tabs.first().getAttribute("data-tab-terminal");
   await page.waitForTimeout(2500); // Includes a background state refresh.
   await expect(tabs.first()).toBeFocused();
   const input = page.getByRole("textbox", { name: "Terminal input" }).filter({ visible: true });
@@ -100,12 +103,29 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   await input.press("Enter");
   const close = page.getByRole("button", { name: "Close terminal output", exact: true });
   await expect(close).toBeVisible();
+  await page.route("**/api/terminals/*", async (route) => {
+    if (route.request().method() === "DELETE")
+      return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({error: "Temporarily unavailable"}) });
+    return route.continue();
+  });
+  await close.click();
+  await expect(page.locator("#toast")).toHaveText(/Temporarily unavailable/);
+  await expect(tabs).toHaveCount(2);
+  await page.unroute("**/api/terminals/*");
   await close.click();
   await expect(page.locator("#end-session-dialog")).not.toBeVisible();
   await expect(tabs).toHaveCount(1);
+  await page.waitForTimeout(2500); // A closed output buffer must stay closed after refresh.
+  await expect(tabs).toHaveCount(1);
+  const origin = url.split("/#")[0];
+  const state = await page.request.get(`${origin}/api/state`, { headers: { "X-Verb-Token": TOKEN } });
+  const record = (await state.json()).sessions.find((session) => session.id === closedId);
+  expect(record).toBeDefined();
+  expect(record.hasTerminal).toBe(false);
   await page.locator("[data-close-terminal]:visible").click();
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
+  expect(errors).toEqual([]);
 });
 
 test("reduced motion preserves an immediate terminal surface", async ({ page }) => {

@@ -1495,8 +1495,9 @@ async function endTerminal(id) {
   terminal.ending = true;
   clearTimeout(terminal.pollTimer);
   try {
-    if (!terminal.tile.classList.contains("ended"))
-      await api("DELETE", `/api/terminals/${id}`);
+    // Release retained output too, or a state refresh can reattach the closed pane.
+    // This endpoint preserves the durable session record.
+    await api("DELETE", `/api/terminals/${id}`);
   } catch (error) {
     terminal.ending = false;
     pollTerminal(id);
@@ -1698,8 +1699,15 @@ document.addEventListener("click", async (event) => {
   if (terminalClose) {
     const id = terminalClose.dataset.closeTerminal;
     const terminal = ui.terminals.get(id);
-    if (!terminal) return;
-    if (terminal.tile.classList.contains("ended")) return endTerminal(id);
+    if (!terminal || terminal.ending) return;
+    if (terminal.tile.classList.contains("ended")) {
+      try {
+        await endTerminal(id);
+      } catch (error) {
+        toast(error.message, "error");
+      }
+      return;
+    }
     $("#end-session-title").textContent = `End ${sessionLabel(id)}?`;
     $("#end-session-dialog").dataset.sessionId = id;
     showDialog("end-session-dialog");
