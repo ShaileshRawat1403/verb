@@ -103,6 +103,9 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   await input.press("Enter");
   const close = page.getByRole("button", { name: "Close terminal output", exact: true });
   await expect(close).toBeVisible();
+  await page.waitForTimeout(4500); // Includes the lightweight workspace refresh after exit.
+  await expect(close).toBeVisible();
+  await expect(tabs).toHaveCount(2);
   await page.route("**/api/terminals/*", async (route) => {
     if (route.request().method() === "DELETE")
       return route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({error: "Temporarily unavailable"}) });
@@ -144,6 +147,33 @@ test("reduced motion preserves an immediate terminal surface", async ({ page }) 
   await input.pressSequentially("exit");
   await input.press("Enter");
   await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
+});
+
+test("a late polling failure cannot overwrite a connected stream", async ({ page }) => {
+  let releasePoll;
+  let pollStarted;
+  const pendingPoll = new Promise((resolve) => { pollStarted = resolve; });
+  await page.routeWebSocket("**/api/terminals/ws?*", async (socket) => {
+    await pendingPoll;
+    socket.connectToServer();
+  });
+  await page.route("**/api/terminals/*/output?*", (route) => {
+    releasePoll = () => route.fulfill({ status: 200, contentType: "application/json", body: "" });
+    pollStarted();
+  });
+  await page.goto(url);
+  await page.locator("#quick-terminal-empty").click();
+  await pendingPoll;
+  await expect(page.locator(".terminal-state")).toHaveText("Connected to Verb (streaming)");
+  await releasePoll();
+  await expect(page.locator(".terminal-state")).toHaveText("Connected to Verb (streaming)");
+  await expect(page.locator(".terminal-state")).not.toHaveAttribute("data-tone", "warn");
+  await expect(page.locator("#toast")).not.toHaveClass(/visible/);
+  const input = page.getByRole("textbox", { name: "Terminal input" });
+  await input.pressSequentially("exit");
+  await input.press("Enter");
+  await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
+  await expect(page.locator("#quick-terminal-empty")).toBeVisible();
 });
 
 test("a spec goes from idea to a committed, audited change", async ({ page }) => {

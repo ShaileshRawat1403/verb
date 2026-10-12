@@ -35,6 +35,10 @@ A session with no buffer here has both false; its native conversation can still 
 The legacy `hostedHere` and `hasTerminal` fields remain compatible: the latter includes replay.
 Neither replay availability nor native resume permission grants a running-process capability.
 Maintenance must refuse ambiguous process ownership rather than infer quiescence from a label.
+The lightweight `/api/workspace` response includes `terminalStates` for all retained buffers,
+including stopped processes. The browser reconciles those facts separately from its running-session
+list, so a refresh cannot discard finished output. Once streaming takes over, late polling results
+must not replace the stream's screen or connection status.
 
 Opening a project starts in Sessions without launching a process automatically. Terminal and agent
 launch are immediate actions; specs remain an optional structured workflow. Existing shortcuts are

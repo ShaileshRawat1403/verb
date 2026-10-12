@@ -4,6 +4,7 @@ import {
   isActiveSession,
   hasTerminalReplay,
   endedSession,
+  sessionWithRuntime,
 } from "../src/session-state.js";
 test("replay, running and native recovery are independent", () => {
   const replay = {
@@ -44,4 +45,17 @@ test("legacy hosts and optimistic launches remain readable", () => {
     isActiveSession({ state: "ended", hostedHere: false, hasTerminal: true }),
     false,
   );
+});
+
+test("lightweight runtime refresh keeps stopped output and native recovery separate", () => {
+  const previous = { state: "live", canResume: false, hasTerminal: true, hostedHere: true };
+  const replay = sessionWithRuntime(previous, { running: false, replayAvailable: true });
+  assert.equal(isActiveSession(replay), false);
+  assert.equal(hasTerminalReplay(replay), true);
+  assert.equal(replay.state, "ended");
+  assert.equal(hasTerminalReplay(sessionWithRuntime(previous, undefined)), false);
+  const recoverable = sessionWithRuntime({ ...previous, state: "recoverable", canResume: true },
+    { running: false, replayAvailable: true });
+  assert.equal(recoverable.state, "recoverable");
+  assert.equal(recoverable.canResume, true);
 });

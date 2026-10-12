@@ -1,6 +1,6 @@
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
-import { isActiveSession, hasTerminalReplay, endedSession } from "./session-state.js";
+import { isActiveSession, hasTerminalReplay, endedSession, sessionWithRuntime } from "./session-state.js";
 import { createTerminalTransport } from "./terminal-transport.js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -653,7 +653,9 @@ async function refreshWorkspace() {
     const history = (previous?.sessions || [])
       .filter((session) => !ids.has(session.id))
       .map((session) =>
-        session.hostedHere
+        workspace.terminalStates
+          ? sessionWithRuntime(session, workspace.terminalStates[session.id])
+          : session.hostedHere
           ? endedSession(session)
           : session,
       );
@@ -1366,7 +1368,7 @@ async function pollTerminal(id) {
       "GET",
       `/api/terminals/${id}/output?after=${terminal.cursor}`,
     );
-    if (terminal.closed || terminal.ending) return;
+    if (terminal.closed || terminal.ending || terminal.streaming) return;
     const bytes = Uint8Array.from(atob(output.data), (character) =>
       character.charCodeAt(0),
     );
@@ -1376,8 +1378,11 @@ async function pollTerminal(id) {
       markDrawn(terminal);
       await new Promise((resolve) => terminal.term.write(bytes, resolve));
     }
+    if (terminal.closed || terminal.ending || terminal.streaming) return;
     terminal.cursor = output.cursor;
     if (output.running) {
+      terminal.tile.querySelector(".terminal-state").dataset.tone = "";
+      terminal.reportedError = false;
       const phoneControls = output.controller === "phone";
       const hasPhone = phoneControls || Boolean(output.phoneConnected);
       terminal.tile.querySelector("[data-phone-terminal]").hidden = !hasPhone;
@@ -1405,7 +1410,7 @@ async function pollTerminal(id) {
         : "Session ended");
     }
   } catch (error) {
-    if (terminal.closed || terminal.ending) return;
+    if (terminal.closed || terminal.ending || terminal.streaming) return;
     terminal.tile.querySelector(".terminal-state").textContent = "Connection interrupted";
     terminal.tile.querySelector(".terminal-state").dataset.tone = "warn";
     if (!terminal.reportedError) toast(error.message, "error");

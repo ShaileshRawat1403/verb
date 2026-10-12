@@ -19,3 +19,15 @@ export function endedSession(session) {
     terminal: { running: false, replayAvailable: false },
   };
 }
+
+// A stopped process can still own output; a lightweight workspace refresh must retain that fact.
+export function sessionWithRuntime(session, terminal) {
+  const facts = terminal || { running: false, replayAvailable: false };
+  return {
+    ...session,
+    state: facts.running ? "live" : session.state === "live" ? "ended" : session.state,
+    hostedHere: facts.running,
+    hasTerminal: facts.replayAvailable,
+    terminal: facts,
+  };
+}

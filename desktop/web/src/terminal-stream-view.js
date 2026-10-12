@@ -17,6 +17,7 @@ export function createTerminalStreamView({
   function connected() {
     getUi().terminals.forEach((terminal, id) => {
       terminal.streaming = true;
+      terminal.reportedError = false;
       sendStreamAttach(id, terminal.term.rows, terminal.term.cols);
       const state = terminal.tile.querySelector(".terminal-state");
       if (state && !terminal.ended) {
@@ -103,6 +104,7 @@ export function createTerminalStreamView({
       }
       const phoneControls = controller === "phone";
       const hasPhone = phoneControls || Boolean(phoneConnected);
+      terminal.tile.querySelector(".terminal-state").dataset.tone = "";
       terminal.tile.querySelector("[data-phone-terminal]").hidden = !hasPhone;
       terminal.tile.querySelector("[data-take-terminal]").hidden =
         !phoneControls;
