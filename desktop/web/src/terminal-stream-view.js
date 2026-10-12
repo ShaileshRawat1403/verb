@@ -1,3 +1,5 @@
+import { finishTerminalChrome } from "./terminal-ui.js";
+
 // Maps stream events to xterm views. Acknowledgement follows rendering, never receipt.
 export function createTerminalStreamView({
   getUi,
@@ -110,19 +112,14 @@ export function createTerminalStreamView({
           ? "Desktop controls input · phone connected"
           : "Connected to Verb (streaming)";
       if (!running) {
-        terminal.tile.querySelector(".terminal-state").textContent =
-          "Session ended";
-        terminal.tile.classList.add("ended");
-        terminal.ended = true;
+        finishTerminalChrome(terminal, "Session ended");
       }
     } else if (msg.type === "exit") {
       const { id, code } = msg;
       const terminal = getUi().terminals.get(id);
       if (!terminal) return;
-      terminal.tile.querySelector(".terminal-state").textContent =
-        code === 0 ? "Session finished" : `Session exited (${code})`;
-      terminal.tile.classList.add("ended");
-      terminal.ended = true;
+      finishTerminalChrome(terminal,
+        code === 0 ? "Session finished" : `Session exited (${code})`);
       if (
         !hasVisibleText(terminal) &&
         terminal.agent &&

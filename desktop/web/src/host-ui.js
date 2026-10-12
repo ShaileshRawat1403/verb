@@ -73,9 +73,9 @@ export function initHost(deps) {
       ? `<table class="host-table"><thead><tr><th>Service</th><th>State</th><th>Up for</th></tr></thead><tbody>${r.services
           .map(
             (s) =>
-              `<tr><td><code>${escapeHtml(s.name)}</code></td><td><span class="state-dot" data-state="${serviceTone(s.state)}"></span>${escapeHtml(s.state)}</td><td>${formatDuration(s.uptime_secs)}</td></tr>`,
+              `<tr><td><code>${escapeHtml(s.name)}</code></td><td><span class="state-dot" data-state="${serviceTone(s.state)}"></span>${escapeHtml(s.state === "unknown" ? "Unavailable" : s.state)}</td><td>${formatDuration(s.uptime_secs)}</td></tr>`,
           )
-          .join("")}</tbody></table>`
+          .join("")}</tbody></table>${r.services.some((s) => s.state === "unknown") ? '<p class="muted">Some service states could not be read. Your node’s operator can verify service health.</p>' : ""}`
       : '<p class="muted">No service supervisor detected. Verb is running as an ordinary process here.</p>';
     $("#host-events").innerHTML = r.events.length
       ? r.events

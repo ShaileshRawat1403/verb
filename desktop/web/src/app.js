@@ -1,4 +1,5 @@
 import { createTerminalStreamView } from "./terminal-stream-view.js";
+import { finishTerminalChrome } from "./terminal-ui.js";
 import { isActiveSession, hasTerminalReplay, endedSession } from "./session-state.js";
 import { createTerminalTransport } from "./terminal-transport.js";
 import { Terminal } from "@xterm/xterm";
@@ -11,6 +12,8 @@ import { ImageAddon } from "@xterm/addon-image";
 import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
 import "./style.css";
+import "./workbench.css";
+import "./motion.css";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
 import { initHost } from "./host-ui.js";
@@ -1300,11 +1303,24 @@ function renderTerminalTabs() {
       return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  strip.innerHTML = `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
+  const markup = `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
     ui.terminals.size > 1
       ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
       : ""
   }<button type="button" class="tabs-action icon-only" data-terminal-new aria-label="New terminal" title="New terminal (Alt+T)">${icon("plus", { size: 14 })}</button>`;
+  // State polls should not discard keyboard focus or restart chrome transitions.
+  if (strip._markup !== markup) {
+    const focused = strip.contains(document.activeElement)
+      ? document.activeElement.dataset.tabTerminal
+      : null;
+    strip.innerHTML = markup;
+    strip._markup = markup;
+    if (focused) {
+      [...strip.querySelectorAll("[data-tab-terminal]")]
+        .find((tab) => tab.dataset.tabTerminal === focused)
+        ?.focus({ preventScroll: true });
+    }
+  }
 }
 
 function updateTerminalFocus() {
@@ -1384,11 +1400,9 @@ async function pollTerminal(id) {
       }
     }
     if (!output.running) {
-      terminal.tile.querySelector(".terminal-state").textContent = output.error
+      finishTerminalChrome(terminal, output.error
         ? `Session stopped: ${output.error}`
-        : "Session ended";
-      terminal.tile.classList.add("ended");
-      terminal.ended = true;
+        : "Session ended");
     }
   } catch (error) {
     if (terminal.closed || terminal.ending) return;

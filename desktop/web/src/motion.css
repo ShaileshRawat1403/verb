@@ -1,0 +1,67 @@
+/* Motion belongs to the workbench chrome, never to terminal rendering. */
+:root {
+  --motion-fast: 120ms;
+  --motion-enter: 180ms;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.view.active,
+.terminal-tile,
+.spec-item,
+.criteria-list li,
+.audit-list li,
+.audit-list li:first-child,
+.palette-list li {
+  animation: none;
+}
+
+.nav-item,
+.terminal-tab,
+.tabs-action,
+.primary-button,
+.secondary-button,
+.icon-button {
+  transition: background-color var(--motion-fast), color var(--motion-fast),
+    box-shadow var(--motion-fast), transform var(--motion-fast) var(--motion-ease);
+}
+
+.primary-button:active,
+.secondary-button:active,
+.tabs-action:active {
+  transform: translateY(1px);
+}
+
+dialog[open],
+.modal[open],
+.modal.palette[open],
+#palette-dialog[open] {
+  animation: chrome-enter var(--motion-enter) var(--motion-ease) both;
+}
+dialog[open]::backdrop,
+.modal[open]::backdrop,
+#palette-dialog[open]::backdrop {
+  animation: backdrop-enter var(--motion-enter) ease-out both;
+}
+.toast.visible,
+.terminal-empty .empty-icon,
+.terminal-empty h3,
+.terminal-empty .empty-actions {
+  animation: chrome-enter var(--motion-enter) var(--motion-ease) both;
+}
+
+@keyframes chrome-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes backdrop-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

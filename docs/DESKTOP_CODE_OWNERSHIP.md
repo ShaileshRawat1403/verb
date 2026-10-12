@@ -16,6 +16,9 @@ boot, service supervision and deployment. Keep those responsibilities in their r
 | Stream rendering | `desktop/web/src/terminal-stream-view.js` | Render xterm output, acknowledge after consumption, show connection/exit state |
 | Session view rules | `desktop/web/src/session-state.js` | Distinguish active sessions, replay availability and native resume |
 | Browser orchestration | `desktop/web/src/app.js` | Compose views and user actions; new independent responsibilities belong in named modules |
+| Terminal chrome | `desktop/web/src/terminal-ui.js` | Consistent ended-output controls across stream and polling paths |
+| Workbench surfaces | `desktop/web/src/workbench.css` | Current layout and theme surfaces; legacy base rules stay in `style.css` |
+| Motion | `desktop/web/src/motion.css` | Brief chrome transitions, reduced-motion override; never animate PTY input or terminal views |
 
 This is an incremental boundary, not a claim that all large modules have been decomposed.
 Continue extracting coherent responsibilities when changing them; avoid size-only file splitting,

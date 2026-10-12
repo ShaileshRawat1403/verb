@@ -63,9 +63,11 @@ test("a fresh project opens directly into a native terminal", async ({ page }) =
   page.on("pageerror", e => errors.push(e.message));
   await page.goto(url);
   await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+  expect(await page.locator("#toast").evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
   await page.locator("#quick-terminal-empty").click();
   const input = page.getByRole("textbox", { name: "Terminal input" });
   await expect(input).toBeVisible();
+  expect(await page.locator("#view-sessions").evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
   await input.pressSequentially("printf '\\164erminal-first-ok\\n'");
   await input.press("Enter");
   const sid = (await page.locator(".terminal-tile").getAttribute("id")).slice("terminal-".length);
@@ -79,6 +81,49 @@ test("a fresh project opens directly into a native terminal", async ({ page }) =
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("terminal tabs keep keyboard focus and finished output stays readable", async ({ page }) => {
+  await page.goto(url);
+  await page.locator("#quick-terminal-empty").click();
+  await page.locator("[data-terminal-new]").click();
+  const tabs = page.getByRole("tab", { name: /Terminal/ });
+  await expect(tabs).toHaveCount(2);
+  await tabs.last().focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(tabs.first()).toBeFocused();
+  await expect(tabs.first()).toHaveAttribute("aria-selected", "true");
+  await page.waitForTimeout(2500); // Includes a background state refresh.
+  await expect(tabs.first()).toBeFocused();
+  const input = page.getByRole("textbox", { name: "Terminal input" }).filter({ visible: true });
+  await input.pressSequentially("exit");
+  await input.press("Enter");
+  const close = page.getByRole("button", { name: "Close terminal output", exact: true });
+  await expect(close).toBeVisible();
+  await close.click();
+  await expect(page.locator("#end-session-dialog")).not.toBeVisible();
+  await expect(tabs).toHaveCount(1);
+  await page.locator("[data-close-terminal]:visible").click();
+  await page.locator("#end-session-confirm").click();
+  await expect(page.locator("#quick-terminal-empty")).toBeVisible();
+});
+
+test("reduced motion preserves an immediate terminal surface", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(url);
+  await page.locator(".palette-hint").click();
+  expect(await page.locator("#palette-dialog").evaluate((el) => getComputedStyle(el).animationName)).toBe("none");
+  await page.keyboard.press("Escape");
+  await page.locator("#quick-terminal-empty").click();
+  const view = await page.locator("#view-sessions").evaluate((el) => ({
+    animation: getComputedStyle(el).animationName,
+    transform: getComputedStyle(el).transform,
+  }));
+  expect(view).toEqual({ animation: "none", transform: "none" });
+  const input = page.getByRole("textbox", { name: "Terminal input" });
+  await input.pressSequentially("exit");
+  await input.press("Enter");
+  await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
 });
 
 test("a spec goes from idea to a committed, audited change", async ({ page }) => {
