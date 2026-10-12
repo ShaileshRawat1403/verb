@@ -120,3 +120,34 @@ The browser then launched a connected PTY as `verb-agent`, ran identity/path/Git
 Host confirmed source2543cdd and battery42% charging. No Desktop runtime redeployment was required.
 Maintenance now distinguishes exited replay buffers from live terminals; ambiguous status remains
 a refusal. The approved encrypted backup was refreshed after these repairs.
+
+
+## October 12 maintainability and release-candidate pass
+
+Session/provider records now live in `desktop/src/session.rs`; background workspace snapshots in
+`desktop/src/web/state.rs`. Browser socket/protocol ownership and stream rendering are separate
+modules, with session-view capability rules centralized. Existing durable record formats and
+legacy API fields are preserved. Additive terminal.running and terminal.replayAvailable explicitly
+distinguish a live local PTY from retained output. Exact native resume remains independent.
+See `DESKTOP_CODE_OWNERSHIP.md` for boundaries and contracts.
+
+A fresh project opens in Sessions; terminal and agent launch require no spec. Sessions is the first
+navigation item, with existing keyboard shortcuts preserved. Specs remain an optional workflow.
+Completed Git reads with no branch show Git status unavailable rather than permanent Loading.
+Exited replay rows open terminal output instead of promising a running process.
+
+Validation:336 Rust tests passed,5 existing ignored; both Clippy toolchains and formatting passed;
+44 browser unit tests,10 browser journeys and7 offline ledger restore regressions passed. The real
+disposable Linux isolation fixture passed. The fresh-state native release fixture verified Mac
+version, workspace startup, PTY commands and exit/replay capability. Generated bundle is current.
+
+Release CI now validates the selected release ref through the full reusable Desktop checks before
+creating a draft. Each native release package must be unpacked and pass the fresh-state fixture
+before upload. The local checks include that fixture too. GitHub workflow execution remains to be
+verified after pushing; local tests do not establish a green remote run.
+
+This pass is local candidate work, not public promotion or completed platform certification.
+Remaining release gates: normal-use observation on stable power, supported-platform package
+acceptance (especially the cross-built Intel Mac artifact), and a signed/notarized macOS
+distribution if advertised as a general production Mac release. Broader AGY/OpenCode automatic
+recovery claims require their own evidence. No release tag or public publication was created.
