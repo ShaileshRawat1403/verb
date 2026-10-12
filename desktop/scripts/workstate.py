@@ -53,6 +53,12 @@ def copy_exact(incoming, output, size):
         raise ValueError("file grew during copy")
 
 
+def file_version(info):
+    # Reading can advance atime. Identity, permissions and write/change times must stay fixed.
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
 def snapshot(state, destination, quiesced):
     if not quiesced:
         raise ValueError("stop all writers, then explicitly pass --quiesced")
@@ -96,11 +102,11 @@ def snapshot(state, destination, quiesced):
                     copied = staging / relative
                     copied.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                     with os.fdopen(os.open(source, os.O_RDONLY | os.O_NOFOLLOW), "rb") as incoming:
-                        if os.fstat(incoming.fileno()) != before:
+                        if file_version(os.fstat(incoming.fileno())) != file_version(before):
                             raise ValueError("ledger changed during snapshot")
                         with copied.open("xb") as output:
                             copy_exact(incoming, output, before.st_size)
-                        if source.lstat() != before:
+                        if file_version(source.lstat()) != file_version(before):
                             raise ValueError("ledger changed during snapshot")
                     os.chmod(copied, 0o600)
                     records.append({"path": relative, "size": before.st_size, "sha256": digest(copied)})

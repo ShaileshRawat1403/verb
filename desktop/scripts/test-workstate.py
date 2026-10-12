@@ -3,10 +3,12 @@
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location("workstate", Path(__file__).with_name("workstate.py"))
 workstate = importlib.util.module_from_spec(spec)
@@ -68,6 +70,26 @@ class RecoveryTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             workstate.restore(self.backup, self.state)
         self.assertEqual((self.state/"work/tasks.json").read_text(), '{"task":"retained"}')
+
+    def test_read_access_time_updates_do_not_reject_a_quiesced_snapshot(self):
+        source = self.state / "work/tasks.json"
+        os.utime(source, ns=(0, source.stat().st_mtime_ns))
+        self.snapshot()
+        self.assertTrue(workstate.restore(self.backup, self.restored)["verified"])
+        self.assertEqual((self.restored / "work/tasks.json").read_bytes(), source.read_bytes())
+
+    def test_concurrent_write_is_rejected_even_when_file_size_is_unchanged(self):
+        copy = workstate.copy_exact
+        def mutate(incoming, output, size):
+            copy(incoming, output, size)
+            # The staging path identifies the fixture being copied from the descriptor.
+            if output.name.endswith("work/tasks.json"):
+                source = self.state / "work/tasks.json"
+                source.write_bytes(b"x" * size)
+        with mock.patch.object(workstate, "copy_exact", side_effect=mutate):
+            with self.assertRaisesRegex(ValueError, "ledger changed during snapshot"):
+                self.snapshot()
+        self.assertFalse((self.backup / "ledger.tgz").exists())
 
     def test_archive_corruption_rejected_before_destination_creation(self):
         self.snapshot()
