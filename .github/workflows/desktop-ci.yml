@@ -14,6 +14,11 @@ on:
       - "desktop/**"
       - ".github/workflows/desktop-ci.yml"
   workflow_call:
+    inputs:
+      ref:
+        description: Exact revision to validate for a release
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -40,6 +45,8 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up Rust
         # Pinned: "stable" moved to 1.99 on 2026-09-28 and a new clippy lint failed CI overnight on
@@ -109,7 +116,10 @@ jobs:
           retention-days: 14
 
       - name: Build release
-        run: cargo build --release
+        run: cargo build --release --locked
+
+      - name: Fresh-state native release contract
+        run: python3 scripts/test-release.py --binary target/release/verb --version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 
       - name: Linux agent isolation (disposable accounts and cgroup)
         if: matrix.os == 'ubuntu-latest'

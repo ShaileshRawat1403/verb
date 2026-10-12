@@ -28,7 +28,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify:
+    uses: ./.github/workflows/desktop-ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+    permissions:
+      contents: read
+
   prepare:
+    needs: verify
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -169,6 +177,17 @@ jobs:
             shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
           fi
           echo "archive=$RUNNER_TEMP/$NAME.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Install and exercise the packaged native artifact
+        if: matrix.test
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          INSTALL="$RUNNER_TEMP/verb-install-proof"
+          mkdir -p "$INSTALL"
+          tar -xzf "$ARCHIVE" -C "$INSTALL"
+          python3 scripts/test-release.py --binary "$INSTALL/verb-desktop-$VERSION-${{ matrix.target }}/verb" --version "$VERSION"
 
       - name: Upload to the draft release
         env:
