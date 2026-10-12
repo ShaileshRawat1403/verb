@@ -101,8 +101,22 @@ another account. SSH keys are excluded. Node operations own the private receipt 
 The earlier approval block is resolved. An unexpected battery shutdown was confirmed by the owner;
 after changing from Mac ADB power to a wall charger, observed capacity rose from 1–3% to 18%.
 
-Remaining closeout: stable power, fresh user acceptance and the agreed normal-use observation
-window. Chrome's Access session expired after the earlier workbench verification; post-reboot browser
-verification requires normal owner sign-in. Code checks cannot substitute for these gates. Archive
+Owner signed in again on October 12. Authenticated public Host/build verification and a real
+browser terminal check passed after the operational corrections below. Remaining closeout:
+stable power and the agreed normal-use observation window. Code checks cannot substitute for
+that observation. Archive
 integrity does not certify external databases or another application's functional restore.
 Commercial/multi-tenant isolation is separate work.
+
+
+October 12 authenticated-browser follow-up exposed two operational gaps. The shared test project
+retained two broken PRoot `.l2s` Git-object links inherited from the original root project. Both
+objects were recovered from old storage, verified against their Git object hashes and atomically
+restored in the shared workspace; refs/history and the original root project were preserved.
+`git fsck` and clean `master` status passed. Android's memory-cgroup directory was mode0777; the
+launcher correctly refused execution. PocketFabric provisioning now explicitly sets root ownership,
+mode0755 on the leaf and mode0644 on its limit every start, with only membership delegated.
+The browser then launched a connected PTY as `verb-agent`, ran identity/path/Git checks and exited.
+Host confirmed source2543cdd and battery42% charging. No Desktop runtime redeployment was required.
+Maintenance now distinguishes exited replay buffers from live terminals; ambiguous status remains
+a refusal. The approved encrypted backup was refreshed after these repairs.
