@@ -151,3 +151,22 @@ Remaining release gates: normal-use observation on stable power, supported-platf
 acceptance (especially the cross-built Intel Mac artifact), and a signed/notarized macOS
 distribution if advertised as a general production Mac release. Broader AGY/OpenCode automatic
 recovery claims require their own evidence. No release tag or public publication was created.
+
+## Hosted candidate promotion and remote validation — October 12
+
+Existing no-merge integration PR12 received the tested commits. GitHub Desktop CI run38264068980
+passed both macOS and Linux jobs for97e4767e809fbced7da6bedad64a9d108d1a71bf, including the fresh-state
+native release check. Intel Mac x86_64 release built and passed the fresh-state fixture under Rosetta
+on the owner's Apple Silicon Mac; native Intel hardware acceptance remains distinct.
+
+Idle public promotion installed the clean ARM64 artifact for97e4767, SHA256
+93de63caf506789284ab66d3251c5f649ed17d69d0e28e314bfa4813a39a1fd9. The previous isolated artifact and
+manifest are preserved in the node deployment backup. Health reported the intended revision,
+UID995, and healthy required services. The2GiB cgroup remained root-controlled (leaf0755/limit0644).
+Authenticated Chrome reloaded into Sessions, verified Host provenance, and ran identity/path/clean
+Git status through a connected real verb-agent terminal. Owner-facing URL is unchanged.
+
+Only Apple Development signing identity was found on the Mac, not Developer ID Application. This
+is insufficient evidence for a signed/notarized general Mac distribution. No release tag, merge or
+final public package publication occurred. Stable-use observation and the focused usability tasks
+in DESKTOP_UX_SPRINT.md remain acceptance work; the hosted candidate is ready for that observation.
