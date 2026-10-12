@@ -93,9 +93,16 @@ regressions passed. The repaired reboot recovered public Verb, SSH and all requi
 before first unlock, with Android reporting RUNNING_LOCKED. Finite memory and private sudo views
 were recreated. No APK, kernel or global mount changes were made.
 
-Remaining closeout: off-device private project/native-history recovery, fresh user acceptance and
-the agreed normal-use observation window. The owner selected local Mac backup storage; the prepared
-encrypted workflow awaits exact-payload approval after automatic review rejected an initial broad
-transfer. No off-device backup is claimed yet. Chrome's Access session expired after the earlier
-workbench verification; post-reboot browser verification requires normal owner sign-in. Code checks
-cannot substitute for these remaining gates. Commercial/multi-tenant isolation is separate work.
+Subsequent October 12 recovery closeout: the owner approved the exact encrypted Mac backup scope,
+including saved CLI logins/private application configuration. AES-256 image roundtrip and isolated
+selected Desktop project/ledger restoration passed with all 30 current session identities. Private
+credential/configuration files were verified by filename only, not inspected or installed into
+another account. SSH keys are excluded. Node operations own the private receipt and runbook.
+The earlier approval block is resolved. An unexpected battery shutdown was confirmed by the owner;
+after changing from Mac ADB power to a wall charger, observed capacity rose from 1–3% to 18%.
+
+Remaining closeout: stable power, fresh user acceptance and the agreed normal-use observation
+window. Chrome's Access session expired after the earlier workbench verification; post-reboot browser
+verification requires normal owner sign-in. Code checks cannot substitute for these gates. Archive
+integrity does not certify external databases or another application's functional restore.
+Commercial/multi-tenant isolation is separate work.
