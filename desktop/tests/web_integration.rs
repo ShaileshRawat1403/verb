@@ -546,9 +546,17 @@ fn short_lived_cli_keeps_its_final_output_until_tile_is_closed() {
     let state = server.json("GET", "/api/state", None);
     assert_eq!(state["sessions"][0]["hasTerminal"], true);
     assert_eq!(state["sessions"][0]["hostedHere"], false);
+    assert_eq!(
+        state["sessions"][0]["terminal"],
+        json!({"running": false, "replayAvailable": true})
+    );
     server.json("DELETE", &format!("/api/terminals/{session_id}"), None);
     let state = server.json("GET", "/api/state", None);
     assert_eq!(state["sessions"][0]["hasTerminal"], false);
+    assert_eq!(
+        state["sessions"][0]["terminal"],
+        json!({"running": false, "replayAvailable": false})
+    );
 }
 
 #[test]
@@ -1285,6 +1293,10 @@ fn terminal_mode_launches_receives_pty_commands_and_persists() {
     assert_eq!(session_entry["state"], "live");
     assert_eq!(session_entry["hostedHere"], true);
     assert_eq!(session_entry["hasTerminal"], true);
+    assert_eq!(
+        session_entry["terminal"],
+        json!({"running": true, "replayAvailable": true})
+    );
 
     // 3. Send a shell command
     let input_res = server.request(

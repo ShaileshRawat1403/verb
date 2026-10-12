@@ -1,3 +1,4 @@
+import { hasTerminalReplay } from "./session-state.js";
 // Pure view helpers: data in, text or HTML out, no DOM and no network. Kept apart from app.js so
 // they can be tested with `node --test` (see test/view.test.js), which is where the rule that every
 // value from the repository or Git is escaped before it reaches the page is checked.
@@ -17,7 +18,7 @@ export function escapeHtml(value) {
 }
 
 export function sessionAction(session) {
-  if (session.hasTerminal) return "Open terminal";
+  if (hasTerminalReplay(session)) return session.terminal?.running === false ? "View terminal output" : "Open terminal";
   if (session.canResume) return "Resume session";
   return "View inbox";
 }

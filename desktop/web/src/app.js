@@ -1,3 +1,6 @@
+import { createTerminalStreamView } from "./terminal-stream-view.js";
+import { isActiveSession, hasTerminalReplay, endedSession } from "./session-state.js";
+import { createTerminalTransport } from "./terminal-transport.js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
@@ -41,7 +44,6 @@ if (location.hash && token) {
   history.replaceState(null, "", location.pathname);
 }
 
-let streamSocket = null;
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
 // The Project view (project-ui.js): file tree, preview and context hub.
@@ -56,253 +58,15 @@ const theme = createThemeController({
     });
   },
 });
-let streamReady = false;
-let socketReconnectTimer = null;
-const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
-const idBytesMap = new Map();
-
-function getIdBytes(id) {
-  let bytes = idBytesMap.get(id);
-  if (!bytes) {
-    bytes = textEncoder.encode(id);
-    idBytesMap.set(id, bytes);
-  }
-  return bytes;
-}
-
-function connectTerminalStream() {
-  if (
-    streamSocket &&
-    (streamSocket.readyState === WebSocket.OPEN ||
-      streamSocket.readyState === WebSocket.CONNECTING)
-  ) {
-    return;
-  }
-  clearTimeout(socketReconnectTimer);
-  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${location.host}/api/terminals/ws?token=${encodeURIComponent(token || "")}`;
-  try {
-    streamSocket = new WebSocket(wsUrl);
-    streamSocket.binaryType = "arraybuffer";
-  } catch (e) {
-    scheduleStreamReconnect();
-    return;
-  }
-
-  streamSocket.onopen = () => {
-    streamReady = true;
-    console.info("Verb terminal stream connected over WebSocket");
-    ui.terminals.forEach((terminal, id) => {
-      terminal.streaming = true;
-      sendStreamAttach(id, terminal.term.rows, terminal.term.cols);
-      const stateEl = terminal.tile.querySelector(".terminal-state");
-      if (stateEl && !terminal.ended) {
-        stateEl.textContent = "Connected to Verb (streaming)";
-        stateEl.dataset.tone = "";
-      }
-    });
-  };
-
-  streamSocket.onmessage = (event) => {
-    if (typeof event.data === "string") {
-      try {
-        const msg = JSON.parse(event.data);
-        handleStreamControl(msg);
-      } catch (e) {
-        console.error("Malformed control frame", e);
-      }
-    } else if (event.data instanceof ArrayBuffer) {
-      handleStreamBinary(event.data);
-    }
-  };
-
-  streamSocket.onclose = (event) => {
-    streamReady = false;
-    streamSocket = null;
-    console.warn("Verb terminal stream closed:", event?.code, event?.reason);
-    ui.terminals.forEach((terminal, id) => {
-      terminal.streaming = false;
-      const stateEl = terminal.tile.querySelector(".terminal-state");
-      if (stateEl && !terminal.ended) {
-        stateEl.textContent = "Reconnecting stream…";
-        stateEl.dataset.tone = "warn";
-      }
-      pollTerminal(id);
-    });
-    scheduleStreamReconnect();
-  };
-
-  streamSocket.onerror = (e) => {
-    streamReady = false;
-    console.warn("Verb terminal stream error:", e);
-  };
-}
-
-function scheduleStreamReconnect() {
-  clearTimeout(socketReconnectTimer);
-  socketReconnectTimer = setTimeout(connectTerminalStream, 2000);
-}
-
-document.addEventListener("visibilitychange", () => {
-  if (
-    document.visibilityState === "visible" &&
-    (!streamSocket || streamSocket.readyState !== WebSocket.OPEN)
-  ) {
-    connectTerminalStream();
-  }
+const terminalTransport = createTerminalTransport({
+ token, onOpen: () => terminalStreamView.connected(), onClose: () => terminalStreamView.disconnected(),
+ onControl: msg => terminalStreamView.control(msg), onOutput: bytes => terminalStreamView.binary(bytes),
 });
-
-function sendStreamAttach(id, rows, cols) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
-  streamSocket.send(JSON.stringify({ type: "attach", id, rows, cols }));
-}
-
-function sendStreamDetach(id) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
-  streamSocket.send(JSON.stringify({ type: "detach", id }));
-}
-
-function sendStreamResize(id, rows, cols) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
-  streamSocket.send(JSON.stringify({ type: "resize", id, rows, cols }));
-}
-
-function sendStreamAck(id, bytes) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
-  streamSocket.send(JSON.stringify({ type: "ack", id, bytes }));
-}
-
-function sendStreamSignal(id, signal) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
-  streamSocket.send(JSON.stringify({ type: "signal", id, signal }));
-}
-
-function sendStreamInput(id, dataStr) {
-  if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) {
-    return false;
-  }
-  const idBytes = getIdBytes(id);
-  const dataBytes = textEncoder.encode(dataStr);
-  const frame = new Uint8Array(1 + idBytes.length + dataBytes.length);
-  frame[0] = idBytes.length;
-  frame.set(idBytes, 1);
-  frame.set(dataBytes, 1 + idBytes.length);
-  streamSocket.send(frame.buffer);
-  return true;
-}
-
-function markTerminalActivity(id) {
-  if (id === ui.focusedTerminal && !document.hidden && ui.view === "sessions")
-    return;
-  const terminal = ui.terminals.get(id);
-  if (!terminal) return;
-  terminal.tile.classList.add("has-activity");
-}
-
-function handleStreamBinary(buffer) {
-  const bytes = new Uint8Array(buffer);
-  if (bytes.length < 2) return;
-  const idLen = bytes[0];
-  if (bytes.length < 1 + idLen) return;
-  const id = textDecoder.decode(bytes.subarray(1, 1 + idLen));
-  const payload = bytes.subarray(1 + idLen);
-  const terminal = ui.terminals.get(id);
-  if (!terminal || terminal.closed || terminal.ended) return;
-
-  terminal.streaming = true;
-  if (payload.length) markDrawn(terminal);
-  terminal.unackedBytes = (terminal.unackedBytes || 0) + payload.length;
-  markTerminalActivity(id);
-
-  terminal.term.write(payload, () => {
-    terminal.unackedBytes = Math.max(0, terminal.unackedBytes - payload.length);
-    terminal.pendingAck = (terminal.pendingAck || 0) + payload.length;
-    if (terminal.pendingAck >= 16384) {
-      clearTimeout(terminal.ackTimer);
-      terminal.ackTimer = null;
-      sendStreamAck(id, terminal.pendingAck);
-      terminal.pendingAck = 0;
-    } else if (!terminal.ackTimer) {
-      terminal.ackTimer = setTimeout(() => {
-        terminal.ackTimer = null;
-        if (terminal.pendingAck > 0 && !terminal.closed && !terminal.ended) {
-          sendStreamAck(id, terminal.pendingAck);
-          terminal.pendingAck = 0;
-        }
-      }, 120);
-    }
-  });
-}
-
-function handleStreamControl(msg) {
-  if (msg.v === 1) {
-    return;
-  }
-  if (msg.type === "attached") {
-    const { id, screen, running, controller, phoneConnected } = msg;
-    const terminal = ui.terminals.get(id);
-    if (!terminal || terminal.closed) return;
-    terminal.streaming = true;
-    if (screen) {
-      const raw = Uint8Array.from(atob(screen), (c) => c.charCodeAt(0));
-      terminal.term.reset();
-      terminal.term.write(raw);
-      if (raw.length) markDrawn(terminal);
-    }
-    const phoneControls = controller === "phone";
-    const hasPhone = phoneControls || Boolean(phoneConnected);
-    terminal.tile.querySelector("[data-phone-terminal]").hidden = !hasPhone;
-    terminal.tile.querySelector("[data-take-terminal]").hidden = !phoneControls;
-    terminal.tile.querySelector(".terminal-state").textContent = phoneControls
-      ? "Phone controls input"
-      : phoneConnected
-        ? "Desktop controls input · phone connected"
-        : "Connected to Verb (streaming)";
-    if (!running) {
-      terminal.tile.querySelector(".terminal-state").textContent =
-        "Session ended";
-      terminal.tile.classList.add("ended");
-      terminal.ended = true;
-    }
-  } else if (msg.type === "exit") {
-    const { id, code } = msg;
-    const terminal = ui.terminals.get(id);
-    if (!terminal) return;
-    terminal.tile.querySelector(".terminal-state").textContent =
-      code === 0 ? "Session finished" : `Session exited (${code})`;
-    terminal.tile.classList.add("ended");
-    terminal.ended = true;
-    if (!hasVisibleText(terminal) && terminal.agent && terminal.agent !== "shell") {
-      showSilent(
-        terminal,
-        `${agentDisplayName(terminal.agent)} exited with code ${code} without printing anything. Open a Terminal here and run it by hand to see why.`,
-      );
-    }
-    const titleEl = terminal.tile.querySelector(".terminal-title");
-    if (titleEl && !titleEl.querySelector(".terminal-exit-badge")) {
-      const badge = document.createElement("span");
-      badge.className = `terminal-exit-badge ${code === 0 ? "exit-ok" : "exit-err"}`;
-      badge.textContent = `exit ${code}`;
-      titleEl.appendChild(badge);
-    }
-    refreshState(true);
-  } else if (msg.type === "title") {
-    const { id, title } = msg;
-    const terminal = ui.terminals.get(id);
-    if (!terminal || !title) return;
-    const titleEl = terminal.tile.querySelector(".terminal-title");
-    if (titleEl) {
-      titleEl.innerHTML = `${escapeHtml(title)} <small>${escapeHtml(id.slice(0, 6))}</small>`;
-    }
-  } else if (msg.type === "bell") {
-    const { id } = msg;
-    const terminal = ui.terminals.get(id);
-    if (!terminal) return;
-    terminal.tile.classList.add("terminal-bell");
-    setTimeout(() => terminal.tile.classList.remove("terminal-bell"), 500);
-  }
-}
+const { connectTerminalStream, sendStreamAttach, sendStreamDetach, sendStreamResize, sendStreamSignal, sendStreamInput, sendStreamAck } = terminalTransport;
+const terminalStreamView = createTerminalStreamView({
+ getUi: () => ui, pollTerminal, markDrawn, hasVisibleText, showSilent,
+ refreshState, agentDisplayName, escapeHtml, sendStreamAttach, sendStreamAck,
+});
 
 function panelPreference(name) {
   try {
@@ -314,7 +78,7 @@ function panelPreference(name) {
 
 const ui = {
   state: null,
-  view: "specs",
+  view: "sessions",
   selectedTask: null,
   terminals: new Map(),
   refreshing: null,
@@ -419,7 +183,7 @@ function mountTalk(id, { focus = false } = {}) {
         renderTerminalTabs();
       },
       openTerminal: (sessionId) =>
-        mountLaunchedSession({ id: sessionId, agent: "agy", isolated: false, state: "live", hasTerminal: true, hostedHere: true }),
+        mountLaunchedSession({ id: sessionId, agent: "agy", isolated: false, state: "live", hasTerminal: true, terminal: { running: true, replayAvailable: true }, hostedHere: true }),
       remove: removeTalk,
     });
     ui.talks.set(id, talk);
@@ -615,9 +379,9 @@ function render() {
   $(".ws-mark").textContent = (project.name || "v").trim().charAt(0).toLowerCase() || "v";
   $(".workspace-head").title =
     project.workspace || project.path || project.name || "Current project";
-  $("#sidebar-branch").textContent = project.branch ?? "Loading branch…";
+  $("#sidebar-branch").textContent = project.branch ?? (project.changedFiles == null ? "Reading Git status…" : "Git status unavailable");
   $("#breadcrumb-project").textContent = project.name || "Project";
-  $("#top-branch").textContent = project.branch ?? "Loading branch…";
+  $("#top-branch").textContent = project.branch ?? (project.changedFiles == null ? "Reading Git status…" : "Git status unavailable");
   $("#top-changes").textContent =
     project.changedFiles == null
       ? "Loading status…"
@@ -793,10 +557,6 @@ function renderTaskDetail() {
   panel.innerHTML = `<div class="detail-top"><h2>${escapeHtml(task.title)}</h2><div class="detail-meta"><span class="status-pill ${escapeHtml(task.status.replaceAll(" ", "-"))}">${escapeHtml(task.needsHelp ? "Help requested" : taskName(task.status))}</span><span>${task.owner ? `Owned by ${escapeHtml(sessionLabel(task.owner))}` : "Unassigned"}</span></div></div><div class="detail-section"><h3>Brief</h3><p class="task-brief">${escapeHtml(task.brief || "No brief recorded.")}</p></div><div class="detail-section"><h3>History</h3><div class="history-list">${history}</div></div>${buttons ? `<div class="detail-actions">${buttons}</div>` : ""}`;
 }
 
-function isActiveSession(session) {
-  return session.hostedHere === true || session.state === "live";
-}
-
 function removeTerminal(id) {
   sendStreamDetach(id);
   const terminal = ui.terminals.get(id);
@@ -830,7 +590,7 @@ function syncHostedTerminals() {
   for (const id of ui.terminals.keys()) {
     if (
       !ui.state.sessions.some(
-        (session) => session.id === id && session.hostedHere,
+        (session) => session.id === id && hasTerminalReplay(session),
       )
     )
       removeTerminal(id);
@@ -891,12 +651,7 @@ async function refreshWorkspace() {
       .filter((session) => !ids.has(session.id))
       .map((session) =>
         session.hostedHere
-          ? {
-              ...session,
-              state: "ended",
-              hostedHere: false,
-              hasTerminal: false,
-            }
+          ? endedSession(session)
           : session,
       );
     const state = {
@@ -962,7 +717,7 @@ async function refreshChecks(silent = true, attempt = 0) {
 async function activateSession(id) {
   const session = ui.state?.sessions.find((item) => item.id === id);
   if (!session) return;
-  if (session.hostedHere) {
+  if (hasTerminalReplay(session)) {
     showView("sessions");
     if (!ui.terminals.has(id)) addTerminal(session);
     selectTerminal(id);
@@ -980,7 +735,7 @@ async function activateSession(id) {
         isolated: session.isolated,
         state: "live",
         hasTerminal: true,
-        hostedHere: true,
+        terminal: { running: true, replayAvailable: true }, hostedHere: true,
       };
       mountLaunchedSession(sessionObj);
     } catch (error) {
@@ -1047,7 +802,7 @@ $("#inbox-content")?.addEventListener("click", async (event) => {
       isolated: false,
       state: "live",
       hasTerminal: true,
-      hostedHere: true,
+      terminal: { running: true, replayAvailable: true }, hostedHere: true,
     });
   } catch (error) {
     toast(error.message, "error");
@@ -1061,7 +816,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${streamReady ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${terminalTransport.ready ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -1738,7 +1493,7 @@ async function endTerminal(id) {
   if (ui.state)
     ui.state.sessions = ui.state.sessions.map((session) =>
       session.id === id
-        ? { ...session, state: "ended", hostedHere: false, hasTerminal: false }
+        ? endedSession(session)
         : session,
     );
   render();
@@ -1783,7 +1538,7 @@ async function launchQuickTerminal() {
       isolated: false,
       state: "live",
       hasTerminal: true,
-      hostedHere: true,
+      terminal: { running: true, replayAvailable: true }, hostedHere: true,
     };
     mountLaunchedSession(sessionObj);
   } catch (error) {
@@ -2141,7 +1896,7 @@ $("#session-form").addEventListener("submit", async (event) => {
       isolated,
       state: "live",
       hasTerminal: true,
-      hostedHere: true,
+      terminal: { running: true, replayAvailable: true }, hostedHere: true,
     };
     mountLaunchedSession(sessionObj);
   } catch (error) {

@@ -1,6 +1,9 @@
 //! A loopback browser host for the same durable project, sessions, and task ledger as the TUI.
 //! The browser is a view/controller; this process remains the sole owner of every PTY it starts.
 
+mod state;
+use state::{terminal_status, StateCache, StateJob};
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -345,22 +348,6 @@ struct WebHost {
     talks: crate::talk::Talks,
     /// Who is making the request being handled: the owner, or a named access token.
     access: crate::tokens::Access,
-}
-
-struct StateCache {
-    body: Vec<u8>,
-    cached_at: Instant,
-    generation: u64,
-}
-
-struct StateJob {
-    project: PathBuf,
-    identity: project::ProjectIdentity,
-    deployment: Value,
-    hosted: HashMap<String, bool>,
-    cache: Arc<std::sync::Mutex<Option<StateCache>>>,
-    generation: u64,
-    current_generation: Arc<AtomicU64>,
 }
 
 /// `verb check` runs Git and several `--version` probes, which can take seconds. The web host has one
@@ -2253,7 +2240,7 @@ impl WebHost {
                 let session = &hosted.session;
                 Some(json!({"id": session.id, "agent": session.display_agent(),
                 "state": "live", "isolated": session.project_id != self.identity.anchor,
-                "hostedHere": true, "hasTerminal": true, "canResume": false, "attention": 0}))
+                "hostedHere": true, "hasTerminal": true, "terminal": terminal_status(Some(true)), "canResume": false, "attention": 0}))
             })
             .collect::<Vec<_>>();
         json!({"project": {"id": self.project_id, "name": self.identity.anchor.file_name()
@@ -2261,85 +2248,6 @@ impl WebHost {
             "anchor": self.identity.anchor, "workspace": self.project,
             "branch": null, "changedFiles": null},
             "deployment": self.deployment, "sessions": sessions, "tasks": [], "memory": ""})
-    }
-}
-
-impl StateJob {
-    fn run(&self) -> Result<Vec<u8>, String> {
-        // Concurrent state requests share work. The PTY thread only uses try_lock.
-        let mut cache = self.cache.lock().map_err(|_| "state cache unavailable")?;
-        if let Some(cached) = cache.as_ref().filter(|cached| {
-            cached.generation == self.generation
-                && cached.cached_at.elapsed() < Duration::from_millis(1500)
-        }) {
-            return Ok(cached.body.clone());
-        }
-        let body = self.state()?.to_string().into_bytes();
-        if self.current_generation.load(Ordering::SeqCst) == self.generation {
-            *cache = Some(StateCache {
-                body: body.clone(),
-                cached_at: Instant::now(),
-                generation: self.generation,
-            });
-        }
-        Ok(body)
-    }
-
-    fn state(&self) -> Result<Value, String> {
-        let identity = &self.identity;
-        let git = crate::git_snapshot(&self.project);
-        let hosted_ids: Vec<_> = self.hosted.keys().map(String::as_str).collect();
-        let sessions = crate::read_sessions_except(&hosted_ids)?;
-        let tasks = workbench::snapshots(&self.project)?
-            .into_iter()
-            .map(|task| {
-                json!({
-                    "id": task.id, "title": task.title, "brief": task.brief, "status": task.status,
-                    "owner": task.owner, "needsHelp": task.needs_help, "createdAt": task.created_at,
-                    "events": task.events.into_iter().map(|event| json!({
-                        "at": event.at, "kind": event.kind.label(), "sessionId": event.session_id,
-                        "note": event.note,
-                    })).collect::<Vec<_>>(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut session_rows = Vec::new();
-        for session in sessions {
-            if !crate::session_in_project_with_id(&session, &self.project, &identity.id) {
-                continue;
-            }
-            let attention = if session.agent.is_some() {
-                tasks
-                    .iter()
-                    .filter(|task| {
-                        task.get("owner").and_then(|o| o.as_str()) == Some(&session.id)
-                            && task
-                                .get("needsHelp")
-                                .and_then(|h| h.as_bool())
-                                .unwrap_or(false)
-                    })
-                    .count()
-            } else {
-                0
-            };
-            session_rows.push(json!({
-                "id": session.id, "agent": session.display_agent(), "state": session.state.as_str(),
-                "workspace": session.project_id, "isolated": session.project_id != identity.anchor,
-                "lastSeenAt": session.last_seen_at, "hostedHere": self.hosted.get(&session.id).copied().unwrap_or(false),
-                "hasTerminal": self.hosted.contains_key(&session.id),
-                "canResume": session.state == SessionState::Recoverable && session.project_id.is_dir(),
-                "attention": attention, "contextState": "not applicable",
-            }));
-        }
-        Ok(json!({
-            "project": {"id": identity.id, "name": identity.anchor.file_name()
-                .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
-                "anchor": identity.anchor, "workspace": self.project,
-                "branch": git.branch, "changedFiles": git.changed_files},
-            "deployment": self.deployment,
-            "memory": workbench::shared_memory(&self.project)?,
-            "tasks": tasks, "sessions": session_rows,
-        }))
     }
 }
 

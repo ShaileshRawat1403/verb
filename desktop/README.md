@@ -73,7 +73,8 @@ Prebuilt binaries come from `.github/workflows/release-desktop.yml` on `desktop-
 macOS builds are not notarized; after a browser download, run `xattr -d com.apple.quarantine verb`.
 
 `verb web` prints a local URL to open in a browser. It binds only to `127.0.0.1` and uses a
-random token for its API. The browser shows the same project sessions, tasks, and memory as the
+random token for its API. The browser opens directly in Sessions, with Terminal and agent launch available without a spec.
+Specs provide an optional structured workflow. It shows the same project sessions, tasks, and memory as the
 CLI and TUI, with clickable task actions and side-by-side live terminal panes. Session and task
 lists can be searched, and a terminal's Focus control expands that pane while the others keep
 running. Click the control again to show all panes. Run it from the project you want to work on;
@@ -354,3 +355,5 @@ shows those facts and the SHA256 of the running executable, including when its f
 atomically replaced by a later installation. `/healthz` is minimal HTTP readiness; project APIs
 still require authentication. See [Desktop production readiness](../docs/DESKTOP_PRODUCTION_READINESS.md)
 for release evidence and remaining deployment gates.
+
+For implementation boundaries and release validation, see [Desktop code ownership](../docs/DESKTOP_CODE_OWNERSHIP.md).

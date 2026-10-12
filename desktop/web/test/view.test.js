@@ -224,3 +224,10 @@ test("built terminal CSS contains xterm input and viewport styling", async () =>
   assert.match(css, /\.xterm-helper-textarea/);
   assert.match(css, /\.xterm-viewport/);
 });
+
+test("an exited replay is labelled as output, not a running terminal", () => {
+  assert.equal(sessionAction({ terminal: { running: false, replayAvailable: true },
+    canResume: true }), "View terminal output");
+  assert.equal(sessionAction({ terminal: { running: false, replayAvailable: false },
+    canResume: true }), "Resume session");
+});

@@ -58,12 +58,37 @@ test.beforeAll(async () => {
 
 test.afterAll(() => server?.kill());
 
+test("a fresh project opens directly into a native terminal", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await page.goto(url);
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+  await page.locator("#quick-terminal-empty").click();
+  const input = page.getByRole("textbox", { name: "Terminal input" });
+  await expect(input).toBeVisible();
+  await input.pressSequentially("printf '\\164erminal-first-ok\\n'");
+  await input.press("Enter");
+  const sid = (await page.locator(".terminal-tile").getAttribute("id")).slice("terminal-".length);
+  const origin = url.split("/#")[0];
+  await expect.poll(async () => {
+    const result = await page.request.get(`${origin}/api/terminals/${sid}/output`,
+      { headers: { "X-Verb-Token": TOKEN } });
+    return Buffer.from((await result.json()).data, "base64").toString();
+  }).toContain("terminal-first-ok");
+  await page.locator("[data-close-terminal]").click();
+  await page.locator("#end-session-confirm").click();
+  await expect(page.locator("#quick-terminal-empty")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("a spec goes from idea to a committed, audited change", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
 
-  // Specs is the home screen and explains the workflow when empty.
+  // The default workspace is a terminal; specs remain an explicit optional workflow.
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+  await page.locator('.nav-item[data-view="specs"]').click();
   await expect(page.getByRole("heading", { name: "Start with a spec" })).toBeVisible();
 
   // Create a spec through the guided form.
@@ -113,6 +138,7 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
+  await page.locator('.nav-item[data-view="specs"]').click();
   await expect(page.locator("#spec-title")).toBeVisible();
 
   // The command palette finds and runs actions.
@@ -190,7 +216,7 @@ test("host view: read-only machine health", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await expect(page.locator("#spec-title:visible, #spec-empty h1:visible").first()).toBeVisible();
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
   await page.keyboard.press("Alt+Digit7");
   await expect(page.locator("#view-host")).toHaveClass(/active/);
   await expect(page.locator("#host-verb")).toContainText("Version");
@@ -210,7 +236,7 @@ test("the older views sit under More, on a desktop and on a phone", async ({ pag
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await expect(page.locator("#spec-title:visible, #spec-empty h1:visible").first()).toBeVisible();
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
   await page.locator(".nav-more > summary").click();
   await page.locator('.nav-item[data-view="memory"]').click();
   await expect(page.locator("#view-memory h1")).toHaveText("Shared notes");
@@ -231,7 +257,7 @@ test("ask verb answers from evidence and its sources open", async ({ page }) => 
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await expect(page.locator("#spec-title:visible, #spec-empty h1:visible").first()).toBeVisible();
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
 
   // Alt+A opens Ask Verb with starter questions.
   await page.keyboard.press("Alt+KeyA");
@@ -270,6 +296,7 @@ test("session board and handoff with a written note", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
+  await page.locator('.nav-item[data-view="specs"]').click();
   await expect(page.locator("#spec-title")).toBeVisible();
 
   // An earlier test opened a terminal from the spec; the board lists it from the audit trail.
@@ -309,6 +336,7 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
       ...(body ? { data: body } : {}),
     });
   await page.goto(url);
+  await page.locator('.nav-item[data-view="specs"]').click();
   await expect(page.locator("#spec-title")).toBeVisible();
 
   // Off until chosen, and it explains its boundaries before asking.
