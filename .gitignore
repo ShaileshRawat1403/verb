@@ -34,3 +34,6 @@ desktop/web/node_modules/
 # Playwright output
 desktop/web/test-results/
 desktop/web/playwright-report/
+
+# Python operation/restore fixtures
+__pycache__/

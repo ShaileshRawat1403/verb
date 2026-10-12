@@ -86,6 +86,9 @@ jobs:
         # the runner; the tests skip themselves rather than fail if a shell is missing.
         run: cargo test --all-targets
 
+      - name: Offline work-state restore
+        run: python3 scripts/test-workstate.py
+
       - name: Browser tests (real verb web + headless Chromium)
         # Drives the workbench like a person: create a spec, prove a criterion with evidence, commit,
         # palette, theme, terminal. `cargo test --all-targets` above already built target/debug/verb.

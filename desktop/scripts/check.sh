@@ -12,6 +12,7 @@ step "format";               cargo fmt --check
 step "clippy (Rust $PIN)";   PATH="$HOME/.cargo/bin:$PATH" cargo "+$PIN" clippy --all-targets -- -D warnings
 step "clippy (local cargo)"; cargo clippy --all-targets -- -D warnings
 step "rust tests";           cargo test --all-targets
+step "offline work-state restore"; python3 scripts/test-workstate.py
 step "web unit tests";       npm test --prefix web
 step "web bundle is current"
 npm run build --prefix web >/dev/null
