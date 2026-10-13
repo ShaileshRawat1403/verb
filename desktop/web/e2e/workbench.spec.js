@@ -327,6 +327,22 @@ test("host view: read-only machine health", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("host supervisor visibility does not imply service outage", async ({ page }) => {
+  await page.route("**/api/host", async route => {
+    const response = await route.fetch();
+    const report = await response.json();
+    report.services = [{name:"verb",state:"unknown",uptime_secs:null},{name:"worker",state:"down",uptime_secs:0}];
+    await route.fulfill({response,json:report});
+  });
+  await page.goto(url);
+  await page.keyboard.press("Alt+Digit7");
+  const services = page.locator("#host-services");
+  await expect(services).toContainText("Supervisor status unavailable");
+  await expect(services).toContainText("does not mean those services are stopped");
+  await expect(services.locator("tr").filter({hasText:"verb"}).locator(".state-dot")).toHaveAttribute("data-state","idle");
+  await expect(services.locator("tr").filter({hasText:"worker"}).locator(".state-dot")).toHaveAttribute("data-state","bad");
+});
+
 test("the older views sit under More, on a desktop and on a phone", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));

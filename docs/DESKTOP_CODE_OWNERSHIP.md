@@ -15,6 +15,7 @@ boot, service supervision and deployment. Keep those responsibilities in their r
 | Terminal connection | `desktop/web/src/terminal-transport.js` | Socket, reconnect, protocol framing; no DOM or durable session ownership |
 | Stream rendering | `desktop/web/src/terminal-stream-view.js` | Render xterm output, acknowledge after consumption, show connection/exit state |
 | Session view rules | `desktop/web/src/session-state.js` | Distinguish active sessions, replay availability and native resume |
+| Host service presentation | `desktop/web/src/host-services.js` | Distinguish unavailable supervisor observations from running/down states; never infer outage or expand permissions |
 | Browser orchestration | `desktop/web/src/app.js` | Compose views and user actions; new independent responsibilities belong in named modules |
 | Terminal chrome | `desktop/web/src/terminal-ui.js` | Consistent ended-output controls across stream and polling paths |
 | Workbench surfaces | `desktop/web/src/workbench.css` | Current layout and theme surfaces; legacy base rules stay in `style.css` |

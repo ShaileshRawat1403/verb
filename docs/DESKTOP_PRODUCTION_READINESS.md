@@ -197,3 +197,17 @@ No further deployment or interruption was needed for this follow-up.
 The owner approved PocketFabric's separate Mac-local read-only operations console. It uses the
 node health contract, backup-file metadata and runbooks; it does not own Verb sessions or change
 application privileges. Remaining release gates above are unchanged.
+
+## Desktop continuation — October 13
+
+Host service presentation is extracted into `host-services.js`. Unreadable supervisor status now
+explains possible account restrictions and explicitly avoids treating missing observations as a
+service outage. Missing supervisor data also avoids claiming an unsupervised ordinary process.
+Running, stopping and down observations retain distinct states; no permissions or runtime protocol
+were changed. Three unit regressions and a browser journey cover this observation boundary.
+
+The complete Desktop check script passed:336 Rust tests,5 existing ignored, both Clippy checks,
+formatting,48 web unit checks,14 browser journeys,9 ledger restore checks and the fresh-state native
+release contract. The rebuilt browser asset is synchronized. This is a tested source candidate;
+the live hosted artifact remains the previously recorded3961722 build until deliberate promotion.
+Stable-use observation and signed/notarized general Mac distribution remain release gates.

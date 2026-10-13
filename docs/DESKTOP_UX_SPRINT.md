@@ -22,9 +22,11 @@ for those behaviors, not a completed keyboard/accessibility/usability study of e
 
 ## Findings to prioritize
 
-- Host service rows show unknown without explaining that the unprivileged account cannot read
-  supervisor state. Root operator health was healthy during the same check. Explain unreadable
-  status and its scope; do not widen privileges or present guessed healthy states.
+- Host service visibility wording is addressed in the October13 continuation: unknown states are
+  labelled Supervisor status unavailable, explain possible account restrictions, and explicitly
+  avoid claiming that services stopped. Missing supervisor observations no longer claim an ordinary
+  unsupervised process. Unit and browser regressions separate unreadable/running/stopping/down.
+  Hosted acceptance of this wording remains pending promotion; no permissions were widened.
 - Git status unavailable should distinguish detached/unborn/non-Git/unreadable conditions and
   name the next useful action. The indefinite loading placeholder was removed, but the diagnosis
   is still too broad.
