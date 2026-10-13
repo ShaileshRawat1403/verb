@@ -231,3 +231,29 @@ This is startup/hosting evidence, not authenticated editing or exact native conv
 The hosted service still runs the previously recorded3961722 artifact; these source changes have
 not been promoted. Stable-use, native Intel hardware and general Mac signing/notarization remain
 separate release gates. No tag, merge or public release was created.
+
+## Hosted promotion — October 13
+
+The clean source revision `74a337536e52ce82e753b8feb540fc1e97767a08` passed Desktop CI
+on macOS and Linux (run38397416347), then was built with the pinned ARM64 Linux toolchain.
+The installed and running artifact SHA256 is
+`cf727111cf1af8e8b283972dbd7e8b88fb093d0717e81322adc67e527e04f502`.
+The previous3961722 artifact is preserved in the node's owner-only deployment rollback directory.
+Installation left the running process untouched; the existing PocketFabric fixed restart utility
+then rechecked active work under the shared maintenance lock before restarting. Both the initial
+observation and guarded restart found no active terminals. Health identifies the expected clean
+revision, host UID995 and all six required services responding.
+
+Live API acceptance created only two synthetic shell sessions. Both ran as agent UID994, had
+distinct process IDs, preserved process/output across fresh attachment requests, and retained
+exited output while the other session continued running. The test closed only its own terminal
+buffers; durable history was retained. It did not inspect project files or call model providers.
+This proves hosted PTY behavior; it is not a browser reload or authenticated model-editing proof.
+
+The public URL reaches its Cloudflare Access login. The owner's existing browser login expired
+on refresh, so post-promotion public browser acceptance awaits owner sign-in. Automatic approval
+review blocked an authenticated agent test in the existing private project because native agents
+could send unreviewed project contents to their providers; no provider request was executed.
+A separate empty test project was proposed for owner approval. Authenticated editing and exact
+native conversation resume on this promoted artifact remain unverified until that acceptance runs.
+Seven-day stable use, native Intel hardware and general Mac signing/notarization remain open.
