@@ -170,3 +170,30 @@ Only Apple Development signing identity was found on the Mac, not Developer ID A
 is insufficient evidence for a signed/notarized general Mac distribution. No release tag, merge or
 final public package publication occurred. Stable-use observation and the focused usability tasks
 in DESKTOP_UX_SPRINT.md remain acceptance work; the hosted candidate is ready for that observation.
+
+
+## Desktop polish and continued observation — October 13
+
+The October 12 polish rollout now serves clean source `3961722aee978f9cedeeb9120825a15489ac7c56`,
+artifact SHA256 `d1f7aee35b7f68358bc47a7fee6ceaffe4ca4ccb450c620f82d932cc1b115931`.
+[Desktop CI 38288595434](https://github.com/ShaileshRawat1403/verb/actions/runs/38288595434)
+passed macOS/Linux. Local checks passed 336 Rust tests (5 existing ignored), 45 web unit tests,
+13 browser journeys, 9 ledger recovery checks and the fresh-install native terminal contract.
+
+Current workbench surfaces and motion are separated into named stylesheets. Chrome motion is
+brief and respects reduced motion; terminal views remain still. Tab refresh keeps keyboard focus.
+Compatible xterm add-ons repair GPU disposal. Stopped output remains available across lightweight
+refreshes until explicitly closed; closing a buffer preserves history. Streaming owns rendering
+and connection status once attached, so late polling responses cannot overwrite them. Ledger
+snapshot checks ignore read access-time changes while retaining concurrent-write rejection.
+
+The public browser ran real commands as verb-agent in the shared clean Git checkout, exited
+normally, retained output across refresh and closed it without deleting the session record.
+October 13 pinned-SSH health observation still identifies the expected clean build and host UID995,
+with all six required services responding and approximately 13.5 hours of node uptime. This is a
+point-in-time operational observation, not seven days of real-use acceptance or a new reboot proof.
+No further deployment or interruption was needed for this follow-up.
+
+The owner approved PocketFabric's separate Mac-local read-only operations console. It uses the
+node health contract, backup-file metadata and runbooks; it does not own Verb sessions or change
+application privileges. Remaining release gates above are unchanged.
