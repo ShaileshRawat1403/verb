@@ -250,10 +250,25 @@ exited output while the other session continued running. The test closed only it
 buffers; durable history was retained. It did not inspect project files or call model providers.
 This proves hosted PTY behavior; it is not a browser reload or authenticated model-editing proof.
 
-The public URL reaches its Cloudflare Access login. The owner's existing browser login expired
-on refresh, so post-promotion public browser acceptance awaits owner sign-in. Automatic approval
-review blocked an authenticated agent test in the existing private project because native agents
-could send unreviewed project contents to their providers; no provider request was executed.
-A separate empty test project was proposed for owner approval. Authenticated editing and exact
-native conversation resume on this promoted artifact remain unverified until that acceptance runs.
-Seven-day stable use, native Intel hardware and general Mac signing/notarization remain open.
+After owner sign-in, the protected public browser loaded the promoted workbench. A new terminal
+printed shell PID32666 and UID994; a full browser reload preserved its output and the same PID.
+Normal exit retained output with an explicit finished state. Only this test buffer was closed;
+its durable history was preserved. The Host page displays the clean74a3375 revision and matching
+artifact fingerprint, and accurately describes unreadable supervisor states under host UID995.
+
+Automatic approval review initially blocked provider testing in the existing private project.
+The owner then explicitly approved small authenticated requests in new empty test projects.
+Separate loopback-only hosts used the promoted binary, fresh state directories and synthetic Git
+repositories; the public workbench and its project files remained untouched. Claude successfully
+created the requested synthetic file owned by UID994. Codex returned an authenticated no-tool
+response. Both produced recoverable native conversation identities and resumed using the same
+Verb session ID; agent-owned native processes carried the expected exact conversation identity.
+The fixture hosts and their terminals were stopped, and the synthetic edit was removed. Owner-only
+fixture state/history remain separate from public state. Provider output and login contents were
+not copied to these repositories. Early fixture failures were corrected: Claude's variadic tool
+flag consumed a trailing prompt, and Codex requires a normal Git repository for exec mode.
+
+This proves authenticated Claude editing, Codex chat, and exact resume launch. It does not prove
+post-resume model continuity or Codex native tool execution on the phone's unsupported kernel.
+No sandbox bypass or privilege fallback was introduced. Seven-day stable use, native Intel
+hardware and general Mac signing/notarization remain open.
