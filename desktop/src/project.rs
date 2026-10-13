@@ -268,16 +268,16 @@ fn show_status(project: &Path, json: bool) -> Result<(), String> {
         println!(
             "{}",
             serde_json::json!({"projectId": identity.id, "anchor": identity.anchor, "workspace": project,
-                        "branch": git.branch, "changedFiles": git.changed_files})
+                        "branch": git.branch, "gitStatus": git.status.as_str(), "changedFiles": git.changes_known.then_some(git.changed_files)})
         );
     } else {
         println!(
-            "Verb project: {}\nPrimary checkout: {}\nThis workspace: {}\nBranch: {} · {} changed",
+            "Verb project: {}\nPrimary checkout: {}\nThis workspace: {}\nBranch: {} · {}",
             identity.id,
             identity.anchor.display(),
             project.display(),
-            git.branch.as_deref().unwrap_or("detached/unknown"),
-            git.changed_files,
+            git.branch_label(),
+            git.change_summary(),
         );
     }
     Ok(())

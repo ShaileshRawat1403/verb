@@ -2246,7 +2246,7 @@ impl WebHost {
         json!({"project": {"id": self.project_id, "name": self.identity.anchor.file_name()
             .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
             "anchor": self.identity.anchor, "workspace": self.project,
-            "branch": null, "changedFiles": null},
+            "branch": null, "gitStatus": "loading", "changedFiles": null},
             "deployment": self.deployment, "sessions": sessions,
             "terminalStates": terminals.iter().map(|(id, terminal)|
                 (id.clone(), terminal_status(Some(terminal.hosted.is_some()))))

@@ -211,3 +211,23 @@ formatting,48 web unit checks,14 browser journeys,9 ledger restore checks and th
 release contract. The rebuilt browser asset is synchronized. This is a tested source candidate;
 the live hosted artifact remains the previously recorded3961722 build until deliberate promotion.
 Stable-use observation and signed/notarized general Mac distribution remain release gates.
+
+## Git diagnosis and multi-session continuation — October 13
+
+Guarded Git snapshots now derive branch/unborn/detached states from porcelain-v2 headers,
+distinguish ordinary non-Git folders from unavailable/broken checkouts, and preserve unknown
+change counts as null. Browser, CLI and TUI no longer advertise zero changes after a failed read.
+Browser workspace polling retains a completed verdict instead of returning it to loading.
+Git probing/presentation have named owners; repository filter/fsmonitor safeguards remain intact.
+
+The complete Desktop check script passed:340 Rust tests,5 existing ignored, both Clippy checks,
+formatting,52 web unit tests,17 browser journeys,9 ledger restore checks and fresh-state native
+release acceptance. A disposable two-PTY journey proved shared project files, distinct process
+IDs, same-process reattachment after reload and exit/replay preservation while another shell
+remained running. Local opt-in acceptance additionally executed the installed Claude and Codex
+version commands successfully under the fixture HOME; no sign-in or model request was performed.
+This is startup/hosting evidence, not authenticated editing or exact native conversation resume.
+
+The hosted service still runs the previously recorded3961722 artifact; these source changes have
+not been promoted. Stable-use, native Intel hardware and general Mac signing/notarization remain
+separate release gates. No tag, merge or public release was created.

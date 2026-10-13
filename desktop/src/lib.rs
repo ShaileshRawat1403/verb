@@ -53,12 +53,8 @@ mod workbench;
 
 const APP_NAME: &str = "Verb";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GitSnapshot {
-    pub root: Option<PathBuf>,
-    pub branch: Option<String>,
-    pub changed_files: usize,
-}
+mod gitview;
+pub(crate) use gitview::GitSnapshot;
 
 /// Exit codes, kept few and documented (`verb help`) because anything that scripts against Verb
 /// depends on them staying put.
@@ -622,16 +618,13 @@ fn print_status(project: &Path, json: bool) -> Result<(), String> {
 
     let git = git_snapshot(project);
     println!("Project: {}", project.display());
-    match git.root {
+    match &git.root {
         Some(root) => {
             println!("Git root: {}", root.display());
-            println!(
-                "Branch: {}",
-                git.branch.as_deref().unwrap_or("detached/unknown")
-            );
-            println!("Changes: {} file(s)", git.changed_files);
+            println!("Branch: {}", git.branch_label());
+            println!("Changes: {}", git.change_summary());
         }
-        None => println!("Git: not a repository"),
+        None => println!("Git: {}", git.branch_label()),
     }
 
     match load_session(project)?.map(reconcile_session).transpose()? {
@@ -1085,19 +1078,7 @@ fn project_root_or_current() -> Result<PathBuf, String> {
 }
 
 pub(crate) fn git_snapshot(project: &Path) -> GitSnapshot {
-    let root = git_output(&["rev-parse", "--show-toplevel"], project)
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty());
-    let branch =
-        git_output(&["branch", "--show-current"], project).filter(|value| !value.is_empty());
-    let changed_files = git_output(&["status", "--porcelain"], project)
-        .map(|value| value.lines().count())
-        .unwrap_or(0);
-    GitSnapshot {
-        root,
-        branch,
-        changed_files,
-    }
+    gitview::snapshot(project)
 }
 
 /// One changed file, as Git reports it: the two-character porcelain code and the path.
@@ -1146,15 +1127,7 @@ fn parse_porcelain(output: &str) -> Vec<ChangedFile> {
 /// Git reads for the status line and `verb changes`, through the same guarded runner the observation
 /// modules use: no repository-chosen binary, fsmonitor or filter runs because Verb looked.
 fn git_output(args: &[&str], directory: &Path) -> Option<String> {
-    let output = exec::git(directory)?
-        .args(args)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    gitview::output(args, directory)
 }
 
 pub(crate) fn load_session(project: &Path) -> Result<Option<Session>, String> {

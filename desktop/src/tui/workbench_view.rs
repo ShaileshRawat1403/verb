@@ -825,11 +825,11 @@ fn header(frame: &mut Frame, app: &App, area: Rect) {
         " · isolated"
     };
     let summary = format!(
-        "verb  ›  {}{} / {}  ·  {} changed",
+        "verb  ›  {}{} / {}  ·  {}",
         project,
         workspace,
-        git.branch.as_deref().unwrap_or("detached"),
-        git.changed_files
+        git.branch_label(),
+        git.change_summary()
     );
     plain(
         frame,
@@ -1331,9 +1331,9 @@ fn inbox(frame: &mut Frame, app: &App, area: Rect) {
         if let Some(git) = app.workspace_status.get(&session.project_id) {
             let workspace = if git.root.is_some() {
                 format!(
-                    "Workspace: {} · {} changed",
-                    git.branch.as_deref().unwrap_or("detached"),
-                    git.changed_files
+                    "Workspace: {} · {}",
+                    git.branch_label(),
+                    git.change_summary()
                 )
             } else {
                 "Workspace: checkout missing or unavailable".to_owned()
@@ -1688,6 +1688,8 @@ mod tests {
                 root: Some(app.project.clone()),
                 branch: Some("verb/example".to_owned()),
                 changed_files: 2,
+                status: crate::gitview::GitStatus::Branch,
+                changes_known: true,
             },
         );
         let inbox = crate::workbench::InboxSnapshot {

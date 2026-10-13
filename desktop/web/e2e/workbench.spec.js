@@ -546,3 +546,107 @@ test("terminal input stays hidden when the real PTY disables echo", async ({ pag
     await page.request.delete(`${origin}/api/terminals/${sessionId}`, { headers });
   }
 });
+
+test("Git diagnostics survive lightweight terminal refreshes", async ({page}) => {
+  let facts = {gitStatus:"unavailable",branch:null,changedFiles:null};
+  await page.route("**/api/state",async route => {
+    const response=await route.fetch();const data=await response.json();
+    data.project={...data.project,...facts};
+    await route.fulfill({response,json:data});
+  });
+  await page.goto(url);
+  await expect(page.locator("#top-branch")).toHaveText("Git status unavailable");
+  await expect(page.locator("#top-changes")).toHaveText("Changes unavailable");
+  await page.waitForTimeout(4500); // Includes a workspace poll that must retain the completed verdict.
+  await expect(page.locator("#top-branch")).toHaveText("Git status unavailable");
+  for (const [state,branch,label,count] of [["unborn","main","main · no commits","0 changed"],["not_repository",null,"Not a Git repository","No Git tracking"]]) {
+    facts={gitStatus:state,branch,changedFiles:state === "unborn" ? 0 : null};
+    await page.reload();
+    await expect(page.locator("#top-branch")).toHaveText(label);
+    await expect(page.locator("#top-changes")).toHaveText(count);
+  }
+});
+
+test("real detached Git checkout is diagnosed without changing terminal availability", async ({page}) => {
+  const branch=git("symbolic-ref","--short","HEAD").trim();
+  try {
+    git("checkout","--detach","-q");
+    const origin=url.split("/#")[0];
+    await expect.poll(async()=> (await (await page.request.get(`${origin}/api/state`,{headers:{"X-Verb-Token":TOKEN}})).json()).project.gitStatus).toBe("detached");
+    await page.goto(url);
+    await expect(page.locator("#top-branch")).toHaveText("Detached HEAD");
+    const launch=page.locator("#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty").filter({visible:true}).first();
+    await expect(launch).toBeVisible();
+    await launch.click();
+    const tile=page.locator(".terminal-tile.focused");
+    await expect(tile).toBeVisible();
+    const id=(await tile.getAttribute("id")).slice("terminal-".length);
+    await page.request.delete(`${origin}/api/terminals/${id}`,{headers:{"X-Verb-Token":TOKEN,Origin:origin}});
+  } finally { git("checkout","-q",branch); }
+});
+
+test("two native sessions share project files and reattach to the same processes", async ({page}) => {
+  const origin=url.split("/#")[0];const headers={"X-Verb-Token":TOKEN,Origin:origin};
+  // Earlier stateful journeys deliberately retain fixture sessions. Clear only this disposable host.
+  const workspace=await (await page.request.get(`${origin}/api/workspace`,{headers})).json();
+  for (const id of Object.keys(workspace.terminalStates || {})) {
+    const response=await page.request.delete(`${origin}/api/terminals/${id}`,{headers});
+    expect(response.ok()).toBe(true);
+  }
+  const ids=[];
+  const output=async id => Buffer.from((await (await page.request.get(`${origin}/api/terminals/${id}/output`,{headers})).json()).data,"base64").toString();
+  try {
+    await page.goto(url);
+    await page.locator("#quick-terminal-empty").click();
+    ids.push((await page.locator(".terminal-tile").getAttribute("id")).slice("terminal-".length));
+    const input=()=>page.getByRole("textbox",{name:"Terminal input"}).filter({visible:true});
+    // Escape the marker so matching output proves execution, not merely input echo.
+    await input().pressSequentially("printf '\\163hared-project-ok\\n' > verb-shared-acceptance.txt; printf '\\146irst-session-ok:%s\\n' \"$$\"");
+    await input().press("Enter");
+    await expect.poll(()=>output(ids[0])).toMatch(/first-session-ok:\d+/);
+    const firstPid=(await output(ids[0])).match(/first-session-ok:(\d+)/)[1];
+    await page.locator("[data-terminal-new]").click();
+    const tabs=page.getByRole("tab",{name:/Terminal/});
+    await expect(tabs).toHaveCount(2);
+    ids.push(await tabs.last().getAttribute("data-tab-terminal"));
+    await input().pressSequentially("cat verb-shared-acceptance.txt; printf '\\163econd-session-ok:%s\\n' \"$$\"");
+    await input().press("Enter");
+    await expect.poll(()=>output(ids[1])).toContain("shared-project-ok");
+    await expect.poll(()=>output(ids[1])).toMatch(/second-session-ok:\d+/);
+    const secondPid=(await output(ids[1])).match(/second-session-ok:(\d+)/)[1];
+    expect(secondPid).not.toBe(firstPid);
+    if (process.env.VERB_ACCEPT_INSTALLED_CLIS === "1") {
+      // Local opt-in uses native installed CLIs with the throwaway HOME; no sign-in or model request.
+      await page.locator(`[data-tab-terminal="${ids[0]}"]`).click();
+      await input().pressSequentially("claude --version; printf '\\143laude-cli-exit:%s\\n' \"$?\"");await input().press("Enter");
+      await expect.poll(()=>output(ids[0]),{timeout:15000}).toContain("claude-cli-exit:0");
+      await page.locator(`[data-tab-terminal="${ids[1]}"]`).click();
+      await input().pressSequentially("codex --version; printf '\\143odex-cli-exit:%s\\n' \"$?\"");await input().press("Enter");
+      await expect.poll(()=>output(ids[1]),{timeout:15000}).toContain("codex-cli-exit:0");
+    }
+    await page.reload();
+    await expect(tabs).toHaveCount(2);
+    await page.locator(`[data-tab-terminal="${ids[0]}"]`).click();
+    await expect(page.locator(`#terminal-${ids[0]} .terminal-state`)).toContainText("Connected");
+    await input().pressSequentially("printf '\\162eload-first:%s\\n' \"$$\"");await input().press("Enter");
+    await expect.poll(()=>output(ids[0])).toContain(`reload-first:${firstPid}`);
+    await page.locator(`[data-tab-terminal="${ids[1]}"]`).click();
+    await expect(page.locator(`#terminal-${ids[1]} .terminal-state`)).toContainText("Connected");
+    await input().pressSequentially("printf '\\162eload-second:%s\\n' \"$$\"; exit");await input().press("Enter");
+    await expect.poll(()=>output(ids[1])).toContain(`reload-second:${secondPid}`);
+    await expect(page.getByRole("button",{name:"Close terminal output",exact:true})).toBeVisible();
+    await expect.poll(async()=> {
+      const snapshot=await (await page.request.get(`${origin}/api/state`,{headers})).json();
+      return snapshot.sessions.find(session=>session.id===ids[1])?.terminal.running;
+    }).toBe(false); // The complete workspace snapshot has a bounded cache.
+    const state=await (await page.request.get(`${origin}/api/state`,{headers})).json();
+    const first=state.sessions.find(session=>session.id===ids[0]);
+    const second=state.sessions.find(session=>session.id===ids[1]);
+    expect(first.workspace).toBe(second.workspace);
+    expect(first.terminal.running).toBe(true);expect(second.terminal.running).toBe(false);expect(second.terminal.replayAvailable).toBe(true);
+  } finally {
+    for (const id of ids) await page.request.delete(`${origin}/api/terminals/${id}`,{headers});
+    const {unlinkSync}=await import("node:fs");
+    try {unlinkSync(join(repo,"verb-shared-acceptance.txt"));} catch {}
+  }
+});

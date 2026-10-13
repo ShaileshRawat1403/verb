@@ -1,3 +1,4 @@
+import { projectGitPresentation } from "./project-git.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
 import { isActiveSession, hasTerminalReplay, endedSession, sessionWithRuntime } from "./session-state.js";
@@ -382,13 +383,13 @@ function render() {
   $(".ws-mark").textContent = (project.name || "v").trim().charAt(0).toLowerCase() || "v";
   $(".workspace-head").title =
     project.workspace || project.path || project.name || "Current project";
-  $("#sidebar-branch").textContent = project.branch ?? (project.changedFiles == null ? "Reading Git status…" : "Git status unavailable");
+  const git = projectGitPresentation(project);
+  $("#sidebar-branch").textContent = git.branch;
+  $("#sidebar-branch").title = git.detail;
   $("#breadcrumb-project").textContent = project.name || "Project";
-  $("#top-branch").textContent = project.branch ?? (project.changedFiles == null ? "Reading Git status…" : "Git status unavailable");
-  $("#top-changes").textContent =
-    project.changedFiles == null
-      ? "Loading status…"
-      : `${project.changedFiles} changed`;
+  $("#top-branch").textContent = git.branch;
+  $("#top-branch").title = git.detail;
+  $("#top-changes").textContent = git.changes;
   $("#nav-session-count").textContent = activeCount;
   $("#nav-task-count").textContent = tasks.filter(
     (task) => task.status !== "done",
@@ -665,6 +666,7 @@ async function refreshWorkspace() {
       memory: previous?.memory || "",
       project: {
         ...workspace.project,
+        gitStatus: previous?.project.gitStatus ?? workspace.project.gitStatus,
         branch: previous?.project.branch ?? null,
         changedFiles: previous?.project.changedFiles ?? null,
       },

@@ -103,7 +103,8 @@ impl StateJob {
             "project": {"id": identity.id, "name": identity.anchor.file_name()
                 .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
                 "anchor": identity.anchor, "workspace": self.project,
-                "branch": git.branch, "changedFiles": git.changed_files},
+                "branch": git.branch, "gitStatus": git.status.as_str(),
+                "changedFiles": git.changes_known.then_some(git.changed_files)},
             "deployment": self.deployment,
             "memory": workbench::shared_memory(&self.project)?,
             "tasks": tasks, "sessions": session_rows,

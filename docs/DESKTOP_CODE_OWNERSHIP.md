@@ -11,6 +11,7 @@ boot, service supervision and deployment. Keep those responsibilities in their r
 | Session/provider records | `desktop/src/session.rs` | Existing record format, exact conversation identity, conservative recovery verdicts |
 | Process lifecycle and persistence | `desktop/src/lib.rs`, `pty.rs`, `tui/term.rs` | One host owns a PTY; reconcile durable metadata with observed process state |
 | HTTP admission and routing | `desktop/src/web.rs` | Authenticate, bound work, dispatch; do not block the PTY pump on workspace probes |
+| Git observation facts | `desktop/src/gitview.rs`, `desktop/web/src/project-git.js` | Guarded read-only Git queries; explicit branch/unborn/detached/non-Git/unavailable states; missing counts stay unknown |
 | Workspace snapshots | `desktop/src/web/state.rs` | Background snapshot/cache; observe host runtime independently of stored recovery state |
 | Terminal connection | `desktop/web/src/terminal-transport.js` | Socket, reconnect, protocol framing; no DOM or durable session ownership |
 | Stream rendering | `desktop/web/src/terminal-stream-view.js` | Render xterm output, acknowledge after consumption, show connection/exit state |
@@ -63,3 +64,19 @@ before creating a draft. Native artifacts are unpacked and exercised with fresh 
 `desktop/scripts/test-release.py` before upload. Cross-built Intel Mac artifacts do not have a native
 installation proof in this workflow. Signing/notarization, platform acceptance, and the real-use
 observation window remain release work; publishing a draft is not automated final acceptance.
+
+## Git observation contract
+
+Workspace/project JSON now includes `gitStatus`: `loading` for the lightweight initial response,
+then `branch`, `unborn`, `detached`, `not_repository` or `unavailable` for a completed observation.
+`branch` remains the observed branch name or null. `changedFiles` is an observed nonnegative
+integer or null when unavailable; consumers must not coerce null to zero. Context JSON also emits
+a null count on failed reads. Existing numeric readings and durable session/ledger formats remain
+unchanged. This corrects the former failed-read default of zero; update count consumers accordingly.
+
+Git's porcelain-v2 branch headers determine unborn/detached status. Reads retain the trusted Git
+runner's repository-filter/fsmonitor safeguards and never expose raw stderr. A broken Git marker
+is unavailable, not a plain non-Git folder. Browser workspace polling preserves the completed Git
+verdict along with branch/count facts until the next full snapshot; it never regresses to loading.
+Complete snapshots have a bounded cache, so acceptance observes actual state convergence rather
+than assuming a read immediately after a checkout/exit reflects that change.

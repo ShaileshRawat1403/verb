@@ -27,9 +27,10 @@ for those behaviors, not a completed keyboard/accessibility/usability study of e
   avoid claiming that services stopped. Missing supervisor observations no longer claim an ordinary
   unsupervised process. Unit and browser regressions separate unreadable/running/stopping/down.
   Hosted acceptance of this wording remains pending promotion; no permissions were widened.
-- Git status unavailable should distinguish detached/unborn/non-Git/unreadable conditions and
-  name the next useful action. The indefinite loading placeholder was removed, but the diagnosis
-  is still too broad.
+- Git diagnosis now distinguishes branch, unborn, detached, non-Git and unavailable observations.
+  Counts are nullable on failed reads rather than claiming a clean tree. Browser labels include
+  contextual next steps; lightweight polls preserve the completed verdict. Real Git and browser
+  regressions cover these states. Hosted acceptance remains pending promotion.
 - Multiple plain terminals rely heavily on short IDs. Test whether native titles and existing
   checkout context are sufficient to distinguish tasks before adding a naming feature.
 - Verify keyboard focus across session switching, dialogs, reconnects and narrow layouts with a
@@ -39,3 +40,16 @@ Keep the pass bounded: observe the tasks, fix demonstrated friction, add behavio
 then rerun the existing terminal contracts. Release requires no data loss, no hidden-input exposure,
 no privilege fallback and no blocker in the advertised supported workflow. Record remaining
 friction separately from future product features.
+
+## Disposable multi-session acceptance — October 13
+
+The new browser journey uses two real native shell PTYs in a shared throwaway project and HOME.
+One session writes a file, the other reads it; both have distinct process identities. Browser reload
+reattaches by session ID, commands verify the same shell processes remain, and exiting one retains
+its output while the other stays running. Session records retain the same project identity.
+
+Local opt-in `VERB_ACCEPT_INSTALLED_CLIS=1` additionally ran the installed Claude and Codex
+`--version` commands in those PTYs with the isolated HOME. Both exited successfully. This proves
+native CLI startup/version and terminal hosting, not authenticated editing, provider conversation
+resume, paid model execution or phone-kernel sandbox compatibility. CI does not require those
+provider installations. Existing Ctrl-C, resize, hidden-input and reconnect contracts remain gates.

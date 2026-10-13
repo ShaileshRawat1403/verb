@@ -182,9 +182,11 @@ fn status(frame: &mut Frame, app: &App, area: Rect) {
     let runtime =
         session.map(|session| session.runtime_id.as_deref().unwrap_or("shell").to_owned());
     let changes = match git.branch.as_deref() {
-        Some(branch) if git.changed_files == 0 => Some(format!("{branch} clean")),
-        Some(branch) => Some(format!("{branch}  {} changed", git.changed_files)),
-        None => None,
+        Some(branch) if git.changes_known && git.changed_files == 0 => {
+            Some(format!("{branch} clean"))
+        }
+        Some(branch) => Some(format!("{branch}  {}", git.change_summary())),
+        None => Some(git.branch_label().to_owned()),
     };
 
     // Everything except the path, which absorbs whatever is left.
