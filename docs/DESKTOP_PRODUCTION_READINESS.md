@@ -272,3 +272,20 @@ This proves authenticated Claude editing, Codex chat, and exact resume launch. I
 post-resume model continuity or Codex native tool execution on the phone's unsupported kernel.
 No sandbox bypass or privilege fallback was introduced. Seven-day stable use, native Intel
 hardware and general Mac signing/notarization remain open.
+
+
+## 2026-10-14 external-isolation checkpoint
+
+Both Claude and Codex completed fresh authentication and verified synthetic
+shell execution inside a separately constructed external boundary on the
+existing OnePlus kernel. Codex used an explicit per-process external-boundary
+mode; its native sandbox remains unsupported. The live Verb launcher and normal
+saved sandbox settings were not changed. This is a disposable runtime proof,
+not evidence that integrated production sessions use the new boundary.
+
+PocketFabric's candidate request/identity control layer passed 23 controller
+and 17 egress regressions on the OnePlus. Execution supervision, aggregate
+resource/storage admission, crash-safe leases, Verb transport integration,
+persistent authentication and candidate resume/reconnect/stop/rollback still
+require implementation and acceptance before promotion. See
+`AGENT_USER_ISOLATION.md` for the precise scope. Existing release gates remain.
