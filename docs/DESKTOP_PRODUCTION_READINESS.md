@@ -36,7 +36,7 @@ artifact SHA256, test totals and target platform for each release.
 The existing authenticated candidate proved Claude/Codex PTY responses, private-record recovery,
 same-session resume, restart durability and read-token boundaries. Claude editing/tests passed.
 AGY authentication/native exact resume passed; automatic Verb AGY recovery remains unconfirmed.
-Codex tool execution on the current phone is blocked by its kernel's missing user namespaces.
+Codex command execution through its native sandbox is blocked by the phone kernel's missing user namespaces.
 No native sandbox bypass or privilege increase is an acceptable automatic compatibility fallback.
 Local desktop or supported Linux execution must be assessed separately from that host limitation.
 

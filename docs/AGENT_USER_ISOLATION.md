@@ -62,3 +62,26 @@ real Claude/Codex hosted PTYs, private-record recovery and same-session resume. 
 Python tests passed. Codex command/edit execution failed under its native workspace sandbox on the
 phone: the kernel has CONFIG_USER_NS disabled. No sandbox bypass, privilege increase or security
 setting change was applied. Authentication and chat success do not prove command capability.
+
+
+## 2026-10-14 external-boundary candidate checkpoint
+
+Separate manual fixtures on the unchanged OnePlus kernel passed fresh Claude and
+Codex sign-in, completed native shell-tool events, exact synthetic file checks
+and CLI exit 0. Their temporary homes contained no copied existing logins. The
+Codex fixture explicitly used per-process external isolation instead of its
+unsupported native sandbox; this was not an automatic compatibility fallback.
+The native kernel sandbox limitation remains. These fixtures did not run through
+Verb's current launcher, and do not prove integrated resume or controller recovery.
+
+PocketFabric now has a separate candidate control foundation: persistent project
+and broker identity reservations, pinned storage handles, bounded typed requests
+and connection/message peer authentication. Twenty-three controller checks and
+17 network-policy regressions passed on the OnePlus. The owner selected public
+HTTPS for daily project terminals, retaining private-address blocking. Existing
+strict fixture defaults and live Verb behavior remain unchanged.
+
+The execution supervisor, resource/storage admission and leases, native Verb
+adapter, persistent-project authentication, candidate endpoint and full
+resume/reconnect/stop/restart/rollback acceptance remain open. No production
+promotion or automatic unrestricted-host fallback follows from this checkpoint.
