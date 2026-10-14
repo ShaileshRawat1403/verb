@@ -99,3 +99,27 @@ The assembled execution service, resource/storage admission and production
 recovery lifecycle, native Verb adapter, persistent-project authentication, candidate endpoint and full
 resume/reconnect/stop/restart/rollback acceptance remain open. No production
 promotion or automatic unrestricted-host fallback follows from this checkpoint.
+
+
+## Resource and reply verification, 2026-10-14
+
+PocketFabric commit `29b9bdf4ff9930a67ea79e6231b84fa3c5e91d78` adds private
+cpuset bounds, guarded quota admission and reciprocal typed PTY/pipe replies.
+Seventy component tests passed on native ARM Linux and the OnePlus. The private
+CPU proof stayed on logical CPUs 0–1 despite attempts to widen affinity, refused
+priority escalation, and removed its own group and mount. A procfs ESRCH exit race
+in supervision/identity scanning was fixed; inaccessible process evidence still
+fails closed. Reply tests preserve separate stdout/stderr, reject foreign/stale
+session identities and close rejected descriptors.
+
+Persistent storage enforcement remains unaccepted. The phone's native F2FS
+project quotas record usage but do not enforce limits. After the owner's approval,
+the runtime enforcement-enable call returned ENOSYS; quota policy stayed unchanged.
+Admission now rejects accounting-only quotas before mutation. No boot/mount policy,
+kernel, live launcher or public routing was changed. All synthetic quota data and
+new CPU groups/mounts were cleaned; live Verb health remained HTTP 200.
+
+This is still component verification, not an installed execution supervisor or
+Rust integration. The separate candidate and authenticated persistent-project
+resume/reconnect/stop/controller-restart/rollback checks remain open. Existing
+live Codex launch behavior has not been switched to external isolation.
