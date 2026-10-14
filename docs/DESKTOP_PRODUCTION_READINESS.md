@@ -288,7 +288,14 @@ and 17 egress regressions on the OnePlus. A subsequent process-supervision,
 bounded-DNS and shared-Linux-setup checkpoint passed 46 component regressions and
 two disposable namespace/PTY/HTTPS checks. No live launcher changed. Assembling
 those components into an execution service, aggregate resource/storage admission,
-crash-safe leases, Verb transport integration,
+production recovery lifecycle, Verb transport integration,
 persistent authentication and candidate resume/reconnect/stop/rollback still
 require implementation and acceptance before promotion. See
 `AGENT_USER_ISOLATION.md` for the precise scope. Existing release gates remain.
+
+Durable lease/controller ownership components subsequently passed 51 checks and
+a forced-controller-crash proof on the OnePlus. Recovery stopped its recorded
+detached test process; stale stop protection preserved a replacement launch.
+These are component proofs. The assembled service, bounded project resources and
+Verb adapter still need integration before candidate activation. Live Verb was
+unchanged and remained healthy; no phone reboot or saved login was used.

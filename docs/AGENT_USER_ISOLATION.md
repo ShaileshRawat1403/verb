@@ -88,7 +88,14 @@ passed, for 46 additional component regressions plus two disposable namespace,
 PTY and unauthenticated HTTPS executions. These use synthetic files and no saved
 provider logins. This is not yet an installed supervisor service.
 
-The assembled execution service, resource/storage admission and crash-safe
-leases, native Verb adapter, persistent-project authentication, candidate endpoint and full
+Durable generation-aware leases and exclusive controller ownership now also
+passed 51 component checks and a same-boot forced-controller-crash proof on the
+OnePlus. A replacement process acquired control and stopped a detached synthetic
+actor using its recorded cgroup. A stale stop did not affect a replacement launch.
+Shared atomic metadata now serves both the identity registry and lease journal.
+No controller daemon or Verb integration was installed by these proofs.
+
+The assembled execution service, resource/storage admission and production
+recovery lifecycle, native Verb adapter, persistent-project authentication, candidate endpoint and full
 resume/reconnect/stop/restart/rollback acceptance remain open. No production
 promotion or automatic unrestricted-host fallback follows from this checkpoint.
