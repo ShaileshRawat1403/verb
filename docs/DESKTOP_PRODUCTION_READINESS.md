@@ -284,8 +284,11 @@ saved sandbox settings were not changed. This is a disposable runtime proof,
 not evidence that integrated production sessions use the new boundary.
 
 PocketFabric's candidate request/identity control layer passed 23 controller
-and 17 egress regressions on the OnePlus. Execution supervision, aggregate
-resource/storage admission, crash-safe leases, Verb transport integration,
+and 17 egress regressions on the OnePlus. A subsequent process-supervision,
+bounded-DNS and shared-Linux-setup checkpoint passed 46 component regressions and
+two disposable namespace/PTY/HTTPS checks. No live launcher changed. Assembling
+those components into an execution service, aggregate resource/storage admission,
+crash-safe leases, Verb transport integration,
 persistent authentication and candidate resume/reconnect/stop/rollback still
 require implementation and acceptance before promotion. See
 `AGENT_USER_ISOLATION.md` for the precise scope. Existing release gates remain.

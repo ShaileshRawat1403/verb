@@ -81,7 +81,14 @@ and connection/message peer authentication. Twenty-three controller checks and
 HTTPS for daily project terminals, retaining private-address blocking. Existing
 strict fixture defaults and live Verb behavior remain unchanged.
 
-The execution supervisor, resource/storage admission and leases, native Verb
-adapter, persistent-project authentication, candidate endpoint and full
+A dedicated process scope now passes eight real process lifecycle checks on the
+OnePlus, including detached descendant cleanup, true exit status and fail-closed
+pidfd checks. Shared Linux setup primitives and bounded DNS/header deadlines also
+passed, for 46 additional component regressions plus two disposable namespace,
+PTY and unauthenticated HTTPS executions. These use synthetic files and no saved
+provider logins. This is not yet an installed supervisor service.
+
+The assembled execution service, resource/storage admission and crash-safe
+leases, native Verb adapter, persistent-project authentication, candidate endpoint and full
 resume/reconnect/stop/restart/rollback acceptance remain open. No production
 promotion or automatic unrestricted-host fallback follows from this checkpoint.
