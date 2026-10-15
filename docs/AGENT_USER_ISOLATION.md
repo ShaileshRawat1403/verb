@@ -174,3 +174,13 @@ Desktop CI run `38670697911` passed macOS and Linux checks. Public promotion,
 reviewed real-project migration, new-boot acceptance and sustained use remain
 open. Registration currently creates empty projects through a root operator tool;
 AGY/OpenCode full workflows and arbitrary CLI adapters are not certified here.
+
+The responsiveness follow-up installs clean Verb revision
+`5c3661ede775549de9017b07f0009e17d661a7c6` with boundary revision
+`22b706b05399a46a1a78d233f722bbfd43bd0bda`. Read-only Git runs in bounded
+workers, and background pipe clients cannot occupy both execution slots. A short
+interactive priority window avoids probe starvation; only explicit pre-lease
+capacity rejection is retried for three seconds. No accepted command, uncertain
+transport failure or issued generation is retried. Native input and two-session
+reload/close passed on the phone. See `DESKTOP_PRODUCTION_READINESS.md` for the
+measured latency and current proof scope.

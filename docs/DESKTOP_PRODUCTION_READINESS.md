@@ -331,4 +331,34 @@ reload with the same shell PID and UI close, with zero page errors. The measured
 new-terminal HTTP response took 16.4 seconds during this proof. Earlier 15-second
 fixture waits expired before launch completed and left their synthetic terminal
 behind; cleanup now waits for the UI request to finish. The observed launch delay
-is a production UX issue to profile and reduce, not a claim of instant startup.
+was traced to synchronous `/api/git` work on the PTY/request loop and is resolved
+by the responsiveness follow-up below.
+
+## Terminal responsiveness follow-up, 2026-10-15
+
+Clean revision `5c3661ede775549de9017b07f0009e17d661a7c6` moves read-only Git
+summary and file-diff requests to the existing bounded worker pool. Authentication,
+request limits and error replies are preserved. Profiling showed the blocking
+Git route took 16.5 s while actual terminal creation took 27 ms. Temporary profiling
+was removed from source and the installed artifact.
+
+A real blocked-Git regression failed before the fix. Both summary and diff cases
+now open a terminal and verify native keyboard echo while Git remains blocked.
+All 19 browser journeys and the 341-test Rust suite passed (five intentional
+ignores). Desktop CI `38676399426` passed macOS and Linux, including repeated
+immediate resume/close across sudo's UID transition. EPERM delegates only to
+the existing isolated-session signal authority, and final reaping is bounded.
+
+On the private OnePlus candidate, the launch response fell to 154 ms in the
+measured flow. With the final bounded priority policy, a cold-start browser opened
+two distinct native shells and received their shell PID markers in 666 ms and
+1,012 ms respectively. Reload retained both processes and UI close removed both
+without page errors. These are observed synthetic runs, not a latency guarantee.
+
+The node still admits at most two sessions. At most one pipe client is active;
+a waiting interactive launch briefly takes priority over subsequent probes. Only
+explicit capacity rejection before lease issuance can be retried, for at most
+three seconds. Transport failures and accepted streams are never resubmitted.
+No memory/network/storage guard was relaxed. The running private binary SHA256 is
+`ab3e939ccbc21e051bc9c3f98e0ecb89552185c88588586264a1b52831e63be1`.
+Public port 3005 remains on its previous clean deployment.
