@@ -1631,10 +1631,15 @@ impl WebHost {
             return Ok(Reply::json(201, json!(spec)));
         }
         if method == &Method::Get && path == "/api/git" {
-            return Ok(Reply::json(
-                200,
-                json!(crate::specs::git_summary(&self.project)?),
-            ));
+            // Git may cross an execution boundary or scan a large checkout.
+            // Keep it off the PTY/request loop, including while opening a terminal.
+            let project = self.project.clone();
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                serde_json::to_vec(&crate::specs::git_summary(&project)?)
+                    .map_err(|error| error.to_string())
+            }));
+            return Ok(reply);
         }
         if method == &Method::Get && path == "/api/git/diff" {
             let wanted = url
@@ -1643,10 +1648,13 @@ impl WebHost {
                 .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("path=")))
                 .map(crate::shell::percent_decode)
                 .ok_or("which file?")?;
-            return Ok(Reply::json(
-                200,
-                json!(crate::diff::file_diff(&self.project, &wanted)?),
-            ));
+            let project = self.project.clone();
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                serde_json::to_vec(&crate::diff::file_diff(&project, &wanted)?)
+                    .map_err(|error| error.to_string())
+            }));
+            return Ok(reply);
         }
         if method == &Method::Post && path == "/api/git/commit" {
             let input: CommitRequest = read_json(request)?;
