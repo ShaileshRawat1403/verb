@@ -73,6 +73,11 @@ pub(crate) struct Instrumented {
 ///
 /// `directory` is Verb's own state directory; everything written lives under it.
 pub(crate) fn prepare(shell: &str, directory: &Path) -> Option<Instrumented> {
+    // Guest startup files live inside each project's private filesystem. Never
+    // pass a host shell shim or host HOME into the external runtime.
+    if crate::isolation::external() {
+        return None;
+    }
     let kind = Kind::of(shell)?;
     let isolated = crate::isolation::profile().ok()?.is_some();
     let root = private_directory(&if isolated {

@@ -121,9 +121,6 @@ impl Agent {
         if identity.is_some_and(|id| valid_resume_identity(id).is_none()) {
             return ResumeVerdict::Unknown;
         }
-        let Some(home) = isolation::agent_home() else {
-            return ResumeVerdict::Unknown;
-        };
         if isolation::profile().is_ok_and(|p| p.is_some()) {
             if identity.is_none() {
                 return ResumeVerdict::Unknown;
@@ -137,6 +134,9 @@ impl Agent {
                 _ => ResumeVerdict::Unknown,
             };
         }
+        let Some(home) = isolation::agent_home() else {
+            return ResumeVerdict::Unknown;
+        };
         match (self, identity) {
             (Self::Claude, Some(id)) => agents::claude_verdict_for(project, &home, id),
             (Self::Codex, Some(id)) => agents::codex_verdict_for(project, &home, id),

@@ -299,3 +299,23 @@ detached test process; stale stop protection preserved a replacement launch.
 These are component proofs. The assembled service, bounded project resources and
 Verb adapter still need integration before candidate activation. Live Verb was
 unchanged and remained healthy; no phone reboot or saved login was used.
+
+
+## 2026-10-15 private native candidate
+
+The external execution service and opt-in Verb adapter are installed as separate
+private candidate services on the OnePlus. Native browser keyboard/close and
+API input/resize/file-owner/persistent-home/cleanup proofs passed, alongside
+assembled controller crash recovery and sampled storage-stop proofs. Ninety
+boundary checks pass on ARM Linux. This does not replace the public deployment,
+which remains on its existing launcher and route.
+
+The owner chose monitored storage explicitly; hard quotas remain unavailable.
+The candidate is a development artifact (`sourceDirty=true`), not a promoted
+release. Fresh owner-completed sign-ins passed integrated Claude/Codex shell
+tools and model continuity in exact resumed native conversations. Verb Resume
+kept the same session ID and exact native identity. Browser reload preserved a
+live shell. API close killed a detached child; forced failure of the installed
+controller recovered its recorded child and lease before accepting another shell.
+Candidate rollback, a clean final build and normal-use observation remain gates.
+See `AGENT_USER_ISOLATION.md` and PocketFabric's dated candidate evidence.

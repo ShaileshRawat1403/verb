@@ -123,3 +123,46 @@ This is still component verification, not an installed execution supervisor or
 Rust integration. The separate candidate and authenticated persistent-project
 resume/reconnect/stop/controller-restart/rollback checks remain open. Existing
 live Codex launch behavior has not been switched to external isolation.
+
+
+## 2026-10-15 private native integration
+
+`VERB_EXECUTION_BOUNDARY=monitored-v1` selects the separate private candidate.
+It is mutually exclusive with `VERB_AGENT_USER` / `VERB_AGENT_SUDO`, Linux-only,
+and requires the dedicated host identity, private host state, a fixed root-owned
+unprivileged client and an operator-registered project. Invalid configuration
+refuses; no host/root execution fallback is allowed. Existing account separation
+and ordinary desktop launches retain their previous behavior.
+
+PocketFabric owns the root controller, per-project actor/broker identities,
+pinned mount views, resource admission and durable recovery. Verb retains its
+host-side session lock and terminal, while the client relays a separate private
+PTY or three distinct pipes. Exact root-issued generations bind completion and
+stop. Native histories stay in the project's private home; the bounded helper
+returns only recovery identity/verdict metadata. Host shell shims are not sent
+into the guest. Unobserved native records remain unobserved.
+
+The candidate runs independently on OnePlus loopback 3007; public port 3005 is
+unchanged. Synthetic device/API/browser checks passed native file ownership,
+input (including queued startup input), resize, Ctrl+C, hidden input, native exit
+status, home persistence, close cleanup and controller crash recovery. Fresh
+persistent Claude/Codex sign-ins were completed by the owner. Both providers
+then wrote synthetic files through shell tools as UID 62000. Each resumed its
+exact native conversation and wrote a remembered marker omitted from the new
+prompt, without reading the earlier file. Verb Resume retained the same Verb
+session ID and launched that exact native conversation. Fresh output attachments
+kept the process alive. A browser reload retained the same shell PID and output.
+Closing a terminal stopped its detached synthetic child. The installed runit
+controller also recovered after SIGKILL, drained the recorded child and lease,
+and admitted a new shell. These tests used only the registered synthetic project.
+Claude disables optional startup traffic and its auto-updater in this candidate;
+project-configured MCP remains native. Provider output and login contents were
+not copied into either repository.
+
+The selected storage control samples native accounting and stops at a budget;
+it is **not a hard disk quota**. The private candidate has explicit memory,
+cpuset, file, inode, lifetime and public-HTTPS limits. It is owner-only and is not
+certified for hostile multi-tenant hosting. Codex's native kernel sandbox remains
+unsupported: the selected candidate uses an explicit external boundary, without
+changing saved native sandbox settings. A clean release build, full acceptance
+and public promotion review are still required.

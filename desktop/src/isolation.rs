@@ -2,17 +2,46 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod external;
+
 const LAUNCHER: &str = "/usr/local/libexec/verb-agent-launch";
 pub(crate) const SHELL_DIR: &str = "/var/lib/verb-shell";
 
 #[derive(Clone, Debug)]
-pub(crate) struct Profile {
+pub(crate) struct AccountProfile {
     pub user: String,
     pub home: PathBuf,
     uid: u32,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum Profile {
+    Account(AccountProfile),
+    External,
+}
+
 pub(crate) fn profile() -> Result<Option<Profile>, String> {
+    if let Some(value) = std::env::var_os("VERB_EXECUTION_BOUNDARY") {
+        if value != "monitored-v1" || !cfg!(target_os = "linux") {
+            return Err("unsupported execution boundary; refusing fallback".into());
+        }
+        if std::env::var_os("VERB_AGENT_USER").is_some()
+            || std::env::var_os("VERB_AGENT_SUDO").is_some()
+        {
+            return Err("choose one execution boundary".into());
+        }
+        external::validate_host()?;
+        secure_launcher(Path::new(external::CLIENT))?;
+        return Ok(Some(Profile::External));
+    }
+    account_profile().map(|profile| profile.map(Profile::Account))
+}
+
+pub(crate) fn external() -> bool {
+    matches!(profile(), Ok(Some(Profile::External)))
+}
+
+fn account_profile() -> Result<Option<AccountProfile>, String> {
     let Some(user) = std::env::var_os("VERB_AGENT_USER") else {
         return Ok(None);
     };
@@ -35,6 +64,20 @@ pub(crate) fn profile() -> Result<Option<Profile>, String> {
         return Err("VERB_AGENT_SUDO must be an absolute root-owned path".into());
     }
     secure_launcher(&sudo)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        validate_host_state(uid)?;
+        let agent_home = std::fs::symlink_metadata(&profile.home).map_err(|e| e.to_string())?;
+        if !agent_home.is_dir() || agent_home.uid() != profile.uid || agent_home.mode() & 0o022 != 0
+        {
+            return Err("agent HOME must belong to the agent and not be writable by others".into());
+        }
+    }
+    Ok(Some(profile))
+}
+
+fn validate_host_state(uid: u32) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -87,16 +130,11 @@ pub(crate) fn profile() -> Result<Option<Profile>, String> {
                 return Err("isolated host state must be an owner-only directory".into());
             }
         }
-        let agent_home = std::fs::symlink_metadata(&profile.home).map_err(|e| e.to_string())?;
-        if !agent_home.is_dir() || agent_home.uid() != profile.uid || agent_home.mode() & 0o022 != 0
-        {
-            return Err("agent HOME must belong to the agent and not be writable by others".into());
-        }
     }
-    Ok(Some(profile))
+    Ok(())
 }
 
-fn parse_profile(user: &str, passwd: &str, host_uid: u32) -> Result<Profile, String> {
+fn parse_profile(user: &str, passwd: &str, host_uid: u32) -> Result<AccountProfile, String> {
     if host_uid == 0 {
         return Err("isolated Verb must run as a dedicated non-root host account".into());
     }
@@ -124,7 +162,7 @@ fn parse_profile(user: &str, passwd: &str, host_uid: u32) -> Result<Profile, Str
     if uid == 0 || gid == 0 || uid == host_uid || !home.is_absolute() || home == Path::new("/") {
         return Err("agent must have a separate non-root UID/GID and absolute home".into());
     }
-    Ok(Profile {
+    Ok(AccountProfile {
         user: user.into(),
         home,
         uid,
@@ -158,7 +196,8 @@ fn secure_launcher(path: &Path) -> Result<(), String> {
 
 pub(crate) fn agent_home() -> Option<PathBuf> {
     match profile() {
-        Ok(Some(profile)) => Some(profile.home),
+        Ok(Some(Profile::Account(profile))) => Some(profile.home),
+        Ok(Some(Profile::External)) => None,
         Ok(None) => std::env::var_os("HOME").map(PathBuf::from),
         Err(_) => None,
     }
@@ -174,7 +213,11 @@ pub(crate) fn launch(
 ) -> Result<(String, Vec<String>), String> {
     match profile()? {
         None => Ok((program.into(), args.to_vec())),
-        Some(profile) => Ok((
+        Some(Profile::External) => Ok((
+            external::CLIENT.into(),
+            external::arguments(program, args, project, session, "terminal")?,
+        )),
+        Some(Profile::Account(profile)) => Ok((
             sudo_path().to_string_lossy().into_owned(),
             launcher_args(&profile, program, args, project, session, env, lock_fd)?,
         )),
@@ -182,7 +225,7 @@ pub(crate) fn launch(
 }
 
 fn launcher_args(
-    profile: &Profile,
+    profile: &AccountProfile,
     program: &str,
     args: &[String],
     project: &Path,
@@ -227,7 +270,14 @@ fn launcher_args(
 }
 
 pub(crate) fn command(program: &Path, project: &Path, session: &str) -> Result<Command, String> {
-    let (program, args) = launch(&program.to_string_lossy(), &[], project, session, &[], None)?;
+    let (program, args) = if external() {
+        (
+            external::CLIENT.into(),
+            external::arguments(&program.to_string_lossy(), &[], project, session, "pipes")?,
+        )
+    } else {
+        launch(&program.to_string_lossy(), &[], project, session, &[], None)?
+    };
     // Talk gets its own session so the unprivileged host can ask the fixed agent launcher to
     // stop that exact session's descendants. Project probes do not need another session.
     let mut command = if !session.is_empty() && profile()?.is_some() {
@@ -248,8 +298,10 @@ pub(crate) fn command(program: &Path, project: &Path, session: &str) -> Result<C
 }
 
 pub(crate) fn signal_session(sid: i32, signal: i32) -> Result<(), String> {
-    let Some(profile) = profile()? else {
-        return Ok(());
+    let profile = match profile()? {
+        None => return Ok(()),
+        Some(Profile::External) => return external::stop_client(sid),
+        Some(Profile::Account(profile)) => profile,
     };
     let signal = match signal {
         1 => "HUP",
@@ -303,14 +355,18 @@ pub(crate) fn recovery_evidence(
     since: Option<std::time::SystemTime>,
     identity: Option<&str>,
 ) -> Option<RecoveryEvidence> {
-    let executable = std::env::current_exe().ok()?;
-    secure_launcher(&executable).ok()?;
     let since = since
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map_or(0, |d| d.as_millis());
-    let output = command(Path::new("/usr/bin/timeout"), project, "")
-        .ok()?
-        .args([
+    let mut probe = if external() {
+        let mut probe = command(Path::new("recovery"), project, "").ok()?;
+        probe.args([agent, &since.to_string(), identity.unwrap_or("")]);
+        probe
+    } else {
+        let executable = std::env::current_exe().ok()?;
+        secure_launcher(&executable).ok()?;
+        let mut probe = command(Path::new("/usr/bin/timeout"), project, "").ok()?;
+        probe.args([
             "--kill-after=1s",
             "2s",
             executable.to_str()?,
@@ -318,10 +374,10 @@ pub(crate) fn recovery_evidence(
             agent,
             &since.to_string(),
             identity.unwrap_or(""),
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .ok()?;
+        ]);
+        probe
+    };
+    let output = probe.stdin(std::process::Stdio::null()).output().ok()?;
     if !output.status.success() || output.stdout.len() > 4096 {
         return None;
     }
