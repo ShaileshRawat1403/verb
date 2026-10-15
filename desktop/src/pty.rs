@@ -428,9 +428,15 @@ fn terminate_leader(pid: PidT) -> Result<i32, String> {
         }
     }
 
-    // SIGKILL cannot be ignored. A blocking wait here only covers the small scheduler gap between
-    // delivery and collection; it cannot wait on a process that is still able to keep running.
-    wait_blocking(pid)
+    // A delegated signal can stop the agent while its privileged sudo monitor is
+    // still exiting. Do not turn an unconfirmed monitor exit into an unbounded wait.
+    for _ in 0..200 {
+        if let Some(code) = wait_nonblocking(pid)? {
+            return Ok(code);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Err("PTY child did not exit after bounded termination".to_owned())
 }
 
 fn drain_group(pid: PidT) {
@@ -466,6 +472,13 @@ pub(crate) fn signal_group(pid: PidT, signal: c_int) -> Result<(), String> {
         let error = io::Error::last_os_error();
         if error.raw_os_error() == Some(ESRCH) {
             Ok(())
+        } else if error.raw_os_error() == Some(EPERM)
+            && crate::isolation::profile().is_ok_and(|profile| profile.is_some())
+        {
+            // sudo may still be privileged, or may already have changed UID.
+            // Use the configured fixed launcher to signal only this session's
+            // agent identity; never widen permission to arbitrary host processes.
+            crate::isolation::signal_session(pid, signal)
         } else {
             Err(format!("could not signal PTY child: {error}"))
         }

@@ -199,9 +199,12 @@ sys.stdin.readline()
         api('DELETE',f'/api/terminals/{hosted}')
         ended=next(s for s in api('GET','/api/state')['sessions'] if s['id']==hosted)
         assert ended['state']=='recoverable' and ended['canResume'], ended
-        resumed=api('POST','/api/terminals',{'agent':agent_name,'resume_id':hosted})['sessionId']
-        assert resumed==hosted, 'resume switched the selected Verb session'
-        api('DELETE',f'/api/terminals/{resumed}')
+        # Close immediately, including while sudo is crossing its UID boundary.
+        # Readiness waits would hide the teardown race this loop exercises.
+        for _ in range(3):
+            resumed=api('POST','/api/terminals',{'agent':agent_name,'resume_id':hosted})['sessionId']
+            assert resumed==hosted, 'resume switched the selected Verb session'
+            api('DELETE',f'/api/terminals/{resumed}')
     print('PASS: private Claude/Codex record metadata, exact resume, unchanged file permissions, no transcript export')
     print("PASS: real Linux PTY/Talk/Git account separation, secret denial, session lock, no-new-privileges, zero capabilities, 512 MiB cgroup, noisy stderr, fail-closed configuration")
 finally:
