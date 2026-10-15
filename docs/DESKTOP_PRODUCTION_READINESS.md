@@ -311,11 +311,24 @@ boundary checks pass on ARM Linux. This does not replace the public deployment,
 which remains on its existing launcher and route.
 
 The owner chose monitored storage explicitly; hard quotas remain unavailable.
-The candidate is a development artifact (`sourceDirty=true`), not a promoted
-release. Fresh owner-completed sign-ins passed integrated Claude/Codex shell
+The clean private artifact is built from
+`5e9884193bf4de3be629092eb67586c1e5af9e8b` (`sourceDirty=false`), binary SHA256
+`e3a4c72429af44440b9b15adf458d5b24337aa0b0cc1de24d460218723dd3f6e`.
+It is not a promoted public release. Fresh owner-completed sign-ins passed integrated Claude/Codex shell
 tools and model continuity in exact resumed native conversations. Verb Resume
 kept the same session ID and exact native identity. Browser reload preserved a
 live shell. API close killed a detached child; forced failure of the installed
 controller recovered its recorded child and lease before accepting another shell.
-Candidate rollback, a clean final build and normal-use observation remain gates.
+Switching to the preserved old package and back passed shell/home checks; the
+clean package then passed exact provider Resume and installed controller crash
+recovery. Desktop CI run `38670697911` passed. Real-project migration, new-boot
+acceptance for these services, normal-use observation and public promotion
+remain gates. The only registered candidate project is synthetic.
 See `AGENT_USER_ISOLATION.md` and PocketFabric's dated candidate evidence.
+
+The clean candidate's final phone-backed browser proof passed real keystrokes,
+reload with the same shell PID and UI close, with zero page errors. The measured
+new-terminal HTTP response took 16.4 seconds during this proof. Earlier 15-second
+fixture waits expired before launch completed and left their synthetic terminal
+behind; cleanup now waits for the UI request to finish. The observed launch delay
+is a production UX issue to profile and reduce, not a claim of instant startup.

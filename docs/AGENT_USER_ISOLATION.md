@@ -164,5 +164,13 @@ it is **not a hard disk quota**. The private candidate has explicit memory,
 cpuset, file, inode, lifetime and public-HTTPS limits. It is owner-only and is not
 certified for hostile multi-tenant hosting. Codex's native kernel sandbox remains
 unsupported: the selected candidate uses an explicit external boundary, without
-changing saved native sandbox settings. A clean release build, full acceptance
-and public promotion review are still required.
+changing saved native sandbox settings. The private candidate now runs clean
+source revision `5e9884193bf4de3be629092eb67586c1e5af9e8b`, binary SHA256
+`e3a4c72429af44440b9b15adf458d5b24337aa0b0cc1de24d460218723dd3f6e`.
+Both the previous-package rollback and restoration of this clean package passed,
+including native home persistence and exact Claude/Codex Resume after restart.
+The installed clean controller repeated the forced-crash proof successfully.
+Desktop CI run `38670697911` passed macOS and Linux checks. Public promotion,
+reviewed real-project migration, new-boot acceptance and sustained use remain
+open. Registration currently creates empty projects through a root operator tool;
+AGY/OpenCode full workflows and arbitrary CLI adapters are not certified here.
