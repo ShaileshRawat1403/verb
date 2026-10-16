@@ -362,3 +362,34 @@ three seconds. Transport failures and accepted streams are never resubmitted.
 No memory/network/storage guard was relaxed. The running private binary SHA256 is
 `ab3e939ccbc21e051bc9c3f98e0ecb89552185c88588586264a1b52831e63be1`.
 Public port 3005 remains on its previous clean deployment.
+
+### Private cold-state follow-up, 2026-10-16
+
+Clean revision `d57bec0666a9ee2ea5cee07fa365250ad7caf2dc` runs as the private
+host and read-only guest helper. Binary SHA256:
+`0523a00e1bd1def4b93c316bbb12590a871716adf88274ea0d1c9a28d544dbf4`.
+It groups guarded Git snapshot reads into one bounded project session and
+reuses the workspace identity for task and memory reads. Git failures remain
+unknown. The controller and public deployment were not upgraded.
+
+On the same phone, uncached `/api/state` improved from 21.395 seconds to
+2.802 seconds on the first read. Three later reads after cache expiry took
+1.879, 1.870 and 1.838 seconds. `/api/workspace` took 0.001 seconds; a cached
+state took 0.004 seconds. These are device observations, not guarantees.
+The observed branch and zero changes remained correct. Existing ended history
+is retained and does not count as active work.
+
+Library tests, all 34 HTTP integration tests, the repository-command execution
+regression and strict Clippy passed. The slow-state regression now delays Git
+itself, rather than depending on redundant project-registry locking. Synthetic
+phone typing, resize, clean exit, HTTPS/private-network policy, scoped rule
+renewal and lease cleanup passed without provider inference. The first upgrade
+attempt rolled back on an overly strict empty-history assertion; the corrected
+gate distinguishes ended history from active work and the accepted switch keeps
+the old immutable package available.
+
+PocketFabric records the full private artifact and measurement evidence in
+`docs/evidence/boundary-state-20261016.json`. Natural idle-transition observation,
+daily-use soak and public promotion remain open. This binary has not repeated
+the earlier build's locked-phone reboot test. The latest encrypted data backup
+predates this code-only upgrade.
