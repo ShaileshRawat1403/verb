@@ -1550,16 +1550,26 @@ fn cf_access_non_blocking_jwks_reliability_and_offline_responsiveness() {
 
 #[test]
 fn secondary_state_work_does_not_block_workspace_or_terminal_io() {
-    let server = Arc::new(WebServer::start());
+    use std::os::unix::fs::PermissionsExt;
+    let tools = std::env::temp_dir().join(format!("verb-slow-git-{}", std::process::id()));
+    fs::create_dir(&tools).unwrap();
+    let blocked = tools.join("slow");
+    let wrapper = tools.join("git");
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in *' status '*) if test -e '{}'; then sleep 2; fi;; esac\nexec /usr/bin/git \"$@\"\n",
+            blocked.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", tools.display(), std::env::var("PATH").unwrap());
+    let server = Arc::new(WebServer::start_with_env(&[("PATH", &path)]));
     let id = start_shell(&server, "cat");
-    // Full state must acquire this registry lock for secondary project work. Hold it to
-    // deterministically model a slow repository without wall-clock guesses about Git.
-    let lock = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(server.root.join("state/projects/.lock"))
-        .unwrap();
-    lock.lock().unwrap();
+    // Delay the actual repository observer. State no longer reacquires the
+    // identity registry lock when reading tasks and memory.
+    fs::write(&blocked, "fixture").unwrap();
     let reader = Arc::clone(&server);
     let state = std::thread::spawn(move || reader.request("GET", "/api/state", None, true));
     std::thread::sleep(Duration::from_millis(150));
@@ -1585,8 +1595,8 @@ fn secondary_state_work_does_not_block_workspace_or_terminal_io() {
         !state.is_finished(),
         "fixture must keep secondary state blocked"
     );
-    drop(lock);
     assert_eq!(state.join().unwrap().0, 200);
+    fs::remove_dir_all(tools).unwrap();
 }
 
 #[test]
