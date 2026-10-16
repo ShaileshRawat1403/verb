@@ -90,6 +90,7 @@ const ui = {
   sessionRevision: 0,
   toastTimer: null,
   focusedTerminal: null,
+  focusProject: null,
   waitingTerminals: new Set(),
   talks: new Map(),
   waitingTalkSpecs: new Set(),
@@ -591,6 +592,16 @@ function selectTerminal(id) {
 
 function syncHostedTerminals() {
   if (!ui.state || ui.view !== "sessions") return;
+  const projectId = ui.state.project.id;
+  let savedFocus = null;
+  if (ui.focusProject !== projectId) {
+    try {
+      savedFocus = sessionStorage.getItem(`verb.terminal-focus.${projectId}`);
+    } catch {
+      // Terminal navigation still works when browser storage is unavailable.
+    }
+    ui.focusProject = projectId;
+  }
   for (const id of ui.terminals.keys()) {
     if (
       !ui.state.sessions.some(
@@ -603,6 +614,9 @@ function syncHostedTerminals() {
     if (session.hostedHere && !ui.terminals.has(session.id))
       addTerminal(session);
   }
+  // Restore after every pane is mounted: mounting the first pane picks a fallback.
+  if (savedFocus && (ui.terminals.has(savedFocus) || ui.talks.has(savedFocus)))
+    ui.focusedTerminal = savedFocus;
   updateTerminalFocus();
 }
 
@@ -1334,6 +1348,15 @@ function updateTerminalFocus() {
   if (ui.talks.size) grid.querySelector(".terminal-empty")?.remove();
   if (!ui.focusedTerminal || (!ui.terminals.has(ui.focusedTerminal) && !ui.talks.has(ui.focusedTerminal)))
     ui.focusedTerminal = ui.terminals.keys().next().value || ui.talks.keys().next().value || null;
+  if (ui.focusProject) {
+    try {
+      const key = `verb.terminal-focus.${ui.focusProject}`;
+      if (ui.focusedTerminal) sessionStorage.setItem(key, ui.focusedTerminal);
+      else sessionStorage.removeItem(key);
+    } catch {
+      // Storage denial must not prevent switching or closing terminals.
+    }
+  }
   ui.talks.forEach(({ tile }, id) => {
     tile.classList.toggle("focused", id === ui.focusedTerminal && !ui.splitTerminals);
   });

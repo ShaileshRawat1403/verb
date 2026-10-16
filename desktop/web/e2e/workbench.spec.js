@@ -131,6 +131,37 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   expect(errors).toEqual([]);
 });
 
+test("refresh restores the selected terminal and ignores stale saved selections", async ({ page }) => {
+  await page.goto(url);
+  await page.locator("#quick-terminal-empty").click();
+  await page.locator("[data-terminal-new]").click();
+  const tabs = page.getByRole("tab", { name: /Terminal/ });
+  await expect(tabs).toHaveCount(2);
+  const ids = await tabs.evaluateAll((items) => items.map((item) => item.dataset.tabTerminal));
+  const origin = url.split("/#")[0];
+  const workspace = await page.request.get(`${origin}/api/workspace`, { headers: { "X-Verb-Token": TOKEN } });
+  const projectId = (await workspace.json()).project.id;
+  try {
+    // Exercise both directions so server ordering cannot accidentally satisfy restoration.
+    for (const id of [ids[1], ids[0], ids[1]]) {
+      await page.locator(`[data-tab-terminal="${id}"]`).click();
+      await page.reload();
+      await expect(tabs).toHaveCount(2);
+      await expect(page.locator(`[data-tab-terminal="${id}"]`)).toHaveAttribute("aria-selected", "true");
+      await expect(page.locator(`#terminal-${id}`)).toHaveClass(/focused/);
+      expect((await tabs.evaluateAll((items) => items.map((item) => item.dataset.tabTerminal))).sort()).toEqual([...ids].sort());
+    }
+    await page.evaluate((id) => sessionStorage.setItem(`verb.terminal-focus.${id}`, "gone-terminal"), projectId);
+    await page.reload();
+    await expect(tabs).toHaveCount(2);
+    await expect(page.locator('.terminal-tab[aria-selected="true"]')).toHaveCount(1);
+    await expect.poll(() => page.evaluate((id) => sessionStorage.getItem(`verb.terminal-focus.${id}`), projectId)).not.toBe("gone-terminal");
+  } finally {
+    for (const id of ids)
+      await page.request.delete(`${origin}/api/terminals/${id}`, { headers: { "X-Verb-Token": TOKEN, Origin: origin } });
+  }
+});
+
 test("reduced motion preserves an immediate terminal surface", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(url);
