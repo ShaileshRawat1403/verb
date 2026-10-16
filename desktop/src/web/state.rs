@@ -58,7 +58,7 @@ impl StateJob {
         let hosted_ids: Vec<_> = self.hosted.keys().map(String::as_str).collect();
         let sessions =
             crate::read_project_sessions_except(&self.project, &identity.id, &hosted_ids)?;
-        let tasks = workbench::snapshots(&self.project)?
+        let tasks = workbench::snapshots_for_identity(&self.project, identity)?
             .into_iter()
             .map(|task| {
                 json!({
@@ -104,7 +104,7 @@ impl StateJob {
                 "branch": git.branch, "gitStatus": git.status.as_str(),
                 "changedFiles": git.changes_known.then_some(git.changed_files)},
             "deployment": self.deployment,
-            "memory": workbench::shared_memory(&self.project)?,
+            "memory": workbench::shared_memory_for_identity(identity)?,
             "tasks": tasks, "sessions": session_rows,
         }))
     }

@@ -184,3 +184,19 @@ capacity rejection is retried for three seconds. No accepted command, uncertain
 transport failure or issued generation is retried. Native input and two-session
 reload/close passed on the phone. See `DESKTOP_PRODUCTION_READINESS.md` for the
 measured latency and current proof scope.
+
+The cold-state follow-up batches Git snapshot reads through the existing
+root-owned `verb-recovery` executable, inside one external project session.
+Its internal `__git-snapshot` command runs the same guarded Git observer under
+the project UID; it does not execute Git on the host. A ten-second guest deadline,
+one-second kill grace and bounded metadata response apply. An absent, old or
+failed helper reports Git as unavailable, with no host fallback. Deploy the host
+binary and its read-only guest helper together. The helper skips ordinary CLI
+root discovery to avoid recursion and only maps a confirmed guest workspace root
+back to the registered host workspace.
+
+Web state also reuses its already resolved project identity for task and memory
+reads. Standalone ledger commands still resolve their own identity. This removes
+repeated isolated Git discovery without caching task or memory contents beyond
+the existing state-cache lifetime. Device timings must be measured on the new
+private artifact before claiming a performance improvement.

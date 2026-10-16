@@ -102,7 +102,16 @@ pub(crate) struct TaskHistory {
 }
 
 pub(crate) fn snapshots(project: &Path) -> Result<Vec<TaskSnapshot>, String> {
-    let mut tasks = read_tasks(project)?;
+    snapshots_for_identity(project, &crate::project::identity(project)?)
+}
+
+/// A workspace job already has a resolved identity. Reuse it for its ledger
+/// reads instead of rediscovering Git membership for every section.
+pub(crate) fn snapshots_for_identity(
+    project: &Path,
+    identity: &crate::project::ProjectIdentity,
+) -> Result<Vec<TaskSnapshot>, String> {
+    let mut tasks = read_tasks_for_identity(project, identity)?;
     tasks.sort_by_key(|task| std::cmp::Reverse(task.created_at));
     Ok(tasks
         .into_iter()
@@ -134,6 +143,12 @@ pub(crate) fn snapshots(project: &Path) -> Result<Vec<TaskSnapshot>, String> {
 
 pub(crate) fn shared_memory(project: &Path) -> Result<String, String> {
     read_memory(project)
+}
+
+pub(crate) fn shared_memory_for_identity(
+    identity: &crate::project::ProjectIdentity,
+) -> Result<String, String> {
+    read_memory_from_store(&identity.store)
 }
 
 pub(crate) fn append_ui_memory(project: &Path, note: &str) -> Result<String, String> {
@@ -1209,7 +1224,11 @@ fn same_project(left: &Path, right: &Path) -> bool {
 }
 
 fn read_memory(project: &Path) -> Result<String, String> {
-    let path = project_root(project)?.join("memory.md");
+    read_memory_from_store(&project_root(project)?)
+}
+
+fn read_memory_from_store(store: &Path) -> Result<String, String> {
+    let path = store.join("memory.md");
     read_bounded(&path, MAX_MEMORY as u64).or_else(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             Ok(String::new())
@@ -1221,7 +1240,14 @@ fn read_memory(project: &Path) -> Result<String, String> {
 
 fn read_tasks(project: &Path) -> Result<Vec<Task>, String> {
     let identity = crate::project::identity(project)?;
-    let root = identity.store;
+    read_tasks_for_identity(project, &identity)
+}
+
+fn read_tasks_for_identity(
+    project: &Path,
+    identity: &crate::project::ProjectIdentity,
+) -> Result<Vec<Task>, String> {
+    let root = &identity.store;
     let directory = root.join("tasks");
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
@@ -1240,7 +1266,7 @@ fn read_tasks(project: &Path) -> Result<Vec<Task>, String> {
             .and_then(|stem| stem.to_str())
             .ok_or_else(|| format!("invalid task filename: {}", path.display()))?;
         tasks.push(read_task_checked(
-            &root,
+            root,
             project,
             &identity.anchor,
             &identity.id,

@@ -104,6 +104,10 @@ fn run() -> Result<(), Failure> {
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(default_command);
     let mut rest: Vec<String> = args.collect();
+    if command == "__git-snapshot" {
+        gitview::helper(&rest)?;
+        return Ok(());
+    }
     if command == "--build-info" {
         println!(
             "{}",

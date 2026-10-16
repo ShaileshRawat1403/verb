@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum GitStatus {
     Branch,
     Unborn,
@@ -22,7 +22,7 @@ impl GitStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct GitSnapshot {
     pub root: Option<PathBuf>,
     pub branch: Option<String>,
@@ -74,6 +74,61 @@ pub(crate) fn output(args: &[&str], directory: &Path) -> Option<String> {
 }
 
 pub(crate) fn snapshot(project: &Path) -> GitSnapshot {
+    if crate::isolation::external() {
+        // Enter the boundary once. The trusted helper runs these same guarded reads
+        // under the project UID, rather than creating a namespace for each Git call.
+        return isolated_snapshot(project).unwrap_or(GitSnapshot {
+            root: None,
+            branch: None,
+            changed_files: 0,
+            status: GitStatus::Unavailable,
+            changes_known: false,
+        });
+    }
+    local_snapshot(project)
+}
+
+fn isolated_snapshot(project: &Path) -> Option<GitSnapshot> {
+    let output = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")
+        .ok()?
+        .args([
+            "--kill-after=1s",
+            "10s",
+            "/usr/local/bin/verb-recovery",
+            "__git-snapshot",
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() || output.stdout.len() > 65536 {
+        return None;
+    }
+    let mut facts: GitSnapshot = serde_json::from_slice(&output.stdout).ok()?;
+    // Guest and host paths differ. The helper confirms that the registered
+    // workspace itself is the repository root before reporting a root at all.
+    facts.root = facts.root.map(|_| project.to_path_buf());
+    Some(facts)
+}
+
+/// Internal helper, already inside the project boundary. Never re-enter it or
+/// discover the project root through the normal CLI startup path.
+pub(crate) fn helper(args: &[String]) -> Result<(), String> {
+    if !args.is_empty() || crate::isolation::profile()?.is_some() {
+        return Err("invalid Git snapshot helper invocation".into());
+    }
+    let directory = std::env::current_dir().map_err(|error| error.to_string())?;
+    let mut facts = local_snapshot(&directory);
+    if facts.root.as_deref() != Some(directory.as_path()) {
+        facts.root = None;
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&facts).map_err(|error| error.to_string())?
+    );
+    Ok(())
+}
+
+fn local_snapshot(project: &Path) -> GitSnapshot {
     let root = output(&["rev-parse", "--show-toplevel"], project)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
