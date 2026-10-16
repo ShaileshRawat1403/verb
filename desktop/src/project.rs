@@ -79,6 +79,16 @@ fn location(project: &Path) -> Result<Location, String> {
             git: true,
         })
     } else {
+        // A failed Git probe is not evidence that an existing checkout became
+        // a plain directory. In particular, its execution controller may still
+        // be starting. Refuse before minting another ID/work store; supervision
+        // can retry startup once Git is available.
+        if checkout
+            .ancestors()
+            .any(|path| fs::symlink_metadata(path.join(".git")).is_ok())
+        {
+            return Err("Git project identity unavailable; retry when Git and its execution boundary are ready".into());
+        }
         Ok(Location {
             key: format!("dir:{}", checkout.display()),
             anchor: checkout.clone(),

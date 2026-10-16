@@ -200,3 +200,13 @@ reads. Standalone ledger commands still resolve their own identity. This removes
 repeated isolated Git discovery without caching task or memory contents beyond
 the existing state-cache lifetime. Device timings must be measured on the new
 private artifact before claiming a performance improvement.
+
+Project identity must also remain unavailable when an existing Git checkout
+cannot be inspected. During backup recovery the web service could start before
+its controller and select a different directory identity for the same checkout.
+Verb now refuses that startup before selecting or creating a replacement work
+store. Supervision can restart it after the controller is ready. Ordinary folders
+remain supported without Git. The regression covers checkout and linked-worktree
+markers, preserves registry/shared-memory bytes during a simulated outage, and
+recovers the original ID when Git returns. Existing fallback records are retained
+for review; this guard does not merge or delete any project data.
