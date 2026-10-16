@@ -371,8 +371,28 @@ pub(crate) fn read_sessions() -> Result<Vec<Session>, String> {
 /// whose process is running right here. The host holding the binding is the authority for that one
 /// record; everything else is reconciled as usual.
 pub(crate) fn read_sessions_except(hosting: &[&str]) -> Result<Vec<Session>, String> {
+    reconcile_sessions(read_session_records()?, hosting)
+}
+
+/// Project views must not probe recovery or rewrite records belonging to another project.
+/// In an external boundary each recovery probe allocates a supervised native process.
+pub(crate) fn read_project_sessions_except(
+    project: &Path,
+    project_id: &str,
+    hosting: &[&str],
+) -> Result<Vec<Session>, String> {
+    let records = read_session_records()?
+        .into_iter()
+        .filter(|session| session_in_project_with_id(session, project, project_id));
+    reconcile_sessions(records, hosting)
+}
+
+fn reconcile_sessions(
+    records: impl IntoIterator<Item = Session>,
+    hosting: &[&str],
+) -> Result<Vec<Session>, String> {
     let mut sessions = Vec::new();
-    for session in read_session_records()? {
+    for session in records {
         sessions.push(
             if hosting.contains(&session.id.as_str()) || session.state == SessionState::Ended {
                 session

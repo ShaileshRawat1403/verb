@@ -1613,6 +1613,58 @@ fn workspace_is_available_without_reading_history_and_has_configured_deployment(
 }
 
 #[test]
+fn project_state_reconciles_only_its_own_history() {
+    let server = WebServer::start();
+    let ended = start_shell(&server, "echo done");
+    wait_for_output(&server, &ended, "done");
+    server.json("DELETE", &format!("/api/terminals/{ended}"), None);
+    let path_for = |id: &str| {
+        let encoded: String = id.bytes().map(|byte| format!("{byte:02x}")).collect();
+        server
+            .root
+            .join(format!("state/sessions/s-{encoded}.session"))
+    };
+    let original = fs::read_to_string(path_for(&ended)).unwrap();
+    let local_id = "11111111111111111111111111111111";
+    let foreign_id = "22222222222222222222222222222222";
+    let history = |id: &str, foreign: bool| {
+        original
+            .replace(&ended, id)
+            .lines()
+            .map(|line| {
+                if line.starts_with("state=") {
+                    "state=live".to_owned()
+                } else if foreign && line.starts_with("verb_project_id=") {
+                    format!("verb_project_id={foreign_id}")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n"
+    };
+    let foreign_record = history(foreign_id, true);
+    fs::write(path_for(foreign_id), &foreign_record).unwrap();
+    fs::write(path_for(local_id), history(local_id, false)).unwrap();
+
+    let state = server.json("GET", "/api/state", None);
+    let rows = state["sessions"].as_array().unwrap();
+    assert!(rows
+        .iter()
+        .any(|row| row["id"] == local_id && row["state"] == "ended"));
+    assert!(!rows.iter().any(|row| row["id"] == foreign_id));
+    assert_eq!(
+        fs::read_to_string(path_for(foreign_id)).unwrap(),
+        foreign_record,
+        "opening one project must not reconcile or rewrite another project's history"
+    );
+    assert!(fs::read_to_string(path_for(local_id))
+        .unwrap()
+        .contains("state=ended"));
+}
+
+#[test]
 fn history_cleanup_preserves_active_sessions_and_other_projects() {
     let server = WebServer::start();
     let active = start_shell(&server, "cat");

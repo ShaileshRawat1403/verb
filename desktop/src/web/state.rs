@@ -56,7 +56,8 @@ impl StateJob {
         let identity = &self.identity;
         let git = crate::git_snapshot(&self.project);
         let hosted_ids: Vec<_> = self.hosted.keys().map(String::as_str).collect();
-        let sessions = crate::read_sessions_except(&hosted_ids)?;
+        let sessions =
+            crate::read_project_sessions_except(&self.project, &identity.id, &hosted_ids)?;
         let tasks = workbench::snapshots(&self.project)?
             .into_iter()
             .map(|task| {
@@ -72,9 +73,6 @@ impl StateJob {
             .collect::<Vec<_>>();
         let mut session_rows = Vec::new();
         for session in sessions {
-            if !crate::session_in_project_with_id(&session, &self.project, &identity.id) {
-                continue;
-            }
             let attention = if session.agent.is_some() {
                 tasks
                     .iter()
