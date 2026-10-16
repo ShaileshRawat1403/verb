@@ -1,0 +1,30 @@
+  verb  ›  verb / main    16 changed                                            ● 1 running     ◐ 1 recoverable
+  1 Terminal      2 Workbench       3 Activity                                                       ? Help
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                   │
+  SESSIONS             3 total     │  PRIORITY WORK                                       / Search    4 tasks
+                                   │
+    Claude             ● running   │  ▸ Review session lock recovery                  NEEDS REVIEW
+    s-8f21 · task review ready     │    Claude handed off 4m ago · no reviewer yet
+                                   │
+    Codex              ◐ resume    │    Verify OpenCode WAL fallback                  HELP REQUEST
+    s-7b10 · needs your reply      │    Codex asked for a second check 12m ago
+                                   │
+    OpenCode           ◌ checking  │    Design task workbench                         IN PROGRESS
+    s-21be · exact ID pending      │    Claude owns this task
+                                   │
+ ──────────────────────────────────│    Write the recovery guide                      OPEN
+                                   │    Unassigned · ready for a session
+  PROJECT MEMORY                   │
+                                   │ ──────────────────────────────────────────────────────────────────────────────────
+    Rust host owns session state.  │  SELECTED TASK
+    Resume exact conversations.    │    Review session lock recovery
+    Review before completion.      │    From Claude · review handoff · completion not yet verified
+                                   │
+                                   │    Check the host-crash lock test and exact-resume guard.
+  m  Open shared memory            │    Handoff note is recorded; transcript stays with Claude.
+  n  New agent session             │
+                                   │    Enter  Open task        c  Claim review        t  Focus terminal
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Tab  Move focus      ↑↓  Select            Enter  Inspect           /  Search            Ctrl+Space  Commands
+  VERB WORKBENCH     Tasks and sessions are durable; action text is attributed to a session.

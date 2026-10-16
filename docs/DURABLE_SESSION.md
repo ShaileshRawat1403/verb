@@ -1,5 +1,54 @@
 # Durable Session — diagnosis
 
+## beta.12 remeasurement (I-5, 11 September 2026)
+
+Measured on the signed release `0.1.0-beta.12` (APK SHA-256 `c531b283…`, identical to the published
+asset) on the same phone, now Android 14 / Funtouch OS 14. Phone charging (83–86 %), screen on; Doze
+whitelist, Vivo background-power settings, autostart, phantom-process monitoring and the package set
+untouched. No agent was started; a `sleep 86400 &` in the terminal stands in for "agent child". Every
+row compares PIDs taken over adb before and after. Kills were confirmed in
+`dumpsys activity exit-info`, never assumed from the command. Raw snapshots and screenshots:
+`~/verb-i5-evidence/survival/`; the helper is `scripts/i5/survival-snap.sh`.
+
+| # | Lifecycle event | PTY | shell | child | scrollback | keep-alive service after | how established |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Open and close the workspace sheet, Verb palette and run history | survives | survives | survives | kept | foreground | verified, same PIDs |
+| 2 | Project switch and back | survives | survives | survives | kept | foreground | verified, same PIDs; the open terminal stays in its directory |
+| — | Back out to the launcher, relaunch | survives | survives | survives | kept | foreground | verified (unplanned, recorded) |
+| 3 | HOME for 60 s, relaunch | survives | survives | survives | kept | foreground (oom_adj 200) | verified |
+| 4 | Rotation ×2 | survives | survives | survives | kept | foreground | verified |
+| 5 | `am kill` while backgrounded | survives | survives | survives | kept | foreground | verified: no-op, no exit record |
+| 5b | Swipe away in Recents, wait 90 s, relaunch | survives | survives | survives | kept | foreground | verified: card removed, no exit record |
+| 6 | Restart Session (confirmed) | **new** | **new** | **orphaned, keeps running** | cleared | **absent** | verified: `sleep` reparented to pid 1; service not re-claimed 40 s later |
+| 6b | …then HOME and `am kill` | **destroyed** | **destroyed** | **destroyed** | lost | back on relaunch | verified: oom_adj 700, exit-info `reason=10 subreason=0`, `kill background` |
+| 7 | `am force-stop` | **destroyed** | **destroyed** | **destroyed** | lost | back on relaunch | verified: exit-info `reason=10 subreason=21 (FORCE STOP)` |
+
+What changed since `c2e21bd`: rows 2, 3, 5 and Recents now survive, because sessions belong to
+`VerbTerminalSessionHolder` rather than the Activity and `TerminalHoldService` holds the process in the
+foreground. A low-memory kill could not be induced while the service was foreground, so row 5 no longer
+reproduces the original event; it shows that the service defeats `am kill`, not that it defeats memory
+pressure.
+
+What beta.12 gets wrong, by evidence:
+
+1. **Restart Session drops the keep-alive and leaks the old process tree.** After row 6 the session is
+   "running" but `TerminalHoldService` never comes back, so the next trip to the background leaves the
+   process cached (oom_adj 700) and killable — row 6b. Background children of the old shell survive the
+   restart, reparented to init, invisible in the UI; a dev server or `ollama serve` would keep its port.
+2. **After process death nothing says what happened.** Rows 6b and 7 relaunch into the right project with
+   an empty terminal, no scrollback and no notice. "Sessions and recovery" lists agent conversations
+   recoverable from disk (Claude, Codex) and nothing about the shell session that was killed, although
+   `exit-info` holds the reason.
+3. **Force-stop by `am` and by Vivo look identical** except for the caller: `stop by 21275` here,
+   `stop by com.vivo.abe` in the device history (every Verb death recorded since 5 September). What Vivo
+   does with the screen off and the phone unplugged is the Track 2 soak, not this table.
+
+Also observed: in landscape the terminal canvas has no visible height; OpenCode's status changed from
+"Not installed" to "Session recoverable" across the restarts; before any test the release process had
+been alive for about 33 hours with the service in the foreground.
+
+## Historical measurement (`c2e21bd`)
+
 Measured on the Vivo I2202 (Android 13, arm64) against `c2e21bd`. No persistence implemented; this
 document exists to decide the architecture, not to justify one already chosen.
 

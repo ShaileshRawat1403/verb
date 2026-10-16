@@ -139,7 +139,11 @@ fn parse_cwd(payload: &str) -> Option<String> {
     let without_scheme = payload.strip_prefix("file://")?;
     let path = &without_scheme[without_scheme.find('/')?..];
     let decoded = percent_decode(path);
-    if decoded.is_empty() {
+    // A control character (a decoded `%0a`, say) is not part of any directory Verb should record:
+    // written into the line-based session record it broke every session read, and a crafted
+    // `%0aproject_id=...` moved the session to another project. Anything printed in the terminal --
+    // a `cat` of a repository file -- can emit this sequence.
+    if decoded.is_empty() || decoded.chars().any(char::is_control) {
         None
     } else {
         Some(decoded)
@@ -214,7 +218,7 @@ fn unescape_command(input: &str) -> String {
     output
 }
 
-fn percent_decode(input: &str) -> String {
+pub(crate) fn percent_decode(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -314,6 +318,16 @@ mod tests {
         assert_eq!(
             scanner.feed(b"\x1b]633;C\x07"),
             vec![ShellEvent::CommandStart]
+        );
+    }
+
+    #[test]
+    fn a_directory_with_a_control_character_is_ignored() {
+        assert_eq!(parse_cwd("file:///tmp%0aproject_id=/elsewhere"), None);
+        assert_eq!(parse_cwd("file:///tmp%09tab"), None);
+        assert_eq!(
+            parse_cwd("file:///tmp/ok%20dir").as_deref(),
+            Some("/tmp/ok dir")
         );
     }
 

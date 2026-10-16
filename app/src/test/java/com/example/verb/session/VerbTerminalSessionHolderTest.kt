@@ -73,6 +73,18 @@ class VerbTerminalSessionHolderTest {
         )
     }
 
+    @Test
+    fun `an occupied terminal rejects another agent without changing its binding`() {
+        val id = VerbTerminalSessionHolder.open { newRuntime() }!!
+        assertTrue(VerbTerminalSessionHolder.claimForeground(id, "claude", emptySet(), "session-one"))
+        assertFalse(VerbTerminalSessionHolder.claimForeground(id, "codex", emptySet(), "session-two"))
+        assertEquals("claude", VerbTerminalSessionHolder.foregroundAgentOf(id))
+        assertEquals(
+            "session-one",
+            VerbTerminalSessionHolder.foregroundBindingForProductSession("session-one")?.second?.productSessionId
+        )
+    }
+
     /** A claim names one terminal. The other one stays the user's to type in. */
     @Test
     fun `Antigravity occupying one terminal leaves the other free`() {

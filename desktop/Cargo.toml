@@ -6,14 +6,28 @@ description = "Verb desktop work-context shell"
 license = "Apache-2.0"
 
 [dependencies]
-# Rendering layer only. See docs/TUI_VISION.md: session records, adapters, the PTY host, the event
-# log and the CLI stay dependency-free, so removing these would cost a renderer, not the product.
+# Rendering layer only. See docs/TUI_VISION.md: removing these costs the workspace renderer,
+# not the session, task, PTY, or CLI capabilities.
 # default-features = false keeps the alternative backends (termion, termwiz and their trees) out.
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
 # A terminal-state parser, so the embedded terminal region is a real screen rather than a log view.
 vt100 = "0.16.2"
-# Continuity is a strict external file format, not one of the tiny scalar agent-record reads handled
-# by `json.rs`. Typed parsing and an integrity checksum keep attacker-controlled imports bounded.
+# Continuity and the task ledger have typed, bounded records. Agent transcript scans remain the
+# tiny scalar reads handled by `json.rs`.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+tiny_http = "0.12.0"
+base64 = "0.22.1"
+ctrlc = { version = "3.5.2", features = ["termination"] }
+rustls = { version = "0.23.45", default-features = false, features = ["std", "ring"] }
+rcgen = "0.14.10"
+if-addrs = "0.13.4"
+jsonwebtoken = "9.3"
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
+tungstenite = "0.24.0"
+
+# tiny_http with one security patch: an unread request body is no longer drained on the thread that
+# pumps hosted terminals. See vendor/tiny_http/VERB_PATCH.md.
+[patch.crates-io]
+tiny_http = { path = "vendor/tiny_http" }

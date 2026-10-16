@@ -1,0 +1,412 @@
+// Pure helpers for the spec-driven workbench: stage guidance, gate warnings, command search and Git
+// labels. No DOM access here, so every rule the UI shows can be tested with `npm test`.
+
+export const STAGES = ["spec", "plan", "build", "verify", "review", "ship"];
+
+/** What each stage means and what to do next, in plain words. */
+export const STAGE_GUIDE = {
+  spec: {
+    label: "Spec",
+    goal: "Agree on what to build",
+    next: "Describe the problem and list acceptance criteria: results anyone can check.",
+  },
+  plan: {
+    label: "Plan",
+    goal: "Decide how",
+    next: "Switch to this spec's branch so the work stays separate, and note any tasks.",
+  },
+  build: {
+    label: "Build",
+    goal: "Make it",
+    next: "Open a terminal, or start an AI agent on this spec. It reads the spec first.",
+  },
+  verify: {
+    label: "Verify",
+    goal: "Prove it works",
+    next: "Run the tests and tick each acceptance criterion with the evidence that proves it.",
+  },
+  review: {
+    label: "Review",
+    goal: "Check the changes",
+    next: "Read the changed files against the spec, then commit with a clear message.",
+  },
+  ship: {
+    label: "Ship",
+    goal: "Release it",
+    next: "Merge the branch and release. The audit trail records how it got here.",
+  },
+};
+
+/** The warnings a stage change will record. Mirrors desktop/src/specs.rs `set_stage`. */
+export function stageWarnings(spec, target) {
+  const from = STAGES.indexOf(spec.stage);
+  const to = STAGES.indexOf(target);
+  const warnings = [];
+  if (to < 0 || from < 0 || to === from) return warnings;
+  if (to > from + 1) warnings.push(`skipped ${STAGES.slice(from + 1, to).join(", ")}`);
+  const open = spec.criteria.length - spec.criteriaDone;
+  if (to >= 4 && open > 0) {
+    warnings.push(`${open} of ${spec.criteria.length} acceptance criteria not yet proven`);
+  }
+  return warnings;
+}
+
+/**
+ * Stages the audit trail says were skipped and never entered afterwards, so the stage bar does not
+ * show a skipped stage as completed.
+ */
+export function skippedStages(spec) {
+  const skipped = new Set();
+  for (const entry of spec.audit ?? []) {
+    const entered = /→ (\w+)/.exec(entry.action)?.[1];
+    if (entered) skipped.delete(entered);
+    const names = /skipped ([a-z, ]+)/.exec(entry.action)?.[1];
+    if (names) for (const name of names.split(", ")) if (STAGES.includes(name)) skipped.add(name);
+  }
+  return skipped;
+}
+
+export function progressLabel(spec) {
+  if (!spec.criteria.length) return "no criteria yet";
+  return `${spec.criteriaDone}/${spec.criteria.length} proven`;
+}
+
+/** Specs grouped in stage order; stages with no specs are left out. */
+export function groupByStage(specs) {
+  return STAGES.map((stage) => ({
+    stage,
+    specs: specs.filter((spec) => spec.stage === stage),
+  })).filter((group) => group.specs.length);
+}
+
+const CHANGE_NAMES = {
+  M: "Modified",
+  A: "Added",
+  D: "Deleted",
+  R: "Renamed",
+  C: "Copied",
+  "??": "New file",
+  U: "Conflict",
+};
+
+/** `git status --porcelain` codes as words. */
+export function changeLabel(code) {
+  const c = code.trim();
+  if (CHANGE_NAMES[c]) return CHANGE_NAMES[c];
+  for (const letter of c) if (CHANGE_NAMES[letter]) return CHANGE_NAMES[letter];
+  return c || "Changed";
+}
+
+/**
+ * Subsequence match score for the command palette: every query character must appear in order.
+ * Consecutive runs and word starts score higher. Returns -1 when it does not match.
+ */
+export function matchScore(text, query) {
+  const t = text.toLowerCase();
+  const q = query.toLowerCase().trim();
+  if (!q) return 0;
+  let score = 0;
+  let pos = -1;
+  let run = 0;
+  for (const ch of q) {
+    const next = t.indexOf(ch, pos + 1);
+    if (next < 0) return -1;
+    run = next === pos + 1 ? run + 1 : 0;
+    const wordStart = next === 0 || /[\s\-:/·]/.test(t[next - 1]);
+    score += 1 + run * 2 + (wordStart ? 3 : 0);
+    pos = next;
+  }
+  return score - t.length * 0.01;
+}
+
+/** Commands ranked for `query`; an empty query keeps the given order. */
+export function filterCommands(commands, query) {
+  if (!query.trim()) return commands;
+  return commands
+    .map((command) => ({
+      command,
+      score: matchScore(`${command.title} ${command.hint ?? ""}`, query),
+    }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .map((entry) => entry.command);
+}
+
+/** A suggested commit message for the selected spec. */
+export function commitPrefix(spec) {
+  return spec ? `spec:${spec.id} ` : "";
+}
+
+/** Nests flat paths ("a/b.txt") into folders; folders first, then files, each alphabetical. */
+export function buildTree(files) {
+  const root = { name: "", path: "", dirs: new Map(), files: [] };
+  for (const file of files) {
+    const parts = file.path.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const name = parts[i];
+      if (!node.dirs.has(name)) {
+        node.dirs.set(name, {
+          name,
+          path: parts.slice(0, i + 1).join("/"),
+          dirs: new Map(),
+          files: [],
+          changed: 0,
+        });
+      }
+      node = node.dirs.get(name);
+    }
+    node.files.push({ name: parts.at(-1), path: file.path, status: file.status ?? null });
+  }
+  const finish = (node) => {
+    node.files.sort((a, b) => a.name.localeCompare(b.name));
+    const dirs = [...node.dirs.values()].sort((a, b) => a.name.localeCompare(b.name));
+    dirs.forEach(finish);
+    node.changed =
+      node.files.filter((f) => f.status).length + dirs.reduce((sum, d) => sum + d.changed, 0);
+    node.dirs = dirs;
+    return node;
+  };
+  return finish(root);
+}
+
+/** Files whose path matches every space-separated word of the query, best first, capped. */
+export function filterFiles(files, query, limit = 200) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  return files
+    .map((file) => {
+      const p = file.path.toLowerCase();
+      if (!words.every((w) => p.includes(w))) return null;
+      const name = p.split("/").at(-1);
+      const score = words.reduce((s, w) => s + (name.includes(w) ? 3 : 1), 0) - p.length * 0.001;
+      return { file, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((entry) => entry.file);
+}
+
+/** "3d 4h", "2h 5m", "4m", "12s": the two largest units, for uptimes. */
+export function formatDuration(secs) {
+  if (secs == null) return "—";
+  const units = [
+    ["d", 86400],
+    ["h", 3600],
+    ["m", 60],
+    ["s", 1],
+  ];
+  const parts = [];
+  let rest = Math.max(0, Math.floor(secs));
+  for (const [label, size] of units) {
+    const n = Math.floor(rest / size);
+    rest -= n * size;
+    if (n || (label === "s" && !parts.length)) parts.push(`${n}${label}`);
+    if (parts.length === 2) break;
+  }
+  return parts.join(" ");
+}
+
+/** Share of a resource in use, 0–100, rounded. */
+export function usedPercent(usage) {
+  if (!usage || !usage.total_kb) return null;
+  return Math.round(((usage.total_kb - usage.available_kb) / usage.total_kb) * 100);
+}
+
+/** KB → "2.4 GB" / "512 MB". */
+export function formatKb(kb) {
+  if (kb == null) return "—";
+  if (kb >= 1024 * 1024) return `${(kb / 1024 / 1024).toFixed(1)} GB`;
+  return `${Math.round(kb / 1024)} MB`;
+}
+
+/** Phone-friendly thresholds: comfortable, warm (watch it), hot (throttling likely). */
+export function temperatureTone(celsius) {
+  if (celsius >= 45) return "hot";
+  if (celsius >= 40) return "warm";
+  return "ok";
+}
+
+/**
+ * Sessions that worked on a spec, newest first, from its audit trail ("started codex on this spec
+ * (session 1a2b3c4d)") joined with the sessions running now.
+ */
+export function specSessions(spec, liveSessions = []) {
+  const out = [];
+  for (const entry of spec.audit ?? []) {
+    const m = /^started (\S+) on this spec \(session ([0-9a-zA-Z_-]+)\)/.exec(entry.action);
+    if (!m) continue;
+    const [, agent, short] = m;
+    const live = liveSessions.find((s) => s.id.startsWith(short) && s.state === "live");
+    out.push({ agent, short, at: entry.at, live: Boolean(live), id: live?.id ?? null });
+  }
+  return out.reverse();
+}
+
+/** The agent that most recently started on a spec (mirrors specs::last_agent). */
+export function lastAgent(spec) {
+  return specSessions(spec)[0]?.agent ?? null;
+}
+
+const compact = (n) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
+
+/**
+ * A context meter as words and a tone. Percentages appear only when the agent records its window;
+ * otherwise the token count is shown with the agent's own reason. Tone follows the observer's
+ * thresholds: "warm" from 80%, "hot" from 95%.
+ */
+export function meterLabel(meter) {
+  if (!meter || meter.tokens == null) return { text: meter?.note ?? "No usage recorded yet.", tone: "idle", percent: null };
+  const limits = (meter.rate_limits ?? []).map((r) => `${r.label} ${r.used_percent}%`).join(" · ");
+  if (meter.percent == null) {
+    return { text: `${compact(meter.tokens)} tokens in context${limits ? ` · ${limits}` : ""}`, tone: "idle", percent: null, title: meter.note ?? "" };
+  }
+  const tone = meter.percent >= 95 ? "hot" : meter.percent >= 80 ? "warm" : "ok";
+  return {
+    text: `${meter.percent}% of ${compact(meter.window)} context${limits ? ` · ${limits}` : ""}`,
+    tone,
+    percent: meter.percent,
+    title: tone === "ok" ? "" : "Context is getting full. A handoff keeps the work going with a fresh session.",
+  };
+}
+
+/**
+ * Observer signals the browser can evaluate itself: context pressure (from the meters) and work on
+ * the wrong branch (from Git and the selected spec). Same shape as the server's signals.
+ */
+export function clientSignals({ meters = {}, sessions = [], git = null, spec = null, muted = [] }) {
+  const on = (kind) => !muted.includes(kind);
+  const out = [];
+  if (on("context")) {
+    for (const [id, meter] of Object.entries(meters)) {
+      if (meter?.percent == null || meter.percent < 80) continue;
+      const agent = sessions.find((s) => s.id === id)?.agent ?? "An agent";
+      const level = meter.percent >= 95 ? 95 : 80;
+      out.push({
+        key: `context:${id}:${level}`,
+        kind: "context",
+        terminal: id,
+        title: `${agent} context is ${meter.percent}% full`,
+        why: `Its own log records ${meter.tokens} tokens in a ${meter.window}-token window. Near the limit, agents start forgetting earlier work; a handoff continues with a fresh session and a written note.`,
+        action: "handoff",
+      });
+    }
+  }
+  if (on("branch") && spec?.branch && git?.branch && git.branch !== spec.branch && git.changes?.length && ["build", "verify", "review"].includes(spec.stage)) {
+    out.push({
+      key: `branch:${spec.id}:${git.branch}`,
+      kind: "branch",
+      terminal: null,
+      title: `Working on ${git.branch}, but spec ${spec.id} has its own branch`,
+      why: `${git.changes.length} uncommitted change(s) are on ${git.branch} while spec ${spec.id} is in ${spec.stage} and its branch is ${spec.branch}. Commit or set them aside, then switch, so the work stays separate.`,
+      action: "switch-branch",
+    });
+  }
+  return out;
+}
+
+/** A commit message from what changed: "spec:001 add the spec and the project brief". */
+export function suggestCommitMessage(spec, changes) {
+  const prefix = commitPrefix(spec);
+  if (!changes?.length) return prefix;
+  const parts = [];
+  const rest = [];
+  for (const c of changes) {
+    if (spec && c.path === spec.file) parts.push(c.code === "??" || c.code === "A" ? "add the spec" : "update the spec");
+    else if (c.path === "docs/project/BRIEF.md") parts.push(c.code === "??" || c.code === "A" ? "add the project brief" : "update the project brief");
+    else if (/^(AGENTS|CLAUDE)\.md$/.test(c.path)) parts.includes("sync agent context") || parts.push("sync agent context");
+    else rest.push(c);
+  }
+  if (rest.length === 1) {
+    const c = rest[0];
+    const name = c.path.split("/").pop();
+    const verb = c.code === "??" || c.code === "A" ? "add" : c.code === "D" ? "remove" : "update";
+    parts.push(`${verb} ${name}`);
+  } else if (rest.length > 1) {
+    const names = rest.slice(0, 2).map((c) => c.path.split("/").pop());
+    parts.push(`update ${rest.length} files (${names.join(", ")}${rest.length > 2 ? ", …" : ""})`);
+  }
+  const words = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
+  return `${prefix}${words}`;
+}
+
+/**
+ * Markdown for the file preview. Escaped first, so nothing in a file can become markup; then only
+ * headings, lists, quotes, rules, code, bold, italic and http(s) links are interpreted.
+ */
+export function renderMarkdown(text, escapeHtml) {
+  const inline = (s) =>
+    escapeHtml(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<i>$2</i>")
+      .replace(/\b_([^_]+)_\b/g, "<i>$1</i>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  const out = [];
+  let list = null;
+  let para = [];
+  let fence = null;
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
+    para = [];
+  };
+  const closeList = () => {
+    if (list) out.push(`</${list}>`);
+    list = null;
+  };
+  for (const line of String(text).split("\n")) {
+    if (fence !== null) {
+      if (/^```/.test(line)) {
+        out.push(`<pre><code>${escapeHtml(fence.join("\n"))}</code></pre>`);
+        fence = null;
+      } else fence.push(line);
+      continue;
+    }
+    if (/^```/.test(line)) {
+      flushPara();
+      closeList();
+      fence = [];
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+    if (heading) {
+      flushPara();
+      closeList();
+      const level = heading[1].length;
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
+    } else if (bullet || numbered) {
+      flushPara();
+      const tag = bullet ? "ul" : "ol";
+      if (list !== tag) {
+        closeList();
+        out.push(`<${tag}>`);
+        list = tag;
+      }
+      const raw = (bullet ?? numbered)[1];
+      const task = /^\[([ xX])\]\s+/.exec(raw);
+      const box = task ? `<span class="md-box${task[1] === " " ? "" : " done"}" aria-hidden="true"></span>` : "";
+      out.push(`<li>${box}${inline(task ? raw.slice(task[0].length) : raw)}</li>`);
+    } else if (/^>\s?/.test(line)) {
+      flushPara();
+      closeList();
+      out.push(`<blockquote>${inline(line.replace(/^>\s?/, ""))}</blockquote>`);
+    } else if (/^\s*(---|\*\*\*)\s*$/.test(line)) {
+      flushPara();
+      closeList();
+      out.push("<hr>");
+    } else if (!line.trim()) {
+      flushPara();
+      closeList();
+    } else {
+      closeList();
+      para.push(line.trim());
+    }
+  }
+  if (fence !== null) out.push(`<pre><code>${escapeHtml(fence.join("\n"))}</code></pre>`);
+  flushPara();
+  closeList();
+  return out.join("");
+}

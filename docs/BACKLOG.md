@@ -10,6 +10,156 @@ does it merely add another capability?
 
 ---
 
+## PocketFabric web UX closeout — 1 October 2026
+
+**Completed and recorded.** Terminal hot-path isolation, incremental workspace loading,
+active-first Sessions with collapsed History, deployment-aware identity, corrected xterm
+assets, and the interaction/layout polish are included in the closeout commit. Complete
+Rust tests passed (248 passed, 2 existing ignored), web tests passed (11 passed), and web,
+desktop, and ARM64 Linux builds passed. The candidate was verified on the OnePlus using
+disposable project/state and temporary forwarding. Measurements and limits are preserved in
+[performance](WEB_UX_PERFORMANCE_REVIEW.md), [journey](WEB_UX_JOURNEY_REVIEW.md), and
+[polish](WEB_UX_POLISH_REVIEW.md) review snapshots. Production was subsequently deployed
+and verified through the real URL; see [the deployment record](WEB_UX_DEPLOYMENT.md).
+
+**Remaining, in order.**
+
+- **User acceptance:** the deployed web flow passed through the real URL: node commands,
+  Claude/Codex panes and switching, browser close/reopen, collapsed History, and the REMOTE
+  label. Complete Claude theme setup and Codex sign-in, then test normal work. The Mac remains
+  unnecessary for runtime operation. Rollback details are in the deployment record.
+- **Verb restart handling:** `sv restart verb` timed out at the PRoot wrapper; terminating
+  its specifically verified Verb child allowed supervision to restart it. Diagnose graceful
+  signal forwarding separately before unattended deployment; no service configuration changed.
+- **Responsive acceptance:** repeat the final polish at a confirmed narrow viewport or
+  actual mobile browser. The last viewport override did not change the observed desktop
+  width, so it is not fresh narrow-screen evidence.
+- **Interaction coverage:** add meaningful browser coverage for launch/end cancellation,
+  last-session empty state, stale-state races, panel preferences, and session restoration
+  when a stable browser test setup is available. API and view logic already have coverage.
+- **Secondary computation:** full state/repository checks still take seconds on the node.
+  They no longer gate the terminal. Investigate only if background device contention remains
+  perceptible, using measurements; do not start another speculative optimization pass.
+- **Git/CI utilities, deferred:** assess compact changed-file/diff review, branch/upstream
+  context, and CI run/check summaries after deployment acceptance. Define the journey and
+  scope before adding integrations or write actions. No Git/CI feature was implemented here.
+- **Separate node administration issue:** SSH was reachable, but read-only inspection found
+  `sv status sshd` reporting `runsv not running` and no corresponding runsv process. Diagnose
+  supervision separately under explicit authorization; this patch does not repair it or
+  establish its cause.
+
+Cloudflare, DNS, Access policies, AdGuard, SSH configuration, LanguageOps, the Android APK,
+and the PocketFabric tunnel remain outside this web closeout. The user subsequently authorized
+the remote push and Verb-only deployment. Remote branches were not deleted. Local merged feature/review
+branches may be removed; preserve `main`, the current integration branch, and unmerged work.
+
+---
+
+## Desktop observation and release — 27 September
+
+Desktop only; `app/` was not touched. Everything below passed `cargo fmt --check`,
+`cargo clippy --all-targets -D warnings` and `cargo test --all-targets` on Linux. It has not yet
+run on macOS; CI now does.
+
+**Fixed.**
+
+- `verb web` printed its URL and then a second line. A launcher that read the URL and closed the
+  pipe made the second `println!` panic on EPIPE, taking every hosted terminal with it. This was
+  also why `tests/web_integration.rs` failed under parallel test threads and passed alone.
+- The phone bridge removed the shared `/tmp/verb-mobile-UID` directory on drop, racing another
+  session between its `create_dir_all` and its `bind`.
+- Three copies of `atomic_write` became one (`fsutil.rs`). The continuity copy used a fixed temporary
+  name and wrote the file before restricting it to `0600`.
+- Three clippy findings on current stable.
+
+**C4 — runtime facts (`runtime.rs`).** Declared: `.nvmrc`, `.node-version`, `package.json`
+`engines.node`, `.python-version`, `pyproject.toml` `requires-python`, `rust-toolchain(.toml)`,
+`Cargo.toml` `rust-version`, `go.mod`, `.ruby-version`, `.tool-versions`. Found: the runtime's own
+`--version`, run in the project directory with a 3 s bound and `RUSTUP_AUTO_INSTALL=0`. Verdicts are
+satisfied, mismatch, missing and unknown; `lts/*`, `stable` and `system` are unknown, never
+mismatched. A toolchain file with a `path`, or a `.tool-versions` entry of `path:`/`ref:`, is not
+probed at all, because the version manager would execute a binary the repository chose.
+
+**C5 — risky repository states (`gitstate.rs`).** Read from Git's own markers and `for-each-ref`,
+with no fetch: unfinished rebase, `am`, merge, cherry-pick, revert or bisect; unmerged paths; a
+detached HEAD outside an operation; an upstream that has diverged or is gone "as of the last fetch".
+Each warning carries the safe next step as text. Counts only; no branch or file names.
+
+**C3 — last-known-good (`good.rs`).** Verb never decides what "good" is. `verb good mark` records,
+per checkout: time, HEAD, uncommitted count and a SHA-256 fingerprint over HEAD, porcelain status,
+the diff against HEAD and untracked blob ids. `verb good` reports commits since, commits dropped and
+files differing, read live; `verb good files` prints names on request and stores none. A marked
+commit that no longer exists is reported as unknown, not as zero distance.
+
+**Surfaces.** `verb check [--json]` gathers all three. The TUI band shows a repository warning at
+start and after a command, a declared-runtime problem (probed off the UI thread), and on a failed
+command the distance from last-known-good. The web workbench has a "Reasons for care" panel
+(`GET /api/checks`, `POST /api/good/mark`).
+
+**Hardened after review.** An independent review found ways a repository could make these
+automatic observations run its own code, and each now has a regression test:
+
+- rust-toolchain `path` written as an inline table, a dotted key, a quoted key, or in the legacy
+  `rust-toolchain` file that rustup prefers over a harmless `.toml`: any `path` in either file
+  refuses the Rust probe;
+- `.tool-versions` fallback fields (`nodejs 99.0.0 path:./x`), and pins shaped like paths;
+- relative or empty `PATH` entries, which the OS resolves in the project (`node_modules/.bin`):
+  programs are found on absolute entries outside the project only (`exec.rs`);
+- `core.fsmonitor`, textconv and clean/smudge filters defined in the repository's own
+  `.git/config`: switched off or blanked for Verb's Git reads (user-level filters such as git-lfs
+  keep working); `hash-object --no-filters`, and untracked symlinks and FIFOs are never read through;
+- `GOTOOLCHAIN=local`, so a `go.mod` pin is reported rather than downloaded.
+
+Also from the review: the TUI's Git reads and the web host's checks run off their loops; the diff
+behind the fingerprint is streamed with a cap instead of buffered; a mark made before the first
+commit no longer claims "no file differs"; "Git could not read this checkout" is distinguished from
+"not a repository"; requirement text is stripped of control characters; alias names such as `311`
+are not read as versions; and runtime output says it read *Verb's* environment, not the shell's.
+
+The status line, `verb status` and `verb changes` (`git_snapshot`, `changed_files`) use the same
+guarded runner.
+
+**Follow-up, same day.** The remaining Git spawns (`project.rs`, `continuity.rs`) and OpenCode's
+`sqlite3` read use the trusted PATH lookup; the worktree the user asks for keeps their own filters
+and hooks (`exec::user_git`). The web page's view logic lives in `web/src/view.js` with
+`node --test` tests (`npm test --prefix desktop/web`), run in CI before the asset build.
+
+The TUI was driven in a real PTY (a scripted 120x36 terminal) against repositories in each state.
+That run found one bug the unit tests had not: starting a session clears the band, so a runtime
+mismatch probed at launch never reached the screen. Facts are now re-applied after every reset,
+a repository warning outranks a runtime one, and the runtime fact returns once the repository is
+clean; `git merge --abort`, `git switch --detach` and back each changed the band live.
+
+**Second review, older desktop code.** A review of code no one had examined found, and each fix
+now has a test that fails on the old code:
+
+- PTY masters were inherited by every later child: one session could type into another. Now
+  close-on-exec. Closing a session now stops its whole process group, not just the leader.
+- The bash shim read a DEBUG trap back from a predictable file in `/tmp` and eval'd it; another
+  account could plant it. The file now lives in Verb's owner-only shell directory.
+- `verb web` could be frozen or aborted by an unauthenticated request declaring a body it never
+  sent (tiny_http drained it on the terminal-pumping thread). tiny_http is vendored with a patch.
+- The hosted program could pair itself as "the phone" over its own bridge socket. Offer, take and
+  revoke are refused from the hosted session; the web page can take input back.
+- An OSC 7 `%0a` could move a session to another project in its record. Rejected at both ends.
+- Transcript tailing counted appended lines twice; array-content tool failures read as successes;
+  Claude's project directory rule was incomplete, so paths with spaces or non-ASCII never
+  resumed; absence from Claude's running-process list read as "cannot resume".
+- A background process left by an agent kept its finished session LIVE; the host now retires the
+  lock file. Codex checks no longer read every rollout; event logs are 0600; `continuity import`
+  enforces its limit on bytes read; the Android release workflow reads its tag through `env`.
+
+Android's `ClaudeProjectDirectory` had the same incomplete directory rule as the desktop did. The
+transfer branch now shares the installed CLI rule and matching edge-case fixtures. Android device
+acceptance remains to be run on the destination system.
+
+**Still open.** The same observations on Android. The fingerprint does not cover ignored files or
+submodule working trees. A band that fires *before* a risky Git command runs would need command
+text, which Verb does not keep, so it is not planned. The page's DOM wiring (`app.js`) has no
+browser tests; its logic and the API it calls do.
+
+---
+
 ## Terminal flicker during keyboard use — measured and fixed (2 September)
 
 Reported as "`agy` starts, then the terminal flickers during use". The hypothesis in
@@ -347,9 +497,9 @@ costume.
 | --- | --- | --- |
 | C1 | ~~Agent sessions emit nothing structural~~ — both hosts now follow the record the agent writes for itself and emit turn/tool/failure events, worded as reported rather than witnessed. OpenCode has no reader yet | done for Claude and Codex |
 | C2 | ~~Git snapshot at command boundaries~~ — the tree is observed and the delta says what the last command did; see the C2 section above | done |
-| C3 | Last-known-good tracking | comparison and recovery |
-| C4 | Runtime version facts (node, python, …) | the runtime-mismatch scenario in the mockups |
-| C5 | Richer contextual triggers: risky Git operation, runtime mismatch | two of the four bands in `TUI_VISION.md` |
+| C3 | ~~Last-known-good tracking~~ — desktop: `verb good mark` records a user-declared good state (HEAD, uncommitted count, tree fingerprint; no names); `verb good` and the TUI failure band report the distance. Android not started | done on desktop |
+| C4 | ~~Runtime version facts~~ — desktop: `verb runtime` compares what the project declares with what runs here; see the 27 September section | done on desktop |
+| C5 | ~~Risky Git operation, runtime mismatch triggers~~ — desktop: unfinished rebase/merge/am/cherry-pick/revert/bisect, conflicts, detached HEAD, diverged or gone upstream; TUI band, `verb check`, web panel | done on desktop |
 
 ## C0. Agent compatibility matrix
 
@@ -366,8 +516,11 @@ Gemini CLI       listed already    upstream: yes (@google/gemini-cli 0.56.0)
 Ollama           candidate         shape: remote provider endpoint, not a hosted agent.
                                    The npm package is a client library; the runtime is a Go binary.
                                    Verb would point at a server elsewhere · priority: deferred
-Antigravity      excluded          nothing hostable exists: @google/antigravity is a 404 and the
-                                   unscoped `antigravity` package is a placeholder joke
+Antigravity      Agent Runtime     not an npm package (@google/antigravity is a 404); hosted since
+                                   30 Aug through the Agent Runtime rootfs under qemu. On Verb
+                                   Android: launch and cold start verified (1.1.22, beta.7);
+                                   sign-in state reported as unknown; no durable recovery
+Hermes           Agent Runtime     on Verb Android: launch verified (beta.6); no durable recovery
 dsh              excluded          koffi has no Android build; the card says why
 ```
 
@@ -387,8 +540,8 @@ quietly invent a different shape.
 | # | Item | Size |
 | --- | --- | --- |
 | D1 | Integrate this source-only transfer into the primary repository's full history; do not publish the temporary transfer Git repository | S–M |
-| D2 | Android signed prerelease workflow exists; desktop distribution remains `cargo install`/source build only | partly |
-| D3 | The Rust crate has no library target, so integration tests drive the binary | S |
+| D2 | Android signed prerelease workflow exists; desktop: `release-desktop.yml` builds macOS and Linux binaries into a draft release on `desktop-v*` tags. Not yet run on GitHub; macOS binaries are not notarized | partly |
+| D3 | ~~The Rust crate has no library target~~ — `src/lib.rs` with `verb::main_entry()`; the binary is a shim | done |
 | D4 | ~~Dated snapshots (`HANDOFF.md`, `NEXT_SPRINT.md`, V0 validation) are marked, not rewritten~~ | done |
 | D5 | ~~Add CONTRIBUTING and architecture overview~~ | done |
 

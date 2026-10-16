@@ -1,0 +1,82 @@
+# Desktop code ownership
+
+Verb owns project context, durable sessions and terminal hosting. Provider CLIs own their
+reasoning, authentication and native conversation records. PocketFabric owns node provisioning,
+boot, service supervision and deployment. Keep those responsibilities in their respective repos.
+
+## Boundaries
+
+| Responsibility | Owner | Contract |
+| --- | --- | --- |
+| Session/provider records | `desktop/src/session.rs` | Existing record format, exact conversation identity, conservative recovery verdicts |
+| Process lifecycle and persistence | `desktop/src/lib.rs`, `pty.rs`, `tui/term.rs` | One host owns a PTY; reconcile durable metadata with observed process state |
+| HTTP admission and routing | `desktop/src/web.rs` | Authenticate, bound work, dispatch; do not block the PTY pump on workspace probes |
+| Git observation facts | `desktop/src/gitview.rs`, `desktop/web/src/project-git.js` | Guarded read-only Git queries; explicit branch/unborn/detached/non-Git/unavailable states; missing counts stay unknown |
+| Workspace snapshots | `desktop/src/web/state.rs` | Background snapshot/cache; observe host runtime independently of stored recovery state |
+| Terminal connection | `desktop/web/src/terminal-transport.js` | Socket, reconnect, protocol framing; no DOM or durable session ownership |
+| Stream rendering | `desktop/web/src/terminal-stream-view.js` | Render xterm output, acknowledge after consumption, show connection/exit state |
+| Session view rules | `desktop/web/src/session-state.js` | Distinguish active sessions, replay availability and native resume |
+| Host service presentation | `desktop/web/src/host-services.js` | Distinguish unavailable supervisor observations from running/down states; never infer outage or expand permissions |
+| Browser orchestration | `desktop/web/src/app.js` | Compose views and user actions; new independent responsibilities belong in named modules |
+| Terminal chrome | `desktop/web/src/terminal-ui.js` | Consistent ended-output controls across stream and polling paths |
+| Workbench surfaces | `desktop/web/src/workbench.css` | Current layout and theme surfaces; legacy base rules stay in `style.css` |
+| Motion | `desktop/web/src/motion.css` | Brief chrome transitions, reduced-motion override; never animate PTY input or terminal views |
+
+This is an incremental boundary, not a claim that all large modules have been decomposed.
+Continue extracting coherent responsibilities when changing them; avoid size-only file splitting,
+framework migrations and unrelated dependency updates during release stabilization.
+
+## Runtime and recovery contract
+
+`state` describes the durable session/recovery verdict. It is not proof that this host owns a
+running process. A live session in another Verb process can be visible without local control.
+
+The additive API `terminal` object explicitly reports `running` and `replayAvailable`. A running
+local PTY has both true. An exited retained buffer has running false and replayAvailable true.
+A session with no buffer here has both false; its native conversation can still be resumable.
+The legacy `hostedHere` and `hasTerminal` fields remain compatible: the latter includes replay.
+Neither replay availability nor native resume permission grants a running-process capability.
+Maintenance must refuse ambiguous process ownership rather than infer quiescence from a label.
+The lightweight `/api/workspace` response includes `terminalStates` for all retained buffers,
+including stopped processes. The browser reconciles those facts separately from its running-session
+list, so a refresh cannot discard finished output. Once streaming takes over, late polling results
+must not replace the stream's screen or connection status.
+
+Opening a project starts in Sessions without launching a process automatically. Terminal and agent
+launch are immediate actions; specs remain an optional structured workflow. Existing shortcuts are
+preserved. Native PTY output determines echo, input and process state.
+
+## Change and release discipline
+
+Use small commits with one reason to change. Keep protocol/schema changes backward compatible;
+cover behavior and failure boundaries with real process tests. Do not rewrite tests merely to match
+implementation. Run `desktop/scripts/check.sh`; the disposable Linux fixture verifies actual UID,
+capability, resource and credential boundaries separately. Keep generated browser assets in sync.
+
+Keep xterm core and add-ons on the same compatible release set, with exact versions in the web
+manifest. The [xterm 5.5 compatibility table](https://github.com/xtermjs/xterm.js/discussions/5022)
+defines the current pins. Newer add-ons can depend on private core internals even when npm accepts
+the combination: WebGL 0.19 threw during disposal with core 5.5. Browser journeys must exercise
+closing a rendered terminal and retaining its history on Linux as well as the local Mac.
+
+The Desktop release workflow validates the selected release ref through the reusable Desktop CI
+before creating a draft. Native artifacts are unpacked and exercised with fresh state using
+`desktop/scripts/test-release.py` before upload. Cross-built Intel Mac artifacts do not have a native
+installation proof in this workflow. Signing/notarization, platform acceptance, and the real-use
+observation window remain release work; publishing a draft is not automated final acceptance.
+
+## Git observation contract
+
+Workspace/project JSON now includes `gitStatus`: `loading` for the lightweight initial response,
+then `branch`, `unborn`, `detached`, `not_repository` or `unavailable` for a completed observation.
+`branch` remains the observed branch name or null. `changedFiles` is an observed nonnegative
+integer or null when unavailable; consumers must not coerce null to zero. Context JSON also emits
+a null count on failed reads. Existing numeric readings and durable session/ledger formats remain
+unchanged. This corrects the former failed-read default of zero; update count consumers accordingly.
+
+Git's porcelain-v2 branch headers determine unborn/detached status. Reads retain the trusted Git
+runner's repository-filter/fsmonitor safeguards and never expose raw stderr. A broken Git marker
+is unavailable, not a plain non-Git folder. Browser workspace polling preserves the completed Git
+verdict along with branch/count facts until the next full snapshot; it never regresses to loading.
+Complete snapshots have a bounded cache, so acceptance observes actual state convergence rather
+than assuming a read immediately after a checkout/exit reflects that change.

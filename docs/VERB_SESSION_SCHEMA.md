@@ -30,6 +30,14 @@ identity, and the product-level state:
 
 `projectId`, `runtimeId`, and `agent` describe the context that actually launched the session.
 They are not rewritten when the UI selects another project or runtime.
+On desktop, the private key-value session file also keeps `verb_project_id`, a local ID that
+groups Git worktrees into one Verb project. It is not a field in this host-neutral v1 JSON shape:
+`projectId` continues to identify the checkout where the agent actually ran, which exact native
+resume requires. Older desktop records without `verb_project_id` remain readable by checkout path.
+For `verb agent CMD [ARGS...]`, `agent.agentType` is `external`, `resumeIdentity` is null, and
+`runtimeId` is a safe executable basename for display. The command path and arguments are not
+persisted in this record. An external session can own tasks while live, but it is `ENDED` after
+its process exits because no exact native resume adapter has been verified.
 
 Allowed `state` values are exactly:
 
@@ -52,8 +60,10 @@ PTY handle
 native process object
 ```
 
-`ProcessBinding` is Android/PTY or desktop/native-process machinery. A persisted `LIVE` session
-does not prove that a process still exists. On host startup or attachment:
+`ProcessBinding` is Android/PTY or desktop/native-process machinery. Desktop also uses a
+per-session kernel lock that the Unix agent process inherits; a held lock is evidence that a
+process still owns the session even if its Verb host exited. A persisted `LIVE` record alone does
+not prove that a process still exists. On host startup or attachment:
 
 ```text
 persisted LIVE

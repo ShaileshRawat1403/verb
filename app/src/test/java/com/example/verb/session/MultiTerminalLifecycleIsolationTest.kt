@@ -38,6 +38,68 @@ class MultiTerminalLifecycleIsolationTest {
         return filesDir to project
     }
 
+    @Test
+    fun `two Claude sessions keep separate durable records and watchers`() = runTest {
+        val (filesDir, project) = setupTestEnvironment()
+        val firstId = VerbTerminalSessionHolder.open {
+            TerminalRuntime(workingDir = filesDir, useFakeForTesting = true)
+        }!!
+        val secondId = VerbTerminalSessionHolder.open {
+            TerminalRuntime(workingDir = filesDir, useFakeForTesting = true)
+        }!!
+        val first = FakeTerminalRuntimeAdapter(filesDir)
+        val second = FakeTerminalRuntimeAdapter(filesDir)
+        val store = InMemoryVerbSessionStore()
+        var coordinator = ClaudeSessionCoordinator(
+            filesDir = filesDir,
+            terminalRuntimeProvider = { id -> mapOf(firstId to first, secondId to second)[id] },
+            coroutineScope = this,
+            sessionStore = store
+        )
+
+        assertTrue(coordinator.launch(project, firstId, "claude", first))
+        assertTrue(coordinator.launch(project, secondId, "claude", second))
+        runCurrent()
+        assertEquals(2, coordinator.sessions.value.size)
+        assertEquals(2, store.loadAll().size)
+        assertEquals(2, coordinator.sessions.value.count { it.state == VerbSessionState.LIVE })
+
+        coordinator.cancelWatch()
+        coordinator = ClaudeSessionCoordinator(
+            filesDir = filesDir,
+            terminalRuntimeProvider = { id -> mapOf(firstId to first, secondId to second)[id] },
+            coroutineScope = this,
+            sessionStore = store,
+            processBindingConfirmed = true
+        )
+        assertEquals(2, coordinator.sessions.value.count { it.state == VerbSessionState.LIVE })
+
+        first.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        first.simulateShellIntegration(ShellIntegrationEvent.CommandEnd(0))
+        testScheduler.advanceTimeBy(600)
+        runCurrent()
+        assertEquals(1, coordinator.sessions.value.count { it.process != null })
+        assertEquals("claude", VerbTerminalSessionHolder.foregroundAgentOf(secondId))
+        coordinator.cancelWatch()
+    }
+
+    @Test
+    fun `a dead terminal clears LIVE even without shell command markers`() = runTest {
+        val (filesDir, project) = setupTestEnvironment()
+        val fake = FakeTerminalRuntimeAdapter(filesDir)
+        val coordinator = ClaudeSessionCoordinator(filesDir, fake, this)
+        assertTrue(coordinator.launch(project, "test-terminal", "claude", fake))
+        runCurrent()
+
+        fake.destroy()
+        testScheduler.advanceTimeBy(600)
+        runCurrent()
+
+        assertNull(coordinator.session.value?.process)
+        assertFalse(coordinator.session.value?.state == VerbSessionState.LIVE)
+        coordinator.cancelWatch()
+    }
+
     /**
      * Property 1: Session Isolation
      * Events and command completions in T2 must NEVER advance or settle lifecycle state in T1.

@@ -10,5 +10,18 @@ class ClaudeProjectDirectoryTest {
             "-tmp-Verb-Transfer-v1",
             ClaudeProjectDirectory.encode("/tmp/Verb_Transfer.v1")
         )
+        assertEquals(
+            "-Users-apple-My-Project-2-x",
+            ClaudeProjectDirectory.encode("/Users/apple/My Project@2+x")
+        )
+        assertEquals(
+            "-home--------x",
+            ClaudeProjectDirectory.encode("/home/ü/项目/🚀x")
+        )
+        val longPath = "/${"a".repeat(250)}/b c"
+        assertEquals(
+            "-${"a".repeat(199)}-lv1bdn",
+            ClaudeProjectDirectory.encode(longPath)
+        )
     }
 }

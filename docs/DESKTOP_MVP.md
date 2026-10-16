@@ -36,10 +36,13 @@ verb claude / codex / opencode / dsh
 
 verb resume
   resumes the tracked session by the agent's own stable conversation id
-    claude --resume <id>      (falls back to --continue)
-    codex resume <id>         (falls back to resume --last)
-    opencode --session <id>   (falls back to --continue)
+    claude --resume <id>
+    codex resume <id>
+    opencode --session <id>
 ```
+
+An absent or ambiguous native identity blocks exact resume. The older fallback proposal is not
+the shipped behavior on either host.
 
 This is intentionally a shell-first desktop product. The host already supplies the shell, process
 runtime, Git, and agent binaries; Verb owns the work context and the honest session boundary above

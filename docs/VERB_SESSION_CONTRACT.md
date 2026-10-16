@@ -148,16 +148,17 @@ metadata under `~/.claude/sessions/`, whose filename is a PID and is therefore n
 identity. `CodexAgentAdapter` reads Codex's rollout files under
 `~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-<timestamp>-<session id>.jsonl`, matching the header
 record's `cwd` and taking its `id` as the resume identity; it resumes with `codex resume <id>`
-(`--last` when no id is known, never the bare `codex resume`, which opens an interactive picker).
+. If several used conversations match one project and Verb has no recorded ID, the identity is
+ambiguous and Verb does not guess.
 `OpenCodeAgentAdapter` has no transcripts to read at all: OpenCode keeps its sessions in the SQLite
 database `~/.local/share/opencode/opencode.db`, so the adapter copies that database (never opening a
-live one in place) and reads `session`/`message` rows, resuming with `opencode --session <id>`
-(`--continue` when no id is known).
+live one in place) and reads `session`/`message` rows, resuming with `opencode --session <id>`.
+Android stores multiple product sessions per agent type by session ID. A missing or ambiguous
+native identity remains interrupted; it never falls back to the agent's latest conversation.
 
-Both detect `resume` failure the same way, through the shared `AgentResumeLauncher`: from the
-agent's own command-history settling before an interactive session would ever return control -- not
-from a transcript scan, since a resumed agent keeps running rather than writing anything new to
-check.
+All three Android adapters use `AgentResumeLauncher`. It waits for a confirmed, idle integrated
+shell before writing the command. A new command-start boundary is required before resume can become
+live. An immediate exit or silence from missing shell integration cannot prove the agent started.
 
 ### Opened is not used: what counts as recovery evidence
 

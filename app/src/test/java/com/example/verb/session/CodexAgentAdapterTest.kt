@@ -169,7 +169,7 @@ class CodexAgentAdapterTest {
     // --- resumeIdentity(): Codex's own conversation id, never the filename ---
 
     @Test
-    fun `resumeIdentity returns the newest used conversation for this project`() {
+    fun `resumeIdentity refuses to guess between used conversations in one project`() {
         val (filesDir, project) = setUpFilesystem()
         writeRollout(
             filesDir,
@@ -186,7 +186,8 @@ class CodexAgentAdapterTest {
         )
         val adapter = CodexAgentAdapter(filesDir, project, FakeTerminalRuntimeAdapter(filesDir))
 
-        assertEquals("codex-newer", adapter.resumeIdentity(AgentRef("codex")))
+        assertNull(adapter.resumeIdentity(AgentRef("codex")))
+        assertEquals("codex-newer", adapter.resumeIdentity(AgentRef("codex", "codex-newer")))
     }
 
     @Test
@@ -215,12 +216,17 @@ class CodexAgentAdapterTest {
     // --- resume(): a settled command-history record is the only failure signal ---
 
     @Test
-    fun `resume runs codex resume with the conversation id and succeeds when nothing settles`() = runTest {
+    fun `resume runs exact codex conversation after observing a running command`() = runTest {
         val (filesDir, project) = setUpFilesystem()
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = CodexAgentAdapter(filesDir, project, fake, resumeSettleMs = 200, pollIntervalMs = 20)
 
-        val binding = adapter.resume(AgentRef("codex", "codex-session-1"))
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { adapter.resume(AgentRef("codex", "codex-session-1")) }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        advanceUntilIdle()
+        val binding = resumeCall.await()
 
         assertNotNull("nothing settling within the window must read as still running", binding)
         assertTrue(
@@ -230,14 +236,14 @@ class CodexAgentAdapterTest {
     }
 
     @Test
-    fun `resume falls back to --last, never the bare picker, when no id is known`() = runTest {
+    fun `resume refuses a missing id instead of choosing the last conversation`() = runTest {
         val (filesDir, project) = setUpFilesystem()
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = CodexAgentAdapter(filesDir, project, fake, resumeSettleMs = 200, pollIntervalMs = 20)
 
-        adapter.resume(AgentRef("codex", resumeIdentity = null))
+        assertNull(adapter.resume(AgentRef("codex", resumeIdentity = null)))
 
-        assertTrue(fake.terminalOutput.value.contains("codex --disable apps resume --last"))
+        assertTrue(!fake.terminalOutput.value.contains("codex --disable apps resume"))
     }
 
     @Test
@@ -246,6 +252,7 @@ class CodexAgentAdapterTest {
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = CodexAgentAdapter(filesDir, project, fake, resumeSettleMs = 5_000, pollIntervalMs = 50)
 
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeCall = async { adapter.resume(AgentRef("codex", "bad-id")) }
         runCurrent()
         fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
@@ -261,6 +268,7 @@ class CodexAgentAdapterTest {
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = CodexAgentAdapter(filesDir, project, fake, resumeSettleMs = 5_000, pollIntervalMs = 50)
 
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeCall = async { adapter.resume(AgentRef("codex", "codex-session-1")) }
         runCurrent()
         fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)

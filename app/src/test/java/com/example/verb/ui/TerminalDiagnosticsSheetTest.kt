@@ -4,6 +4,9 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
@@ -109,7 +112,7 @@ class TerminalDiagnosticsSheetTest {
         composeTestRule.waitForIdle()
 
         // The button relabels itself as the user-visible confirmation that the copy happened.
-        composeTestRule.onNodeWithText("Report Copied!").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Report copied").assertIsDisplayed()
     }
 
     /**
@@ -167,5 +170,50 @@ class TerminalDiagnosticsSheetTest {
 
         composeTestRule.onNodeWithText("Copy Report").assertIsDisplayed().assertHasClickAction()
         composeTestRule.onNodeWithText("Clear Logs").assertIsDisplayed().assertHasClickAction()
+    }
+
+    /**
+     * The state label used to run underneath the Reconnect button, so "Connected (Native PTY)" lost
+     * its closing parenthesis behind the fill on a Vivo I2202. Asserted at an enlarged font scale,
+     * where the collision is guaranteed if the label is not given the remaining width.
+     */
+    @Test
+    @Config(sdk = [34], qualifiers = "w357dp-h792dp-xxhdpi")
+    fun `the state label never runs underneath the reconnect button`() {
+        val adapter = DiagnosticsTestRuntimeAdapter()
+        composeTestRule.setContent {
+            val base = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(density = base.density, fontScale = 1.6f)
+            ) {
+                TerminalDiagnosticsSheet(terminalRuntime = adapter, onDismiss = {})
+            }
+        }
+
+        val label = composeTestRule.onNodeWithTag("diagnostics_state_label").fetchSemanticsNode().boundsInRoot
+        val button = composeTestRule.onNodeWithTag("btn_reconnect_diagnostics").fetchSemanticsNode().boundsInRoot
+        // Never underneath the button...
+        assertTrue("label right ${label.right} must end before button left ${button.left}", label.right <= button.left)
+        // ...and given everything the button leaves, so it wraps instead of clipping. Robolectric's
+        // font metrics cannot reproduce the on-device clip itself, but they do show the structural
+        // fault: unweighted, this label measured 83px wide with ~600px of free row beside it.
+        val spacerPx = 8 * composeTestRule.density.density
+        assertTrue(
+            "label should run up to the button: label right ${label.right}, button left ${button.left}",
+            button.left - label.right <= spacerPx + 1f
+        )
+    }
+
+    /** Colour carries evidence: green only once a copy has happened, never at rest. */
+    @Test
+    fun `copy report is neutral until the copy is confirmed`() {
+        assertEquals(DiagnosticsTone.NEUTRAL, copyReportTone(copied = false))
+        assertEquals(DiagnosticsTone.CONFIRMED, copyReportTone(copied = true))
+    }
+
+    /** Red means an observed failure. Clearing a log is not one. */
+    @Test
+    fun `clearing logs is not presented as a failure`() {
+        assertEquals(DiagnosticsTone.NEUTRAL, clearLogsTone())
     }
 }

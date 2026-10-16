@@ -4,6 +4,7 @@ import com.example.verb.project.VerbProject
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -115,9 +116,13 @@ class ClaudeSessionCoordinatorTest {
         val recoverableId = coordinator.session.value!!.id
         assertEquals(VerbSessionState.RECOVERABLE, coordinator.session.value!!.state)
 
-        // Resume: nothing new settles within ClaudeAgentAdapter's resume window -- Claude presumed
-        // still running.
-        coordinator.resume()
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { coordinator.resume() }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        testScheduler.advanceTimeBy(5_100)
+        runCurrent()
+        resumeCall.await()
 
         val resumed = coordinator.session.value!!
         assertEquals(VerbSessionState.LIVE, resumed.state)
@@ -142,6 +147,7 @@ class ClaudeSessionCoordinatorTest {
 
         // A background job runs resume(); once it has issued the resume command, simulate that
         // attempt failing before the settle window closes.
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeJob = launch { coordinator.resume() }
         runCurrent()
         fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)

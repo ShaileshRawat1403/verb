@@ -3,14 +3,14 @@
 //! Imported records are deliberately kept outside `sessions/`: a foreign file can contribute
 //! history, never current state or a resume capability.
 
-use crate::{event_log_path, iso8601, json_escape, load_session, state_root, Session};
+use crate::fsutil::atomic_write;
+use crate::{event_log_path, iso8601, json_escape, load_sessions_for_project, state_root, Session};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Component, Path};
-use std::process::Command;
 
 const VERSION: u8 = 1;
 const KIND: &str = "verb.continuity";
@@ -163,19 +163,28 @@ fn export(project: &Path, destination: &Path) -> Result<(), String> {
         exported_at: iso8601(crate::now_millis()),
     };
 
-    let session = load_session(project)?;
-    let session_record = session
-        .as_ref()
-        .map(|session| session_record(session, project, &project_key));
-    let events = match session.as_ref() {
-        Some(session) => export_events(project, session)?,
-        None => Vec::new(),
-    };
+    let sessions = load_sessions_for_project(project)?;
+    if sessions.len() > MAX_SESSIONS {
+        return Err(format!(
+            "too many sessions to export (maximum {MAX_SESSIONS})"
+        ));
+    }
+    let session_records: Vec<_> = sessions
+        .iter()
+        .map(|session| session_record(session, &session.project_id, &project_key))
+        .collect();
+    let mut events = Vec::new();
+    for session in &sessions {
+        events.extend(export_events(&session.project_id, session)?);
+        if events.len() > MAX_EVENTS {
+            return Err(format!("too many events to export (maximum {MAX_EVENTS})"));
+        }
+    }
 
     let mut payload = String::new();
     push_record(&mut payload, &origin)?;
     push_record(&mut payload, &project_record)?;
-    if let Some(record) = session_record.as_ref() {
+    for record in &session_records {
         push_record(&mut payload, record)?;
     }
     for event in &events {
@@ -195,7 +204,7 @@ fn export(project: &Path, destination: &Path) -> Result<(), String> {
     atomic_write(destination, &bytes)?;
     println!(
         "Exported {} session and {} structural events to {}",
-        usize::from(session_record.is_some()),
+        session_records.len(),
         events.len(),
         destination.display()
     );
@@ -392,13 +401,23 @@ fn export_events(project: &Path, session: &Session) -> Result<Vec<EventRecord>, 
 }
 
 fn parse_file(path: &Path) -> Result<ParsedEnvelope, String> {
-    let metadata = fs::metadata(path)
+    // The size is enforced on what is read, not on what metadata claimed a moment earlier: a
+    // device such as /dev/zero reports length 0 and then reads forever, and a file can grow between
+    // the two calls.
+    let file = fs::File::open(path)
         .map_err(|error| format!("could not read {}: {error}", path.display()))?;
-    if metadata.len() > MAX_BYTES {
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err("a continuity file must be a regular file".to_owned());
+    }
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut io::Read::take(file, MAX_BYTES + 1), &mut bytes)
+        .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > MAX_BYTES {
         return Err("continuity file exceeds the 5 MiB limit".to_owned());
     }
-    let bytes =
-        fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
     let first_newline = bytes
         .iter()
         .position(|byte| *byte == b'\n')
@@ -611,10 +630,11 @@ fn load_or_create_host_id() -> Result<String, String> {
 }
 
 fn project_key(project: &Path) -> String {
-    let output = Command::new("git")
-        .args(["config", "--get", "remote.origin.url"])
-        .current_dir(project)
-        .output();
+    let output = crate::exec::git(project).ok_or(()).and_then(|mut git| {
+        git.args(["config", "--get", "remote.origin.url"])
+            .output()
+            .map_err(|_| ())
+    });
     let remote = output
         .ok()
         .filter(|output| output.status.success())
@@ -736,30 +756,6 @@ fn take_local_flag(args: &mut Vec<String>, flag: &str) -> bool {
         .position(|value| value == flag)
         .map(|index| args.remove(index))
         .is_some()
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or("invalid continuity path")?;
-    let temporary = parent.join(format!(".{name}.tmp"));
-    let mut file = File::create(&temporary)
-        .map_err(|error| format!("could not write {}: {error}", temporary.display()))?;
-    file.write_all(bytes)
-        .and_then(|_| file.sync_all())
-        .map_err(|error| format!("could not finish {}: {error}", temporary.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
-            .map_err(|error| error.to_string())?;
-    }
-    fs::rename(&temporary, path)
-        .map_err(|error| format!("could not commit {}: {error}", path.display()))
 }
 
 pub(crate) fn imported_session_json(session: &ImportedSession) -> String {

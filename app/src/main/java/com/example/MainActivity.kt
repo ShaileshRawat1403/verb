@@ -40,6 +40,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.verb.ui.AgentsScreen
+import com.example.verb.ui.DesktopPhoneScreen
 import com.example.verb.ui.AskVerbScreen
 import com.example.verb.ui.RunsSheet
 import com.example.verb.ui.SemanticLensSheet
@@ -53,15 +54,34 @@ import com.example.verb.ui.theme.VerbTheme
 import com.example.verb.ui.verbFirstAction
 import com.example.verb.ui.AppearanceScreen
 import com.example.verb.viewmodel.VerbSurface
+import com.example.verb.viewmodel.DesktopPhoneViewModel
 import com.example.verb.viewmodel.VerbTask
 import com.example.verb.viewmodel.VerbViewModel
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: VerbViewModel by viewModels()
+    private val desktopPhoneViewModel: DesktopPhoneViewModel by viewModels()
+    private var incomingPairLink by mutableStateOf<String?>(null)
+
+    /**
+     * Terminals outlive Activities (`VerbTerminalSessionHolder` keeps them for the process), but
+     * each one's TerminalView was created in a specific Activity and holds it as its context. Left
+     * bound, a destroyed Activity stayed reachable from a process-wide object: on a Vivo I2202,
+     * four rotations then five minutes and forced GC left 2 Activities alive; released, 1.
+     * Release every view this Activity created; the next one binds fresh views to the same
+     * sessions.
+     */
+    override fun onDestroy() {
+        com.example.verb.session.VerbTerminalSessionHolder.runtimes.value.forEach { runtime ->
+            runtime.renderTarget.value?.releaseTerminalView(this)
+        }
+        super.onDestroy()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        incomingPairLink = intent?.dataString?.takeIf { it.startsWith("verb://pair#") }
 
         // Edge-to-edge makes the IME insets dispatch reliably so keyboard visibility can be
         // tracked from the decor view instead of guessing from Compose's isImeVisible read.
@@ -92,9 +112,20 @@ class MainActivity : ComponentActivity() {
             }
 
             VerbTheme(darkTheme = dark) {
-                VerbAppContent(viewModel = viewModel)
+                VerbAppContent(viewModel = viewModel, desktopPhoneState = desktopPhoneViewModel,
+                    pairingLink = incomingPairLink,
+                    onPairingLinkConsumed = {
+                        incomingPairLink = null
+                        setIntent(Intent(intent).apply { data = null })
+                    })
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        incomingPairLink = intent.dataString?.takeIf { it.startsWith("verb://pair#") }
     }
 }
 
@@ -117,7 +148,12 @@ class MainActivity : ComponentActivity() {
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun VerbAppContent(viewModel: VerbViewModel) {
+fun VerbAppContent(viewModel: VerbViewModel, desktopPhoneState: DesktopPhoneViewModel,
+                   pairingLink: String? = null,
+                   onPairingLinkConsumed: () -> Unit = {}) {
+    LaunchedEffect(pairingLink) {
+        if (pairingLink != null) viewModel.openTask(VerbTask.CONTROL_DESKTOP)
+    }
     val surface by viewModel.surface.collectAsStateWithLifecycle()
     val queryInput by viewModel.queryInput.collectAsStateWithLifecycle()
     val isExecuting by viewModel.isExecuting.collectAsStateWithLifecycle()
@@ -147,6 +183,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val agentRuntimeStatus by viewModel.agentRuntimeStatus.collectAsStateWithLifecycle()
     val agentKeyStatus by viewModel.agentKeyStatus.collectAsStateWithLifecycle()
     val agentSessions by viewModel.agentSessions.collectAsStateWithLifecycle()
+    val agentSessionHistory by viewModel.agentSessionHistory.collectAsStateWithLifecycle()
     val worldArchiveName by viewModel.worldArchiveName.collectAsStateWithLifecycle()
     val worldArchiveMessage by viewModel.worldArchiveMessage.collectAsStateWithLifecycle()
     val continuityMessage by viewModel.continuityMessage.collectAsStateWithLifecycle()
@@ -184,7 +221,11 @@ fun VerbAppContent(viewModel: VerbViewModel) {
     val activity = LocalActivity.current
     BackHandler {
         if (activity == null) return@BackHandler
-        if (!viewModel.dismissVerbSurface()) {
+        if (BuildConfig.FULL_CLI) {
+            if (!viewModel.dismissVerbSurface()) {
+                activity.finish()
+            }
+        } else {
             activity.finish()
         }
     }
@@ -249,8 +290,9 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 // job is hosting a full-screen agent, one honest jump beats eight repaints.
                 .windowInsetsPadding(WindowInsets.imeAnimationTarget)
         ) {
-            // The workspace. Always composed, never replaced -- see this function's own note.
-            TerminalScreen(
+            if (BuildConfig.FULL_CLI) {
+                // The workspace. Always composed, never replaced -- see this function's own note.
+                TerminalScreen(
                 terminalOutput = terminalOutput,
                 terminalRuntime = viewModel.terminalRuntime,
                 sessionState = terminalSessionState,
@@ -311,6 +353,9 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                 is VerbSurface.Task -> VerbTaskSurface(
                     task = current.task,
                     viewModel = viewModel,
+                    desktopPhoneState = desktopPhoneState,
+                    pairingLink = pairingLink,
+                    onPairingLinkConsumed = onPairingLinkConsumed,
                     queryInput = queryInput,
                     isExecuting = isExecuting,
                     currentResult = currentResult,
@@ -331,6 +376,7 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     agentKeyStatus = agentKeyStatus,
                     agentSignInStates = agentSignInStates,
                     agentSessions = agentSessions,
+                    agentSessionHistory = agentSessionHistory,
                     installingRuntimeProfile = installingRuntimeProfile,
                     runtimeInstallMessage = runtimeInstallMessage,
                     agentRuntimeStatus = agentRuntimeStatus,
@@ -380,7 +426,14 @@ fun VerbAppContent(viewModel: VerbViewModel) {
                     onExecuteSuggestedIntent = viewModel::submitIntent
                 )
             }
+        } else {
+            DesktopPhoneScreen(
+                state = desktopPhoneState,
+                initialLink = pairingLink,
+                onLinkConsumed = onPairingLinkConsumed
+            )
         }
+    }
     }
 }
 
@@ -398,6 +451,9 @@ fun VerbAppContent(viewModel: VerbViewModel) {
 private fun VerbTaskSurface(
     task: VerbTask,
     viewModel: VerbViewModel,
+    desktopPhoneState: DesktopPhoneViewModel,
+    pairingLink: String?,
+    onPairingLinkConsumed: () -> Unit,
     queryInput: String,
     isExecuting: Boolean,
     currentResult: com.example.verb.model.ActionResult?,
@@ -418,6 +474,7 @@ private fun VerbTaskSurface(
     agentKeyStatus: List<com.example.verb.ui.AgentKeyStatus>,
     agentSignInStates: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.terminal.AgentSignInState>,
     agentSessions: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.session.VerbSession>,
+    agentSessionHistory: Map<com.example.verb.terminal.RuntimeProfileId, List<com.example.verb.session.VerbSession>>,
     installingRuntimeProfile: com.example.verb.terminal.RuntimeProfileId?,
     runtimeInstallMessage: String?,
     agentRuntimeStatus: com.example.verb.terminal.AgentRuntimeStatus,
@@ -496,7 +553,9 @@ private fun VerbTaskSurface(
                     installingProfile = installingRuntimeProfile,
                     message = runtimeInstallMessage,
                     agentSessions = agentSessions,
+                    sessionHistory = agentSessionHistory,
                     onResumeSession = viewModel::resumeAgentSession,
+                    onResumeSavedSession = viewModel::resumeExactAgentSession,
                     onStartNewSession = viewModel::startNewAgentSession,
                     terminalSessionIds = terminalSessionIds,
                     activeTerminalSessionId = activeTerminalSessionId,
@@ -511,6 +570,9 @@ private fun VerbTaskSurface(
                     choice = themeChoice,
                     onChoose = viewModel::setThemeChoice
                 )
+
+                VerbTask.CONTROL_DESKTOP -> DesktopPhoneScreen(desktopPhoneState, pairingLink,
+                    onPairingLinkConsumed)
 
                 else -> {
                     // The archive list is read from disk, and `verb export` writes to that disk

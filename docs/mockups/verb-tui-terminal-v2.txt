@@ -1,0 +1,30 @@
+  verb   verb / main    16 changed        Claude  s-8f21  ● running                 2 tasks need you     ^Space menu
+
+
+
+  Claude Code
+  Project: ~/code/verb
+
+  > Work on the task workbench with the durable task store.
+
+  I am checking the existing TUI structure before changing navigation.
+
+    Read  desktop/src/tui/mod.rs
+    Read  desktop/src/tui/render.rs
+
+  The Workbench is a separate Verb mode. This terminal stays under agent control.
+
+  Next: connect task selection to the existing task ledger.
+
+
+  ────────────────────────────────────────────────────────────────────────────────────────
+
+  › Continue working...
+
+
+
+
+
+
+
+  ^Space  Verb commands         2 tasks need you             Terminal keys go to Claude

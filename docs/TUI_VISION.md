@@ -1,5 +1,11 @@
 # Verb TUI Vision
 
+**Update:** The approved desktop Workbench design in `DESKTOP_TUI_REDESIGN_PROPOSAL.md` supersedes
+the terminal-first landing screen below. Terminal mode still follows this document's keyboard
+ownership, context, and palette rules; `verb ui` now lands in the Workbench so durable sessions and
+tasks are visible immediately. Terminal mode tiles hosted agent processes by default and supports
+click-to-focus and temporary zoom; each child still owns its own keyboard input and mouse tracking.
+
 How the desktop experience works, as one implementation of `docs/UX_FOUNDATION.md`. The foundation
 holds the philosophy — product feel, the one-surface-one-question rule, the utility moments, the
 visual language, progressive disclosure, language and input rules, and the test a new surface must

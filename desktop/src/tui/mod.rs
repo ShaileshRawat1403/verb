@@ -1,10 +1,9 @@
-//! The Verb workspace: the terminal you were already using, with Verb's knowledge of it one leader
-//! key away.
+//! The Verb workspace: a durable task/session Workbench beside a hosted terminal.
 //!
 //! Built against `docs/TUI_VISION.md`, and the rules there are the ones that matter here:
 //!
-//! * **Terminal first.** The session owns most of the screen and every keystroke Verb has not
-//!   claimed. Verb reserves exactly one chord (see [`leader`]).
+//! * **Workbench first.** Durable sessions and tasks are visible on entry. In Terminal mode, the
+//!   hosted session owns most of the screen and every keystroke except Verb's leader chord.
 //! * **Context second.** The band under the terminal appears only from an observed fact -- a command
 //!   that actually failed, a session state that actually changed -- never from a suspicion.
 //! * **Power stays reachable.** Everything is in the palette, by name.
@@ -13,25 +12,103 @@
 //!   about sessions on its own.
 
 mod context_view;
+mod input;
 mod keys;
 mod leader;
+mod mouse;
 mod render;
-mod term;
+pub(crate) mod term;
 mod theme;
+mod workbench_view;
 
 use crate::{Agent, Session, SessionState};
 use leader::{Command, Leader, Outcome};
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::Terminal;
+use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use term::Hosted;
 
 const TICK: Duration = Duration::from_millis(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    Workbench,
+    Terminal,
+    Activity,
+    Memory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkFocus {
+    Sessions,
+    Tasks,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorkState {
+    focus: WorkFocus,
+    session: usize,
+    task: usize,
+    detail: bool,
+    inbox: Option<crate::workbench::InboxSnapshot>,
+    inbox_index: usize,
+    search: Option<String>,
+    filter: String,
+    composer: Option<Composer>,
+    actor_picker: Option<ActorPicker>,
+    new_task: Option<NewTask>,
+    memory_editor: Option<String>,
+    scroll: u16,
+}
+
+#[derive(Debug)]
+pub(crate) struct Composer {
+    task_id: String,
+    action: crate::workbench::TaskAction,
+    actor: String,
+    text: String,
+    expected_revision: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) struct ActorPicker {
+    action: crate::workbench::TaskAction,
+    selected: usize,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct NewTask {
+    title: String,
+    brief: String,
+    editing_brief: bool,
+}
+
+impl Default for WorkState {
+    fn default() -> Self {
+        Self {
+            focus: WorkFocus::Tasks,
+            session: 0,
+            task: 0,
+            detail: false,
+            inbox: None,
+            inbox_index: 0,
+            search: None,
+            filter: String::new(),
+            composer: None,
+            actor_picker: None,
+            new_task: None,
+            memory_editor: None,
+            scroll: 0,
+        }
+    }
+}
 
 pub(super) fn run(project: &Path) -> Result<(), String> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -54,12 +131,14 @@ pub(crate) enum Surface {
         filter: String,
         selected: usize,
     },
+    ExternalAgent {
+        command: String,
+        isolated: bool,
+    },
     Sessions {
         selected: usize,
     },
     Help,
-    /// Shown once, on a first run: what this is and the one key that opens everything.
-    Welcome,
     /// What Verb has observed, as `verb context` assembles it.
     Evidence,
     /// What Git reports as changed here, as `verb changes` lists it.
@@ -87,6 +166,9 @@ pub(crate) enum Context {
         /// Volatile: shown, never stored. Absent when the shell reported no command line, and the
         /// band says so rather than inventing one.
         label: Option<String>,
+        /// How far the tree has moved from the user's last-known-good mark, read when the command
+        /// failed. Absent when nothing is marked or Git could not say.
+        since_good: Option<String>,
     },
     /// A tool the agent ran and its own record marked as failed.
     ///
@@ -101,21 +183,41 @@ pub(crate) enum Context {
         exit_code: i32,
     },
     SessionState(SessionState),
+    /// The repository is in a state where the obvious next Git command can lose work or be refused:
+    /// an unfinished rebase or merge, conflicts, a detached HEAD, a diverged upstream. Read from Git
+    /// after a command finished; see `gitstate.rs`.
+    RepoWarning {
+        fact: String,
+        safe_next: String,
+    },
+    /// A runtime the project declares is missing or the wrong version, per `runtime.rs`. Only from a
+    /// declaration in the project's own files; never from a guess about what it wants.
+    RuntimeMismatch(String),
 }
 
 pub(crate) struct App {
     project: PathBuf,
+    project_anchor: PathBuf,
+    logical_project_id: String,
+    git: crate::GitSnapshot,
+    mode: Mode,
+    work: WorkState,
+    tasks: Vec<crate::workbench::TaskSnapshot>,
+    memory: String,
+    inboxes: HashMap<String, crate::workbench::InboxSnapshot>,
+    workspace_status: HashMap<PathBuf, crate::GitSnapshot>,
     leader: Leader,
     surface: Surface,
     context: Context,
     hosted: Option<Hosted>,
+    parked: Vec<Hosted>,
+    pane_order: Vec<String>,
+    pane_areas: Vec<(String, ratatui::layout::Rect)>,
+    terminal_zoom: bool,
     sessions: Vec<Session>,
     imported_sessions: Vec<crate::continuity::ImportedSession>,
     message: Option<String>,
     quit: bool,
-    /// Shown once, the first time Verb is opened on this machine: the keys, and the promise that
-    /// everything else belongs to the terminal.
-    first_run: bool,
     mouse_captured: bool,
     /// Whether Verb should hold the mouse at all. On by default: the action bar is the primary
     /// visible affordance, and an affordance you can see but not click is a worse lie than no
@@ -125,6 +227,111 @@ pub(crate) struct App {
     /// from the draw itself rather than queried separately: the rendered frame is the authority for
     /// where things are, exactly as it already is for how large the session believes it is.
     frame_height: u16,
+    frame_width: u16,
+    /// Observations that run Git or a runtime's `--version`, gathered off the UI thread: in a large
+    /// repository or on a network drive they take long enough to freeze typing.
+    background: Background,
+    /// The declared-runtime problem last read for each project, `None` when there is none (or the
+    /// read is still running). The band is cleared when a session starts or focus moves; this lets
+    /// the fact come back without probing again.
+    runtime_problems: HashMap<PathBuf, Option<String>>,
+}
+
+/// Results arriving from background observation threads.
+enum Observation {
+    Runtime {
+        project: PathBuf,
+        facts: Vec<crate::runtime::Fact>,
+    },
+    Repo(Option<Context>),
+    SinceGood {
+        generation: u64,
+        text: Option<String>,
+    },
+}
+
+struct Background {
+    sender: std::sync::mpsc::Sender<Observation>,
+    receiver: std::sync::mpsc::Receiver<Observation>,
+    /// Bumped for every failed command, so a slow answer for an older failure is dropped.
+    failure_generation: u64,
+    repo_running: bool,
+    /// A command finished while a repository read was in flight; read again when it returns.
+    repo_again: bool,
+}
+
+impl Background {
+    fn new() -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        Self {
+            sender,
+            receiver,
+            failure_generation: 0,
+            repo_running: false,
+            repo_again: false,
+        }
+    }
+
+    fn spawn(&self, work: impl FnOnce() -> Observation + Send + 'static) {
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(work());
+        });
+    }
+
+    fn runtime(&self, project: &Path) {
+        let project = project.to_path_buf();
+        self.spawn(move || Observation::Runtime {
+            facts: crate::runtime::observe(&project),
+            project,
+        });
+    }
+
+    fn repo(&mut self, project: &Path) {
+        if self.repo_running {
+            self.repo_again = true;
+            return;
+        }
+        self.repo_running = true;
+        let project = project.to_path_buf();
+        self.spawn(move || Observation::Repo(repo_warning(&project)));
+    }
+
+    fn since_good(&mut self, project: &Path) -> u64 {
+        self.failure_generation += 1;
+        let generation = self.failure_generation;
+        let project = project.to_path_buf();
+        self.spawn(move || Observation::SinceGood {
+            generation,
+            text: since_good(&project),
+        });
+        generation
+    }
+}
+
+/// The first repository warning, if the repository has one.
+fn repo_warning(project: &Path) -> Option<Context> {
+    let warning = crate::gitstate::observe(project)
+        .state()?
+        .warnings()
+        .into_iter()
+        .next()?;
+    Some(Context::RepoWarning {
+        fact: warning.fact,
+        safe_next: warning.safe_next,
+    })
+}
+
+/// A short "since last known good" line, when the user has marked one. No fingerprint, so the answer
+/// arrives while the failure is still on screen.
+fn since_good(project: &Path) -> Option<String> {
+    let mark = crate::good::load(project).ok()??;
+    let distance = crate::good::distance(project, &mark, false);
+    Some(format!(
+        "last known good {}: {}",
+        mark.short_head().unwrap_or("(no commit)"),
+        distance.summary()
+    ))
 }
 
 impl App {
@@ -136,9 +343,14 @@ impl App {
     /// Listing it as ended while it runs in front of the user would be the one kind of lie Verb is
     /// built to avoid.
     fn refresh_sessions(&mut self) -> Result<(), String> {
-        let hosting = self.hosted.as_ref().map(|hosted| hosted.session.id.clone());
-        let mut sessions = crate::read_sessions_except(hosting.as_deref())?;
-        if let Some(hosted) = self.hosted.as_ref() {
+        let hosting: Vec<&str> = self
+            .hosted
+            .iter()
+            .chain(self.parked.iter())
+            .map(|hosted| hosted.session.id.as_str())
+            .collect();
+        let mut sessions = crate::read_sessions_except(&hosting)?;
+        for hosted in self.hosted.iter().chain(self.parked.iter()) {
             let hosted_id = hosted.session.id.clone();
             match sessions.iter_mut().find(|session| session.id == hosted_id) {
                 Some(session) => session.state = SessionState::Live,
@@ -151,53 +363,80 @@ impl App {
     }
 
     fn new(project: &Path) -> Result<Self, String> {
-        Ok(Self {
+        let identity = crate::project::identity(project)?;
+        let mut app = Self {
             project: project.to_path_buf(),
+            project_anchor: identity.anchor,
+            logical_project_id: identity.id,
+            git: crate::git_snapshot(project),
+            mode: Mode::Workbench,
+            work: WorkState::default(),
+            tasks: crate::workbench::snapshots(project)?,
+            memory: crate::workbench::shared_memory(project)?,
+            inboxes: HashMap::new(),
+            workspace_status: HashMap::new(),
             leader: Leader::from_environment(),
             surface: Surface::None,
             context: Context::None,
             hosted: None,
+            parked: Vec::new(),
+            pane_order: Vec::new(),
+            pane_areas: Vec::new(),
+            terminal_zoom: false,
             sessions: crate::read_sessions()?,
             imported_sessions: crate::continuity::imported_sessions()?,
             message: None,
             quit: false,
-            first_run: crate::mark_first_run_seen().unwrap_or(false),
             mouse_captured: false,
             mouse_enabled: true,
             frame_height: 0,
-        })
+            frame_width: 0,
+            background: Background::new(),
+            runtime_problems: HashMap::new(),
+        };
+        // A repository left mid-merge or detached is worth knowing before the first command.
+        app.reobserve();
+        app.refresh_workbench()?;
+        Ok(app)
     }
 
     fn run(mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<(), String> {
-        // The workspace opens with the work-context shell already running, which is what `verb
-        // shell` starts -- the terminal region is not a placeholder waiting to be filled.
         let size = terminal
             .size()
             .map_err(|error| format!("could not read the terminal size: {error}"))?;
-        let (rows, cols) = render::hosting_size(size.width, size.height);
-        self.start_shell(rows, cols)?;
-        if self.first_run {
-            self.surface = Surface::Welcome;
-        }
+        // Workbench is the landing view. No idle PTY is created until the user opens Terminal.
 
         let mut redraw = true;
         let mut last_draw = Instant::now();
+        let mut last_workbench_refresh = Instant::now();
+        let mut last_git_refresh = Instant::now();
         let mut undersized = render::is_too_small(size.width, size.height);
         let mut drew_once = false;
         while !self.quit {
             // The rendered rectangle is the authority for how big the session thinks it is.
-            let drawn = std::cell::Cell::new((0_u16, 0_u16));
+            let drawn = std::cell::RefCell::new(Vec::new());
             let frame_height = std::cell::Cell::new(0_u16);
+            let frame_width = std::cell::Cell::new(0_u16);
             let frame_undersized = std::cell::Cell::new(undersized);
             let draw_due = !drew_once
                 || last_draw.elapsed() >= Duration::from_secs(1)
                 || (redraw && !undersized);
             if draw_due {
+                if last_git_refresh.elapsed() >= Duration::from_secs(1) {
+                    self.refresh_git();
+                    last_git_refresh = Instant::now();
+                }
+                if self.mode != Mode::Terminal
+                    && last_workbench_refresh.elapsed() >= Duration::from_secs(1)
+                {
+                    self.refresh_workbench()?;
+                    last_workbench_refresh = Instant::now();
+                }
                 terminal
                     .draw(|frame| {
-                        let area = render::workspace(frame, &self);
-                        drawn.set((area.height, area.width));
+                        *drawn.borrow_mut() = render::workspace(frame, &self);
                         frame_height.set(frame.area().height);
+                        frame_width.set(frame.area().width);
                         frame_undersized.set(render::is_too_small(
                             frame.area().width,
                             frame.area().height,
@@ -209,14 +448,25 @@ impl App {
                 redraw = false;
                 undersized = frame_undersized.get();
                 self.frame_height = frame_height.get();
+                self.frame_width = frame_width.get();
 
                 self.sync_mouse_capture()?;
 
-                let (rows, cols) = drawn.get();
-                if rows > 0 && cols > 0 {
-                    if let Some(hosted) = self.hosted.as_mut() {
-                        if hosted.screen().size() != (rows, cols) {
-                            hosted.resize(rows, cols);
+                self.pane_areas = drawn.into_inner();
+                if self.mode == Mode::Terminal {
+                    for (id, area) in &self.pane_areas {
+                        if area.height == 0 || area.width == 0 {
+                            continue;
+                        }
+                        if let Some(hosted) = self
+                            .hosted
+                            .iter_mut()
+                            .chain(self.parked.iter_mut())
+                            .find(|hosted| hosted.session.id == *id)
+                        {
+                            if hosted.screen().size() != (area.height, area.width) {
+                                hosted.resize(area.height, area.width);
+                            }
                         }
                     }
                 }
@@ -246,13 +496,115 @@ impl App {
         Ok(())
     }
 
-    /// Moves the hosted session forward, and closes it out when it ends.
+    /// Applies whatever the background observers have finished. Each only fills a band that is
+    /// quiet or already showing its own kind of fact: a failed command is never overwritten.
+    fn take_observations(&mut self) -> bool {
+        let mut changed = false;
+        while let Ok(observation) = self.background.receiver.try_recv() {
+            match observation {
+                Observation::Runtime { project, facts } => {
+                    let problem = facts
+                        .iter()
+                        .find(|fact| {
+                            matches!(
+                                fact.verdict,
+                                crate::runtime::Verdict::Mismatch
+                                    | crate::runtime::Verdict::Missing
+                            )
+                        })
+                        .map(crate::runtime::Fact::to_text);
+                    if let (Some(text), Context::None, true) =
+                        (&problem, &self.context, project == self.project)
+                    {
+                        self.context = Context::RuntimeMismatch(text.clone());
+                        changed = true;
+                    }
+                    self.runtime_problems.insert(project, problem);
+                }
+                Observation::Repo(warning) => {
+                    self.background.repo_running = false;
+                    // A repository warning outranks a runtime one: an unfinished merge is the
+                    // more urgent fact. When the repository is fine again, the runtime fact returns.
+                    if matches!(
+                        self.context,
+                        Context::None | Context::RepoWarning { .. } | Context::RuntimeMismatch(_)
+                    ) {
+                        let next = warning
+                            .or_else(|| {
+                                self.runtime_problems
+                                    .get(&self.project)
+                                    .cloned()
+                                    .flatten()
+                                    .map(Context::RuntimeMismatch)
+                            })
+                            .unwrap_or(Context::None);
+                        changed |= next != self.context;
+                        self.context = next;
+                    }
+                    if std::mem::take(&mut self.background.repo_again) {
+                        let project = self.project.clone();
+                        self.background.repo(&project);
+                    }
+                }
+                Observation::SinceGood { generation, text } => {
+                    if generation != self.background.failure_generation {
+                        continue;
+                    }
+                    if let Context::CommandFailed { since_good, .. } = &mut self.context {
+                        *since_good = text;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// Brings the observed facts back after the band was cleared: the cached runtime problem for this
+    /// project at once, a fresh repository read in the background. Probes a project's runtimes the
+    /// first time it is seen.
+    fn reobserve(&mut self) {
+        let project = self.project.clone();
+        match self.runtime_problems.get(&project) {
+            Some(Some(text)) if matches!(self.context, Context::None) => {
+                self.context = Context::RuntimeMismatch(text.clone());
+            }
+            Some(_) => {}
+            None => {
+                self.runtime_problems.insert(project.clone(), None);
+                self.background.runtime(&project);
+            }
+        }
+        self.background.repo(&project);
+    }
+
+    /// Moves every hosted session forward, including terminals hidden behind the active one.
     fn pump(&mut self) -> Result<bool, String> {
+        let mut changed = self.take_observations();
+        let mut index = 0;
+        while index < self.parked.len() {
+            let (exit, output_changed) = self.parked[index].poll()?;
+            changed |= output_changed && self.mode == Mode::Terminal;
+            self.parked[index].take_structural();
+            if let Some(exit_code) = exit {
+                let hosted = self.parked.remove(index);
+                self.pane_order.retain(|id| id != &hosted.session.id);
+                hosted.finish(exit_code)?;
+                self.refresh_sessions()?;
+                changed = true;
+            } else {
+                index += 1;
+            }
+        }
+        if self.pane_order.len() <= 1 {
+            self.terminal_zoom = false;
+        }
         let Some(hosted) = self.hosted.as_mut() else {
-            return Ok(false);
+            return Ok(changed);
         };
         let previous_state = hosted.session.state.clone();
-        let (exit, mut changed) = hosted.poll()?;
+        let (exit, active_changed) = hosted.poll()?;
+        changed |= active_changed && self.mode == Mode::Terminal;
 
         // A failed command outranks a state change in the band: it is the thing the user just
         // watched happen.
@@ -264,14 +616,26 @@ impl App {
                     millis,
                     label,
                 } if exit_code != 0 => {
+                    self.background.since_good(&self.project);
                     self.context = Context::CommandFailed {
                         exit_code,
                         millis,
                         label,
+                        since_good: None,
                     };
                 }
-                // A command that succeeded is not news. The band stays as it was.
-                crate::pty::Structural::CommandFinished { .. } => {}
+                // A command that succeeded is not news in itself, but it may have left the
+                // repository in a risky state (`git switch --detach` exits 0). Only replaces a
+                // quiet band or an older warning.
+                crate::pty::Structural::CommandFinished { .. } => {
+                    if matches!(
+                        self.context,
+                        Context::None | Context::RepoWarning { .. } | Context::RuntimeMismatch(_)
+                    ) {
+                        let project = self.project.clone();
+                        self.background.repo(&project);
+                    }
+                }
                 // Inside an agent, this is the only kind of failure Verb can see at all, and until
                 // now it could not see even this.
                 crate::pty::Structural::AgentToolFailed { millis, tool } => {
@@ -290,6 +654,7 @@ impl App {
             // The session is over, so any command label it left on screen goes with it.
             self.context = Context::None;
             let hosted = self.hosted.take().expect("checked above");
+            self.pane_order.retain(|id| id != &hosted.session.id);
             let session = hosted.finish(exit_code)?;
             self.context = if exit_code == 0 {
                 Context::SessionState(session.state.clone())
@@ -297,13 +662,39 @@ impl App {
                 Context::SessionEnded { exit_code }
             };
             self.refresh_sessions()?;
+            if let Some(next) = self.parked.pop() {
+                self.project = next.session.project_id.clone();
+                let identity = crate::project::identity(&self.project)?;
+                self.project_anchor = identity.anchor;
+                self.logical_project_id = identity.id;
+                self.refresh_git();
+                self.hosted = Some(next);
+                self.refresh_sessions()?;
+            }
+            if self.pane_order.len() <= 1 {
+                self.terminal_zoom = false;
+            }
         }
         Ok(changed)
     }
 
     fn on_key(&mut self, key: KeyEvent) -> Result<(), String> {
+        // Some PTYs report Return as Ctrl+J. Verb overlays treat it as Enter; terminal mode
+        // forwards the original key to the hosted program.
+        let key = if key.code == KeyCode::Char('j')
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && self.surface != Surface::None
+        {
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+        } else {
+            key
+        };
         if self.surface != Surface::None {
             return self.on_surface_key(key);
+        }
+
+        if self.mode != Mode::Terminal {
+            return self.on_workbench_key(key);
         }
 
         // Accelerators, but only at a shell prompt. A full-screen application -- vim, less, an
@@ -358,213 +749,346 @@ impl App {
         Ok(())
     }
 
-    /// Which Verb command a function key means right now, if any.
-    fn accelerator(&self, key: KeyEvent) -> Option<Command> {
-        if !self.accelerators_active() {
-            return None;
+    fn refresh_workbench(&mut self) -> Result<(), String> {
+        let selected_session = self.selected_actor();
+        let selected_task = self.selected_task().map(|task| task.id.clone());
+        self.refresh_sessions()?;
+        self.tasks = crate::workbench::snapshots(&self.project)?;
+        self.memory = crate::workbench::shared_memory(&self.project)?;
+        let ids = self
+            .project_session_indices()
+            .iter()
+            .map(|index| self.sessions[*index].id.clone())
+            .collect::<Vec<_>>();
+        self.inboxes = crate::workbench::inbox_snapshots(&self.project, &ids)?
+            .into_iter()
+            .map(|inbox| (inbox.session_id.clone(), inbox))
+            .collect();
+        self.workspace_status.clear();
+        for index in self.project_session_indices() {
+            let workspace = self.sessions[index].project_id.clone();
+            self.workspace_status
+                .entry(workspace.clone())
+                .or_insert_with(|| crate::git_snapshot(&workspace));
         }
-        match key.code {
-            KeyCode::F(1) => Some(Command::Help),
-            KeyCode::F(2) => Some(Command::Sessions),
-            KeyCode::F(3) => Some(Command::Contextual),
-            KeyCode::F(4) => Some(Command::Palette),
-            _ => None,
+        if let Some(open) = &self.work.inbox {
+            self.work.inbox = self.inboxes.get(&open.session_id).cloned();
+            self.work.inbox_index = self.work.inbox_index.min(
+                self.work
+                    .inbox
+                    .as_ref()
+                    .map_or(0, |inbox| inbox.items.len().saturating_sub(1)),
+            );
+        }
+        let sessions = self.project_session_indices();
+        self.work.session = selected_session
+            .and_then(|id| {
+                sessions
+                    .iter()
+                    .position(|index| self.sessions[*index].id == id)
+            })
+            .unwrap_or_else(|| self.work.session.min(sessions.len().saturating_sub(1)));
+        let tasks = self.visible_task_indices();
+        self.work.task = selected_task
+            .and_then(|id| tasks.iter().position(|index| self.tasks[*index].id == id))
+            .unwrap_or_else(|| self.work.task.min(tasks.len().saturating_sub(1)));
+        Ok(())
+    }
+
+    fn refresh_git(&mut self) {
+        self.git = crate::git_snapshot(&self.project);
+    }
+
+    fn project_session_indices(&self) -> Vec<usize> {
+        self.sessions
+            .iter()
+            .enumerate()
+            .filter(|(_, session)| {
+                crate::session_in_project_with_id(session, &self.project, &self.logical_project_id)
+                    && session.agent.is_some()
+            })
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn visible_task_indices(&self) -> Vec<usize> {
+        let query = self.work.filter.to_lowercase();
+        let mut indices: Vec<usize> = self
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, task)| {
+                query.is_empty()
+                    || task.title.to_lowercase().contains(&query)
+                    || task.id.to_lowercase().contains(&query)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        indices.sort_by_key(|index| {
+            let task = &self.tasks[*index];
+            let priority = if task.needs_help {
+                0
+            } else {
+                match task.status {
+                    "needs review" => 1,
+                    "active" => 2,
+                    "open" => 3,
+                    _ => 4,
+                }
+            };
+            (priority, std::cmp::Reverse(task.created_at))
+        });
+        indices
+    }
+
+    fn selected_task(&self) -> Option<&crate::workbench::TaskSnapshot> {
+        self.visible_task_indices()
+            .get(self.work.task)
+            .and_then(|index| self.tasks.get(*index))
+    }
+
+    fn open_task_by_id(&mut self, id: &str) {
+        self.work.filter.clear();
+        self.work.search = None;
+        self.work.focus = WorkFocus::Tasks;
+        if let Some(position) = self
+            .visible_task_indices()
+            .iter()
+            .position(|index| self.tasks[*index].id == id)
+        {
+            self.work.task = position;
+            self.work.detail = true;
+            self.work.scroll = 0;
         }
     }
 
-    /// Accelerators are live at a shell prompt, and off while a full-screen application owns the
-    /// screen or the user has turned them off entirely.
-    pub(crate) fn accelerators_active(&self) -> bool {
-        if std::env::var("VERB_FKEYS").is_ok_and(|value| value == "off") {
-            return false;
+    fn selected_actor(&self) -> Option<String> {
+        self.project_session_indices()
+            .get(self.work.session)
+            .and_then(|index| self.sessions.get(*index))
+            .map(|session| session.id.clone())
+    }
+
+    fn session_can_open(&self, session: &crate::Session) -> bool {
+        self.hosted
+            .iter()
+            .chain(self.parked.iter())
+            .any(|hosted| hosted.session.id == session.id)
+            || (session.state == SessionState::Recoverable && session.project_id.is_dir())
+    }
+
+    fn open_workbench_session(&mut self, index: usize) -> Result<(), String> {
+        let Some(session) = self.sessions.get(index) else {
+            return Ok(());
+        };
+        if self.session_can_open(session) {
+            self.resume_selected(index)
+        } else {
+            self.open_session_inbox()
         }
-        !self
+    }
+
+    fn enter_workbench(&mut self) -> Result<(), String> {
+        self.refresh_workbench()?;
+        self.refresh_git();
+        self.mode = Mode::Workbench;
+        self.work.detail = false;
+        self.work.inbox = None;
+        self.work.scroll = 0;
+        self.surface = Surface::None;
+        Ok(())
+    }
+
+    fn open_session_inbox(&mut self) -> Result<(), String> {
+        let Some(id) = self.selected_actor() else {
+            return Ok(());
+        };
+        let inbox = crate::workbench::inbox_snapshot(&self.project, &id)?;
+        self.inboxes.insert(id, inbox.clone());
+        self.work.inbox = Some(inbox);
+        self.work.inbox_index = 0;
+        self.work.detail = false;
+        self.work.scroll = 0;
+        Ok(())
+    }
+
+    fn open_inbox_task(&mut self, index: usize) {
+        if let Some(id) = self
+            .work
+            .inbox
+            .as_ref()
+            .and_then(|inbox| inbox.items.get(index))
+            .map(|item| item.task_id.clone())
+        {
+            self.open_task_by_id(&id);
+        }
+    }
+
+    fn enter_terminal(&mut self) -> Result<(), String> {
+        if self.hosted.is_none() {
+            let (rows, cols) = self.last_size();
+            self.start_shell(rows, cols)?;
+        }
+        self.mode = Mode::Terminal;
+        self.surface = Surface::None;
+        Ok(())
+    }
+
+    fn focus_pane(&mut self, id: &str) -> Result<(), String> {
+        if self
             .hosted
             .as_ref()
-            .is_some_and(|hosted| hosted.full_screen_app())
-    }
-
-    fn on_surface_key(&mut self, key: KeyEvent) -> Result<(), String> {
-        // A search prompt owns every key until it closes, or typing "n" would jump instead of
-        // typing an n.
-        if let Surface::Scrollback {
-            search: Some(term),
-            last_search,
-            ..
-        } = &mut self.surface
+            .is_some_and(|hosted| hosted.session.id == id)
         {
-            match key.code {
-                KeyCode::Esc => {
-                    if let Surface::Scrollback { search, .. } = &mut self.surface {
-                        *search = None;
-                    }
-                }
-                KeyCode::Enter => {
-                    let term = term.clone();
-                    *last_search = Some(term.clone());
-                    if let Surface::Scrollback { search, .. } = &mut self.surface {
-                        *search = None;
-                    }
-                    self.search(&term, 1)?;
-                }
-                KeyCode::Backspace => {
-                    term.pop();
-                }
-                KeyCode::Char(character) => term.push(character),
-                _ => {}
-            }
             return Ok(());
         }
-
-        match (&mut self.surface, key.code) {
-            (Surface::Scrollback { .. }, KeyCode::Esc) => {
-                // Back to the live end of the session, or the next output would arrive somewhere
-                // the user cannot see.
-                self.scroll_to_end()?;
-                self.surface = Surface::None;
-            }
-            (_, KeyCode::Esc) => self.surface = Surface::None,
-            (Surface::Help, _)
-            | (Surface::Evidence, _)
-            | (Surface::Changes, _)
-            | (Surface::Welcome, _) => {
-                self.surface = Surface::None;
-                self.first_run = false;
-            }
-
-            (Surface::Scrollback { .. }, KeyCode::Up | KeyCode::Char('k')) => self.scroll_by(1)?,
-            (Surface::Scrollback { .. }, KeyCode::Down | KeyCode::Char('j')) => {
-                self.scroll_by(-1)?
-            }
-            (Surface::Scrollback { .. }, KeyCode::PageUp) => self.scroll_by(10)?,
-            (Surface::Scrollback { .. }, KeyCode::PageDown) => self.scroll_by(-10)?,
-            (Surface::Scrollback { .. }, KeyCode::Char('g')) => self.scroll_to_end()?,
-            (Surface::Scrollback { search, .. }, KeyCode::Char('/')) => {
-                *search = Some(String::new());
-            }
-            (Surface::Scrollback { last_search, .. }, KeyCode::Char('n')) => {
-                if let Some(term) = last_search.clone() {
-                    self.search(&term, 1)?;
-                }
-            }
-            (Surface::Scrollback { last_search, .. }, KeyCode::Char('N')) => {
-                if let Some(term) = last_search.clone() {
-                    self.search(&term, -1)?;
-                }
-            }
-            (Surface::Sessions { selected }, KeyCode::Up | KeyCode::Char('k')) => {
-                *selected = selected.saturating_sub(1);
-            }
-            (Surface::Sessions { selected }, KeyCode::Down | KeyCode::Char('j')) => {
-                *selected = (*selected + 1).min(self.sessions.len().saturating_sub(1));
-            }
-            (Surface::Sessions { selected }, KeyCode::Enter) => {
-                let index = *selected;
-                self.surface = Surface::None;
-                self.resume_selected(index)?;
-            }
-            (Surface::Sessions { selected }, KeyCode::Char('n')) => {
-                let index = *selected;
-                self.surface = Surface::None;
-                self.start_selected(index)?;
-            }
-            (Surface::Sessions { selected }, KeyCode::Char('x')) => {
-                let index = *selected;
-                self.forget_selected(index)?;
-            }
-            (Surface::Palette { filter, selected }, KeyCode::Char(character)) => {
-                filter.push(character);
-                *selected = 0;
-            }
-            (Surface::Palette { filter, selected }, KeyCode::Backspace) => {
-                filter.pop();
-                *selected = 0;
-            }
-            (Surface::Palette { filter, selected }, KeyCode::Up) => {
-                let _ = filter;
-                *selected = selected.saturating_sub(1);
-            }
-            (Surface::Palette { filter, selected }, KeyCode::Down) => {
-                let count = render::palette_entries(filter).len();
-                *selected = (*selected + 1).min(count.saturating_sub(1));
-            }
-            (Surface::Palette { filter, selected }, KeyCode::Enter) => {
-                let entries = render::palette_entries(filter);
-                let action = entries.get(*selected).map(|entry| entry.action.clone());
-                self.surface = Surface::None;
-                if let Some(action) = action {
-                    self.run_action(action)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn sync_mouse_capture(&mut self) -> Result<(), String> {
-        let wanted = self.mouse_enabled;
-        if wanted == self.mouse_captured {
+        let Some(index) = self
+            .parked
+            .iter()
+            .position(|hosted| hosted.session.id == id)
+        else {
             return Ok(());
-        }
-        let mut stdout = io::stdout();
-        let result = if wanted {
-            ratatui::crossterm::execute!(stdout, event::EnableMouseCapture)
-        } else {
-            ratatui::crossterm::execute!(stdout, event::DisableMouseCapture)
         };
-        result.map_err(|error| format!("could not change mouse handling: {error}"))?;
-        self.mouse_captured = wanted;
+        let selected = self.parked.remove(index);
+        let project = selected.session.project_id.clone();
+        if let Some(current) = self.hosted.replace(selected) {
+            self.parked.push(current);
+        }
+        self.project = project;
+        let identity = crate::project::identity(&self.project)?;
+        self.project_anchor = identity.anchor;
+        self.logical_project_id = identity.id;
+        self.refresh_git();
+        self.context = Context::None;
+        self.reobserve();
+        self.message = None;
+        self.refresh_sessions()?;
         Ok(())
     }
 
-    /// Verb holds the mouse whenever [`App::mouse_enabled`] is set, which is what lets the action
-    /// bar be clicked rather than only read. The cost is that a plain drag no longer selects text;
-    /// Option-drag still does in the terminals that support it, and `leader m` hands the mouse back
-    /// in the ones that do not.
-    fn on_mouse(&mut self, mouse: MouseEvent) -> Result<(), String> {
-        // With no surface open, the only thing on screen that answers a click is the bar.
-        if matches!(self.surface, Surface::None) {
-            if let MouseEventKind::Down(_) = mouse.kind {
-                if mouse.row == self.bar_row() {
-                    if let Some(command) = render::bar_command_at(self, mouse.column) {
-                        self.run_command(command)?;
-                    }
-                }
+    fn focus_pane_number(&mut self, number: usize) -> Result<(), String> {
+        if let Some(id) = self.pane_order.get(number).cloned() {
+            self.focus_pane(&id)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn pane_hosts(&self) -> Vec<&Hosted> {
+        self.pane_order
+            .iter()
+            .filter_map(|id| {
+                self.hosted
+                    .iter()
+                    .chain(self.parked.iter())
+                    .find(|hosted| hosted.session.id == *id)
+            })
+            .collect()
+    }
+
+    fn task_action(&mut self, action: crate::workbench::TaskAction) -> Result<(), String> {
+        let Some(task) = self.selected_task().cloned() else {
+            return Ok(());
+        };
+        let available = match action {
+            crate::workbench::TaskAction::Claim => matches!(task.status, "open" | "needs review"),
+            crate::workbench::TaskAction::Reassign => task.status != "done",
+            crate::workbench::TaskAction::Reply => task.status == "active" && task.needs_help,
+            crate::workbench::TaskAction::RequestHelp => {
+                task.status == "active" && !task.needs_help
             }
+            crate::workbench::TaskAction::Handoff | crate::workbench::TaskAction::Done => {
+                task.status == "active"
+            }
+        };
+        if !available {
+            self.message = Some(format!(
+                "That action is unavailable while this task is {}.",
+                task.status
+            ));
             return Ok(());
         }
-
-        match (&mut self.surface, mouse.kind) {
-            (Surface::Scrollback { .. }, MouseEventKind::ScrollUp) => self.scroll_by(3)?,
-            (Surface::Scrollback { .. }, MouseEventKind::ScrollDown) => self.scroll_by(-3)?,
-            (Surface::Sessions { selected }, MouseEventKind::ScrollUp) => {
-                *selected = selected.saturating_sub(1);
-            }
-            (Surface::Sessions { selected }, MouseEventKind::ScrollDown) => {
-                *selected = (*selected + 1).min(self.sessions.len().saturating_sub(1));
-            }
-            (Surface::Palette { selected, filter }, MouseEventKind::ScrollUp) => {
-                let _ = filter;
-                *selected = selected.saturating_sub(1);
-            }
-            (Surface::Palette { selected, filter }, MouseEventKind::ScrollDown) => {
-                let count = render::palette_entries(filter).len();
-                *selected = (*selected + 1).min(count.saturating_sub(1));
-            }
-            // A click inside an overlay picks the row under the pointer; a click outside it closes
-            // the overlay, which is what clicking away from a thing means everywhere else.
-            (_, MouseEventKind::Down(_)) => {
-                let row = mouse.row;
-                match render::overlay_row_at(&self.surface, self.sessions.len(), row) {
-                    Some(index) => match &mut self.surface {
-                        Surface::Sessions { selected } => *selected = index,
-                        Surface::Palette { selected, .. } => *selected = index,
-                        _ => {}
-                    },
-                    None => self.surface = Surface::None,
+        match action {
+            crate::workbench::TaskAction::Claim
+            | crate::workbench::TaskAction::Reassign
+            | crate::workbench::TaskAction::Reply => {
+                let candidates = self.actor_candidates(action);
+                if candidates.is_empty() {
+                    self.message = Some(
+                        "No eligible agent session. Start or resume an agent first.".to_owned(),
+                    );
+                    return Ok(());
                 }
+                let selected = self
+                    .selected_actor()
+                    .and_then(|id| {
+                        candidates
+                            .iter()
+                            .position(|index| self.sessions[*index].id == id)
+                    })
+                    .unwrap_or(0);
+                self.work.actor_picker = Some(ActorPicker { action, selected });
+                return Ok(());
             }
             _ => {}
+        }
+        let actor = task.owner.clone();
+        let Some(actor) = actor else {
+            self.message =
+                Some("This task has no owner. Claim it with an agent session first.".to_owned());
+            return Ok(());
+        };
+        self.start_task_action(action, actor)
+    }
+
+    fn actor_candidates(&self, action: crate::workbench::TaskAction) -> Vec<usize> {
+        let owner = self.selected_task().and_then(|task| task.owner.as_deref());
+        self.project_session_indices()
+            .into_iter()
+            .filter(|index| {
+                let session = &self.sessions[*index];
+                session.state != SessionState::Ended
+                    && !(matches!(
+                        action,
+                        crate::workbench::TaskAction::Reply
+                            | crate::workbench::TaskAction::Reassign
+                    ) && owner == Some(session.id.as_str()))
+            })
+            .collect()
+    }
+
+    fn start_task_action(
+        &mut self,
+        action: crate::workbench::TaskAction,
+        actor: String,
+    ) -> Result<(), String> {
+        let Some(task) = self.selected_task().cloned() else {
+            return Ok(());
+        };
+        if action == crate::workbench::TaskAction::Claim {
+            match crate::workbench::apply_ui_action(
+                &self.project,
+                &task.id,
+                &actor,
+                action,
+                None,
+                None,
+            ) {
+                Ok(message) => {
+                    self.message = Some(message);
+                    self.refresh_workbench()?;
+                }
+                Err(error) => self.message = Some(error),
+            }
+        } else {
+            self.work.composer = Some(Composer {
+                task_id: task.id.clone(),
+                action,
+                actor,
+                text: String::new(),
+                expected_revision: (action == crate::workbench::TaskAction::Handoff)
+                    .then(|| crate::workbench::handoff_revision(&self.project, &task.id))
+                    .transpose()?,
+            });
         }
         Ok(())
     }
@@ -642,6 +1166,15 @@ impl App {
 
     fn run_command(&mut self, command: Command) -> Result<(), String> {
         match command {
+            Command::Workbench => self.enter_workbench()?,
+            Command::FocusPane(number) => self.focus_pane_number(number)?,
+            Command::ToggleZoom => {
+                if self.pane_order.len() > 1 {
+                    self.terminal_zoom = !self.terminal_zoom;
+                } else {
+                    self.message = Some("Open another agent session to use pane zoom.".to_owned());
+                }
+            }
             Command::Palette => {
                 self.surface = Surface::Palette {
                     filter: String::new(),
@@ -688,6 +1221,7 @@ impl App {
 
     fn run_action(&mut self, action: Action) -> Result<(), String> {
         match action {
+            Action::Workbench => self.enter_workbench(),
             Action::Sessions => self.run_command(Command::Sessions),
             Action::Help => self.run_command(Command::Help),
             Action::Evidence => self.run_command(Command::Contextual),
@@ -710,6 +1244,47 @@ impl App {
                     cols,
                 )
             }
+            Action::NewIsolatedAgent(agent) => {
+                let workspace = crate::project::create_isolated_checkout(&self.project)?;
+                let (rows, cols) = self.last_size();
+                self.start(
+                    crate::begin_session(&workspace, agent, Vec::new()),
+                    rows,
+                    cols,
+                )
+                .map_err(|error| {
+                    format!(
+                        "{error}; isolated workspace kept at {}",
+                        workspace.display()
+                    )
+                })
+            }
+            Action::NewExternalAgent => {
+                self.surface = Surface::ExternalAgent {
+                    command: String::new(),
+                    isolated: false,
+                };
+                Ok(())
+            }
+            Action::NewIsolatedExternalAgent => {
+                self.surface = Surface::ExternalAgent {
+                    command: String::new(),
+                    isolated: true,
+                };
+                Ok(())
+            }
+            Action::NewExternalPreset(command, args) => {
+                let (rows, cols) = self.last_size();
+                self.start(
+                    crate::begin_external_session(
+                        &self.project,
+                        command.to_owned(),
+                        args.iter().map(|arg| (*arg).to_owned()).collect(),
+                    )?,
+                    rows,
+                    cols,
+                )
+            }
             Action::Reconcile => {
                 self.refresh_sessions()?;
                 self.message =
@@ -720,8 +1295,12 @@ impl App {
                 if let Some(hosted) = self.hosted.take() {
                     let session = hosted.stop()?;
                     self.context = Context::SessionState(session.state.clone());
-                    self.refresh_sessions()?;
                 }
+                for hosted in self.parked.drain(..) {
+                    hosted.stop()?;
+                }
+                self.pane_order.clear();
+                self.refresh_sessions()?;
                 self.quit = true;
                 Ok(())
             }
@@ -730,18 +1309,53 @@ impl App {
 
     fn resume_here(&mut self) -> Result<(), String> {
         let project = self.project.clone();
-        self.resume_project(&project)
+        if self.hosted.as_ref().is_some_and(|hosted| {
+            crate::session_in_project_with_id(&hosted.session, &project, &self.logical_project_id)
+                && hosted.session.agent.is_some()
+        }) {
+            self.mode = Mode::Terminal;
+            return Ok(());
+        }
+        if let Some(id) = self
+            .parked
+            .iter()
+            .rev()
+            .find(|hosted| {
+                crate::session_in_project_with_id(
+                    &hosted.session,
+                    &project,
+                    &self.logical_project_id,
+                ) && hosted.session.agent.is_some()
+            })
+            .map(|hosted| hosted.session.id.clone())
+        {
+            if let Some(index) = self.sessions.iter().position(|session| session.id == id) {
+                return self.resume_selected(index);
+            }
+        }
+        self.resume_project(&project, None)
     }
 
     fn resume_selected(&mut self, index: usize) -> Result<(), String> {
-        let Some(project) = self
-            .sessions
-            .get(index)
-            .map(|session| session.project_id.clone())
-        else {
+        let Some(session) = self.sessions.get(index) else {
             return Ok(());
         };
-        self.resume_project(&project)
+        let id = session.id.clone();
+        let project = session.project_id.clone();
+        if self
+            .hosted
+            .as_ref()
+            .is_some_and(|hosted| hosted.session.id == id)
+        {
+            self.mode = Mode::Terminal;
+            return Ok(());
+        }
+        if self.parked.iter().any(|hosted| hosted.session.id == id) {
+            self.focus_pane(&id)?;
+            self.mode = Mode::Terminal;
+            return Ok(());
+        }
+        self.resume_project(&project, Some(&id))
     }
 
     fn start_selected(&mut self, index: usize) -> Result<(), String> {
@@ -752,6 +1366,13 @@ impl App {
         let agent = session.agent.clone();
         let (rows, cols) = self.last_size();
         match agent {
+            Some(Agent::External) => {
+                self.message = Some(
+                    "Start another external agent with 'verb agent CMD' in a shell; Verb does not store its executable."
+                        .to_owned(),
+                );
+                Ok(())
+            }
             Some(agent) => self.start(
                 crate::begin_session(&project, agent, Vec::new()),
                 rows,
@@ -773,15 +1394,15 @@ impl App {
         };
         if self
             .hosted
-            .as_ref()
-            .map(|hosted| hosted.session.id.as_str())
-            == Some(&session.id)
+            .iter()
+            .chain(self.parked.iter())
+            .any(|hosted| hosted.session.id == session.id)
         {
             self.message = Some("That session is running here; end it first.".to_owned());
             return Ok(());
         }
         let project = session.project_id.clone();
-        crate::forget_session(&project)?;
+        crate::forget_session(&session.id)?;
         self.message = Some(format!(
             "Forgot Verb's record of {}. The agent's own conversation is untouched.",
             crate::display_path(&project)
@@ -793,9 +1414,9 @@ impl App {
         Ok(())
     }
 
-    fn resume_project(&mut self, project: &Path) -> Result<(), String> {
+    fn resume_project(&mut self, project: &Path, id: Option<&str>) -> Result<(), String> {
         let (rows, cols) = self.last_size();
-        match crate::begin_resume(project) {
+        match crate::begin_resume(project, id) {
             Ok(start) => self.start(start, rows, cols),
             Err(failure) => {
                 // Refused for the same reasons `verb resume` refuses, and reported rather than
@@ -812,14 +1433,8 @@ impl App {
     }
 
     fn start(&mut self, start: crate::SessionStart, rows: u16, cols: u16) -> Result<(), String> {
-        if let Some(hosted) = self.hosted.take() {
-            // One hosted session at a time in M1. The outgoing one is closed out honestly rather
-            // than abandoned: its record must not be left claiming LIVE.
-            let session = hosted.stop()?;
-            self.context = Context::SessionState(session.state.clone());
-        }
         let project = start.session.project_id.clone();
-        self.hosted = Some(Hosted::start(
+        let next = Hosted::start(
             &project,
             start.session,
             &start.command,
@@ -828,8 +1443,21 @@ impl App {
             start.is_new,
             rows,
             cols,
-        )?);
+        )?;
+        if !self.pane_order.iter().any(|id| id == &next.session.id) {
+            self.pane_order.push(next.session.id.clone());
+        }
+        if let Some(previous) = self.hosted.replace(next) {
+            self.parked.push(previous);
+        }
+        self.project = project;
+        let identity = crate::project::identity(&self.project)?;
+        self.project_anchor = identity.anchor;
+        self.logical_project_id = identity.id;
+        self.refresh_git();
+        self.mode = Mode::Terminal;
         self.context = Context::None;
+        self.reobserve();
         self.message = None;
         self.refresh_sessions()?;
         Ok(())
@@ -844,21 +1472,41 @@ impl App {
 
     /// A plain workspace, for tests in this module and in `render`.
     #[cfg(test)]
+    pub(super) fn set_context_for_tests(&mut self, context: Context) {
+        self.context = context;
+    }
+
+    #[cfg(test)]
     pub(super) fn for_tests() -> App {
         App {
             project: PathBuf::from("/tmp/project"),
+            project_anchor: PathBuf::from("/tmp/project"),
+            logical_project_id: String::new(),
+            git: crate::git_snapshot(Path::new("/tmp/project")),
+            mode: Mode::Terminal,
+            work: WorkState::default(),
+            tasks: Vec::new(),
+            memory: String::new(),
+            inboxes: HashMap::new(),
+            workspace_status: HashMap::new(),
             leader: Leader::default_chord(),
             surface: Surface::None,
             context: Context::None,
             hosted: None,
+            parked: Vec::new(),
+            pane_order: Vec::new(),
+            pane_areas: Vec::new(),
+            terminal_zoom: false,
             sessions: Vec::new(),
             imported_sessions: Vec::new(),
             message: None,
             quit: false,
-            first_run: false,
             mouse_captured: false,
             mouse_enabled: true,
             frame_height: 24,
+            frame_width: 80,
+            background: Background::new(),
+            runtime_problems: HashMap::new(),
         }
     }
 
@@ -879,7 +1527,7 @@ impl App {
                 let (rows, cols) = hosted.screen().size();
                 (rows.max(1), cols.max(1))
             })
-            .unwrap_or((24, 80))
+            .unwrap_or_else(|| render::hosting_size(self.frame_width, self.frame_height))
     }
 
     pub(crate) fn project(&self) -> &Path {
@@ -922,9 +1570,14 @@ impl App {
 /// What a palette entry does. Every variant is an existing capability, reachable from the CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
+    Workbench,
     Resume,
     NewShell,
     NewAgent(Agent),
+    NewIsolatedAgent(Agent),
+    NewExternalAgent,
+    NewIsolatedExternalAgent,
+    NewExternalPreset(&'static str, &'static [&'static str]),
     Sessions,
     Reconcile,
     Evidence,
@@ -986,6 +1639,83 @@ mod tests {
     }
 
     #[test]
+    fn a_repository_warning_outranks_a_runtime_one_and_hands_back_when_resolved() {
+        let mut app = App::for_tests();
+        let project = app.project.clone();
+        app.runtime_problems.insert(
+            project.clone(),
+            Some("node 18 · .nvmrc wants 20 · mismatch".to_owned()),
+        );
+        let send = |app: &App, observation| app.background.sender.send(observation).unwrap();
+
+        send(
+            &app,
+            Observation::Repo(Some(Context::RepoWarning {
+                fact: "A merge is in progress.".to_owned(),
+                safe_next: "git merge --abort".to_owned(),
+            })),
+        );
+        assert!(app.take_observations());
+        assert!(matches!(app.context, Context::RepoWarning { .. }));
+
+        send(&app, Observation::Repo(None));
+        assert!(app.take_observations());
+        assert!(matches!(app.context, Context::RuntimeMismatch(_)));
+
+        // A failed command is never overwritten by a background answer.
+        app.context = Context::CommandFailed {
+            exit_code: 1,
+            millis: 0,
+            label: None,
+            since_good: None,
+        };
+        send(&app, Observation::Repo(None));
+        app.take_observations();
+        assert!(matches!(app.context, Context::CommandFailed { .. }));
+
+        // A last-known-good answer for an older failure is dropped.
+        let current = app.background.failure_generation;
+        send(
+            &app,
+            Observation::SinceGood {
+                generation: current + 7,
+                text: Some("stale".to_owned()),
+            },
+        );
+        app.take_observations();
+        assert!(matches!(
+            app.context,
+            Context::CommandFailed {
+                since_good: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn workbench_buttons_and_rows_complete_actions_with_one_click() {
+        let mut app = app();
+        app.mode = Mode::Workbench;
+        app.frame_width = 120;
+        app.frame_height = 30;
+
+        app.on_mouse(click(39, 6)).unwrap();
+        assert!(app.work.new_task.is_some());
+        let cancel = (0..30)
+            .flat_map(|row| (0..120).map(move |column| (column, row)))
+            .find(|(column, row)| {
+                workbench_view::modal_action_at(&app, *column, *row)
+                    == Some(workbench_view::ClickAction::Cancel)
+            })
+            .unwrap();
+        app.on_mouse(click(cancel.0, cancel.1)).unwrap();
+        assert!(app.work.new_task.is_none());
+
+        app.on_mouse(click(3, 7)).unwrap();
+        assert!(matches!(app.surface, Surface::Palette { .. }));
+    }
+
+    #[test]
     fn clicking_an_action_on_the_bar_runs_it() {
         // The bar is the primary visible affordance. Something a person can see and point at, and
         // which then does nothing, is worse than not showing it at all.
@@ -1005,14 +1735,14 @@ mod tests {
         let mut app = app();
         let sessions = render::bar_slots(&app)
             .into_iter()
-            .find(|slot| slot.label == "Sessions")
-            .expect("Sessions is on the bar");
+            .find(|slot| slot.label == "Workbench")
+            .expect("Workbench is on the bar");
 
-        // The last column of "[F2] Sessions" -- the "s" of Sessions, furthest from the key.
+        // The last column of "[F2] Workbench" is clickable too.
         app.on_mouse(click(sessions.start + sessions.width - 1, app.bar_row()))
             .unwrap();
 
-        assert!(matches!(app.surface, Surface::Sessions { .. }));
+        assert_eq!(app.mode, Mode::Workbench);
     }
 
     #[test]
@@ -1094,6 +1824,44 @@ mod tests {
     }
 
     #[test]
+    fn arbitrary_agent_launcher_accepts_an_executable_without_shell_parsing() {
+        let mut app = app();
+        app.frame_width = 120;
+        app.frame_height = 30;
+        app.run_action(Action::NewExternalAgent).unwrap();
+        for character in "agy".chars() {
+            app.on_surface_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
+                .unwrap();
+        }
+        assert!(matches!(
+            app.surface,
+            Surface::ExternalAgent { ref command, .. } if command == "agy"
+        ));
+        let rect = render::external_agent_rect(ratatui::layout::Rect::new(0, 0, 120, 30));
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 3,
+            row: rect.y + 2,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap();
+        assert!(matches!(app.surface, Surface::ExternalAgent { .. }));
+        app.on_surface_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(app.surface, Surface::None));
+    }
+
+    #[test]
+    fn isolated_launcher_keeps_the_generic_cli_choice() {
+        let mut app = app();
+        app.run_action(Action::NewIsolatedExternalAgent).unwrap();
+        assert!(matches!(
+            app.surface,
+            Surface::ExternalAgent { isolated: true, .. }
+        ));
+    }
+
+    #[test]
     fn only_one_verb_surface_can_be_open_at_a_time() {
         // The budget in docs/UX_FOUNDATION.md forbids stacking overlays, and the state makes it
         // impossible rather than merely discouraged: asking for a second replaces the first.
@@ -1145,5 +1913,117 @@ mod tests {
 
         assert!(matches!(app.surface, Surface::None));
         assert!(app.message.is_some());
+    }
+
+    #[test]
+    fn control_j_moves_new_task_input_from_title_to_brief() {
+        let mut app = app();
+        app.mode = Mode::Workbench;
+        app.work.new_task = Some(NewTask::default());
+        for character in "Title".chars() {
+            app.on_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
+                .unwrap();
+        }
+        app.on_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL))
+            .unwrap();
+        app.on_key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE))
+            .unwrap();
+        let draft = app.work.new_task.as_ref().unwrap();
+        assert_eq!(draft.title, "Title");
+        assert_eq!(draft.brief, "B");
+    }
+
+    #[test]
+    fn workbench_commands_follow_the_configured_leader() {
+        let mut app = app();
+        app.mode = Mode::Workbench;
+        app.leader = Leader::configured(leader::Chord::ctrl('g'));
+        app.on_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(matches!(app.surface, Surface::Palette { .. }));
+    }
+
+    #[test]
+    fn task_claim_opens_an_explicit_agent_chooser() {
+        let mut app = app();
+        app.mode = Mode::Workbench;
+        app.work.detail = true;
+        app.tasks.push(crate::workbench::TaskSnapshot {
+            id: "a".repeat(32),
+            title: "Review parser".to_owned(),
+            brief: String::new(),
+            status: "open",
+            owner: None,
+            needs_help: false,
+            created_at: 1,
+            events: Vec::new(),
+        });
+        app.sessions
+            .push(crate::Session::new(app.project.clone(), Agent::Claude));
+        app.sessions
+            .push(crate::Session::new(app.project.clone(), Agent::Codex));
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            app.work.actor_picker,
+            Some(ActorPicker { selected: 0, .. })
+        ));
+        app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            app.work.actor_picker,
+            Some(ActorPicker { selected: 1, .. })
+        ));
+        app.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.work.actor_picker.is_none());
+    }
+
+    #[test]
+    fn a_new_task_opens_even_when_an_older_task_has_higher_priority() {
+        let mut app = app();
+        app.mode = Mode::Workbench;
+        app.work.filter = "older".to_owned();
+        app.tasks.push(crate::workbench::TaskSnapshot {
+            id: "a".repeat(32),
+            title: "Older review".to_owned(),
+            brief: String::new(),
+            status: "needs review",
+            owner: None,
+            needs_help: false,
+            created_at: 1,
+            events: Vec::new(),
+        });
+        let id = "b".repeat(32);
+        app.tasks.push(crate::workbench::TaskSnapshot {
+            id: id.clone(),
+            title: "New task".to_owned(),
+            brief: String::new(),
+            status: "open",
+            owner: None,
+            needs_help: false,
+            created_at: 2,
+            events: Vec::new(),
+        });
+
+        app.open_task_by_id(&id);
+
+        assert_eq!(app.work.focus, WorkFocus::Tasks);
+        assert!(app.work.detail);
+        assert!(app.work.filter.is_empty());
+        assert_eq!(app.selected_task().unwrap().id, id);
+    }
+
+    #[test]
+    fn control_j_activates_a_palette_choice_in_verb_owned_ui() {
+        let mut app = app();
+        app.mode = Mode::Workbench;
+        app.surface = Surface::Palette {
+            filter: "Help".to_owned(),
+            selected: 0,
+        };
+        app.on_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(matches!(app.surface, Surface::Help));
     }
 }

@@ -56,13 +56,21 @@ class ClaudeAgentAdapter(
     }
 
     /**
-     * Returns Claude's stable conversation id when this host exposes one. The filename in the
-     * Android session directory is a PID and is intentionally never returned or persisted.
+     * Returns an exact conversation ID only when the project evidence names one candidate.
+     * A metadata filename is a PID and is never returned or persisted.
      */
     override fun resumeIdentity(agent: AgentRef): String? {
         val project = projectDirectory ?: return null
-        return matchingSessionMetadata(sessionMetadataFiles() ?: return null, project, agent)
-            .firstOrNull()
+        val fromMetadata = sessionMetadataFiles()
+            ?.let { matchingSessionMetadata(it, project, agent) }
+            .orEmpty()
+        val fromTranscripts = transcriptDirectories(project)
+            .flatMap { it.listFiles { file -> file.isFile && file.extension == "jsonl" }?.toList().orEmpty() }
+            .mapNotNull { ResumeIdentity.validOrNull(it.nameWithoutExtension) }
+        val candidates = (fromMetadata + fromTranscripts)
+            .filter { agent.resumeIdentity == null || it == agent.resumeIdentity }
+            .distinct()
+        return candidates.singleOrNull()
     }
 
     private fun sessionMetadataFiles(): List<File>? {
@@ -125,15 +133,13 @@ class ClaudeAgentAdapter(
     }
 
     /**
-     * Sends `claude --resume <id>` (or `--continue` with no known id) and waits up to
-     * [resumeSettleMs] to see whether it exits. [AgentResumeLauncher] owns the reasoning about why
-     * "nothing settled" is the shape of success here.
+     * Sends `claude --resume <id>` only with a verified identity. The launcher requires
+     * a fresh running-command boundary and rejects an immediate exit or absent shell evidence.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
         val runtime = terminalRuntimeAdapter ?: return null
-        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity)
-            ?.let { "--resume $it" }
-            ?: "--continue"
+        val identity = ResumeIdentity.validOrNull(agent.resumeIdentity) ?: return null
+        val resumeArgument = "--resume $identity"
         val stillRunning = AgentResumeLauncher.launch(
             terminalRuntimeAdapter = runtime,
             command = "claude $resumeArgument",

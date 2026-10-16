@@ -73,6 +73,11 @@ enum class VerbTask(
         subtitle = "Resume what was interrupted, or start over",
         keywords = "session sessions resume recover recoverable interrupted ended restore continue"
     ),
+    CONTROL_DESKTOP(
+        title = "Control a desktop session",
+        subtitle = "Continue a running desktop agent from this phone",
+        keywords = "desktop phone pair connect remote live control terminal"
+    ),
     EVIDENCE(
         title = "What Verb knows",
         subtitle = "The environment and session facts Verb has observed",

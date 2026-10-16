@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.ViewGroup
 import androidx.compose.ui.text.TextRange
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -37,6 +38,24 @@ class TermuxTerminalRuntimeAdapter(
      * changing.
      */
     override val renderTarget: StateFlow<TermuxTerminalRuntimeAdapter?> = MutableStateFlow(this)
+
+    /**
+     * Drops the bound [TerminalView] if it was created in [owner], which is being destroyed.
+     *
+     * This adapter outlives Activities -- `VerbTerminalSessionHolder` keeps every terminal for the
+     * life of the process -- but a View holds the Activity it was created in as its context. Kept,
+     * the view pinned that Activity in memory after it was destroyed. On a Vivo I2202, four
+     * rotations then five minutes and forced GC left `dumpsys meminfo` at 2 Activities with the
+     * view kept, 1 with it released. The terminal's content lives in the session and its emulator, not in
+     * the view, so the next Activity binds a fresh view to the same session and loses nothing but
+     * the scroll offset.
+     */
+    fun releaseTerminalView(owner: Context) {
+        val view = terminalView ?: return
+        if (view.context.owningActivity() !== owner.owningActivity()) return
+        (view.parent as? ViewGroup)?.removeView(view)
+        terminalView = null
+    }
 
     fun bindTerminalView(view: TerminalView) {
         // TerminalView is a plain Android View, so Compose does not make it focusable for us.
@@ -111,6 +130,7 @@ class TermuxTerminalRuntimeAdapter(
 
     private val commandTracker = CommandExecutionTracker()
     override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+    override val runningCommand: StateFlow<CommandExecutionRecord?> = commandTracker.runningCommand
     override val shellIntegrationActive: StateFlow<Boolean> = commandTracker.shellIntegrationActive
 
     override val launchWorkingDirectory: File get() = workingDir
@@ -829,4 +849,14 @@ class TermuxTerminalRuntimeAdapter(
             TerminalContextState()
         }
     }
+}
+
+/** The Activity a context ultimately belongs to, unwrapping ContextWrappers; null if none. */
+private fun Context.owningActivity(): android.app.Activity? {
+    var c: Context? = this
+    while (c is android.content.ContextWrapper) {
+        if (c is android.app.Activity) return c
+        c = c.baseContext
+    }
+    return null
 }

@@ -6,6 +6,7 @@ import com.example.verb.project.VerbProject
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -138,8 +139,13 @@ class OpenCodeSessionCoordinatorTest {
         assertEquals(VerbSessionState.RECOVERABLE, restored.state)
         assertEquals("opencode-session-1", restored.agent!!.resumeIdentity)
 
-        // Nothing settles inside the resume window, so OpenCode is presumed still running.
-        coordinator.resume()
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { coordinator.resume() }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        testScheduler.advanceTimeBy(5_100)
+        runCurrent()
+        resumeCall.await()
 
         val resumed = coordinator.session.value!!
         assertEquals(VerbSessionState.LIVE, resumed.state)

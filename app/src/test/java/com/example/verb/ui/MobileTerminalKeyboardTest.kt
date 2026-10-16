@@ -1,6 +1,9 @@
 package com.example.verb.ui
 
 import android.content.Context
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -143,6 +146,43 @@ class MobileTerminalKeyboardTest {
         assertEquals(listOf("git status"), textsSent)
         // The text is already on the shell line; Enter just completes it.
         assertEquals(listOf(""), commandsSent)
+    }
+
+    /**
+     * The field's text is a copy of what was already written to one terminal's line. Observed on a
+     * Vivo I2202: text typed with Terminal 1 in front stayed in the field after switching to
+     * Terminal 2, and the next edit was diffed against it and sent to Terminal 2 -- backspaces
+     * into a Codex composer that had never seen those characters.
+     */
+    @Test
+    fun `switching terminals does not carry one terminal's text into another`() {
+        var terminal by mutableStateOf("terminal-1")
+        val sent = mutableListOf<String>()
+        composeTestRule.setContent {
+            MobileTerminalKeyboard(
+                onSendKey = { sent.add("$terminal:key:$it") },
+                onSendCommand = {},
+                onSendText = { sent.add("$terminal:text:$it") },
+                terminalOutput = "",
+                onInspectOutput = {},
+                terminalKey = terminal
+            )
+        }
+
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("abc")
+        terminal = "terminal-2"
+        composeTestRule.waitForIdle()
+
+        // The other terminal starts with its own empty field, so typing there is a pure append.
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextInput("x")
+
+        assertEquals(listOf("terminal-1:text:abc", "terminal-2:text:x"), sent)
+
+        // And coming back restores Terminal 1's copy, so its edits are diffed against its own line.
+        terminal = "terminal-1"
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("terminal_input_field").performTextReplacement("ab")
+        assertEquals("terminal-1:key:BACKSPACE", sent.last())
     }
 
     @Test

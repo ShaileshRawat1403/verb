@@ -1,0 +1,49 @@
+// Completed failures and initial loading are different observations.
+export function projectGitPresentation(project) {
+  const states = {
+    loading: ["Reading Git status…", "Reading the current checkout."],
+    unborn: [
+      `${project.branch || "New repository"} · no commits`,
+      "This repository has no commits yet. Create its first commit when ready.",
+    ],
+    detached: [
+      "Detached HEAD",
+      "No branch is checked out. Switch to a branch in your terminal before adding work you want to keep on a branch.",
+    ],
+    not_repository: [
+      "Not a Git repository",
+      "Open a Git checkout, or initialize this folder from your terminal.",
+    ],
+    unavailable: [
+      "Git status unavailable",
+      "Check that Git is installed and this account can read the checkout. Terminal work remains available.",
+    ],
+  };
+  const state =
+    project.gitStatus ||
+    (project.branch
+      ? "branch"
+      : project.changedFiles == null
+        ? "loading"
+        : "unavailable");
+  const [branch, detail] =
+    states[state] ||
+    (state === "branch" && project.branch
+      ? [project.branch, "Current Git branch."]
+      : states.unavailable);
+  const count =
+    ["branch", "unborn", "detached"].includes(state) &&
+    Number.isInteger(project.changedFiles) &&
+    project.changedFiles >= 0
+      ? project.changedFiles
+      : null;
+  const changes =
+    state === "loading"
+      ? "Reading changes…"
+      : count != null
+        ? `${count} changed`
+        : state === "not_repository"
+          ? "No Git tracking"
+          : "Changes unavailable";
+  return { branch, detail, changes };
+}

@@ -4,6 +4,7 @@ import com.example.verb.project.VerbProject
 import com.example.verb.terminal.FakeTerminalRuntimeAdapter
 import com.example.verb.terminal.ShellIntegrationEvent
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -131,8 +132,13 @@ class CodexSessionCoordinatorTest {
         advanceUntilIdle()
         val recoverableId = coordinator.session.value!!.id
 
-        // Nothing new settles inside CodexAgentAdapter's resume window: Codex presumed still running.
-        coordinator.resume()
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { coordinator.resume() }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        testScheduler.advanceTimeBy(5_100)
+        runCurrent()
+        resumeCall.await()
 
         val resumed = coordinator.session.value!!
         assertEquals(VerbSessionState.LIVE, resumed.state)
@@ -152,6 +158,7 @@ class CodexSessionCoordinatorTest {
         advanceUntilIdle()
         val recoverableId = coordinator.session.value!!.id
 
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeJob = launch { coordinator.resume() }
         runCurrent()
         exitCodex(fake, exitCode = 1)

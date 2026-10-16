@@ -1,4 +1,82 @@
-# Verb return handoff — 2026-08-24
+# Verb return handoff — updated 2026-09-28
+
+## September 28 live desktop-to-phone control addendum
+
+The later live-control slice supersedes the September 26/27 statements below that Android has no
+desktop receiver. A live desktop web terminal now exposes a one-use QR/deep-link pair action and a
+temporary TLS relay; `verb mobile share SESSION_ID` serves a TUI-hosted terminal. Android adds the
+**Control a desktop session** task, verifies the pinned desktop certificate and IP name, displays
+the volatile current screen, and sends explicit input only after taking the single input lease.
+The web title bar shows the controller and can take control back or revoke the phone. Pairing and
+phone capability tokens are never written to Verb's durable stores. The earlier `.vcont` boundary
+is unchanged: it carries read-only structural history, not a running process.
+
+The desktop integration test covers pairing, pin rejection, code renewal without disconnecting an
+existing phone, phone replacement, screen through TLS, keystrokes into an actual PTY, desktop
+takeback, and revocation. Android JVM tests cover link parsing, exact TLS pin validation, and IP
+name rejection. The web workbench now has searchable session/task lists, a focused terminal layout,
+pairing status and one-use link renewal, with reduced-motion styling. The package
+still needs a physical Android and same-network acceptance run, including camera/deep-link launch,
+touch layout, and reconnect after an interruption. The desktop and
+phone must remain on the same reachable network; there is no internet relay or phone-local process
+transfer. See `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md` for the exact contract.
+
+## September 27 desktop addendum
+
+Branch `desktop/gaps-and-observation`, desktop, CI and docs only. The Kotlin Android app (`app/`)
+and `runtime/` are unchanged. The first commit on the branch snapshots the Sep 26 working tree
+exactly as it was. The rest is summarised in `docs/BACKLOG.md` under "Desktop observation and
+release — 27 September":
+
+* fixed: `verb web` dying on a closed stdout (the flaky web tests), a phone-bridge directory race,
+  one owner-only `atomic_write`, clippy on current stable;
+* the crate has a library target (D3);
+* `verb check`, `verb runtime`, `verb good` (C3, C4, C5), with TUI band and web panel;
+* `release-desktop.yml` for draft macOS/Linux binaries (D2), and macOS in the desktop CI job.
+
+Gate passed in a Linux container: `cargo fmt --check`, `cargo clippy --all-targets -D warnings`,
+`cargo test --all-targets`, `cargo build --release --locked`, and the web asset build with no
+`dist` drift. Not yet run: the macOS test job, the release workflow on GitHub, or the TUI by hand.
+
+## September 26 final review addendum
+
+This source archive includes the desktop Rust TUI and web workbench, plus the Android recovery
+fixes from the final review. It contains source and built browser assets; it does not contain a Git
+history, Android APK, local credentials, `~/.verb/work`, project working trees, or any native agent
+conversation store. Copy those separately only after reviewing what they contain.
+
+The final review fixes Android's same-agent session overwrite, foreground-terminal replacement,
+ambiguous latest-conversation resume, false LIVE status after a silent resume attempt, unchecked
+session-store writes, and archive staging failures. The session registry now keeps records by
+product session ID; resume dispatch requires a verified native conversation ID and a fresh running
+shell boundary. Failed archive import leaves the prior staging file intact, and a failed export
+removes its pending MediaStore item. The desktop CI builds the embedded web assets before Rust.
+
+The following gates passed on this Mac:
+
+```text
+./gradlew :app:testFullCliDebugUnitTest :app:testPlayDebugUnitTest
+./gradlew :app:lintFullCliDebug :app:lintPlayDebug
+./gradlew :app:assembleFullCliDebug :app:assemblePlayDebug
+npm ci --prefix desktop/web
+npm run build --prefix desktop/web
+cargo fmt --manifest-path desktop/Cargo.toml --all -- --check
+cargo clippy --manifest-path desktop/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path desktop/Cargo.toml --all-targets
+cargo build --release --manifest-path desktop/Cargo.toml
+git diff --check
+```
+
+There was no attached Android device or emulator for this review, so new Android behavior has not
+had a physical acceptance run. The desktop live bridge is local to its Unix socket. An encrypted
+phone transport and Android receiver have not been built, so live desktop sessions cannot yet be
+controlled from Verb Mobile. The `.vcont` file carries read-only history, not a live process or a
+portable native agent conversation. These are remaining product capabilities, not claims made by
+this archive.
+
+---
+
+## August 24 baseline handoff
 
 This is a verified source-only release candidate produced from transfer snapshot `bf9fd84`. It is
 intended to be reviewed and integrated into the primary Verb checkout that owns the real Git

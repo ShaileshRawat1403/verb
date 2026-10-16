@@ -76,7 +76,7 @@ pub(crate) fn assemble_for(project: &Path, hosting: Option<&Session>) -> Result<
         None => hosting.cloned(),
     };
     let events = match session.as_ref() {
-        Some(session) => read_events(project, &session.id)?,
+        Some(session) => read_events(&session.project_id, &session.id)?,
         None => Vec::new(),
     };
     Ok(Context {
@@ -228,7 +228,7 @@ impl Context {
                 .as_ref()
                 .map(|branch| format!("\"{}\"", crate::json_escape(branch)))
                 .unwrap_or_else(|| "null".to_owned()),
-            self.git.changed_files,
+            serde_json::json!(self.git.changes_known.then_some(self.git.changed_files)),
             session,
             events.join(",")
         )
@@ -245,11 +245,11 @@ impl Context {
         lines.push(format!("  Project: {}", self.project.display()));
         match self.git.root {
             Some(_) => lines.push(format!(
-                "  Git: {} · {} changed",
-                self.git.branch.as_deref().unwrap_or("detached/unknown"),
-                self.git.changed_files
+                "  Git: {} · {}",
+                self.git.branch_label(),
+                self.git.change_summary()
             )),
-            None => lines.push("  Git: not a repository".to_owned()),
+            None => lines.push(format!("  Git: {}", self.git.branch_label())),
         }
 
         lines.push(String::new());
@@ -350,6 +350,18 @@ impl Event {
 mod tests {
     use super::*;
 
+    #[test]
+    fn unavailable_git_count_is_null_in_context_and_not_a_clean_tree() {
+        let mut context = bundle();
+        context.git.branch = None;
+        context.git.status = crate::gitview::GitStatus::Unavailable;
+        context.git.changes_known = false;
+        let json: serde_json::Value = serde_json::from_str(&context.to_json()).unwrap();
+        assert!(json["observedNow"]["changedFiles"].is_null());
+        assert!(context.to_text().contains("Changes unavailable"));
+        assert!(!context.to_text().contains("0 changed"));
+    }
+
     fn bundle() -> Context {
         Context {
             project: PathBuf::from("/tmp/project"),
@@ -357,6 +369,8 @@ mod tests {
                 root: Some(PathBuf::from("/tmp/project")),
                 branch: Some("main".to_owned()),
                 changed_files: 0,
+                status: crate::gitview::GitStatus::Branch,
+                changes_known: true,
             },
             session: None,
             events: vec![Event {

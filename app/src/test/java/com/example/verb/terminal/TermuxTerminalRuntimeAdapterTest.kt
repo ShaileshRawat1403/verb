@@ -103,6 +103,37 @@ class TermuxTerminalRuntimeAdapterTest {
         assertEquals(9, adapter.appliedTextSizePx)
     }
 
+    /**
+     * The adapter lives for the process (`VerbTerminalSessionHolder`), but a TerminalView holds the
+     * Activity it was created in. Kept bound, that Activity outlived its own destruction. Measured
+     * on a Vivo I2202 with identical runs (two terminals, four rotations, then five minutes and
+     * forced GC): the steady state was 2 Activities with the view kept, 1 with it released.
+     */
+    @Test
+    fun `a view created in a destroyed activity is released`() {
+        val destroyed = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val bound = TermuxTerminalRuntimeAdapter(workingDir)
+        bound.bindTerminalView(TerminalView(destroyed, null))
+
+        bound.releaseTerminalView(destroyed)
+
+        assertNull("the adapter must not keep a destroyed activity reachable", bound.terminalView)
+    }
+
+    /** A view owned by a different, still-live Activity is left alone. */
+    @Test
+    fun `releasing for one activity leaves another activity's view bound`() {
+        val live = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val other = org.robolectric.Robolectric.buildActivity(android.app.Activity::class.java).setup().get()
+        val view = TerminalView(live, null)
+        val bound = TermuxTerminalRuntimeAdapter(workingDir)
+        bound.bindTerminalView(view)
+
+        bound.releaseTerminalView(other)
+
+        assertTrue(bound.terminalView === view)
+    }
+
     @Test
     fun `binding applies the previously persisted pixel size`() {
         storeTextSizePx(15)

@@ -208,6 +208,11 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
             pairs.mapNotNull { (id, session) -> session?.let { id to it } }.toMap()
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
+    val agentSessionHistory: StateFlow<Map<RuntimeProfileId, List<com.example.verb.session.VerbSession>>> =
+        combine(sessionCoordinators.map { (id, coordinator) -> coordinator.sessions.map { id to it } }) { pairs ->
+            pairs.toMap()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
+
     private val _projects = MutableStateFlow(projectRepository.list())
     val projects: StateFlow<List<VerbProject>> = _projects.asStateFlow()
     private val _selectedProject = MutableStateFlow(projectRepository.selected())
@@ -871,6 +876,12 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
      * again by hand next time.
      */
     fun launchAgent(command: String) {
+        val occupiedBy = com.example.verb.session.VerbTerminalSessionHolder.activeId.value
+            ?.let(com.example.verb.session.VerbTerminalSessionHolder::foregroundAgentOf)
+        if (occupiedBy != null) {
+            _terminalLaunchNotice.value = "This terminal is running $occupiedBy. Open another terminal first."
+            return
+        }
         val profile = RuntimeProfiles.all.firstOrNull { it.launchCommand == command }
         if (profile?.environment == ProfileEnvironment.AGENT_RUNTIME) {
             val status = _agentRuntimeStatus.value
@@ -1029,15 +1040,29 @@ class VerbViewModel(application: Application) : AndroidViewModel(application) {
 
     /** The Agents screen's Resume action once that agent's session is [com.example.verb.session.VerbSessionState.RECOVERABLE]. */
     fun resumeAgentSession(profileId: RuntimeProfileId) {
+        resumeAgentSessionInternal(profileId, null)
+    }
+
+    fun resumeExactAgentSession(profileId: RuntimeProfileId, productSessionId: String) {
+        resumeAgentSessionInternal(profileId, productSessionId)
+    }
+
+    private fun resumeAgentSessionInternal(profileId: RuntimeProfileId, productSessionId: String?) {
         val coordinator = sessionCoordinators[profileId] ?: return
         val activeId = com.example.verb.session.VerbTerminalSessionHolder.activeId.value ?: return
+        val occupiedBy = com.example.verb.session.VerbTerminalSessionHolder.foregroundAgentOf(activeId)
+        if (occupiedBy != null) {
+            _terminalLaunchNotice.value = "This terminal is running $occupiedBy. Open another terminal first."
+            return
+        }
         val concreteRuntime = com.example.verb.session.VerbTerminalSessionHolder.runtimeOf(activeId) ?: return
         openTerminal()
         returnTerminalToLocalUserland(profileId)
         viewModelScope.launch(Dispatchers.Main.immediate) {
             coordinator.resume(
                 sessionId = activeId,
-                runtime = concreteRuntime
+                runtime = concreteRuntime,
+                productSessionId = productSessionId
             )
         }
     }
