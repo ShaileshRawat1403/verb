@@ -135,6 +135,36 @@ fn reserve_launch<T>(
     Ok(Some((permit, start()?)))
 }
 
+/// Work that must happen only after a launched terminal is confirmed started (for example the spec
+/// record of an agent start). It runs once, after admission, and never for a refused launch.
+type AfterAdmission = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+/// The spec audit line for a confirmed agent start. A handoff's intent is recorded separately.
+fn spec_start_line(agent: &str, session: &str, continues_talk: bool) -> String {
+    format!(
+        "started {agent} on this spec (session {}){}",
+        &session[..session.len().min(8)],
+        if continues_talk {
+            " to continue the talk"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Runs the post-admission work for a terminal that is running. A failure is reported in the reply
+/// rather than failing the launch, so the running terminal stays tracked.
+fn after_admission(mut body: Value, after: Option<AfterAdmission>) -> Value {
+    if let Some(after) = after {
+        if let Err(error) = after() {
+            body["warning"] = json!(format!(
+                "The terminal is running, but its spec record could not be written: {error}"
+            ));
+        }
+    }
+    body
+}
+
 /// Every terminal launch answers through this. An external terminal's reply waits off the request
 /// loop for the execution boundary's verdict; any other terminal is answered at once. `body` is the
 /// route's own reply (for example a spec handoff note) and is sent only after admission.
@@ -144,6 +174,7 @@ fn launch_reply(
     generation: &Arc<AtomicU64>,
     session: &str,
     body: Value,
+    after: Option<AfterAdmission>,
     admitted: fn(i32) -> bool,
 ) -> Reply {
     let pending = terminals
@@ -152,7 +183,7 @@ fn launch_reply(
         .get(session)
         .and_then(|terminal| terminal.pending_admission);
     let Some(pid) = pending else {
-        return Reply::json(201, body);
+        return Reply::json(201, after_admission(body, after));
     };
     let terminals = Arc::clone(terminals);
     let generation = Arc::clone(generation);
@@ -162,7 +193,7 @@ fn launch_reply(
     reply.deferred = Some(Box::new(move || {
         let result = await_admission(&terminals, &id, pid, ADMISSION_WAIT, admitted);
         generation.fetch_add(1, Ordering::SeqCst);
-        result.map(|()| body.to_string().into_bytes())
+        result.map(|()| after_admission(body, after).to_string().into_bytes())
     }));
     reply
 }
@@ -1545,7 +1576,7 @@ impl WebHost {
                 return Ok(Reply::error(503, HOST_BUSY));
             };
             self.invalidate_state();
-            return Ok(self.launch_reply(permit, &session, json!({"sessionId": session})));
+            return Ok(self.launch_reply(permit, &session, json!({"sessionId": session}), None));
         }
         if method == &Method::Post && path == "/api/ask" {
             let input: AskRequest = read_json(request)?;
@@ -1956,25 +1987,35 @@ impl WebHost {
                 )?;
                 let spec = view.spec_id.ok_or("this talk is not on a spec")?;
                 let counter = Arc::clone(&self.background_requests);
-                let Some((permit, session)) = reserve_launch(&counter, || {
+                let Some((permit, (session, record))) = reserve_launch(&counter, || {
                     self.start_on_spec_with(&spec, "agy", Some(&conversation))
                 })?
                 else {
                     return Ok(Reply::error(503, HOST_BUSY));
                 };
                 self.invalidate_state();
-                Ok(self.launch_reply(permit, &session, json!({"sessionId": session})))
+                Ok(self.launch_reply(
+                    permit,
+                    &session,
+                    json!({"sessionId": session}),
+                    Some(record),
+                ))
             }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
                 let counter = Arc::clone(&self.background_requests);
-                let Some((permit, session)) =
+                let Some((permit, (session, record))) =
                     reserve_launch(&counter, || self.start_on_spec(id, &input.agent))?
                 else {
                     return Ok(Reply::error(503, HOST_BUSY));
                 };
                 self.invalidate_state();
-                Ok(self.launch_reply(permit, &session, json!({"sessionId": session})))
+                Ok(self.launch_reply(
+                    permit,
+                    &session,
+                    json!({"sessionId": session}),
+                    Some(record),
+                ))
             }
             ["api", "specs", id, "handoff"] if method == &Method::Post => {
                 let input: SpecHandoffRequest = read_json(request)?;
@@ -1985,7 +2026,9 @@ impl WebHost {
                     return Err("choose a supported agent".to_owned());
                 }
                 let counter = Arc::clone(&self.background_requests);
-                let Some((permit, (note, session))) = reserve_launch(&counter, || {
+                // The handoff note records intent when the request is accepted; the agent start is
+                // recorded separately, and only once its terminal is confirmed started.
+                let Some((permit, (note, (session, record)))) = reserve_launch(&counter, || {
                     let note = crate::specs::handoff(
                         &self.project,
                         id,
@@ -2003,6 +2046,7 @@ impl WebHost {
                     permit,
                     &session,
                     json!({"sessionId": session, "note": note}),
+                    Some(record),
                 ))
             }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
@@ -2244,17 +2288,19 @@ impl WebHost {
 
     /// Starts an agent (or a shell) on a spec and records it in the spec's audit trail, which is
     /// how the session board and Ask Verb know who worked on what.
-    fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<String, String> {
+    fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<(String, AfterAdmission), String> {
         self.start_on_spec_with(id, agent, None)
     }
 
     /// `conversation`: continue an Antigravity talk in its terminal instead of starting afresh.
+    /// Returns the launched session and the spec record of its start, which the caller runs only
+    /// once the terminal is confirmed started: a refused or timed-out launch records nothing.
     fn start_on_spec_with(
         &mut self,
         id: &str,
         agent: &str,
         conversation: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, AfterAdmission), String> {
         let (path, spec) = crate::specs::find(&self.project, id)?;
         // Every agent whose CLI can take an opening prompt gets the spec brief: as the first
         // argument for Claude, Codex and Gemini, through `-i` (run it, then stay interactive) for
@@ -2275,29 +2321,26 @@ impl WebHost {
             args,
             resume_id: None,
         })?;
-        crate::specs::record(
-            &path,
-            &self.actor(),
-            &format!(
-                "started {agent} on this spec (session {}){}",
-                &session[..session.len().min(8)],
-                if conversation.is_some() {
-                    " to continue the talk"
-                } else {
-                    ""
-                }
-            ),
-        )?;
-        Ok(session)
+        let actor = self.actor();
+        let line = spec_start_line(agent, &session, conversation.is_some());
+        let record: AfterAdmission = Box::new(move || crate::specs::record(&path, &actor, &line));
+        Ok((session, record))
     }
 
-    fn launch_reply(&self, permit: RequestPermit, session: &str, body: Value) -> Reply {
+    fn launch_reply(
+        &self,
+        permit: RequestPermit,
+        session: &str,
+        body: Value,
+        after: Option<AfterAdmission>,
+    ) -> Reply {
         launch_reply(
             permit,
             &self.terminals,
             &self.state_generation,
             session,
             body,
+            after,
             crate::isolation::admitted,
         )
     }
@@ -2566,8 +2609,10 @@ mod tests {
         true
     }
 
-    fn spec_handoff_reply(
+    fn spec_reply(
         terminal: WebTerminal,
+        body: Value,
+        after: Option<AfterAdmission>,
         admitted: fn(i32) -> bool,
     ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
         let terminals = Arc::new(std::sync::Mutex::new(HashMap::from([(
@@ -2582,10 +2627,155 @@ mod tests {
             &terminals,
             &generation,
             "spec",
-            json!({"sessionId": "spec", "note": "handoff note"}),
+            body,
+            after,
             admitted,
         );
         (reply, terminals)
+    }
+
+    fn spec_handoff_reply(
+        terminal: WebTerminal,
+        admitted: fn(i32) -> bool,
+    ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
+        spec_reply(
+            terminal,
+            json!({"sessionId": "spec", "note": "handoff note"}),
+            None,
+            admitted,
+        )
+    }
+
+    /// A spec start record that only counts how often it is written.
+    fn counted_record(fail: bool) -> (AfterAdmission, Arc<AtomicUsize>) {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&writes);
+        let record: AfterAdmission = Box::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            if fail {
+                Err("spec file is read-only".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        (record, writes)
+    }
+
+    /// Bodies of the three spec launch routes: agent, handoff and talk-to-terminal.
+    fn spec_route_bodies() -> [(&'static str, Value); 3] {
+        [
+            ("agent", json!({"sessionId": "spec"})),
+            (
+                "handoff",
+                json!({"sessionId": "spec", "note": "handoff note"}),
+            ),
+            ("talk", json!({"sessionId": "spec"})),
+        ]
+    }
+
+    #[test]
+    fn admitted_spec_launches_record_the_start_once_and_keep_their_body() {
+        for (route, body) in spec_route_bodies() {
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) = spec_reply(
+                bare_terminal(None, Some(4242)),
+                body.clone(),
+                Some(record),
+                always,
+            );
+            let sent = (reply.deferred.take().unwrap())().unwrap();
+            let sent: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(writes.load(Ordering::SeqCst), 1, "{route}");
+            assert_eq!(sent["sessionId"], "spec", "{route}");
+            assert_eq!(sent.get("note"), body.get("note"), "{route}");
+            assert!(sent.get("warning").is_none(), "{route}");
+            assert!(terminals.lock().unwrap()["spec"]
+                .pending_admission
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn refused_spec_launches_record_no_start() {
+        for (route, body) in spec_route_bodies() {
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) = spec_reply(refused_terminal(), body, Some(record), never);
+            let error = (reply.deferred.take().unwrap())().unwrap_err();
+            assert_eq!(error, TERMINAL_CAPACITY, "{route}");
+            assert_eq!(writes.load(Ordering::SeqCst), 0, "{route}");
+            assert!(terminals.lock().unwrap().is_empty(), "{route}");
+        }
+    }
+
+    #[test]
+    fn timed_out_spec_launches_record_no_start() {
+        // Run the three routes concurrently: each waits out the real admission deadline.
+        let runs: Vec<_> = spec_route_bodies()
+            .into_iter()
+            .map(|(route, body)| {
+                std::thread::spawn(move || {
+                    let (record, writes) = counted_record(false);
+                    let (mut reply, terminals) =
+                        spec_reply(bare_terminal(None, Some(4242)), body, Some(record), never);
+                    let error = (reply.deferred.take().unwrap())().unwrap_err();
+                    assert_eq!(error, TERMINAL_START_TIMEOUT, "{route}");
+                    assert_eq!(writes.load(Ordering::SeqCst), 0, "{route}");
+                    assert!(terminals.lock().unwrap().is_empty(), "{route}");
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_start_record_is_reported_and_the_running_terminal_stays_tracked() {
+        let (record, writes) = counted_record(true);
+        let (mut reply, terminals) = spec_reply(
+            bare_terminal(None, Some(4242)),
+            json!({"sessionId": "spec", "note": "handoff note"}),
+            Some(record),
+            always,
+        );
+        let sent = (reply.deferred.take().unwrap())().unwrap();
+        let sent: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(sent["sessionId"], "spec");
+        assert_eq!(sent["note"], "handoff note");
+        let warning = sent["warning"].as_str().unwrap();
+        assert!(
+            warning.contains("terminal is running") && warning.contains("read-only"),
+            "{warning}"
+        );
+        assert!(terminals.lock().unwrap()["spec"]
+            .pending_admission
+            .is_none());
+    }
+
+    #[test]
+    fn non_boundary_spec_launch_records_the_start_at_once() {
+        let (record, writes) = counted_record(false);
+        let (reply, _) = spec_reply(
+            bare_terminal(None, None),
+            json!({"sessionId": "spec"}),
+            Some(record),
+            never,
+        );
+        assert!(reply.deferred.is_none());
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn start_record_names_the_agent_and_marks_a_continued_talk() {
+        assert_eq!(
+            spec_start_line("codex", "0123456789abcdef", false),
+            "started codex on this spec (session 01234567)"
+        );
+        assert_eq!(
+            spec_start_line("agy", "abc", true),
+            "started agy on this spec (session abc) to continue the talk"
+        );
     }
 
     #[test]

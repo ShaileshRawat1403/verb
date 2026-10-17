@@ -496,7 +496,9 @@ export function initWorkbench(deps) {
         hasTerminal: true,
         terminal: { running: true, replayAvailable: true }, hostedHere: true,
       });
-      if (agent !== "shell") toast(`${agentDisplayName(agent)} started on spec ${spec.id}. Recorded in the audit trail.`);
+      // The terminal is running either way; only claim the audit record when it was written.
+      if (result.warning) toast(result.warning, "error");
+      else if (agent !== "shell") toast(`${agentDisplayName(agent)} started on spec ${spec.id}. Recorded in the audit trail.`);
       refreshSpecs();
     } catch (error) {
       toast(error.message, "error");
@@ -823,9 +825,11 @@ export function initWorkbench(deps) {
       const result = await api("POST", `/api/specs/${spec.id}/handoff`, { to, note: $("#handoff-note").value });
       closeDialog("handoff-dialog");
       deps.mountLaunchedSession({ id: result.sessionId, agent: to, isolated: false, state: "live", hasTerminal: true, terminal: { running: true, replayAvailable: true }, hostedHere: true });
-      toast(
-        `Handed off to ${agentDisplayName(to)}. The note is in the spec's Handoff notes${fromLive ? `; ${agentDisplayName(from)} is still running, end it when you're ready` : ""}.`,
-      );
+      if (result.warning) toast(result.warning, "error");
+      else
+        toast(
+          `Handed off to ${agentDisplayName(to)}. The note is in the spec's Handoff notes${fromLive ? `; ${agentDisplayName(from)} is still running, end it when you're ready` : ""}.`,
+        );
       await Promise.all([refreshSpecs(), refreshGit()]);
     } catch (error) {
       toast(error.message, "error");
