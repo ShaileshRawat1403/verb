@@ -56,11 +56,45 @@ pub(crate) fn capacity_message(text: &str) -> bool {
         || text.contains("Verb execution unavailable: busy")
 }
 
-/// Whether the external terminal client running as `pid` has been admitted by the controller.
-/// The receipt is written only after the controller issues a lease, so concurrent launches are
-/// decided by the controller rather than by a host-side count.
-pub(crate) fn admitted(pid: i32) -> bool {
-    external() && external::admitted(pid)
+/// One external terminal launch: the client Verb spawned, for which project and session, and when.
+/// The controller's receipt is accepted as this launch's admission only if it matches all of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Launch {
+    pub(crate) pid: i32,
+    /// The client's kernel start time, read right after spawn. A reused PID has another one.
+    pub(crate) started: Option<u64>,
+    /// Registered project id the client was asked to run in.
+    pub(crate) project: String,
+    pub(crate) session: String,
+    /// Taken before the client was spawned: its receipt cannot be older than this.
+    pub(crate) spawned_at: std::time::SystemTime,
+}
+
+/// The identity of an external terminal launch whose client runs as `pid`, or `None` when
+/// terminals do not cross the external boundary (they are then admitted at once).
+pub(crate) fn launch_identity(
+    pid: i32,
+    project: &Path,
+    session: &str,
+    spawned_at: std::time::SystemTime,
+) -> Option<Launch> {
+    external().then(|| Launch {
+        pid,
+        started: external::process_start(pid),
+        project: project
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        session: session.to_owned(),
+        spawned_at,
+    })
+}
+
+/// Whether the controller has admitted `launch`. The receipt is written only after the controller
+/// issues a lease, so concurrent launches are decided by the controller rather than by a host-side
+/// count; it must also belong to this launch, not merely to its PID.
+pub(crate) fn admitted(launch: &Launch) -> bool {
+    external() && external::admitted(launch)
 }
 
 fn account_profile() -> Result<Option<AccountProfile>, String> {
