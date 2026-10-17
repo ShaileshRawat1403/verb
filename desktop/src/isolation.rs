@@ -101,6 +101,12 @@ pub(crate) fn admitted(launch: &Launch) -> bool {
     external() && external::admitted(launch)
 }
 
+/// Whether the execution boundary has yet to confirm cleanup of the external terminal that ran as
+/// `pid` for `session`. Its slot stays reserved by the controller until it does.
+pub(crate) fn cleanup_unconfirmed(pid: i32, session: &str) -> bool {
+    external() && external::receipt_held(pid, session)
+}
+
 fn account_profile() -> Result<Option<AccountProfile>, String> {
     let Some(user) = std::env::var_os("VERB_AGENT_USER") else {
         return Ok(None);

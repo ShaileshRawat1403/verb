@@ -34,6 +34,9 @@ const TERMINAL_START_TIMEOUT: &str =
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
+const TERMINAL_CLEANUP_UNCONFIRMED: &str =
+    "The terminal ended, but the execution boundary has not \
+    confirmed its cleanup yet. Its slot stays reserved until it does.";
 const HOST_BUSY: &str = "desktop host is busy; retry shortly";
 const MAX_TERMINAL_CONNECTIONS: usize = 32;
 struct RequestPermit(Arc<AtomicUsize>);
@@ -134,18 +137,6 @@ fn await_admission(
     }
 }
 
-/// Reserves the worker that will answer a launch before `start` runs. A saturated host refuses the
-/// request instead of starting a terminal whose acknowledgement could never run (`Ok(None)`).
-fn reserve_launch<T>(
-    counter: &Arc<AtomicUsize>,
-    start: impl FnOnce() -> Result<T, String>,
-) -> Result<Option<(RequestPermit, T)>, String> {
-    let Some(permit) = RequestPermit::acquire(counter, MAX_BACKGROUND_REQUESTS) else {
-        return Ok(None);
-    };
-    Ok(Some((permit, start()?)))
-}
-
 /// Work that must happen only after a launched terminal is confirmed started (for example the spec
 /// record of an agent start). It runs once, after admission, and never for a refused launch.
 type AfterAdmission = Box<dyn FnOnce() -> Result<(), String> + Send>;
@@ -186,44 +177,63 @@ fn unconfirmed_start(mut body: Value, code: i32) -> Value {
     body
 }
 
-/// Every terminal launch answers through this. An external terminal's reply waits off the request
-/// loop for the execution boundary's verdict; any other terminal is answered at once. `body` is the
-/// route's own reply (for example a spec handoff note) and is sent only after admission.
+/// What a launch's `start` produces: the session, the route's own reply body (for example a spec
+/// handoff note, sent only after admission) and any work that must follow confirmed admission.
+type Started = (String, Value, Option<AfterAdmission>);
+
+/// Every terminal launch answers through this. `start` runs on the worker reserved here, never on the
+/// request loop: it may cross the execution boundary before the client exists, and an external
+/// terminal's answer then waits for the boundary's verdict. A saturated host refuses before `start`
+/// runs, so no terminal starts without a worker to acknowledge it.
 fn launch_reply(
-    permit: RequestPermit,
+    counter: &Arc<AtomicUsize>,
     terminals: &Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
     generation: &Arc<AtomicU64>,
+    start: impl FnOnce() -> Result<Started, String> + Send + 'static,
+    admitted: fn(&crate::isolation::Launch) -> bool,
+) -> Reply {
+    let Some(permit) = RequestPermit::acquire(counter, MAX_BACKGROUND_REQUESTS) else {
+        return Reply::error(503, HOST_BUSY);
+    };
+    let terminals = Arc::clone(terminals);
+    let generation = Arc::clone(generation);
+    let mut reply = Reply::json(201, Value::Null);
+    reply.permit = Some(permit);
+    reply.deferred = Some(Box::new(move || {
+        let (session, body, after) = start()?;
+        answer_launch(&terminals, &generation, &session, body, after, admitted)
+    }));
+    reply
+}
+
+/// The answer for a started terminal: at once when it does not cross the execution boundary,
+/// otherwise once the boundary admits or refuses it (or the wait times out).
+fn answer_launch(
+    terminals: &std::sync::Mutex<HashMap<String, WebTerminal>>,
+    generation: &AtomicU64,
     session: &str,
     body: Value,
     after: Option<AfterAdmission>,
     admitted: fn(&crate::isolation::Launch) -> bool,
-) -> Reply {
+) -> Result<Vec<u8>, String> {
     let pending = terminals
         .lock()
         .unwrap()
         .get(session)
         .and_then(|terminal| terminal.pending_admission.clone());
     let Some(launch) = pending else {
-        return Reply::json(201, after_admission(body, after));
+        return Ok(after_admission(body, after).to_string().into_bytes());
     };
-    let terminals = Arc::clone(terminals);
-    let generation = Arc::clone(generation);
-    let id = session.to_owned();
-    let mut reply = Reply::json(201, Value::Null);
-    reply.permit = Some(permit);
-    reply.deferred = Some(Box::new(move || {
-        let result = await_admission(&terminals, &id, &launch, ADMISSION_WAIT, admitted);
-        generation.fetch_add(1, Ordering::SeqCst);
-        result.map(|admission| {
-            match admission {
-                Admission::Confirmed => after_admission(body, after),
-                Admission::EndedUnconfirmed(code) => unconfirmed_start(body, code),
-            }
-            .to_string()
-            .into_bytes()
-        })
-    }));
-    reply
+    let result = await_admission(terminals, session, &launch, ADMISSION_WAIT, admitted);
+    generation.fetch_add(1, Ordering::SeqCst);
+    result.map(|admission| {
+        match admission {
+            Admission::Confirmed => after_admission(body, after),
+            Admission::EndedUnconfirmed(code) => unconfirmed_start(body, code),
+        }
+        .to_string()
+        .into_bytes()
+    })
 }
 
 /// Status and body for slow work that failed. A full execution boundary is temporary congestion
@@ -245,6 +255,27 @@ fn deferred_error(error: &str) -> (u16, Vec<u8>) {
         )
     } else {
         (400, json!({"error": error}).to_string().into_bytes())
+    }
+}
+
+/// Stops a terminal the request loop gave up on without holding the loop: its cleanup may wait on
+/// the execution boundary. One reaper thread, so a stalled controller holds one cleanup at a time.
+fn stop_in_background(hosted: Hosted) {
+    static REAPER: std::sync::OnceLock<std::sync::mpsc::Sender<Hosted>> =
+        std::sync::OnceLock::new();
+    let reaper = REAPER.get_or_init(|| {
+        let (sender, stops) = std::sync::mpsc::channel::<Hosted>();
+        std::thread::spawn(move || {
+            for hosted in stops {
+                if let Err(error) = hosted.stop() {
+                    eprintln!("Verb could not confirm a stopped web terminal: {error}");
+                }
+            }
+        });
+        sender
+    });
+    if let Err(std::sync::mpsc::SendError(hosted)) = reaper.send(hosted) {
+        let _ = hosted.stop();
     }
 }
 
@@ -374,7 +405,7 @@ impl WebTerminal {
         self.failure = Some(error);
         if let Some(hosted) = self.hosted.take() {
             self.final_screen = hosted.screen().contents_formatted();
-            let _ = hosted.stop();
+            stop_in_background(hosted);
         }
     }
 
@@ -541,6 +572,25 @@ impl crate::stream::StreamTerminalHandler for WebTerminalsManager {
     }
 }
 
+/// How long the owner's name for audit lines is used before it is read again from Git config.
+const OWNER_FRESH: Duration = Duration::from_secs(60);
+
+struct OwnerName {
+    name: String,
+    read_at: Instant,
+    refreshing: bool,
+}
+
+impl OwnerName {
+    fn read(name: String) -> Self {
+        Self {
+            name,
+            read_at: Instant::now(),
+            refreshing: false,
+        }
+    }
+}
+
 struct WebHost {
     background_requests: Arc<AtomicUsize>,
     terminal_connections: Arc<AtomicUsize>,
@@ -557,6 +607,7 @@ struct WebHost {
     terminals: Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
     phone_shares: HashMap<String, PhoneShare>,
     checks: Arc<std::sync::Mutex<ChecksCache>>,
+    owner: Arc<std::sync::Mutex<OwnerName>>,
     identity: project::ProjectIdentity,
     deployment: Value,
     state_cache: Arc<std::sync::Mutex<Option<StateCache>>>,
@@ -614,14 +665,6 @@ impl WebHost {
             }
             None => json!({"pending": true}),
         }
-    }
-
-    fn invalidate_checks(&self) {
-        let mut cache = self
-            .checks
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        cache.report = None;
     }
 }
 
@@ -873,6 +916,9 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         terminals: Arc::default(),
         phone_shares: HashMap::new(),
         checks: Arc::default(),
+        owner: Arc::new(std::sync::Mutex::new(OwnerName::read(
+            crate::specs::owner_name(project),
+        ))),
         identity,
         deployment: deployment_info(),
         background_requests: Arc::default(),
@@ -1117,8 +1163,26 @@ impl WebHost {
     fn actor(&self) -> String {
         match &self.access.token {
             Some(name) => format!("{name} (access token) via Verb web"),
-            None => crate::specs::actor(&self.project, "Verb web"),
+            None => format!("{} via Verb web", self.owner_name()),
         }
+    }
+
+    /// The owner's name for audit lines. Reading Git config can cross the execution boundary, so the
+    /// request loop only reads this cache: filled before the host serves, refreshed off the loop.
+    fn owner_name(&self) -> String {
+        let mut owner = self
+            .owner
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if owner.read_at.elapsed() >= OWNER_FRESH && !owner.refreshing {
+            owner.refreshing = true;
+            let (shared, project) = (Arc::clone(&self.owner), self.project.clone());
+            std::thread::spawn(move || {
+                let name = crate::specs::owner_name(&project);
+                *shared.lock().unwrap_or_else(|poison| poison.into_inner()) = OwnerName::read(name);
+            });
+        }
+        owner.name.clone()
     }
 
     fn authenticate_cf_access(&mut self, request: &Request) -> bool {
@@ -1567,18 +1631,20 @@ impl WebHost {
             return Ok(Reply::json(200, self.checks()));
         }
         if method == &Method::Post && path == "/api/good/mark" {
-            let mark = crate::good::mark(&self.project)?;
-            self.invalidate_checks();
-            self.invalidate_state();
-            return Ok(Reply::json(
-                200,
-                json!({
+            let (project, checks) = (self.project.clone(), Arc::clone(&self.checks));
+            return Ok(self.off_loop(true, move || {
+                let mark = crate::good::mark(&project)?;
+                checks
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .report = None;
+                Ok(json!({
                     "message": format!(
                         "Marked last-known-good at {}.",
                         mark.short_head().unwrap_or("this state")
                     )
-                }),
-            ));
+                }))
+            }));
         }
         if method == &Method::Post && path == "/api/tasks" {
             let input: TaskRequest = read_json(request)?;
@@ -1599,12 +1665,11 @@ impl WebHost {
         }
         if method == &Method::Post && path == "/api/terminals" {
             let input: LaunchRequest = read_json(request)?;
-            let counter = Arc::clone(&self.background_requests);
-            let Some((permit, session)) = reserve_launch(&counter, || self.launch(input))? else {
-                return Ok(Reply::error(503, HOST_BUSY));
-            };
-            self.invalidate_state();
-            return Ok(self.launch_reply(permit, &session, json!({"sessionId": session}), None));
+            let launcher = self.launcher();
+            return Ok(self.launch_reply(move || {
+                let session = launcher.launch(input)?;
+                Ok((session.clone(), json!({"sessionId": session}), None))
+            }));
         }
         if method == &Method::Post && path == "/api/ask" {
             let input: AskRequest = read_json(request)?;
@@ -1774,7 +1839,8 @@ impl WebHost {
             return Ok(Reply::json(200, json!(crate::hub::hub(&self.project))));
         }
         if method == &Method::Get && path == "/api/files" {
-            return Ok(Reply::json(200, json!(crate::hub::files(&self.project)?)));
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || Ok(json!(crate::hub::files(&project)?))));
         }
         if method == &Method::Get && path == "/api/files/preview" {
             let wanted = url
@@ -1783,10 +1849,10 @@ impl WebHost {
                 .and_then(|query| query.split('&').find_map(|pair| pair.strip_prefix("path=")))
                 .map(crate::shell::percent_decode)
                 .ok_or("which file?")?;
-            return Ok(Reply::json(
-                200,
-                json!(crate::hub::preview(&self.project, &wanted)?),
-            ));
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || {
+                Ok(json!(crate::hub::preview(&project, &wanted)?))
+            }));
         }
         if method == &Method::Post && path == "/api/hub/brief" {
             let input: BriefRequest = read_json(request)?;
@@ -1875,17 +1941,16 @@ impl WebHost {
         }
         if method == &Method::Post && path == "/api/git/commit" {
             let input: CommitRequest = read_json(request)?;
-            let sha = crate::specs::commit(
-                &self.project,
-                &input.message,
-                input.spec_id.as_deref(),
-                &self.actor(),
-            )?;
-            self.invalidate_state();
-            return Ok(Reply::json(
-                200,
-                json!({"sha": sha, "message": format!("Committed {sha}")}),
-            ));
+            let (project, actor) = (self.project.clone(), self.actor());
+            return Ok(self.off_loop(true, move || {
+                let sha = crate::specs::commit(
+                    &project,
+                    &input.message,
+                    input.spec_id.as_deref(),
+                    &actor,
+                )?;
+                Ok(json!({"sha": sha, "message": format!("Committed {sha}")}))
+            }));
         }
         let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
         match parts.as_slice() {
@@ -1904,29 +1969,23 @@ impl WebHost {
                     .iter()
                     .position(|s| *s == to)
                     .ok_or("unknown stage")?;
-                let ship = crate::specs::ship_state(&self.project, &spec);
-                Ok(Reply::json(
-                    200,
-                    json!({
-                        "warnings": crate::specs::stage_warnings(&self.project, &spec, target),
+                let project = self.project.clone();
+                Ok(self.off_loop(false, move || {
+                    let ship = crate::specs::ship_state(&project, &spec);
+                    Ok(json!({
+                        "warnings": crate::specs::stage_warnings(&project, &spec, target),
                         "ship": ship,
-                    }),
-                ))
+                    }))
+                }))
             }
             ["api", "specs", id, "stage"] if method == &Method::Post => {
                 let input: SpecStageRequest = read_json(request)?;
-                let (spec, warnings) = crate::specs::set_stage(
-                    &self.project,
-                    id,
-                    &input.stage,
-                    &input.note,
-                    &self.actor(),
-                )?;
-                self.invalidate_state();
-                Ok(Reply::json(
-                    200,
-                    json!({"spec": spec, "warnings": warnings}),
-                ))
+                let (project, actor, id) = (self.project.clone(), self.actor(), id.to_string());
+                Ok(self.off_loop(true, move || {
+                    let (spec, warnings) =
+                        crate::specs::set_stage(&project, &id, &input.stage, &input.note, &actor)?;
+                    Ok(json!({"spec": spec, "warnings": warnings}))
+                }))
             }
             ["api", "specs", id, "criteria", index] if method == &Method::Post => {
                 let input: SpecCriterionRequest = read_json(request)?;
@@ -1945,12 +2004,11 @@ impl WebHost {
                 Ok(Reply::json(200, json!(spec)))
             }
             ["api", "specs", id, "branch"] if method == &Method::Post => {
-                let branch = crate::specs::switch_to_branch(&self.project, id, &self.actor())?;
-                self.invalidate_state();
-                Ok(Reply::json(
-                    200,
-                    json!({"branch": branch, "message": format!("Now on {branch}")}),
-                ))
+                let (project, actor, id) = (self.project.clone(), self.actor(), id.to_string());
+                Ok(self.off_loop(true, move || {
+                    let branch = crate::specs::switch_to_branch(&project, &id, &actor)?;
+                    Ok(json!({"branch": branch, "message": format!("Now on {branch}")}))
+                }))
             }
             ["api", "specs", id, "talk"] if method == &Method::Post => {
                 // A talk with Antigravity on this spec, through agy's JSON mode (crate::talk).
@@ -2014,36 +2072,20 @@ impl WebHost {
                     "Antigravity has not started this conversation yet; wait for its first reply",
                 )?;
                 let spec = view.spec_id.ok_or("this talk is not on a spec")?;
-                let counter = Arc::clone(&self.background_requests);
-                let Some((permit, (session, record))) = reserve_launch(&counter, || {
-                    self.start_on_spec_with(&spec, "agy", Some(&conversation))
-                })?
-                else {
-                    return Ok(Reply::error(503, HOST_BUSY));
-                };
-                self.invalidate_state();
-                Ok(self.launch_reply(
-                    permit,
-                    &session,
-                    json!({"sessionId": session}),
-                    Some(record),
-                ))
+                let launcher = self.launcher();
+                Ok(self.launch_reply(move || {
+                    let (session, record) =
+                        launcher.start_on_spec_with(&spec, "agy", Some(&conversation))?;
+                    Ok((session.clone(), json!({"sessionId": session}), Some(record)))
+                }))
             }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
-                let counter = Arc::clone(&self.background_requests);
-                let Some((permit, (session, record))) =
-                    reserve_launch(&counter, || self.start_on_spec(id, &input.agent))?
-                else {
-                    return Ok(Reply::error(503, HOST_BUSY));
-                };
-                self.invalidate_state();
-                Ok(self.launch_reply(
-                    permit,
-                    &session,
-                    json!({"sessionId": session}),
-                    Some(record),
-                ))
+                let (launcher, id) = (self.launcher(), id.to_string());
+                Ok(self.launch_reply(move || {
+                    let (session, record) = launcher.start_on_spec(&id, &input.agent)?;
+                    Ok((session.clone(), json!({"sessionId": session}), Some(record)))
+                }))
             }
             ["api", "specs", id, "handoff"] if method == &Method::Post => {
                 let input: SpecHandoffRequest = read_json(request)?;
@@ -2053,29 +2095,21 @@ impl WebHost {
                 if !SPEC_AGENTS.contains(&input.to.as_str()) {
                     return Err("choose a supported agent".to_owned());
                 }
-                let counter = Arc::clone(&self.background_requests);
+                let (launcher, id) = (self.launcher(), id.to_string());
                 // The handoff note records intent when the request is accepted; the agent start is
                 // recorded separately, and only once its terminal is confirmed started.
-                let Some((permit, (note, (session, record)))) = reserve_launch(&counter, || {
+                Ok(self.launch_reply(move || {
                     let note = crate::specs::handoff(
-                        &self.project,
-                        id,
+                        &launcher.project,
+                        &id,
                         &input.to,
                         &input.note,
-                        &self.actor(),
+                        &launcher.actor,
                     )?;
-                    Ok((note, self.start_on_spec(id, &input.to)?))
-                })?
-                else {
-                    return Ok(Reply::error(503, HOST_BUSY));
-                };
-                self.invalidate_state();
-                Ok(self.launch_reply(
-                    permit,
-                    &session,
-                    json!({"sessionId": session, "note": note}),
-                    Some(record),
-                ))
+                    let (session, record) = launcher.start_on_spec(&id, &input.to)?;
+                    let body = json!({"sessionId": session, "note": note});
+                    Ok((session, body, Some(record)))
+                }))
             }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
                 let revision = workbench::handoff_revision(&self.project, id)?;
@@ -2255,18 +2289,38 @@ impl WebHost {
                 Ok(Reply::json(200, json!({"ok": true})))
             }
             ["api", "terminals", id] if method == &Method::Delete => {
-                self.phone_shares.remove(*id);
+                // Stopping may wait on the execution boundary: do it on a worker, reserved before
+                // anything changes so a saturated host refuses without losing track of the terminal.
+                let Some(permit) =
+                    RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 let mut terminal = self
                     .terminals
                     .lock()
                     .unwrap()
                     .remove(*id)
                     .ok_or("terminal is not hosted here")?;
-                if let Some(hosted) = terminal.hosted.take() {
-                    hosted.stop()?;
-                }
+                self.phone_shares.remove(*id);
                 self.invalidate_state();
-                Ok(Reply::json(200, json!({"ok": true})))
+                let hosted = terminal.hosted.take();
+                let generation = Arc::clone(&self.state_generation);
+                let mut reply = Reply::json(200, Value::Null);
+                reply.permit = Some(permit);
+                reply.deferred = Some(Box::new(move || {
+                    let mut body = json!({"ok": true});
+                    if let Some(hosted) = hosted {
+                        let (pid, session) = (hosted.pid(), hosted.session.id.clone());
+                        hosted.stop()?;
+                        if crate::isolation::cleanup_unconfirmed(pid, &session) {
+                            body["warning"] = json!(TERMINAL_CLEANUP_UNCONFIRMED);
+                        }
+                    }
+                    generation.fetch_add(1, Ordering::SeqCst);
+                    Ok(body.to_string().into_bytes())
+                }));
+                Ok(reply)
             }
             ["api", "sessions", "clear-ended"] if method == &Method::Post => {
                 let records = crate::read_session_records()?;
@@ -2314,10 +2368,99 @@ impl WebHost {
         }
     }
 
+    fn launcher(&self) -> Launcher {
+        Launcher {
+            project: self.project.clone(),
+            project_id: self.project_id.clone(),
+            identity: self.identity.clone(),
+            terminals: Arc::clone(&self.terminals),
+            generation: Arc::clone(&self.state_generation),
+            actor: self.actor(),
+        }
+    }
+
+    /// Answers `work` off the request loop, on a bounded worker: anything that may cross the
+    /// execution boundary (Git, file lists) must not hold the loop that serves health, workspace
+    /// reads and live terminal output. A change to project state is announced once `work` is done.
+    fn off_loop(
+        &self,
+        changes_state: bool,
+        work: impl FnOnce() -> Result<Value, String> + Send + 'static,
+    ) -> Reply {
+        let generation = changes_state.then(|| Arc::clone(&self.state_generation));
+        let mut reply = Reply::json(200, Value::Null);
+        reply.deferred = Some(Box::new(move || {
+            let result = work();
+            if let Some(generation) = generation {
+                generation.fetch_add(1, Ordering::SeqCst);
+            }
+            result.map(|value| value.to_string().into_bytes())
+        }));
+        reply
+    }
+
+    fn launch_reply(
+        &self,
+        start: impl FnOnce() -> Result<Started, String> + Send + 'static,
+    ) -> Reply {
+        launch_reply(
+            &self.background_requests,
+            &self.terminals,
+            &self.state_generation,
+            start,
+            crate::isolation::admitted,
+        )
+    }
+
+    fn invalidate_state(&self) {
+        self.state_generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn workspace(&self) -> Value {
+        let terminals = self.terminals.lock().unwrap();
+        let sessions = terminals
+            .values()
+            .filter(|terminal| terminal.pending_admission.is_none())
+            .filter_map(|terminal| {
+                let hosted = terminal.hosted.as_ref()?;
+                let session = &hosted.session;
+                Some(json!({"id": session.id, "agent": session.display_agent(),
+                "state": "live", "isolated": session.project_id != self.identity.anchor,
+                "hostedHere": true, "hasTerminal": true, "terminal": terminal_status(Some(true)), "canResume": false, "attention": 0}))
+            })
+            .collect::<Vec<_>>();
+        json!({"project": {"id": self.project_id, "name": self.identity.anchor.file_name()
+            .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+            "anchor": self.identity.anchor, "workspace": self.project,
+            "branch": null, "gitStatus": "loading", "changedFiles": null},
+            "deployment": self.deployment, "sessions": sessions,
+            "terminalStates": terminals.iter().filter(|(_, terminal)| terminal.pending_admission.is_none()).map(|(id, terminal)|
+                (id.clone(), terminal_status(Some(terminal.hosted.is_some()))))
+                .collect::<serde_json::Map<String, Value>>(),
+            "tasks": [], "memory": ""})
+    }
+}
+
+/// What starting a terminal needs from the host, detached from the request loop. A launch can
+/// cross the execution boundary before its client even starts (Git for a handoff note, an isolated
+/// checkout), so it runs on the worker that later answers it, never on the loop that serves health,
+/// workspace reads and live terminal output.
+#[derive(Clone)]
+struct Launcher {
+    project: PathBuf,
+    project_id: String,
+    identity: project::ProjectIdentity,
+    terminals: Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
+    generation: Arc<AtomicU64>,
+    /// Who asked, resolved while the request was authenticated.
+    actor: String,
+}
+
+impl Launcher {
     /// Starts an agent (or a shell) on a spec. The returned action records the start in the spec's
     /// audit trail (how the session board and Ask Verb know who worked on what); callers run it only
     /// after the terminal is confirmed started.
-    fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<(String, AfterAdmission), String> {
+    fn start_on_spec(&self, id: &str, agent: &str) -> Result<(String, AfterAdmission), String> {
         self.start_on_spec_with(id, agent, None)
     }
 
@@ -2325,7 +2468,7 @@ impl WebHost {
     /// Returns the launched session and the spec record of its start, which the caller runs only
     /// once the terminal is confirmed started: a refused or timed-out launch records nothing.
     fn start_on_spec_with(
-        &mut self,
+        &self,
         id: &str,
         agent: &str,
         conversation: Option<&str>,
@@ -2350,31 +2493,13 @@ impl WebHost {
             args,
             resume_id: None,
         })?;
-        let actor = self.actor();
+        let actor = self.actor.clone();
         let line = spec_start_line(agent, &session, conversation.is_some());
         let record: AfterAdmission = Box::new(move || crate::specs::record(&path, &actor, &line));
         Ok((session, record))
     }
 
-    fn launch_reply(
-        &self,
-        permit: RequestPermit,
-        session: &str,
-        body: Value,
-        after: Option<AfterAdmission>,
-    ) -> Reply {
-        launch_reply(
-            permit,
-            &self.terminals,
-            &self.state_generation,
-            session,
-            body,
-            after,
-            crate::isolation::admitted,
-        )
-    }
-
-    fn launch(&mut self, input: LaunchRequest) -> Result<String, String> {
+    fn launch(&self, input: LaunchRequest) -> Result<String, String> {
         if input.args.len() > 32 || input.args.iter().any(|arg| arg.len() > 4096) {
             return Err("too many or oversized agent arguments".to_owned());
         }
@@ -2493,36 +2618,8 @@ impl WebHost {
             .lock()
             .unwrap()
             .insert(id.clone(), WebTerminal::new(hosted, sink, pending));
-        self.invalidate_state();
+        self.generation.fetch_add(1, Ordering::SeqCst);
         Ok(id)
-    }
-
-    fn invalidate_state(&self) {
-        self.state_generation.fetch_add(1, Ordering::SeqCst);
-    }
-
-    fn workspace(&self) -> Value {
-        let terminals = self.terminals.lock().unwrap();
-        let sessions = terminals
-            .values()
-            .filter(|terminal| terminal.pending_admission.is_none())
-            .filter_map(|terminal| {
-                let hosted = terminal.hosted.as_ref()?;
-                let session = &hosted.session;
-                Some(json!({"id": session.id, "agent": session.display_agent(),
-                "state": "live", "isolated": session.project_id != self.identity.anchor,
-                "hostedHere": true, "hasTerminal": true, "terminal": terminal_status(Some(true)), "canResume": false, "attention": 0}))
-            })
-            .collect::<Vec<_>>();
-        json!({"project": {"id": self.project_id, "name": self.identity.anchor.file_name()
-            .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
-            "anchor": self.identity.anchor, "workspace": self.project,
-            "branch": null, "gitStatus": "loading", "changedFiles": null},
-            "deployment": self.deployment, "sessions": sessions,
-            "terminalStates": terminals.iter().filter(|(_, terminal)| terminal.pending_admission.is_none()).map(|(id, terminal)|
-                (id.clone(), terminal_status(Some(terminal.hosted.is_some()))))
-                .collect::<serde_json::Map<String, Value>>(),
-            "tasks": [], "memory": ""})
     }
 }
 
@@ -2662,14 +2759,11 @@ mod tests {
         )])));
         let generation = Arc::new(AtomicU64::new(0));
         let counter = Arc::new(AtomicUsize::new(0));
-        let permit = RequestPermit::acquire(&counter, MAX_BACKGROUND_REQUESTS).unwrap();
         let reply = launch_reply(
-            permit,
+            &counter,
             &terminals,
             &generation,
-            "spec",
-            body,
-            after,
+            move || Ok(("spec".to_owned(), body, after)),
             admitted,
         );
         (reply, terminals)
@@ -2869,15 +2963,17 @@ mod tests {
     }
 
     #[test]
-    fn non_boundary_spec_launch_records_the_start_at_once() {
+    fn non_boundary_spec_launch_records_the_start_without_waiting() {
         let (record, writes) = counted_record(false);
-        let (reply, _) = spec_reply(
+        let (mut reply, _) = spec_reply(
             bare_terminal(None, None),
             json!({"sessionId": "spec"}),
             Some(record),
             never,
         );
-        assert!(reply.deferred.is_none());
+        let started = Instant::now();
+        (reply.deferred.take().unwrap())().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
         assert_eq!(writes.load(Ordering::SeqCst), 1);
     }
 
@@ -2920,25 +3016,34 @@ mod tests {
     #[test]
     fn saturated_workers_refuse_a_launch_before_any_process_starts() {
         let counter = Arc::new(AtomicUsize::new(0));
+        let terminals = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let generation = Arc::new(AtomicU64::new(0));
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let start = |started: &Arc<std::sync::atomic::AtomicBool>| {
+            let started = Arc::clone(started);
+            move || {
+                started.store(true, Ordering::SeqCst);
+                Ok(("t".to_owned(), json!({"sessionId": "t"}), None))
+            }
+        };
         let held: Vec<_> = (0..MAX_BACKGROUND_REQUESTS)
             .map(|_| RequestPermit::acquire(&counter, MAX_BACKGROUND_REQUESTS).unwrap())
             .collect();
-        let mut started = false;
-        let refused = reserve_launch(&counter, || {
-            started = true;
-            Ok("t")
-        })
-        .unwrap();
-        assert!(refused.is_none());
+        let refused = launch_reply(&counter, &terminals, &generation, start(&started), never);
+        assert_eq!(refused.status, 503);
+        assert!(refused.deferred.is_none());
         assert!(
-            !started,
+            !started.load(Ordering::SeqCst),
             "no terminal may start without a worker to acknowledge it"
         );
         drop(held);
-        let (permit, session) = reserve_launch(&counter, || Ok("t")).unwrap().unwrap();
-        assert_eq!(session, "t");
+        let mut reply = launch_reply(&counter, &terminals, &generation, start(&started), never);
         assert_eq!(counter.load(Ordering::Acquire), 1);
-        drop(permit);
+        // The start itself runs on that worker, never on the request loop.
+        assert!(!started.load(Ordering::SeqCst));
+        (reply.deferred.take().unwrap())().unwrap();
+        assert!(started.load(Ordering::SeqCst));
+        drop(reply);
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
@@ -2949,10 +3054,14 @@ mod tests {
     }
 
     #[test]
-    fn non_external_launch_is_answered_at_once() {
-        let (reply, _) = spec_handoff_reply(bare_terminal(None, None), never);
-        assert!(reply.deferred.is_none());
+    fn non_external_launch_is_answered_without_an_admission_wait() {
+        let (mut reply, _) = spec_handoff_reply(bare_terminal(None, None), never);
         assert_eq!(reply.status, 201);
+        let started = Instant::now();
+        let body: Value =
+            serde_json::from_slice(&(reply.deferred.take().unwrap())().unwrap()).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert_eq!(body["note"], "handoff note");
     }
 
     fn refused_terminal() -> WebTerminal {

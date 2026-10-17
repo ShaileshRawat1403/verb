@@ -51,6 +51,8 @@ while [ $# -gt 0 ]; do
 done
 echo "launch $$ $mode $session" >> "$root/log"
 if [ "$mode" != terminal ]; then
+  # Background jobs (Git, file lists) never get a lease here; a stalled controller holds them.
+  if [ -f "$root/pipes-stall" ]; then sleep "$(cat "$root/pipes-stall")"; fi
   echo "Verb execution connection failed; check the candidate controller." >&2
   exit 126
 fi
@@ -375,4 +377,118 @@ fn talks_cannot_reach_a_provider_through_the_boundary() {
     assert!(!marker.exists(), "the provider stand-in ran");
     assert!(host.client_pids().is_empty());
     let _ = fs::remove_dir_all(fixtures);
+}
+
+/// Times `request` while `stalled` is in flight on another connection.
+fn timed_during(
+    host: &Host,
+    stalled: impl FnOnce(&Host) + Send,
+    probes: &[(&str, String)],
+) -> Vec<(String, u16, Duration)> {
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| stalled(host));
+        // Let the stalled request reach the host first.
+        std::thread::sleep(Duration::from_millis(400));
+        let mut timings = Vec::new();
+        for (method, path) in probes {
+            let started = Instant::now();
+            let (status, _) = host.request(method, path, None);
+            timings.push((path.clone(), status, started.elapsed()));
+        }
+        worker.join().unwrap();
+        timings
+    })
+}
+
+fn assert_prompt(timings: &[(String, u16, Duration)]) {
+    for (path, status, took) in timings {
+        if std::env::var_os("VERB_PRINT_TIMINGS").is_some() {
+            eprintln!("{path}: {status} in {took:?}");
+        }
+        assert_eq!(*status, 200, "{path}");
+        assert!(
+            *took < Duration::from_millis(1000),
+            "{path} took {took:?} while the boundary was stalled"
+        );
+    }
+}
+
+#[test]
+fn a_stalled_boundary_stop_does_not_freeze_health_workspace_or_terminal_output() {
+    let host = Host::start("admit");
+    let (_, first) = host.request("POST", "/api/terminals", shell());
+    let (_, second) = host.request("POST", "/api/terminals", shell());
+    let first = first["sessionId"].as_str().unwrap().to_owned();
+    let second = second["sessionId"].as_str().unwrap().to_owned();
+    fs::write(host.root.join("boundary/stop-stall"), "4").unwrap();
+    let timings = timed_during(
+        &host,
+        |host| {
+            let (status, body) = host.request("DELETE", &format!("/api/terminals/{first}"), None);
+            // Cleanup the boundary did not confirm is reported, never claimed.
+            assert_eq!(status, 200, "{body}");
+            assert!(
+                body["warning"]
+                    .as_str()
+                    .is_some_and(|warning| warning.contains("has not confirmed its cleanup")),
+                "{body}"
+            );
+        },
+        &[
+            ("GET", "/healthz".to_owned()),
+            ("GET", "/api/workspace".to_owned()),
+            ("GET", format!("/api/terminals/{second}/output?after=0")),
+        ],
+    );
+    assert_prompt(&timings);
+}
+
+#[test]
+fn a_stalled_background_job_does_not_freeze_health_workspace_or_terminal_output() {
+    let host = Host::start("admit");
+    let (_, terminal) = host.request("POST", "/api/terminals", shell());
+    let terminal = terminal["sessionId"].as_str().unwrap().to_owned();
+    fs::write(host.root.join("boundary/pipes-stall"), "4").unwrap();
+    let timings = timed_during(
+        &host,
+        |host| {
+            host.request("GET", "/api/files", None);
+        },
+        &[
+            ("GET", "/healthz".to_owned()),
+            ("GET", "/api/workspace".to_owned()),
+            ("GET", format!("/api/terminals/{terminal}/output?after=0")),
+        ],
+    );
+    assert_prompt(&timings);
+}
+
+#[test]
+fn a_stalled_launch_does_not_freeze_health_workspace_or_terminal_output() {
+    let host = Host::start("admit");
+    let (_, terminal) = host.request("POST", "/api/terminals", shell());
+    let terminal = terminal["sessionId"].as_str().unwrap().to_owned();
+    let spec = host.spec();
+    // The handoff note's Git queries stall at the boundary, then admission never comes.
+    fs::write(host.root.join("boundary/pipes-stall"), "2").unwrap();
+    host.behave("hang");
+    let timings = timed_during(
+        &host,
+        |host| {
+            let (status, body) = host.request(
+                "POST",
+                &format!("/api/specs/{spec}/handoff"),
+                Some(json!({"to": "shell", "note": "stalled handoff"})),
+            );
+            assert_eq!(status, 503, "{body}");
+            assert_eq!(body["code"], "startup_timeout", "{body}");
+        },
+        &[
+            ("GET", "/healthz".to_owned()),
+            ("GET", "/api/workspace".to_owned()),
+            ("GET", format!("/api/terminals/{terminal}/output?after=0")),
+        ],
+    );
+    assert_prompt(&timings);
+    assert_eq!(host.listed(), vec![terminal]);
 }
