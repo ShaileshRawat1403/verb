@@ -2232,7 +2232,8 @@ fn talk_continues_in_a_terminal_and_records_the_start_once() {
     assert!(reply.get("warning").is_none(), "{reply}");
     let session = reply["sessionId"].as_str().unwrap().to_owned();
     for _ in 0..50 {
-        if launched.exists() {
+        // The file exists as soon as the shell opens it; wait for the arguments themselves.
+        if fs::read_to_string(&launched).is_ok_and(|args| !args.trim().is_empty()) {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
