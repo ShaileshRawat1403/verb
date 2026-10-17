@@ -34,6 +34,7 @@ const TERMINAL_START_TIMEOUT: &str =
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
+const HOST_BUSY: &str = "desktop host is busy; retry shortly";
 const MAX_TERMINAL_CONNECTIONS: usize = 32;
 struct RequestPermit(Arc<AtomicUsize>);
 impl RequestPermit {
@@ -122,10 +123,23 @@ fn await_admission(
     }
 }
 
+/// Reserves the worker that will answer a launch before `start` runs. A saturated host refuses the
+/// request instead of starting a terminal whose acknowledgement could never run (`Ok(None)`).
+fn reserve_launch<T>(
+    counter: &Arc<AtomicUsize>,
+    start: impl FnOnce() -> Result<T, String>,
+) -> Result<Option<(RequestPermit, T)>, String> {
+    let Some(permit) = RequestPermit::acquire(counter, MAX_BACKGROUND_REQUESTS) else {
+        return Ok(None);
+    };
+    Ok(Some((permit, start()?)))
+}
+
 /// Every terminal launch answers through this. An external terminal's reply waits off the request
 /// loop for the execution boundary's verdict; any other terminal is answered at once. `body` is the
 /// route's own reply (for example a spec handoff note) and is sent only after admission.
 fn launch_reply(
+    permit: RequestPermit,
     terminals: &Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
     generation: &Arc<AtomicU64>,
     session: &str,
@@ -144,6 +158,7 @@ fn launch_reply(
     let generation = Arc::clone(generation);
     let id = session.to_owned();
     let mut reply = Reply::json(201, Value::Null);
+    reply.permit = Some(permit);
     reply.deferred = Some(Box::new(move || {
         let result = await_admission(&terminals, &id, pid, ADMISSION_WAIT, admitted);
         generation.fetch_add(1, Ordering::SeqCst);
@@ -704,6 +719,8 @@ struct Reply {
     state_job: Option<StateJob>,
     /// Slow, read-only work answered off the request loop, which also pumps live terminals.
     deferred: Option<DeferredWork>,
+    /// A worker permit reserved before the request had side effects (a terminal launch).
+    permit: Option<RequestPermit>,
 }
 
 impl Reply {
@@ -716,6 +733,7 @@ impl Reply {
             cache_control: None,
             state_job: None,
             deferred: None,
+            permit: None,
         }
     }
 
@@ -732,6 +750,7 @@ impl Reply {
             cache_control: None,
             state_job: None,
             deferred: None,
+            permit: None,
         }
     }
 
@@ -744,6 +763,7 @@ impl Reply {
             cache_control: None,
             state_job: None,
             deferred: None,
+            permit: None,
         }
     }
 }
@@ -1279,14 +1299,13 @@ impl WebHost {
             let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         }
         let mut reply = self.dispatch(&mut request);
-        let permit = if reply.deferred.is_some() || reply.state_job.is_some() {
+        let permit = if let Some(permit) = reply.permit.take() {
+            Some(permit)
+        } else if reply.deferred.is_some() || reply.state_job.is_some() {
             let Some(permit) =
                 RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
             else {
-                send_reply(
-                    request,
-                    Reply::error(503, "desktop host is busy; retry shortly"),
-                );
+                send_reply(request, Reply::error(503, HOST_BUSY));
                 return;
             };
             Some(permit)
@@ -1521,9 +1540,12 @@ impl WebHost {
         }
         if method == &Method::Post && path == "/api/terminals" {
             let input: LaunchRequest = read_json(request)?;
-            let session = self.launch(input)?;
+            let counter = Arc::clone(&self.background_requests);
+            let Some((permit, session)) = reserve_launch(&counter, || self.launch(input))? else {
+                return Ok(Reply::error(503, HOST_BUSY));
+            };
             self.invalidate_state();
-            return Ok(self.launch_reply(&session, json!({"sessionId": session})));
+            return Ok(self.launch_reply(permit, &session, json!({"sessionId": session})));
         }
         if method == &Method::Post && path == "/api/ask" {
             let input: AskRequest = read_json(request)?;
@@ -1933,15 +1955,26 @@ impl WebHost {
                     "Antigravity has not started this conversation yet; wait for its first reply",
                 )?;
                 let spec = view.spec_id.ok_or("this talk is not on a spec")?;
-                let session = self.start_on_spec_with(&spec, "agy", Some(&conversation))?;
+                let counter = Arc::clone(&self.background_requests);
+                let Some((permit, session)) = reserve_launch(&counter, || {
+                    self.start_on_spec_with(&spec, "agy", Some(&conversation))
+                })?
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 self.invalidate_state();
-                Ok(self.launch_reply(&session, json!({"sessionId": session})))
+                Ok(self.launch_reply(permit, &session, json!({"sessionId": session})))
             }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
-                let session = self.start_on_spec(id, &input.agent)?;
+                let counter = Arc::clone(&self.background_requests);
+                let Some((permit, session)) =
+                    reserve_launch(&counter, || self.start_on_spec(id, &input.agent))?
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 self.invalidate_state();
-                Ok(self.launch_reply(&session, json!({"sessionId": session})))
+                Ok(self.launch_reply(permit, &session, json!({"sessionId": session})))
             }
             ["api", "specs", id, "handoff"] if method == &Method::Post => {
                 let input: SpecHandoffRequest = read_json(request)?;
@@ -1951,16 +1984,26 @@ impl WebHost {
                 if !SPEC_AGENTS.contains(&input.to.as_str()) {
                     return Err("choose a supported agent".to_owned());
                 }
-                let note = crate::specs::handoff(
-                    &self.project,
-                    id,
-                    &input.to,
-                    &input.note,
-                    &self.actor(),
-                )?;
-                let session = self.start_on_spec(id, &input.to)?;
+                let counter = Arc::clone(&self.background_requests);
+                let Some((permit, (note, session))) = reserve_launch(&counter, || {
+                    let note = crate::specs::handoff(
+                        &self.project,
+                        id,
+                        &input.to,
+                        &input.note,
+                        &self.actor(),
+                    )?;
+                    Ok((note, self.start_on_spec(id, &input.to)?))
+                })?
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 self.invalidate_state();
-                Ok(self.launch_reply(&session, json!({"sessionId": session, "note": note})))
+                Ok(self.launch_reply(
+                    permit,
+                    &session,
+                    json!({"sessionId": session, "note": note}),
+                ))
             }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
                 let revision = workbench::handoff_revision(&self.project, id)?;
@@ -2248,8 +2291,9 @@ impl WebHost {
         Ok(session)
     }
 
-    fn launch_reply(&self, session: &str, body: Value) -> Reply {
+    fn launch_reply(&self, permit: RequestPermit, session: &str, body: Value) -> Reply {
         launch_reply(
+            permit,
             &self.terminals,
             &self.state_generation,
             session,
@@ -2531,7 +2575,10 @@ mod tests {
             terminal,
         )])));
         let generation = Arc::new(AtomicU64::new(0));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let permit = RequestPermit::acquire(&counter, MAX_BACKGROUND_REQUESTS).unwrap();
         let reply = launch_reply(
+            permit,
             &terminals,
             &generation,
             "spec",
@@ -2563,6 +2610,37 @@ mod tests {
         let error = (reply.deferred.take().unwrap())().unwrap_err();
         assert_eq!(error, TERMINAL_CAPACITY);
         assert!(terminals.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn saturated_workers_refuse_a_launch_before_any_process_starts() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let held: Vec<_> = (0..MAX_BACKGROUND_REQUESTS)
+            .map(|_| RequestPermit::acquire(&counter, MAX_BACKGROUND_REQUESTS).unwrap())
+            .collect();
+        let mut started = false;
+        let refused = reserve_launch(&counter, || {
+            started = true;
+            Ok("t")
+        })
+        .unwrap();
+        assert!(refused.is_none());
+        assert!(
+            !started,
+            "no terminal may start without a worker to acknowledge it"
+        );
+        drop(held);
+        let (permit, session) = reserve_launch(&counter, || Ok("t")).unwrap().unwrap();
+        assert_eq!(session, "t");
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        drop(permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_reserved_launch_worker_travels_with_the_deferred_reply() {
+        let (reply, _) = spec_handoff_reply(bare_terminal(None, Some(4242)), always);
+        assert!(reply.permit.is_some() && reply.deferred.is_some());
     }
 
     #[test]
