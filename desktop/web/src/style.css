@@ -1730,6 +1730,30 @@ body {
   background: var(--danger-bg);
   color: var(--text);
 }
+.cleanup-notice {
+  position: fixed;
+  z-index: 100;
+  left: 22px;
+  bottom: 20px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--text);
+  padding: 13px 16px;
+  border-radius: 10px;
+  box-shadow: 0 15px 40px color-mix(in srgb, var(--shadow) 53%, transparent);
+  font-size: 12px;
+  max-width: min(460px, calc(100vw - 44px));
+}
+.cleanup-notice[hidden] {
+  display: none;
+}
+.cleanup-notice ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
 .locked {
   min-height: 100vh;
   display: flex;
