@@ -65,14 +65,26 @@ struct OutputChunk {
     bytes: Vec<u8>,
 }
 
+/// How an external terminal's start resolved, short of refusal or timeout (which are errors).
+#[derive(Debug, PartialEq, Eq)]
+enum Admission {
+    /// The boundary issued the session's lease: the terminal started.
+    Confirmed,
+    /// The terminal ended (with this exit status) before any admission was observed. It is shown
+    /// so its status and output stay available, but no start is claimed: the client may have
+    /// failed before the boundary admitted anything (for example exit 126 on a controller error).
+    EndedUnconfirmed(i32),
+}
+
 /// Waits until the execution boundary admits the external terminal whose client runs as `pid`, or
 /// refuses it. Admission is the controller's lease receipt, so two simultaneous launches cannot both
 /// be reported as running when only one slot is free.
 ///
-/// - Admitted (a receipt was observed at any point): shown, whatever its later exit code.
+/// - Admitted (a receipt was observed at any point): `Confirmed`, whatever its later exit code.
 /// - Refused: exit 75 with the boundary's own refusal text and no observed admission. Never shown;
 ///   dropped once the terminal loop has closed out its record.
-/// - Any other early exit: shown with its exit status, as before.
+/// - Any other exit without observed admission: `EndedUnconfirmed`. Shown with its status and
+///   output; the absence of refusal text is not taken as evidence that it was admitted.
 /// - No verdict before `wait`: stopped and dropped, and reported as a start timeout. A terminal is
 ///   never reported as running without acknowledgement.
 fn await_admission(
@@ -81,7 +93,7 @@ fn await_admission(
     pid: i32,
     wait: Duration,
     admitted: impl Fn(i32) -> bool,
-) -> Result<(), String> {
+) -> Result<Admission, String> {
     let deadline = Instant::now() + wait;
     let mut seen = false;
     loop {
@@ -92,12 +104,12 @@ fn await_admission(
         };
         if seen {
             terminal.pending_admission = None;
-            return Ok(());
+            return Ok(Admission::Confirmed);
         }
         if let Some(code) = terminal.exit_code {
             if code != crate::isolation::REFUSED_EXIT || !terminal.reported_refusal() {
                 terminal.pending_admission = None;
-                return Ok(());
+                return Ok(Admission::EndedUnconfirmed(code));
             }
             // Wait for the terminal loop to close out the session record, then forget the
             // never-presented terminal so nothing hidden lingers in the host.
@@ -165,6 +177,16 @@ fn after_admission(mut body: Value, after: Option<AfterAdmission>) -> Value {
     body
 }
 
+/// Reply for a terminal that ended before the boundary confirmed it: it stays visible for
+/// diagnosis, and nothing records it as started.
+fn unconfirmed_start(mut body: Value, code: i32) -> Value {
+    body["warning"] = json!(format!(
+        "The terminal ended (exit {code}) before the execution boundary confirmed it started. \
+         Its output is kept for diagnosis; no start was recorded."
+    ));
+    body
+}
+
 /// Every terminal launch answers through this. An external terminal's reply waits off the request
 /// loop for the execution boundary's verdict; any other terminal is answered at once. `body` is the
 /// route's own reply (for example a spec handoff note) and is sent only after admission.
@@ -193,7 +215,14 @@ fn launch_reply(
     reply.deferred = Some(Box::new(move || {
         let result = await_admission(&terminals, &id, pid, ADMISSION_WAIT, admitted);
         generation.fetch_add(1, Ordering::SeqCst);
-        result.map(|()| after_admission(body, after).to_string().into_bytes())
+        result.map(|admission| {
+            match admission {
+                Admission::Confirmed => after_admission(body, after),
+                Admission::EndedUnconfirmed(code) => unconfirmed_start(body, code),
+            }
+            .to_string()
+            .into_bytes()
+        })
     }));
     reply
 }
@@ -2731,6 +2760,80 @@ mod tests {
     }
 
     #[test]
+    fn client_exit_126_before_admission_records_no_start_and_stays_visible() {
+        for (route, body) in spec_route_bodies() {
+            let mut failed = bare_terminal(Some(126), Some(4242));
+            failed.push(b"Verb execution unavailable: unavailable\r\n".to_vec());
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) = spec_reply(failed, body, Some(record), never);
+            let sent = (reply.deferred.take().unwrap())().unwrap();
+            let sent: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(writes.load(Ordering::SeqCst), 0, "{route}");
+            let warning = sent["warning"].as_str().unwrap();
+            assert!(
+                warning.contains("exit 126") && warning.contains("no start was recorded"),
+                "{route}: {warning}"
+            );
+            // Kept for diagnosis: listed, with its exit status and output.
+            let map = terminals.lock().unwrap();
+            assert!(map["spec"].pending_admission.is_none(), "{route}");
+            assert_eq!(map["spec"].exit_code, Some(126), "{route}");
+            let kept: Vec<u8> = map["spec"]
+                .chunks
+                .iter()
+                .flat_map(|chunk| chunk.bytes.clone())
+                .collect();
+            assert!(
+                String::from_utf8_lossy(&kept).contains("unavailable: unavailable"),
+                "{route}: client output must be kept for diagnosis"
+            );
+        }
+    }
+
+    #[test]
+    fn confirmed_admission_then_exit_126_or_75_records_exactly_once() {
+        for code in [126, crate::isolation::REFUSED_EXIT] {
+            for (route, body) in spec_route_bodies() {
+                let (record, writes) = counted_record(false);
+                let (mut reply, _) = spec_reply(
+                    bare_terminal(Some(code), Some(4242)),
+                    body,
+                    Some(record),
+                    always,
+                );
+                let sent = (reply.deferred.take().unwrap())().unwrap();
+                let sent: Value = serde_json::from_slice(&sent).unwrap();
+                assert_eq!(writes.load(Ordering::SeqCst), 1, "{route} exit {code}");
+                assert!(sent.get("warning").is_none(), "{route} exit {code}");
+            }
+        }
+    }
+
+    #[test]
+    fn quick_exit_without_confirmed_admission_makes_no_start_claim() {
+        for code in [0, crate::isolation::REFUSED_EXIT] {
+            let mut quick = bare_terminal(Some(code), Some(4242));
+            quick.push(b"done\r\n".to_vec());
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) =
+                spec_reply(quick, json!({"sessionId": "spec"}), Some(record), never);
+            let sent = (reply.deferred.take().unwrap())().unwrap();
+            let sent: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(writes.load(Ordering::SeqCst), 0, "exit {code}");
+            assert!(
+                sent["warning"]
+                    .as_str()
+                    .unwrap()
+                    .contains("no start was recorded"),
+                "exit {code}"
+            );
+            assert!(terminals.lock().unwrap()["spec"]
+                .pending_admission
+                .is_none());
+        }
+    }
+
+    #[test]
     fn failed_start_record_is_reported_and_the_running_terminal_stays_tracked() {
         let (record, writes) = counted_record(true);
         let (mut reply, terminals) = spec_reply(
@@ -2888,7 +2991,10 @@ mod tests {
             "t".to_owned(),
             bare_terminal(Some(126), Some(4242)),
         )]));
-        await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap();
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap(),
+            Admission::EndedUnconfirmed(126)
+        );
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
         let error =
             await_admission(&terminals, "missing", 4242, Duration::ZERO, never).unwrap_err();
@@ -2922,7 +3028,10 @@ mod tests {
         )]));
         let from = Instant::now();
         let later = move |_: i32| from.elapsed() >= Duration::from_millis(200);
-        await_admission(&terminals, "t", 4242, Duration::from_secs(3), later).unwrap();
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), later).unwrap(),
+            Admission::Confirmed
+        );
         assert!(from.elapsed() >= Duration::from_millis(200));
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
     }
@@ -2955,13 +3064,19 @@ mod tests {
             "t".to_owned(),
             bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
         )]));
-        await_admission(&terminals, "t", 4242, Duration::from_secs(3), always).unwrap();
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), always).unwrap(),
+            Admission::Confirmed
+        );
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
-        // Admission too brief to observe, but no boundary refusal text: still the program's exit.
+        // Admission too brief to observe and no refusal text: shown, but not claimed as started.
         let mut quick = bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242));
         quick.push(b"tool: temporary failure\r\n".to_vec());
         let terminals = std::sync::Mutex::new(HashMap::from([("t".to_owned(), quick)]));
-        await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap();
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap(),
+            Admission::EndedUnconfirmed(crate::isolation::REFUSED_EXIT)
+        );
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
     }
 
