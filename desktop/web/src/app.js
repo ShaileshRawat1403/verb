@@ -1529,10 +1529,11 @@ async function endTerminal(id) {
   if (!terminal) return;
   terminal.ending = true;
   clearTimeout(terminal.pollTimer);
+  let result;
   try {
     // Release retained output too, or a state refresh can reattach the closed pane.
     // This endpoint preserves the durable session record.
-    await api("DELETE", `/api/terminals/${id}`);
+    result = await api("DELETE", `/api/terminals/${id}`);
   } catch (error) {
     terminal.ending = false;
     pollTerminal(id);
@@ -1549,7 +1550,23 @@ async function endTerminal(id) {
   render();
   updateTerminalFocus();
   refreshState(true);
+  // The pane is closed either way; a warning means its processes may still hold a slot.
+  if (result?.warning) showCleanupNotice(id, result.warning);
 }
+
+/** Closing a pane is not proof its processes were cleaned up. When the execution boundary has not
+ * confirmed cleanup, say so until dismissed rather than in a toast that fades. */
+function showCleanupNotice(id, warning) {
+  const item = document.createElement("li");
+  item.dataset.sessionId = id;
+  item.textContent = `${sessionLabel(id)}: ${warning}`;
+  $("#cleanup-notice-list").append(item);
+  $("#cleanup-notice").hidden = false;
+}
+$("#cleanup-notice-dismiss").addEventListener("click", () => {
+  $("#cleanup-notice-list").replaceChildren();
+  $("#cleanup-notice").hidden = true;
+});
 $("#end-session-confirm").addEventListener("click", async () => {
   const button = $("#end-session-confirm");
   button.disabled = true;

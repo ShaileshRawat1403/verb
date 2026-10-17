@@ -99,7 +99,8 @@ jobs:
         # External terminal admission over HTTP against a stand-in execution boundary: delayed
         # admission, start timeout cleanup, refusal, stale receipts. Test builds only.
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test --features synthetic-boundary --test synthetic_boundary
+        # Its own target directory, so every other step keeps testing the normal build.
+        run: CARGO_TARGET_DIR=target/synthetic cargo test --features synthetic-boundary --test synthetic_boundary
 
       - name: Offline work-state restore
         run: python3 scripts/test-workstate.py
@@ -110,7 +111,8 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           npx --prefix web playwright install --with-deps chromium
-          VERB_BIN="$PWD/target/debug/verb" npm run e2e --prefix web
+          # The synthetic boundary build (previous step) drives the stalled-cleanup browser test only.
+          VERB_BIN="$PWD/target/debug/verb" VERB_SYNTHETIC_BIN="$PWD/target/synthetic/debug/verb" npm run e2e --prefix web
 
       - name: Upload browser test report
         if: failure() && matrix.os == 'ubuntu-latest'
