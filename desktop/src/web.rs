@@ -2286,8 +2286,9 @@ impl WebHost {
         }
     }
 
-    /// Starts an agent (or a shell) on a spec and records it in the spec's audit trail, which is
-    /// how the session board and Ask Verb know who worked on what.
+    /// Starts an agent (or a shell) on a spec. The returned action records the start in the spec's
+    /// audit trail (how the session board and Ask Verb know who worked on what); callers run it only
+    /// after the terminal is confirmed started.
     fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<(String, AfterAdmission), String> {
         self.start_on_spec_with(id, agent, None)
     }
