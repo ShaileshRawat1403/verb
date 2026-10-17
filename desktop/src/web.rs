@@ -71,10 +71,11 @@ fn await_admission(
     id: &str,
     pid: i32,
     wait: Duration,
+    admitted: fn(i32) -> bool,
 ) -> Result<(), String> {
     let deadline = Instant::now() + wait;
     loop {
-        let admitted = crate::isolation::admitted(pid);
+        let admitted = admitted(pid);
         let mut map = terminals.lock().unwrap();
         let Some(terminal) = map.get_mut(id) else {
             return Err("the terminal closed before it started".to_owned());
@@ -96,6 +97,36 @@ fn await_admission(
         drop(map);
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Every terminal launch answers through this. An external terminal's reply waits off the request
+/// loop for the execution boundary's verdict; any other terminal is answered at once. `body` is the
+/// route's own reply (for example a spec handoff note) and is sent only after admission.
+fn launch_reply(
+    terminals: &Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
+    generation: &Arc<AtomicU64>,
+    session: &str,
+    body: Value,
+    admitted: fn(i32) -> bool,
+) -> Reply {
+    let pending = terminals
+        .lock()
+        .unwrap()
+        .get(session)
+        .and_then(|terminal| terminal.pending_admission);
+    let Some(pid) = pending else {
+        return Reply::json(201, body);
+    };
+    let terminals = Arc::clone(terminals);
+    let generation = Arc::clone(generation);
+    let id = session.to_owned();
+    let mut reply = Reply::json(201, Value::Null);
+    reply.deferred = Some(Box::new(move || {
+        let result = await_admission(&terminals, &id, pid, ADMISSION_WAIT, admitted);
+        generation.fetch_add(1, Ordering::SeqCst);
+        result.map(|()| body.to_string().into_bytes())
+    }));
+    reply
 }
 
 /// Status and body for slow work that failed. A full execution boundary is temporary congestion
@@ -1451,25 +1482,7 @@ impl WebHost {
             let input: LaunchRequest = read_json(request)?;
             let session = self.launch(input)?;
             self.invalidate_state();
-            let pending = self
-                .terminals
-                .lock()
-                .unwrap()
-                .get(&session)
-                .and_then(|terminal| terminal.pending_admission);
-            let Some(pid) = pending else {
-                return Ok(Reply::json(201, json!({"sessionId": session})));
-            };
-            // Answer off the request loop: live terminals keep streaming while this one waits.
-            let terminals = Arc::clone(&self.terminals);
-            let generation = Arc::clone(&self.state_generation);
-            let mut reply = Reply::json(201, Value::Null);
-            reply.deferred = Some(Box::new(move || {
-                let result = await_admission(&terminals, &session, pid, ADMISSION_WAIT);
-                generation.fetch_add(1, Ordering::SeqCst);
-                result.map(|()| json!({"sessionId": session}).to_string().into_bytes())
-            }));
-            return Ok(reply);
+            return Ok(self.launch_reply(&session, json!({"sessionId": session})));
         }
         if method == &Method::Post && path == "/api/ask" {
             let input: AskRequest = read_json(request)?;
@@ -1881,13 +1894,13 @@ impl WebHost {
                 let spec = view.spec_id.ok_or("this talk is not on a spec")?;
                 let session = self.start_on_spec_with(&spec, "agy", Some(&conversation))?;
                 self.invalidate_state();
-                Ok(Reply::json(201, json!({"sessionId": session})))
+                Ok(self.launch_reply(&session, json!({"sessionId": session})))
             }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
                 let session = self.start_on_spec(id, &input.agent)?;
                 self.invalidate_state();
-                Ok(Reply::json(201, json!({"sessionId": session})))
+                Ok(self.launch_reply(&session, json!({"sessionId": session})))
             }
             ["api", "specs", id, "handoff"] if method == &Method::Post => {
                 let input: SpecHandoffRequest = read_json(request)?;
@@ -1906,10 +1919,7 @@ impl WebHost {
                 )?;
                 let session = self.start_on_spec(id, &input.to)?;
                 self.invalidate_state();
-                Ok(Reply::json(
-                    201,
-                    json!({"sessionId": session, "note": note}),
-                ))
+                Ok(self.launch_reply(&session, json!({"sessionId": session, "note": note})))
             }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
                 let revision = workbench::handoff_revision(&self.project, id)?;
@@ -2197,6 +2207,16 @@ impl WebHost {
         Ok(session)
     }
 
+    fn launch_reply(&self, session: &str, body: Value) -> Reply {
+        launch_reply(
+            &self.terminals,
+            &self.state_generation,
+            session,
+            body,
+            crate::isolation::admitted,
+        )
+    }
+
     fn launch(&mut self, input: LaunchRequest) -> Result<String, String> {
         if input.args.len() > 32 || input.args.iter().any(|arg| arg.len() > 4096) {
             return Err("too many or oversized agent arguments".to_owned());
@@ -2453,6 +2473,67 @@ mod tests {
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
+    fn never(_: i32) -> bool {
+        false
+    }
+
+    fn always(_: i32) -> bool {
+        true
+    }
+
+    fn spec_handoff_reply(
+        terminal: WebTerminal,
+        admitted: fn(i32) -> bool,
+    ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
+        let terminals = Arc::new(std::sync::Mutex::new(HashMap::from([(
+            "spec".to_owned(),
+            terminal,
+        )])));
+        let generation = Arc::new(AtomicU64::new(0));
+        let reply = launch_reply(
+            &terminals,
+            &generation,
+            "spec",
+            json!({"sessionId": "spec", "note": "handoff note"}),
+            admitted,
+        );
+        (reply, terminals)
+    }
+
+    #[test]
+    fn admitted_spec_launch_answers_with_its_own_body_and_is_shown() {
+        let (mut reply, terminals) = spec_handoff_reply(bare_terminal(None, Some(4242)), always);
+        let body = (reply
+            .deferred
+            .take()
+            .expect("external launch must wait for admission"))()
+        .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["sessionId"], "spec");
+        assert_eq!(body["note"], "handoff note");
+        assert!(terminals.lock().unwrap()["spec"]
+            .pending_admission
+            .is_none());
+    }
+
+    #[test]
+    fn refused_spec_launch_is_a_capacity_error_and_leaves_nothing_hidden() {
+        let (mut reply, terminals) = spec_handoff_reply(
+            bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
+            never,
+        );
+        let error = (reply.deferred.take().unwrap())().unwrap_err();
+        assert_eq!(error, TERMINAL_CAPACITY);
+        assert!(terminals.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn non_external_launch_is_answered_at_once() {
+        let (reply, _) = spec_handoff_reply(bare_terminal(None, None), never);
+        assert!(reply.deferred.is_none());
+        assert_eq!(reply.status, 201);
+    }
+
     fn bare_terminal(exit_code: Option<i32>, pending: Option<i32>) -> WebTerminal {
         WebTerminal {
             hosted: None,
@@ -2477,7 +2558,8 @@ mod tests {
             "t".to_owned(),
             bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
         )]));
-        let error = await_admission(&terminals, "t", 4242, Duration::from_secs(5)).unwrap_err();
+        let error =
+            await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap_err();
         assert_eq!(error, TERMINAL_CAPACITY);
         // Never presented as a session, and nothing hidden is left behind once it is closed out.
         assert!(!terminals.lock().unwrap().contains_key("t"));
@@ -2495,9 +2577,10 @@ mod tests {
             "t".to_owned(),
             bare_terminal(Some(126), Some(4242)),
         )]));
-        await_admission(&terminals, "t", 4242, Duration::from_secs(5)).unwrap();
+        await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap();
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
-        let error = await_admission(&terminals, "missing", 4242, Duration::ZERO).unwrap_err();
+        let error =
+            await_admission(&terminals, "missing", 4242, Duration::ZERO, never).unwrap_err();
         assert!(error.contains("closed"), "{error}");
         assert_eq!(deferred_error(&error).0, 400);
     }
@@ -2508,7 +2591,7 @@ mod tests {
             "t".to_owned(),
             bare_terminal(None, Some(4242)),
         )]));
-        await_admission(&terminals, "t", 4242, Duration::ZERO).unwrap();
+        await_admission(&terminals, "t", 4242, Duration::ZERO, never).unwrap();
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
     }
 
