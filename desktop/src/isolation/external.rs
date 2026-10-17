@@ -1,11 +1,38 @@
 //! Fixed unprivileged client for the explicitly selected private candidate.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 pub(super) const CLIENT: &str = "/usr/local/libexec/verb-boundary-client";
 const PROJECTS: &str = "/srv/verb-boundary/projects";
 /// The client writes `<pid>.json` here only after the controller has issued the session's lease.
 const RECEIPTS: &str = "/home/verb-host/.verb-boundary-clients";
+
+#[cfg(all(feature = "synthetic-boundary", not(debug_assertions)))]
+compile_error!("the synthetic execution boundary is for test builds only");
+
+/// Test builds only: `VERB_SYNTHETIC_BOUNDARY` names a directory with a stand-in `client` and its
+/// `receipts`, so the external launch, admission and cleanup paths run end to end without the
+/// controller. Host account, launcher and project ownership checks do not apply there.
+#[cfg(feature = "synthetic-boundary")]
+pub(super) fn synthetic() -> Option<PathBuf> {
+    std::env::var_os("VERB_SYNTHETIC_BOUNDARY").map(PathBuf::from)
+}
+
+#[cfg(not(feature = "synthetic-boundary"))]
+pub(super) fn synthetic() -> Option<PathBuf> {
+    None
+}
+
+pub(super) fn client() -> String {
+    synthetic().map_or_else(
+        || CLIENT.to_owned(),
+        |root| root.join("client").to_string_lossy().into_owned(),
+    )
+}
+
+fn receipts() -> PathBuf {
+    synthetic().map_or_else(|| PathBuf::from(RECEIPTS), |root| root.join("receipts"))
+}
 
 pub(super) fn validate_host() -> Result<(), String> {
     let status = std::fs::read_to_string("/proc/self/status").map_err(|e| e.to_string())?;
@@ -20,7 +47,8 @@ pub(super) fn validate_host() -> Result<(), String> {
 }
 
 fn project_id(project: &Path) -> Result<String, String> {
-    if project.parent() != Some(Path::new(PROJECTS)) {
+    let synthetic = synthetic().is_some();
+    if !synthetic && project.parent() != Some(Path::new(PROJECTS)) {
         return Err("external execution requires an operator-registered project".into());
     }
     let id = project
@@ -33,6 +61,9 @@ fn project_id(project: &Path) -> Result<String, String> {
             .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
     {
         return Err("invalid registered project identity".into());
+    }
+    if synthetic {
+        return Ok(id.to_owned());
     }
     if project.canonicalize().map_err(|e| e.to_string())? != project {
         return Err("registered project cannot follow a symbolic link".into());
@@ -133,7 +164,7 @@ pub(super) fn process_start(pid: i32) -> Option<u64> {
 
 /// Controller-authoritative startup acknowledgement for `launch`.
 pub(super) fn admitted(launch: &super::Launch) -> bool {
-    admitted_in(Path::new(RECEIPTS), launch, process_start(launch.pid))
+    admitted_in(&receipts(), launch, process_start(launch.pid))
 }
 
 /// The client writes `<pid>.json` only after the controller issued the session's lease, but a PID
@@ -183,7 +214,7 @@ pub(super) fn stop_client(pid: i32) -> Result<(), String> {
     if pid <= 1 {
         return Err("invalid host client identity".into());
     }
-    let result = Command::new(CLIENT)
+    let result = Command::new(client())
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .args(["--stop-client", &pid.to_string()])

@@ -5,6 +5,11 @@ edition = "2021"
 description = "Verb desktop work-context shell"
 license = "Apache-2.0"
 
+[features]
+# Test builds only: lets `VERB_SYNTHETIC_BOUNDARY` stand in for the private execution boundary so
+# the external launch path can be exercised over HTTP in CI. A release build refuses to compile it.
+synthetic-boundary = []
+
 [dependencies]
 # Rendering layer only. See docs/TUI_VISION.md: removing these costs the workspace renderer,
 # not the session, task, PTY, or CLI capabilities.

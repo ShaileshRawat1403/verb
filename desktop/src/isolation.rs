@@ -21,6 +21,10 @@ pub(crate) enum Profile {
 }
 
 pub(crate) fn profile() -> Result<Option<Profile>, String> {
+    #[cfg(feature = "synthetic-boundary")]
+    if external::synthetic().is_some() {
+        return Ok(Some(Profile::External));
+    }
     if let Some(value) = std::env::var_os("VERB_EXECUTION_BOUNDARY") {
         if value != "monitored-v1" || !cfg!(target_os = "linux") {
             return Err("unsupported execution boundary; refusing fallback".into());
@@ -270,7 +274,7 @@ pub(crate) fn launch(
     match profile()? {
         None => Ok((program.into(), args.to_vec())),
         Some(Profile::External) => Ok((
-            external::CLIENT.into(),
+            external::client(),
             external::arguments(program, args, project, session, "terminal")?,
         )),
         Some(Profile::Account(profile)) => Ok((
@@ -328,7 +332,7 @@ fn launcher_args(
 pub(crate) fn command(program: &Path, project: &Path, session: &str) -> Result<Command, String> {
     let (program, args) = if external() {
         (
-            external::CLIENT.into(),
+            external::client(),
             external::arguments(&program.to_string_lossy(), &[], project, session, "pipes")?,
         )
     } else {

@@ -2171,3 +2171,90 @@ fn oversized_http_header_is_closed_before_api_dispatch() {
     }
     assert_eq!(server.request("GET", "/healthz", None, false).0, 200);
 }
+
+/// Talk to terminal, end to end with a stand-in agy and no provider: the talk's first reply gives a
+/// conversation id, and continuing it in a terminal starts `agy --conversation <id>` and records the
+/// start on the spec exactly once.
+#[test]
+fn talk_continues_in_a_terminal_and_records_the_start_once() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let bin = server.root.join("fake-bin");
+    fs::create_dir_all(&bin).unwrap();
+    let agy = bin.join("agy");
+    let launched = server.root.join("terminal-args");
+    fs::write(
+        &agy,
+        format!(
+            "#!/bin/sh\n\
+             if [ \"$1\" = --conversation ]; then echo \"$@\" > '{}'; exec sleep 30; fi\n\
+             echo '{{\"event\":\"init\",\"conversation_id\":\"synthetic-conversation\"}}'\n\
+             echo '{{\"event\":\"result\",\"result\":{{\"status\":\"SUCCESS\",\"response\":\"planned\"}}}}'\n",
+            launched.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&agy, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let server = server.restart_with_env(&[
+        ("VERB_AGY_BIN", agy.to_str().unwrap()),
+        ("PATH", path.as_str()),
+    ]);
+    let spec = server.json(
+        "POST",
+        "/api/specs",
+        Some(json!({"title": "Talk to terminal", "problem": "p", "criteria": ["works"]})),
+    );
+    let spec = spec["id"].as_str().unwrap().to_owned();
+    let (status, body) = server.request("POST", &format!("/api/specs/{spec}/talk"), None, true);
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    let talk: Value = serde_json::from_slice(&body).unwrap();
+    let talk = talk["talkId"].as_str().unwrap().to_owned();
+    // Before the first reply there is no conversation to continue.
+    let mut conversation = Value::Null;
+    for _ in 0..50 {
+        conversation =
+            server.json("GET", &format!("/api/talk/{talk}"), None)["conversation_id"].clone();
+        if conversation.is_string() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(conversation, "synthetic-conversation");
+    let (status, body) = server.request("POST", &format!("/api/talk/{talk}/terminal"), None, true);
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    let reply: Value = serde_json::from_slice(&body).unwrap();
+    assert!(reply.get("warning").is_none(), "{reply}");
+    let session = reply["sessionId"].as_str().unwrap().to_owned();
+    for _ in 0..50 {
+        if launched.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        fs::read_to_string(&launched).unwrap().trim(),
+        "--conversation synthetic-conversation"
+    );
+    let audit = fs::read_dir(server.root.join("project/specs"))
+        .unwrap()
+        .map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+        .collect::<String>();
+    assert_eq!(
+        audit
+            .matches(&format!(
+                "started agy on this spec (session {}) to continue the talk",
+                &session[..8]
+            ))
+            .count(),
+        1,
+        "{audit}"
+    );
+    let (status, _) = server.request("DELETE", &format!("/api/terminals/{session}"), None, true);
+    assert_eq!(status, 200);
+}
