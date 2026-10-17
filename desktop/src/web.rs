@@ -28,6 +28,9 @@ const ADMISSION_WAIT: Duration = Duration::from_secs(6);
 /// Shown when the execution boundary has no free terminal slot.
 const TERMINAL_CAPACITY: &str =
     "All terminal slots on this host are in use. End a terminal, then start another.";
+/// Shown when the execution boundary gave no verdict in time; the terminal has been closed.
+const TERMINAL_START_TIMEOUT: &str =
+    "The terminal did not start in time and was closed. Try again in a moment.";
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
@@ -63,36 +66,56 @@ struct OutputChunk {
 
 /// Waits until the execution boundary admits the external terminal whose client runs as `pid`, or
 /// refuses it. Admission is the controller's lease receipt, so two simultaneous launches cannot both
-/// be reported as running when only one slot is free. A refused terminal is never presented as a
-/// session; if neither outcome arrives in time the terminal is shown, and a later refusal still
-/// ends it visibly (the startup-refusal backstop).
+/// be reported as running when only one slot is free.
+///
+/// - Admitted (a receipt was observed at any point): shown, whatever its later exit code.
+/// - Refused: exit 75 with the boundary's own refusal text and no observed admission. Never shown;
+///   dropped once the terminal loop has closed out its record.
+/// - Any other early exit: shown with its exit status, as before.
+/// - No verdict before `wait`: stopped and dropped, and reported as a start timeout. A terminal is
+///   never reported as running without acknowledgement.
 fn await_admission(
     terminals: &std::sync::Mutex<HashMap<String, WebTerminal>>,
     id: &str,
     pid: i32,
     wait: Duration,
-    admitted: fn(i32) -> bool,
+    admitted: impl Fn(i32) -> bool,
 ) -> Result<(), String> {
     let deadline = Instant::now() + wait;
+    let mut seen = false;
     loop {
-        let admitted = admitted(pid);
+        seen = seen || admitted(pid);
         let mut map = terminals.lock().unwrap();
         let Some(terminal) = map.get_mut(id) else {
             return Err("the terminal closed before it started".to_owned());
         };
-        let refused = terminal.exit_code == Some(crate::isolation::REFUSED_EXIT);
-        if refused && !admitted {
+        if seen {
+            terminal.pending_admission = None;
+            return Ok(());
+        }
+        if let Some(code) = terminal.exit_code {
+            if code != crate::isolation::REFUSED_EXIT || !terminal.reported_refusal() {
+                terminal.pending_admission = None;
+                return Ok(());
+            }
             // Wait for the terminal loop to close out the session record, then forget the
             // never-presented terminal so nothing hidden lingers in the host.
             if terminal.hosted.is_none() || Instant::now() >= deadline + Duration::from_secs(3) {
                 map.remove(id);
                 return Err(TERMINAL_CAPACITY.to_owned());
             }
-        } else if admitted || terminal.exit_code.is_some() || Instant::now() >= deadline {
-            // Admitted, or ended for any other reason (shown with its exit status, as before),
-            // or no verdict in time: present it. Only a capacity refusal is withheld.
-            terminal.pending_admission = None;
-            return Ok(());
+        } else if Instant::now() >= deadline {
+            let terminal = map.remove(id);
+            drop(map);
+            let cleanup = terminal
+                .and_then(|mut terminal| terminal.hosted.take())
+                .map_or(Ok(()), |hosted| hosted.stop().map(|_| ()));
+            return Err(match cleanup {
+                Ok(()) => TERMINAL_START_TIMEOUT.to_owned(),
+                Err(error) => {
+                    format!("{TERMINAL_START_TIMEOUT} Cleanup was not confirmed: {error}")
+                }
+            });
         }
         drop(map);
         std::thread::sleep(Duration::from_millis(50));
@@ -132,7 +155,14 @@ fn launch_reply(
 /// Status and body for slow work that failed. A full execution boundary is temporary congestion
 /// (503, `code: "capacity"`), never a Git or request failure; everything else stays 400.
 fn deferred_error(error: &str) -> (u16, Vec<u8>) {
-    if error == TERMINAL_CAPACITY || crate::isolation::capacity_message(error) {
+    if error.starts_with(TERMINAL_START_TIMEOUT) {
+        (
+            503,
+            json!({"error": error, "code": "startup_timeout"})
+                .to_string()
+                .into_bytes(),
+        )
+    } else if error == TERMINAL_CAPACITY || crate::isolation::capacity_message(error) {
         (
             503,
             json!({"error": error, "code": "capacity"})
@@ -209,6 +239,17 @@ impl WebTerminal {
                 self.base = oldest.from + oldest.bytes.len() as u64;
             }
         }
+    }
+
+    /// Whether this terminal's own output carries the boundary client's pre-lease refusal text.
+    fn reported_refusal(&self) -> bool {
+        let start: Vec<u8> = self
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.bytes.iter().copied())
+            .take(4096)
+            .collect();
+        crate::isolation::capacity_message(&String::from_utf8_lossy(&start))
     }
 
     fn poll(&mut self) -> Result<(), String> {
@@ -2518,10 +2559,7 @@ mod tests {
 
     #[test]
     fn refused_spec_launch_is_a_capacity_error_and_leaves_nothing_hidden() {
-        let (mut reply, terminals) = spec_handoff_reply(
-            bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
-            never,
-        );
+        let (mut reply, terminals) = spec_handoff_reply(refused_terminal(), never);
         let error = (reply.deferred.take().unwrap())().unwrap_err();
         assert_eq!(error, TERMINAL_CAPACITY);
         assert!(terminals.lock().unwrap().is_empty());
@@ -2532,6 +2570,12 @@ mod tests {
         let (reply, _) = spec_handoff_reply(bare_terminal(None, None), never);
         assert!(reply.deferred.is_none());
         assert_eq!(reply.status, 201);
+    }
+
+    fn refused_terminal() -> WebTerminal {
+        let mut terminal = bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242));
+        terminal.push(b"Verb execution unavailable: capacity\r\n".to_vec());
+        terminal
     }
 
     fn bare_terminal(exit_code: Option<i32>, pending: Option<i32>) -> WebTerminal {
@@ -2554,10 +2598,8 @@ mod tests {
 
     #[test]
     fn refused_external_terminal_is_a_capacity_error_not_a_session() {
-        let terminals = std::sync::Mutex::new(HashMap::from([(
-            "t".to_owned(),
-            bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
-        )]));
+        let terminals =
+            std::sync::Mutex::new(HashMap::from([("t".to_owned(), refused_terminal())]));
         let error =
             await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap_err();
         assert_eq!(error, TERMINAL_CAPACITY);
@@ -2586,12 +2628,71 @@ mod tests {
     }
 
     #[test]
-    fn admission_wait_ends_with_the_terminal_shown_when_no_outcome_arrives() {
+    fn no_verdict_in_time_is_a_start_timeout_with_cleanup_never_running() {
         let terminals = std::sync::Mutex::new(HashMap::from([(
             "t".to_owned(),
             bare_terminal(None, Some(4242)),
         )]));
-        await_admission(&terminals, "t", 4242, Duration::ZERO, never).unwrap();
+        let error =
+            await_admission(&terminals, "t", 4242, Duration::from_millis(100), never).unwrap_err();
+        assert_eq!(error, TERMINAL_START_TIMEOUT);
+        assert!(terminals.lock().unwrap().is_empty());
+        let (status, body) = deferred_error(&error);
+        assert_eq!(status, 503);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["code"],
+            "startup_timeout"
+        );
+    }
+
+    #[test]
+    fn delayed_admission_is_awaited_and_then_shown() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(None, Some(4242)),
+        )]));
+        let from = Instant::now();
+        let later = move |_: i32| from.elapsed() >= Duration::from_millis(200);
+        await_admission(&terminals, "t", 4242, Duration::from_secs(3), later).unwrap();
+        assert!(from.elapsed() >= Duration::from_millis(200));
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+    }
+
+    #[test]
+    fn delayed_refusal_is_awaited_and_never_shown() {
+        let terminals = Arc::new(std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(None, Some(4242)),
+        )])));
+        let writer = Arc::clone(&terminals);
+        let refuse = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let mut map = writer.lock().unwrap();
+            let terminal = map.get_mut("t").unwrap();
+            terminal.push(b"Verb execution unavailable: capacity\r\n".to_vec());
+            terminal.exit_code = Some(crate::isolation::REFUSED_EXIT);
+        });
+        let error =
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap_err();
+        refuse.join().unwrap();
+        assert_eq!(error, TERMINAL_CAPACITY);
+        assert!(terminals.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn admitted_command_that_quickly_exits_75_is_not_a_capacity_refusal() {
+        // Admission observed, then the program itself exits 75.
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
+        )]));
+        await_admission(&terminals, "t", 4242, Duration::from_secs(3), always).unwrap();
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+        // Admission too brief to observe, but no boundary refusal text: still the program's exit.
+        let mut quick = bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242));
+        quick.push(b"tool: temporary failure\r\n".to_vec());
+        let terminals = std::sync::Mutex::new(HashMap::from([("t".to_owned(), quick)]));
+        await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap();
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
     }
 
