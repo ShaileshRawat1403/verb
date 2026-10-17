@@ -376,6 +376,14 @@ pub(super) fn terminate(pid: PidT) -> Result<i32, String> {
 /// Kills every remaining process in the session `leader` started. A session id cannot be reused
 /// while any member is alive, so matching on it never reaches an unrelated process.
 fn drain_session(leader: PidT) {
+    if crate::isolation::external() {
+        // The boundary's stop ends the whole native session exactly and has its own deadline.
+        // Repeating it per signal adds nothing and would multiply a stalled controller's wait.
+        if let Err(error) = crate::isolation::signal_session(leader, SIGKILL) {
+            eprintln!("Verb: {error}");
+        }
+        return;
+    }
     if crate::isolation::profile().is_ok_and(|profile| profile.is_some()) {
         // Android hides other UIDs from the host's ps. An empty host-side process list is
         // therefore not proof that the agent session ended. The fixed launcher enumerates

@@ -210,22 +210,48 @@ fn admitted_in(receipts: &Path, launch: &super::Launch, running: Option<u64>) ->
             .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
 }
 
+/// How long Verb waits for the boundary to confirm a stop. Past it the stop is reported unconfirmed
+/// and the receipt stays, so recovery can still stop that exact lease later.
+const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
 pub(super) fn stop_client(pid: i32) -> Result<(), String> {
     if pid <= 1 {
         return Err("invalid host client identity".into());
     }
-    let result = Command::new(client())
+    let mut child = Command::new(client())
         .env_clear()
         .env("PATH", "/usr/bin:/bin")
         .args(["--stop-client", &pid.to_string()])
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
         .map_err(|e| e.to_string())?;
-    if result.status.success() {
-        Ok(())
-    } else {
-        Err("native session cleanup was not confirmed".into())
+    let until = std::time::Instant::now() + STOP_DEADLINE;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err("native session cleanup was not confirmed".into())
+            };
+        }
+        if std::time::Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("native session cleanup was not confirmed in time".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
+/// Whether a lease receipt for `session` is still held under `pid`: the boundary has not confirmed
+/// that session's cleanup (both the client and recovery remove it only after the controller does).
+pub(super) fn receipt_held(pid: i32, session: &str) -> bool {
+    std::fs::read(receipts().join(format!("{pid}.json")))
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
+        .is_some_and(|receipt| receipt["session"] == session)
 }
 
 #[cfg(test)]

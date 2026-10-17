@@ -80,13 +80,14 @@ fn specs_dir(project: &Path) -> PathBuf {
 }
 
 /// Who is acting, for the audit trail: the project's Git identity, plus the surface used.
-pub(crate) fn actor(project: &Path, via: &str) -> String {
-    let name = git(project, &["config", "user.name"])
+/// The project owner's name from Git config, for audit lines. It runs Git, so it can cross the
+/// execution boundary.
+pub(crate) fn owner_name(project: &Path) -> String {
+    git(project, &["config", "user.name"])
         .ok()
         .map(|name| name.trim().to_owned())
         .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "unknown user".to_owned());
-    format!("{name} via {via}")
+        .unwrap_or_else(|| "unknown user".to_owned())
 }
 
 // ------------------------------------------------------------------------------------- parsing
@@ -241,6 +242,15 @@ fn audit_line(actor: &str, action: &str) -> String {
     format!("- {at} · {} · {}", clean(actor), clean(action))
 }
 
+/// Serializes every read-modify-write of a spec file. Spec changes arrive from the request loop and
+/// from workers (Git-backed changes, start records after admission), and an unserialized pair could
+/// each append to the same old contents and lose a line. Held only from the read to the atomic
+/// write, never across Git or the execution boundary, so the loop never waits behind a stall.
+fn writing() -> std::sync::MutexGuard<'static, ()> {
+    static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    WRITES.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
 fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     crate::fsutil::atomic_write(path, contents.as_bytes())?;
     #[cfg(unix)]
@@ -304,6 +314,8 @@ pub(crate) fn create(project: &Path, input: NewSpec, actor: &str) -> Result<Spec
     }
     let dir = specs_dir(project);
     fs::create_dir_all(&dir).map_err(|e| format!("could not create specs/: {e}"))?;
+    // Choosing the next id and writing its file must not interleave with another create.
+    let _writing = writing();
     let next = list(project)
         .iter()
         .filter_map(|spec| spec.id.parse::<u32>().ok())
@@ -380,6 +392,7 @@ pub(crate) fn set_stage(
     if !note.trim().is_empty() {
         action.push_str(&format!(" — {}", note.trim()));
     }
+    let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let raw = set_field(&raw, "stage", stage);
     write_atomic(&path, &append_audit(&raw, &audit_line(actor, &action)))?;
@@ -506,6 +519,7 @@ pub(crate) fn set_criterion(
     if criterion.done == done {
         return Ok(spec);
     }
+    let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let mut out = String::with_capacity(raw.len());
     let mut seen = 0usize;
@@ -639,6 +653,7 @@ pub(crate) fn commit(
     let subject = message.lines().next().unwrap_or(message);
     if let Some(id) = spec_id.filter(|id| !id.is_empty()) {
         let (path, _) = find(project, id)?;
+        let _writing = writing();
         let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
         write_atomic(
             &path,
@@ -678,6 +693,7 @@ pub(crate) fn switch_to_branch(project: &Path, id: &str, actor: &str) -> Result<
         git(project, &["switch", "--quiet", "-c", &spec.branch])?;
     }
     // The spec file came along with the branch (it is committed), so record the switch there.
+    let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let verb = if exists {
         "switched to"
@@ -696,6 +712,7 @@ pub(crate) fn switch_to_branch(project: &Path, id: &str, actor: &str) -> Result<
 
 /// Appends one audit line to a spec file, for events that happen outside this module.
 pub(crate) fn record(path: &Path, actor: &str, action: &str) -> Result<(), String> {
+    let _writing = writing();
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     write_atomic(path, &append_audit(&raw, &audit_line(actor, action)))
 }
@@ -819,6 +836,7 @@ pub(crate) fn handoff(
     }
     let entry = lines.join("\n");
 
+    let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let next = if let Some(at_heading) = raw.find(HANDOFF_HEADING) {
         let insert = at_heading + HANDOFF_HEADING.len();
