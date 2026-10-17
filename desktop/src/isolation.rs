@@ -41,6 +41,28 @@ pub(crate) fn external() -> bool {
     matches!(profile(), Ok(Some(Profile::External)))
 }
 
+/// Exit status of a boundary client whose launch the controller refused before issuing a lease.
+pub(crate) const REFUSED_EXIT: i32 = 75;
+
+/// Whether a boundary client's result is an admission refusal (capacity or busy), as opposed to a
+/// failure of the program it was asked to run. Only the client's own pre-lease refusal qualifies.
+pub(crate) fn refused(code: Option<i32>, stderr: &[u8]) -> bool {
+    code == Some(REFUSED_EXIT) && capacity_message(&String::from_utf8_lossy(stderr))
+}
+
+/// The boundary's own wording for a refused admission.
+pub(crate) fn capacity_message(text: &str) -> bool {
+    text.contains("Verb execution unavailable: capacity")
+        || text.contains("Verb execution unavailable: busy")
+}
+
+/// Whether the external terminal client running as `pid` has been admitted by the controller.
+/// The receipt is written only after the controller issues a lease, so concurrent launches are
+/// decided by the controller rather than by a host-side count.
+pub(crate) fn admitted(pid: i32) -> bool {
+    external() && external::admitted(pid)
+}
+
 fn account_profile() -> Result<Option<AccountProfile>, String> {
     let Some(user) = std::env::var_os("VERB_AGENT_USER") else {
         return Ok(None);
@@ -439,6 +461,20 @@ pub(crate) fn recovery_command(project: &Path, args: &[String]) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_clients_own_capacity_refusal_counts_as_refused() {
+        let refusal = b"Verb execution unavailable: capacity\n";
+        assert!(refused(Some(REFUSED_EXIT), refusal));
+        assert!(refused(
+            Some(REFUSED_EXIT),
+            b"Verb execution unavailable: busy\n"
+        ));
+        // A program may exit 75 itself, and the message alone is not a client verdict.
+        assert!(!refused(Some(REFUSED_EXIT), b"temporary failure"));
+        assert!(!refused(Some(1), refusal));
+        assert!(!refused(None, refusal));
+    }
     const PASSWD: &str = "root:x:0:0::/root:/bin/bash\nagent:x:1101:1101::/home/agent:/bin/bash\nhost:x:1102:1102::/home/host:/bin/bash\n";
     #[test]
     fn refuses_root_same_user_missing_and_option_shaped_accounts() {

@@ -290,8 +290,13 @@ async function api(method, path, body) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const value = await response.json();
-  if (!response.ok)
-    throw new Error(value.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(value.error || `Request failed (${response.status})`);
+    // `code: "capacity"` marks temporary execution-boundary congestion, not a failed request.
+    error.status = response.status;
+    error.code = value.code;
+    throw error;
+  }
   return value;
 }
 

@@ -14,6 +14,10 @@ export function projectGitPresentation(project) {
       "Not a Git repository",
       "Open a Git checkout, or initialize this folder from your terminal.",
     ],
+    busy: [
+      "Busy—retrying",
+      "Background checks are waiting for a free execution slot. Verb retries automatically; terminals are unaffected.",
+    ],
     unavailable: [
       "Git status unavailable",
       "Check that Git is installed and this account can read the checkout. Terminal work remains available.",

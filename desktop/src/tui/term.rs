@@ -177,6 +177,11 @@ impl Hosted {
 
     /// Drains whatever the session has produced and returns its exit code once it has finished.
     ///
+    /// The PTY child's process ID: for an external terminal, the boundary client itself.
+    pub fn pid(&self) -> i32 {
+        self.pid
+    }
+
     /// The same bytes go two places and nowhere else: into the terminal state Verb draws, and past
     /// the shell-integration scanner that turns markers into structural events. Neither retains
     /// them.

@@ -22,9 +22,19 @@ use crate::{project, workbench, Agent, SessionState};
 
 const MAX_BODY: usize = 64 * 1024;
 const MAX_BUFFER: usize = 2 * 1024 * 1024;
+/// How long a launch waits for the execution boundary to admit or refuse an external terminal.
+/// The boundary client retries a capacity refusal for up to 3 s before giving up.
+const ADMISSION_WAIT: Duration = Duration::from_secs(6);
+/// Shown when the execution boundary has no free terminal slot.
+const TERMINAL_CAPACITY: &str =
+    "All terminal slots on this host are in use. End a terminal, then start another.";
+/// Shown when the execution boundary gave no verdict in time; the terminal has been closed.
+const TERMINAL_START_TIMEOUT: &str =
+    "The terminal did not start in time and was closed. Try again in a moment.";
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
+const HOST_BUSY: &str = "desktop host is busy; retry shortly";
 const MAX_TERMINAL_CONNECTIONS: usize = 32;
 struct RequestPermit(Arc<AtomicUsize>);
 impl RequestPermit {
@@ -55,6 +65,190 @@ struct OutputChunk {
     bytes: Vec<u8>,
 }
 
+/// How an external terminal's start resolved, short of refusal or timeout (which are errors).
+#[derive(Debug, PartialEq, Eq)]
+enum Admission {
+    /// The boundary issued the session's lease: the terminal started.
+    Confirmed,
+    /// The terminal ended (with this exit status) before any admission was observed. It is shown
+    /// so its status and output stay available, but no start is claimed: the client may have
+    /// failed before the boundary admitted anything (for example exit 126 on a controller error).
+    EndedUnconfirmed(i32),
+}
+
+/// Waits until the execution boundary admits the external terminal whose client runs as `pid`, or
+/// refuses it. Admission is the controller's lease receipt, so two simultaneous launches cannot both
+/// be reported as running when only one slot is free.
+///
+/// - Admitted (a receipt was observed at any point): `Confirmed`, whatever its later exit code.
+/// - Refused: exit 75 with the boundary's own refusal text and no observed admission. Never shown;
+///   dropped once the terminal loop has closed out its record.
+/// - Any other exit without observed admission: `EndedUnconfirmed`. Shown with its status and
+///   output; the absence of refusal text is not taken as evidence that it was admitted.
+/// - No verdict before `wait`: stopped and dropped, and reported as a start timeout. A terminal is
+///   never reported as running without acknowledgement.
+fn await_admission(
+    terminals: &std::sync::Mutex<HashMap<String, WebTerminal>>,
+    id: &str,
+    pid: i32,
+    wait: Duration,
+    admitted: impl Fn(i32) -> bool,
+) -> Result<Admission, String> {
+    let deadline = Instant::now() + wait;
+    let mut seen = false;
+    loop {
+        seen = seen || admitted(pid);
+        let mut map = terminals.lock().unwrap();
+        let Some(terminal) = map.get_mut(id) else {
+            return Err("the terminal closed before it started".to_owned());
+        };
+        if seen {
+            terminal.pending_admission = None;
+            return Ok(Admission::Confirmed);
+        }
+        if let Some(code) = terminal.exit_code {
+            if code != crate::isolation::REFUSED_EXIT || !terminal.reported_refusal() {
+                terminal.pending_admission = None;
+                return Ok(Admission::EndedUnconfirmed(code));
+            }
+            // Wait for the terminal loop to close out the session record, then forget the
+            // never-presented terminal so nothing hidden lingers in the host.
+            if terminal.hosted.is_none() || Instant::now() >= deadline + Duration::from_secs(3) {
+                map.remove(id);
+                return Err(TERMINAL_CAPACITY.to_owned());
+            }
+        } else if Instant::now() >= deadline {
+            let terminal = map.remove(id);
+            drop(map);
+            let cleanup = terminal
+                .and_then(|mut terminal| terminal.hosted.take())
+                .map_or(Ok(()), |hosted| hosted.stop().map(|_| ()));
+            return Err(match cleanup {
+                Ok(()) => TERMINAL_START_TIMEOUT.to_owned(),
+                Err(error) => {
+                    format!("{TERMINAL_START_TIMEOUT} Cleanup was not confirmed: {error}")
+                }
+            });
+        }
+        drop(map);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Reserves the worker that will answer a launch before `start` runs. A saturated host refuses the
+/// request instead of starting a terminal whose acknowledgement could never run (`Ok(None)`).
+fn reserve_launch<T>(
+    counter: &Arc<AtomicUsize>,
+    start: impl FnOnce() -> Result<T, String>,
+) -> Result<Option<(RequestPermit, T)>, String> {
+    let Some(permit) = RequestPermit::acquire(counter, MAX_BACKGROUND_REQUESTS) else {
+        return Ok(None);
+    };
+    Ok(Some((permit, start()?)))
+}
+
+/// Work that must happen only after a launched terminal is confirmed started (for example the spec
+/// record of an agent start). It runs once, after admission, and never for a refused launch.
+type AfterAdmission = Box<dyn FnOnce() -> Result<(), String> + Send>;
+
+/// The spec audit line for a confirmed agent start. A handoff's intent is recorded separately.
+fn spec_start_line(agent: &str, session: &str, continues_talk: bool) -> String {
+    format!(
+        "started {agent} on this spec (session {}){}",
+        &session[..session.len().min(8)],
+        if continues_talk {
+            " to continue the talk"
+        } else {
+            ""
+        }
+    )
+}
+
+/// Runs the post-admission work for a terminal that is running. A failure is reported in the reply
+/// rather than failing the launch, so the running terminal stays tracked.
+fn after_admission(mut body: Value, after: Option<AfterAdmission>) -> Value {
+    if let Some(after) = after {
+        if let Err(error) = after() {
+            body["warning"] = json!(format!(
+                "The terminal is running, but its spec record could not be written: {error}"
+            ));
+        }
+    }
+    body
+}
+
+/// Reply for a terminal that ended before the boundary confirmed it: it stays visible for
+/// diagnosis, and nothing records it as started.
+fn unconfirmed_start(mut body: Value, code: i32) -> Value {
+    body["warning"] = json!(format!(
+        "The terminal ended (exit {code}) before the execution boundary confirmed it started. \
+         Its output is kept for diagnosis; no start was recorded."
+    ));
+    body
+}
+
+/// Every terminal launch answers through this. An external terminal's reply waits off the request
+/// loop for the execution boundary's verdict; any other terminal is answered at once. `body` is the
+/// route's own reply (for example a spec handoff note) and is sent only after admission.
+fn launch_reply(
+    permit: RequestPermit,
+    terminals: &Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>,
+    generation: &Arc<AtomicU64>,
+    session: &str,
+    body: Value,
+    after: Option<AfterAdmission>,
+    admitted: fn(i32) -> bool,
+) -> Reply {
+    let pending = terminals
+        .lock()
+        .unwrap()
+        .get(session)
+        .and_then(|terminal| terminal.pending_admission);
+    let Some(pid) = pending else {
+        return Reply::json(201, after_admission(body, after));
+    };
+    let terminals = Arc::clone(terminals);
+    let generation = Arc::clone(generation);
+    let id = session.to_owned();
+    let mut reply = Reply::json(201, Value::Null);
+    reply.permit = Some(permit);
+    reply.deferred = Some(Box::new(move || {
+        let result = await_admission(&terminals, &id, pid, ADMISSION_WAIT, admitted);
+        generation.fetch_add(1, Ordering::SeqCst);
+        result.map(|admission| {
+            match admission {
+                Admission::Confirmed => after_admission(body, after),
+                Admission::EndedUnconfirmed(code) => unconfirmed_start(body, code),
+            }
+            .to_string()
+            .into_bytes()
+        })
+    }));
+    reply
+}
+
+/// Status and body for slow work that failed. A full execution boundary is temporary congestion
+/// (503, `code: "capacity"`), never a Git or request failure; everything else stays 400.
+fn deferred_error(error: &str) -> (u16, Vec<u8>) {
+    if error.starts_with(TERMINAL_START_TIMEOUT) {
+        (
+            503,
+            json!({"error": error, "code": "startup_timeout"})
+                .to_string()
+                .into_bytes(),
+        )
+    } else if error == TERMINAL_CAPACITY || crate::isolation::capacity_message(error) {
+        (
+            503,
+            json!({"error": error, "code": "capacity"})
+                .to_string()
+                .into_bytes(),
+        )
+    } else {
+        (400, json!({"error": error}).to_string().into_bytes())
+    }
+}
+
 struct WebTerminal {
     hosted: Option<Hosted>,
     sink: Arc<crate::stream::TerminalStreamSink>,
@@ -64,6 +258,11 @@ struct WebTerminal {
     buffered: usize,
     final_screen: Vec<u8>,
     exit_seen_at: Option<Instant>,
+    /// Exit status once the process has ended, kept for the launch acknowledgement.
+    exit_code: Option<i32>,
+    /// For an external terminal not yet admitted by the execution boundary: the client's PID.
+    /// A pending terminal is not presented as a session until admission is confirmed.
+    pending_admission: Option<i32>,
     failure: Option<String>,
     /// For the observer, in memory only: when this terminal last produced output, and recent
     /// failed commands (shell integration's volatile label, never written anywhere).
@@ -72,7 +271,11 @@ struct WebTerminal {
 }
 
 impl WebTerminal {
-    fn new(mut hosted: Hosted, sink: Arc<crate::stream::TerminalStreamSink>) -> Self {
+    fn new(
+        mut hosted: Hosted,
+        sink: Arc<crate::stream::TerminalStreamSink>,
+        pending_admission: Option<i32>,
+    ) -> Self {
         hosted.capture_web_output();
         Self {
             hosted: Some(hosted),
@@ -83,6 +286,8 @@ impl WebTerminal {
             buffered: 0,
             final_screen: Vec::new(),
             exit_seen_at: None,
+            exit_code: None,
+            pending_admission,
             failure: None,
             last_output: Instant::now(),
             failures: VecDeque::new(),
@@ -109,6 +314,17 @@ impl WebTerminal {
                 self.base = oldest.from + oldest.bytes.len() as u64;
             }
         }
+    }
+
+    /// Whether this terminal's own output carries the boundary client's pre-lease refusal text.
+    fn reported_refusal(&self) -> bool {
+        let start: Vec<u8> = self
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.bytes.iter().copied())
+            .take(4096)
+            .collect();
+        crate::isolation::capacity_message(&String::from_utf8_lossy(&start))
     }
 
     fn poll(&mut self) -> Result<(), String> {
@@ -139,6 +355,7 @@ impl WebTerminal {
             self.push(chunk);
         }
         if let Some(code) = exit {
+            self.exit_code = Some(code);
             let seen = self.exit_seen_at.get_or_insert_with(Instant::now);
             if self
                 .hosted
@@ -562,6 +779,8 @@ struct Reply {
     state_job: Option<StateJob>,
     /// Slow, read-only work answered off the request loop, which also pumps live terminals.
     deferred: Option<DeferredWork>,
+    /// A worker permit reserved before the request had side effects (a terminal launch).
+    permit: Option<RequestPermit>,
 }
 
 impl Reply {
@@ -574,6 +793,7 @@ impl Reply {
             cache_control: None,
             state_job: None,
             deferred: None,
+            permit: None,
         }
     }
 
@@ -590,6 +810,7 @@ impl Reply {
             cache_control: None,
             state_job: None,
             deferred: None,
+            permit: None,
         }
     }
 
@@ -602,6 +823,7 @@ impl Reply {
             cache_control: None,
             state_job: None,
             deferred: None,
+            permit: None,
         }
     }
 }
@@ -1137,14 +1359,13 @@ impl WebHost {
             let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         }
         let mut reply = self.dispatch(&mut request);
-        let permit = if reply.deferred.is_some() || reply.state_job.is_some() {
+        let permit = if let Some(permit) = reply.permit.take() {
+            Some(permit)
+        } else if reply.deferred.is_some() || reply.state_job.is_some() {
             let Some(permit) =
                 RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
             else {
-                send_reply(
-                    request,
-                    Reply::error(503, "desktop host is busy; retry shortly"),
-                );
+                send_reply(request, Reply::error(503, HOST_BUSY));
                 return;
             };
             Some(permit)
@@ -1156,10 +1377,7 @@ impl WebHost {
                 let _permit = permit;
                 match work() {
                     Ok(body) => reply.body = body,
-                    Err(error) => {
-                        reply.status = 400;
-                        reply.body = json!({"error": error}).to_string().into_bytes();
-                    }
+                    Err(error) => (reply.status, reply.body) = deferred_error(&error),
                 }
                 send_reply(request, reply);
             });
@@ -1169,13 +1387,10 @@ impl WebHost {
             // Only secondary state work leaves the PTY loop. Authentication remains in dispatch.
             std::thread::spawn(move || {
                 let _permit = permit;
-                reply.body = match job.run() {
-                    Ok(body) => body,
-                    Err(error) => {
-                        reply.status = 400;
-                        json!({"error": error}).to_string().into_bytes()
-                    }
-                };
+                match job.run() {
+                    Ok(body) => reply.body = body,
+                    Err(error) => (reply.status, reply.body) = deferred_error(&error),
+                }
                 send_reply(request, reply);
             });
         } else {
@@ -1385,9 +1600,12 @@ impl WebHost {
         }
         if method == &Method::Post && path == "/api/terminals" {
             let input: LaunchRequest = read_json(request)?;
-            let session = self.launch(input)?;
+            let counter = Arc::clone(&self.background_requests);
+            let Some((permit, session)) = reserve_launch(&counter, || self.launch(input))? else {
+                return Ok(Reply::error(503, HOST_BUSY));
+            };
             self.invalidate_state();
-            return Ok(Reply::json(201, json!({"sessionId": session})));
+            return Ok(self.launch_reply(permit, &session, json!({"sessionId": session}), None));
         }
         if method == &Method::Post && path == "/api/ask" {
             let input: AskRequest = read_json(request)?;
@@ -1797,15 +2015,36 @@ impl WebHost {
                     "Antigravity has not started this conversation yet; wait for its first reply",
                 )?;
                 let spec = view.spec_id.ok_or("this talk is not on a spec")?;
-                let session = self.start_on_spec_with(&spec, "agy", Some(&conversation))?;
+                let counter = Arc::clone(&self.background_requests);
+                let Some((permit, (session, record))) = reserve_launch(&counter, || {
+                    self.start_on_spec_with(&spec, "agy", Some(&conversation))
+                })?
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 self.invalidate_state();
-                Ok(Reply::json(201, json!({"sessionId": session})))
+                Ok(self.launch_reply(
+                    permit,
+                    &session,
+                    json!({"sessionId": session}),
+                    Some(record),
+                ))
             }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
-                let session = self.start_on_spec(id, &input.agent)?;
+                let counter = Arc::clone(&self.background_requests);
+                let Some((permit, (session, record))) =
+                    reserve_launch(&counter, || self.start_on_spec(id, &input.agent))?
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 self.invalidate_state();
-                Ok(Reply::json(201, json!({"sessionId": session})))
+                Ok(self.launch_reply(
+                    permit,
+                    &session,
+                    json!({"sessionId": session}),
+                    Some(record),
+                ))
             }
             ["api", "specs", id, "handoff"] if method == &Method::Post => {
                 let input: SpecHandoffRequest = read_json(request)?;
@@ -1815,18 +2054,28 @@ impl WebHost {
                 if !SPEC_AGENTS.contains(&input.to.as_str()) {
                     return Err("choose a supported agent".to_owned());
                 }
-                let note = crate::specs::handoff(
-                    &self.project,
-                    id,
-                    &input.to,
-                    &input.note,
-                    &self.actor(),
-                )?;
-                let session = self.start_on_spec(id, &input.to)?;
+                let counter = Arc::clone(&self.background_requests);
+                // The handoff note records intent when the request is accepted; the agent start is
+                // recorded separately, and only once its terminal is confirmed started.
+                let Some((permit, (note, (session, record)))) = reserve_launch(&counter, || {
+                    let note = crate::specs::handoff(
+                        &self.project,
+                        id,
+                        &input.to,
+                        &input.note,
+                        &self.actor(),
+                    )?;
+                    Ok((note, self.start_on_spec(id, &input.to)?))
+                })?
+                else {
+                    return Ok(Reply::error(503, HOST_BUSY));
+                };
                 self.invalidate_state();
-                Ok(Reply::json(
-                    201,
+                Ok(self.launch_reply(
+                    permit,
+                    &session,
                     json!({"sessionId": session, "note": note}),
+                    Some(record),
                 ))
             }
             ["api", "tasks", id, "handoff-revision"] if method == &Method::Get => {
@@ -2066,19 +2315,22 @@ impl WebHost {
         }
     }
 
-    /// Starts an agent (or a shell) on a spec and records it in the spec's audit trail, which is
-    /// how the session board and Ask Verb know who worked on what.
-    fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<String, String> {
+    /// Starts an agent (or a shell) on a spec. The returned action records the start in the spec's
+    /// audit trail (how the session board and Ask Verb know who worked on what); callers run it only
+    /// after the terminal is confirmed started.
+    fn start_on_spec(&mut self, id: &str, agent: &str) -> Result<(String, AfterAdmission), String> {
         self.start_on_spec_with(id, agent, None)
     }
 
     /// `conversation`: continue an Antigravity talk in its terminal instead of starting afresh.
+    /// Returns the launched session and the spec record of its start, which the caller runs only
+    /// once the terminal is confirmed started: a refused or timed-out launch records nothing.
     fn start_on_spec_with(
         &mut self,
         id: &str,
         agent: &str,
         conversation: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, AfterAdmission), String> {
         let (path, spec) = crate::specs::find(&self.project, id)?;
         // Every agent whose CLI can take an opening prompt gets the spec brief: as the first
         // argument for Claude, Codex and Gemini, through `-i` (run it, then stay interactive) for
@@ -2099,20 +2351,28 @@ impl WebHost {
             args,
             resume_id: None,
         })?;
-        crate::specs::record(
-            &path,
-            &self.actor(),
-            &format!(
-                "started {agent} on this spec (session {}){}",
-                &session[..session.len().min(8)],
-                if conversation.is_some() {
-                    " to continue the talk"
-                } else {
-                    ""
-                }
-            ),
-        )?;
-        Ok(session)
+        let actor = self.actor();
+        let line = spec_start_line(agent, &session, conversation.is_some());
+        let record: AfterAdmission = Box::new(move || crate::specs::record(&path, &actor, &line));
+        Ok((session, record))
+    }
+
+    fn launch_reply(
+        &self,
+        permit: RequestPermit,
+        session: &str,
+        body: Value,
+        after: Option<AfterAdmission>,
+    ) -> Reply {
+        launch_reply(
+            permit,
+            &self.terminals,
+            &self.state_generation,
+            session,
+            body,
+            after,
+            crate::isolation::admitted,
+        )
     }
 
     fn launch(&mut self, input: LaunchRequest) -> Result<String, String> {
@@ -2227,10 +2487,11 @@ impl WebHost {
             Some(Arc::clone(&sink)),
         )?;
         let id = hosted.session.id.clone();
+        let pending = crate::isolation::external().then(|| hosted.pid());
         self.terminals
             .lock()
             .unwrap()
-            .insert(id.clone(), WebTerminal::new(hosted, sink));
+            .insert(id.clone(), WebTerminal::new(hosted, sink, pending));
         self.invalidate_state();
         Ok(id)
     }
@@ -2243,6 +2504,7 @@ impl WebHost {
         let terminals = self.terminals.lock().unwrap();
         let sessions = terminals
             .values()
+            .filter(|terminal| terminal.pending_admission.is_none())
             .filter_map(|terminal| {
                 let hosted = terminal.hosted.as_ref()?;
                 let session = &hosted.session;
@@ -2256,7 +2518,7 @@ impl WebHost {
             "anchor": self.identity.anchor, "workspace": self.project,
             "branch": null, "gitStatus": "loading", "changedFiles": null},
             "deployment": self.deployment, "sessions": sessions,
-            "terminalStates": terminals.iter().map(|(id, terminal)|
+            "terminalStates": terminals.iter().filter(|(_, terminal)| terminal.pending_admission.is_none()).map(|(id, terminal)|
                 (id.clone(), terminal_status(Some(terminal.hosted.is_some()))))
                 .collect::<serde_json::Map<String, Value>>(),
             "tasks": [], "memory": ""})
@@ -2369,6 +2631,462 @@ mod tests {
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
+    fn never(_: i32) -> bool {
+        false
+    }
+
+    fn always(_: i32) -> bool {
+        true
+    }
+
+    fn spec_reply(
+        terminal: WebTerminal,
+        body: Value,
+        after: Option<AfterAdmission>,
+        admitted: fn(i32) -> bool,
+    ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
+        let terminals = Arc::new(std::sync::Mutex::new(HashMap::from([(
+            "spec".to_owned(),
+            terminal,
+        )])));
+        let generation = Arc::new(AtomicU64::new(0));
+        let counter = Arc::new(AtomicUsize::new(0));
+        let permit = RequestPermit::acquire(&counter, MAX_BACKGROUND_REQUESTS).unwrap();
+        let reply = launch_reply(
+            permit,
+            &terminals,
+            &generation,
+            "spec",
+            body,
+            after,
+            admitted,
+        );
+        (reply, terminals)
+    }
+
+    fn spec_handoff_reply(
+        terminal: WebTerminal,
+        admitted: fn(i32) -> bool,
+    ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
+        spec_reply(
+            terminal,
+            json!({"sessionId": "spec", "note": "handoff note"}),
+            None,
+            admitted,
+        )
+    }
+
+    /// A spec start record that only counts how often it is written.
+    fn counted_record(fail: bool) -> (AfterAdmission, Arc<AtomicUsize>) {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&writes);
+        let record: AfterAdmission = Box::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            if fail {
+                Err("spec file is read-only".to_owned())
+            } else {
+                Ok(())
+            }
+        });
+        (record, writes)
+    }
+
+    /// Bodies of the three spec launch routes: agent, handoff and talk-to-terminal.
+    fn spec_route_bodies() -> [(&'static str, Value); 3] {
+        [
+            ("agent", json!({"sessionId": "spec"})),
+            (
+                "handoff",
+                json!({"sessionId": "spec", "note": "handoff note"}),
+            ),
+            ("talk", json!({"sessionId": "spec"})),
+        ]
+    }
+
+    #[test]
+    fn admitted_spec_launches_record_the_start_once_and_keep_their_body() {
+        for (route, body) in spec_route_bodies() {
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) = spec_reply(
+                bare_terminal(None, Some(4242)),
+                body.clone(),
+                Some(record),
+                always,
+            );
+            let sent = (reply.deferred.take().unwrap())().unwrap();
+            let sent: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(writes.load(Ordering::SeqCst), 1, "{route}");
+            assert_eq!(sent["sessionId"], "spec", "{route}");
+            assert_eq!(sent.get("note"), body.get("note"), "{route}");
+            assert!(sent.get("warning").is_none(), "{route}");
+            assert!(terminals.lock().unwrap()["spec"]
+                .pending_admission
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn refused_spec_launches_record_no_start() {
+        for (route, body) in spec_route_bodies() {
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) = spec_reply(refused_terminal(), body, Some(record), never);
+            let error = (reply.deferred.take().unwrap())().unwrap_err();
+            assert_eq!(error, TERMINAL_CAPACITY, "{route}");
+            assert_eq!(writes.load(Ordering::SeqCst), 0, "{route}");
+            assert!(terminals.lock().unwrap().is_empty(), "{route}");
+        }
+    }
+
+    #[test]
+    fn timed_out_spec_launches_record_no_start() {
+        // Run the three routes concurrently: each waits out the real admission deadline.
+        let runs: Vec<_> = spec_route_bodies()
+            .into_iter()
+            .map(|(route, body)| {
+                std::thread::spawn(move || {
+                    let (record, writes) = counted_record(false);
+                    let (mut reply, terminals) =
+                        spec_reply(bare_terminal(None, Some(4242)), body, Some(record), never);
+                    let error = (reply.deferred.take().unwrap())().unwrap_err();
+                    assert_eq!(error, TERMINAL_START_TIMEOUT, "{route}");
+                    assert_eq!(writes.load(Ordering::SeqCst), 0, "{route}");
+                    assert!(terminals.lock().unwrap().is_empty(), "{route}");
+                })
+            })
+            .collect();
+        for run in runs {
+            run.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn client_exit_126_before_admission_records_no_start_and_stays_visible() {
+        for (route, body) in spec_route_bodies() {
+            let mut failed = bare_terminal(Some(126), Some(4242));
+            failed.push(b"Verb execution unavailable: unavailable\r\n".to_vec());
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) = spec_reply(failed, body, Some(record), never);
+            let sent = (reply.deferred.take().unwrap())().unwrap();
+            let sent: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(writes.load(Ordering::SeqCst), 0, "{route}");
+            let warning = sent["warning"].as_str().unwrap();
+            assert!(
+                warning.contains("exit 126") && warning.contains("no start was recorded"),
+                "{route}: {warning}"
+            );
+            // Kept for diagnosis: listed, with its exit status and output.
+            let map = terminals.lock().unwrap();
+            assert!(map["spec"].pending_admission.is_none(), "{route}");
+            assert_eq!(map["spec"].exit_code, Some(126), "{route}");
+            let kept: Vec<u8> = map["spec"]
+                .chunks
+                .iter()
+                .flat_map(|chunk| chunk.bytes.clone())
+                .collect();
+            assert!(
+                String::from_utf8_lossy(&kept).contains("unavailable: unavailable"),
+                "{route}: client output must be kept for diagnosis"
+            );
+        }
+    }
+
+    #[test]
+    fn confirmed_admission_then_exit_126_or_75_records_exactly_once() {
+        for code in [126, crate::isolation::REFUSED_EXIT] {
+            for (route, body) in spec_route_bodies() {
+                let (record, writes) = counted_record(false);
+                let (mut reply, _) = spec_reply(
+                    bare_terminal(Some(code), Some(4242)),
+                    body,
+                    Some(record),
+                    always,
+                );
+                let sent = (reply.deferred.take().unwrap())().unwrap();
+                let sent: Value = serde_json::from_slice(&sent).unwrap();
+                assert_eq!(writes.load(Ordering::SeqCst), 1, "{route} exit {code}");
+                assert!(sent.get("warning").is_none(), "{route} exit {code}");
+            }
+        }
+    }
+
+    #[test]
+    fn quick_exit_without_confirmed_admission_makes_no_start_claim() {
+        for code in [0, crate::isolation::REFUSED_EXIT] {
+            let mut quick = bare_terminal(Some(code), Some(4242));
+            quick.push(b"done\r\n".to_vec());
+            let (record, writes) = counted_record(false);
+            let (mut reply, terminals) =
+                spec_reply(quick, json!({"sessionId": "spec"}), Some(record), never);
+            let sent = (reply.deferred.take().unwrap())().unwrap();
+            let sent: Value = serde_json::from_slice(&sent).unwrap();
+            assert_eq!(writes.load(Ordering::SeqCst), 0, "exit {code}");
+            assert!(
+                sent["warning"]
+                    .as_str()
+                    .unwrap()
+                    .contains("no start was recorded"),
+                "exit {code}"
+            );
+            assert!(terminals.lock().unwrap()["spec"]
+                .pending_admission
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn failed_start_record_is_reported_and_the_running_terminal_stays_tracked() {
+        let (record, writes) = counted_record(true);
+        let (mut reply, terminals) = spec_reply(
+            bare_terminal(None, Some(4242)),
+            json!({"sessionId": "spec", "note": "handoff note"}),
+            Some(record),
+            always,
+        );
+        let sent = (reply.deferred.take().unwrap())().unwrap();
+        let sent: Value = serde_json::from_slice(&sent).unwrap();
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(sent["sessionId"], "spec");
+        assert_eq!(sent["note"], "handoff note");
+        let warning = sent["warning"].as_str().unwrap();
+        assert!(
+            warning.contains("terminal is running") && warning.contains("read-only"),
+            "{warning}"
+        );
+        assert!(terminals.lock().unwrap()["spec"]
+            .pending_admission
+            .is_none());
+    }
+
+    #[test]
+    fn non_boundary_spec_launch_records_the_start_at_once() {
+        let (record, writes) = counted_record(false);
+        let (reply, _) = spec_reply(
+            bare_terminal(None, None),
+            json!({"sessionId": "spec"}),
+            Some(record),
+            never,
+        );
+        assert!(reply.deferred.is_none());
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn start_record_names_the_agent_and_marks_a_continued_talk() {
+        assert_eq!(
+            spec_start_line("codex", "0123456789abcdef", false),
+            "started codex on this spec (session 01234567)"
+        );
+        assert_eq!(
+            spec_start_line("agy", "abc", true),
+            "started agy on this spec (session abc) to continue the talk"
+        );
+    }
+
+    #[test]
+    fn admitted_spec_launch_answers_with_its_own_body_and_is_shown() {
+        let (mut reply, terminals) = spec_handoff_reply(bare_terminal(None, Some(4242)), always);
+        let body = (reply
+            .deferred
+            .take()
+            .expect("external launch must wait for admission"))()
+        .unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["sessionId"], "spec");
+        assert_eq!(body["note"], "handoff note");
+        assert!(terminals.lock().unwrap()["spec"]
+            .pending_admission
+            .is_none());
+    }
+
+    #[test]
+    fn refused_spec_launch_is_a_capacity_error_and_leaves_nothing_hidden() {
+        let (mut reply, terminals) = spec_handoff_reply(refused_terminal(), never);
+        let error = (reply.deferred.take().unwrap())().unwrap_err();
+        assert_eq!(error, TERMINAL_CAPACITY);
+        assert!(terminals.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn saturated_workers_refuse_a_launch_before_any_process_starts() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let held: Vec<_> = (0..MAX_BACKGROUND_REQUESTS)
+            .map(|_| RequestPermit::acquire(&counter, MAX_BACKGROUND_REQUESTS).unwrap())
+            .collect();
+        let mut started = false;
+        let refused = reserve_launch(&counter, || {
+            started = true;
+            Ok("t")
+        })
+        .unwrap();
+        assert!(refused.is_none());
+        assert!(
+            !started,
+            "no terminal may start without a worker to acknowledge it"
+        );
+        drop(held);
+        let (permit, session) = reserve_launch(&counter, || Ok("t")).unwrap().unwrap();
+        assert_eq!(session, "t");
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        drop(permit);
+        assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn a_reserved_launch_worker_travels_with_the_deferred_reply() {
+        let (reply, _) = spec_handoff_reply(bare_terminal(None, Some(4242)), always);
+        assert!(reply.permit.is_some() && reply.deferred.is_some());
+    }
+
+    #[test]
+    fn non_external_launch_is_answered_at_once() {
+        let (reply, _) = spec_handoff_reply(bare_terminal(None, None), never);
+        assert!(reply.deferred.is_none());
+        assert_eq!(reply.status, 201);
+    }
+
+    fn refused_terminal() -> WebTerminal {
+        let mut terminal = bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242));
+        terminal.push(b"Verb execution unavailable: capacity\r\n".to_vec());
+        terminal
+    }
+
+    fn bare_terminal(exit_code: Option<i32>, pending: Option<i32>) -> WebTerminal {
+        WebTerminal {
+            hosted: None,
+            sink: crate::stream::TerminalStreamSink::new("test".to_owned()),
+            chunks: VecDeque::new(),
+            base: 0,
+            next: 0,
+            buffered: 0,
+            final_screen: Vec::new(),
+            exit_seen_at: None,
+            exit_code,
+            pending_admission: pending,
+            failure: None,
+            last_output: Instant::now(),
+            failures: VecDeque::new(),
+        }
+    }
+
+    #[test]
+    fn refused_external_terminal_is_a_capacity_error_not_a_session() {
+        let terminals =
+            std::sync::Mutex::new(HashMap::from([("t".to_owned(), refused_terminal())]));
+        let error =
+            await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap_err();
+        assert_eq!(error, TERMINAL_CAPACITY);
+        // Never presented as a session, and nothing hidden is left behind once it is closed out.
+        assert!(!terminals.lock().unwrap().contains_key("t"));
+        let (status, body) = deferred_error(&error);
+        assert_eq!(status, 503);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["code"],
+            "capacity"
+        );
+    }
+
+    #[test]
+    fn other_early_exits_are_shown_and_closed_terminals_are_not_capacity() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(Some(126), Some(4242)),
+        )]));
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap(),
+            Admission::EndedUnconfirmed(126)
+        );
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+        let error =
+            await_admission(&terminals, "missing", 4242, Duration::ZERO, never).unwrap_err();
+        assert!(error.contains("closed"), "{error}");
+        assert_eq!(deferred_error(&error).0, 400);
+    }
+
+    #[test]
+    fn no_verdict_in_time_is_a_start_timeout_with_cleanup_never_running() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(None, Some(4242)),
+        )]));
+        let error =
+            await_admission(&terminals, "t", 4242, Duration::from_millis(100), never).unwrap_err();
+        assert_eq!(error, TERMINAL_START_TIMEOUT);
+        assert!(terminals.lock().unwrap().is_empty());
+        let (status, body) = deferred_error(&error);
+        assert_eq!(status, 503);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["code"],
+            "startup_timeout"
+        );
+    }
+
+    #[test]
+    fn delayed_admission_is_awaited_and_then_shown() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(None, Some(4242)),
+        )]));
+        let from = Instant::now();
+        let later = move |_: i32| from.elapsed() >= Duration::from_millis(200);
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), later).unwrap(),
+            Admission::Confirmed
+        );
+        assert!(from.elapsed() >= Duration::from_millis(200));
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+    }
+
+    #[test]
+    fn delayed_refusal_is_awaited_and_never_shown() {
+        let terminals = Arc::new(std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(None, Some(4242)),
+        )])));
+        let writer = Arc::clone(&terminals);
+        let refuse = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            let mut map = writer.lock().unwrap();
+            let terminal = map.get_mut("t").unwrap();
+            terminal.push(b"Verb execution unavailable: capacity\r\n".to_vec());
+            terminal.exit_code = Some(crate::isolation::REFUSED_EXIT);
+        });
+        let error =
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap_err();
+        refuse.join().unwrap();
+        assert_eq!(error, TERMINAL_CAPACITY);
+        assert!(terminals.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn admitted_command_that_quickly_exits_75_is_not_a_capacity_refusal() {
+        // Admission observed, then the program itself exits 75.
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
+        )]));
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), always).unwrap(),
+            Admission::Confirmed
+        );
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+        // Admission too brief to observe and no refusal text: shown, but not claimed as started.
+        let mut quick = bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242));
+        quick.push(b"tool: temporary failure\r\n".to_vec());
+        let terminals = std::sync::Mutex::new(HashMap::from([("t".to_owned(), quick)]));
+        assert_eq!(
+            await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap(),
+            Admission::EndedUnconfirmed(crate::isolation::REFUSED_EXIT)
+        );
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+    }
+
+    #[test]
+    fn boundary_capacity_text_is_congestion_and_git_errors_stay_errors() {
+        let busy = "Verb execution unavailable: busy";
+        assert_eq!(deferred_error(busy).0, 503);
+        assert_eq!(deferred_error("fatal: not a git repository").0, 400);
+    }
+
     #[test]
     fn output_cursor_replays_bytes_and_reports_overflow() {
         let mut terminal = WebTerminal {
@@ -2380,6 +3098,8 @@ mod tests {
             buffered: 0,
             final_screen: b"last screen".to_vec(),
             exit_seen_at: None,
+            exit_code: None,
+            pending_admission: None,
             failure: None,
             last_output: Instant::now(),
             failures: VecDeque::new(),

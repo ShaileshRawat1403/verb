@@ -157,9 +157,10 @@ export function createTalk(id, deps) {
   tile.addEventListener("click", async (event) => {
     if (event.target.closest("[data-talk-terminal]")) {
       try {
-        const { sessionId } = await deps.api("POST", `/api/talk/${encodeURIComponent(id)}/terminal`);
+        const { sessionId, warning } = await deps.api("POST", `/api/talk/${encodeURIComponent(id)}/terminal`);
         deps.openTerminal(sessionId);
-        deps.toast("Antigravity's terminal continues this conversation. Approve its actions there.");
+        if (warning) deps.toast(warning, "error");
+        else deps.toast("Antigravity's terminal continues this conversation. Approve its actions there.");
       } catch (error) {
         deps.toast(error.message, "error");
       }

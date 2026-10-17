@@ -9,6 +9,8 @@ pub(crate) enum GitStatus {
     Detached,
     NotRepository,
     Unavailable,
+    /// The execution boundary had no free background slot. Temporary; not a Git failure.
+    Busy,
 }
 impl GitStatus {
     pub(crate) fn as_str(self) -> &'static str {
@@ -18,6 +20,7 @@ impl GitStatus {
             Self::Detached => "detached",
             Self::NotRepository => "not_repository",
             Self::Unavailable => "unavailable",
+            Self::Busy => "busy",
         }
     }
 }
@@ -36,6 +39,7 @@ impl GitSnapshot {
         self.branch.as_deref().unwrap_or(match self.status {
             GitStatus::Detached => "Detached HEAD",
             GitStatus::NotRepository => "Not a Git repository",
+            GitStatus::Busy => "Busy—retrying",
             _ => "Git status unavailable",
         })
     }
@@ -77,20 +81,22 @@ pub(crate) fn snapshot(project: &Path) -> GitSnapshot {
     if crate::isolation::external() {
         // Enter the boundary once. The trusted helper runs these same guarded reads
         // under the project UID, rather than creating a namespace for each Git call.
-        return isolated_snapshot(project).unwrap_or(GitSnapshot {
+        return isolated_snapshot(project).unwrap_or_else(|status| GitSnapshot {
             root: None,
             branch: None,
             changed_files: 0,
-            status: GitStatus::Unavailable,
+            status,
             changes_known: false,
         });
     }
     local_snapshot(project)
 }
 
-fn isolated_snapshot(project: &Path) -> Option<GitSnapshot> {
+/// One boundary entry for all Git facts. A refused admission is reported as `Busy`, distinct from
+/// a Git or helper failure, so a full background slot never reads as a broken repository.
+fn isolated_snapshot(project: &Path) -> Result<GitSnapshot, GitStatus> {
     let output = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")
-        .ok()?
+        .map_err(|_| GitStatus::Unavailable)?
         .args([
             "--kill-after=1s",
             "10s",
@@ -99,15 +105,19 @@ fn isolated_snapshot(project: &Path) -> Option<GitSnapshot> {
         ])
         .stdin(Stdio::null())
         .output()
-        .ok()?;
-    if !output.status.success() || output.stdout.len() > 65536 {
-        return None;
+        .map_err(|_| GitStatus::Unavailable)?;
+    if crate::isolation::refused(output.status.code(), &output.stderr) {
+        return Err(GitStatus::Busy);
     }
-    let mut facts: GitSnapshot = serde_json::from_slice(&output.stdout).ok()?;
+    if !output.status.success() || output.stdout.len() > 65536 {
+        return Err(GitStatus::Unavailable);
+    }
+    let mut facts: GitSnapshot =
+        serde_json::from_slice(&output.stdout).map_err(|_| GitStatus::Unavailable)?;
     // Guest and host paths differ. The helper confirms that the registered
     // workspace itself is the repository root before reporting a root at all.
     facts.root = facts.root.map(|_| project.to_path_buf());
-    Some(facts)
+    Ok(facts)
 }
 
 /// Internal helper, already inside the project boundary. Never re-enter it or
@@ -179,6 +189,20 @@ fn local_snapshot(project: &Path) -> GitSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_is_its_own_presentation_and_never_a_clean_tree() {
+        let busy = GitSnapshot {
+            root: None,
+            branch: None,
+            changed_files: 0,
+            status: GitStatus::Busy,
+            changes_known: false,
+        };
+        assert_eq!(busy.status.as_str(), "busy");
+        assert_eq!(busy.branch_label(), "Busy—retrying");
+        assert_eq!(busy.change_summary(), "Changes unavailable");
+    }
     fn folder() -> PathBuf {
         let path = std::env::temp_dir().join(format!("verb-gitview-{}", crate::new_id()));
         std::fs::create_dir_all(&path).unwrap();
