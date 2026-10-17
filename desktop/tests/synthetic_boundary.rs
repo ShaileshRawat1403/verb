@@ -35,6 +35,9 @@ receipt() { # pid session mtime
 }
 if [ "$1" = --stop-client ]; then
   echo "stop $2" >> "$root/log"
+  if [ -f "$root/stop-fallback" ] && [ -f "$root/receipts/$2.json" ]; then
+    mv "$root/receipts/$2.json" "$root/receipts/$2-0123456789abcdef0123456789abcdef.json"
+  fi
   if [ -f "$root/stop-stall" ]; then sleep "$(cat "$root/stop-stall")"; exit 126; fi
   rm -f "$root/receipts/$2.json"
   exit 0
@@ -491,4 +494,28 @@ fn a_stalled_launch_does_not_freeze_health_workspace_or_terminal_output() {
     );
     assert_prompt(&timings);
     assert_eq!(host.listed(), vec![terminal]);
+}
+
+#[test]
+fn an_unpublished_lease_recovery_receipt_still_reports_unconfirmed_cleanup() {
+    let host = Host::start("admit");
+    let (status, launched) = host.request("POST", "/api/terminals", shell());
+    assert_eq!(status, 201, "{launched}");
+    let session = launched["sessionId"].as_str().unwrap();
+    fs::write(host.root.join("boundary/stop-fallback"), "").unwrap();
+    fs::write(host.root.join("boundary/stop-stall"), "1").unwrap();
+    let (status, body) = host.request("DELETE", &format!("/api/terminals/{session}"), None);
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body["warning"]
+            .as_str()
+            .is_some_and(|warning| warning.contains("has not confirmed its cleanup")),
+        "{body}"
+    );
+    let names: Vec<_> = fs::read_dir(host.root.join("boundary/receipts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 1, "{names:?}");
+    assert!(names[0].ends_with("-0123456789abcdef0123456789abcdef.json"));
 }

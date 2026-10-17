@@ -248,10 +248,72 @@ pub(super) fn stop_client(pid: i32) -> Result<(), String> {
 /// Whether a lease receipt for `session` is still held under `pid`: the boundary has not confirmed
 /// that session's cleanup (both the client and recovery remove it only after the controller does).
 pub(super) fn receipt_held(pid: i32, session: &str) -> bool {
-    std::fs::read(receipts().join(format!("{pid}.json")))
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<serde_json::Value>(&raw).ok())
-        .is_some_and(|receipt| receipt["session"] == session)
+    receipt_held_in(&receipts(), pid, session)
+}
+
+fn receipt_held_in(root: &Path, pid: i32, session: &str) -> bool {
+    use std::io::Read;
+    if pid <= 1 {
+        return false;
+    }
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => return error.kind() != std::io::ErrorKind::NotFound,
+    };
+    let primary = format!("{pid}.json");
+    let prefix = format!("{pid}-");
+    // The client normally bounds the directory to 256 records. Allow recovery
+    // overflow, but never let an unexpected directory stall the stop response.
+    for (index, entry) in entries.enumerate() {
+        if index >= 512 {
+            return true; // inspection incomplete: cleanup cannot be confirmed
+        }
+        let Ok(entry) = entry else { return true };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let fallback = name
+            .strip_prefix(&prefix)
+            .and_then(|suffix| suffix.strip_suffix(".json"))
+            .is_some_and(|generation| {
+                generation.len() == 32
+                    && generation
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            });
+        if name != primary && !fallback {
+            continue;
+        }
+        let path = entry.path();
+        let info = match std::fs::symlink_metadata(&path) {
+            Ok(info) => info,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return true,
+        };
+        // Unreadable or malformed candidate records are uncertainty, not proof
+        // of cleanup. Reject non-regular entries and bound recovery reads.
+        if !info.is_file() || info.len() > 4096 {
+            return true;
+        }
+        let file = match std::fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return true,
+        };
+        let mut raw = Vec::new();
+        if file.take(4097).read_to_end(&mut raw).is_err() || raw.len() > 4096 {
+            return true;
+        }
+        let Ok(receipt) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            return true;
+        };
+        let Some(recorded_session) = receipt["session"].as_str() else {
+            return true;
+        };
+        if recorded_session == session {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -408,6 +470,63 @@ mod tests {
             std::os::unix::fs::symlink(real, &path).unwrap();
             assert!(!admitted_in(&receipts.0, &ours, Some(777)));
         }
+    }
+
+    #[test]
+    fn cleanup_checks_primary_and_generation_recovery_receipts_for_the_session() {
+        let receipts = Receipts::new();
+        assert!(!receipt_held_in(&receipts.0, 4242, "new-session"));
+        let primary = receipts.write(4242, "old-session", SystemTime::now());
+        assert!(!receipt_held_in(&receipts.0, 4242, "new-session"));
+        assert!(receipt_held_in(&receipts.0, 4242, "old-session"));
+        let own = receipts.write(9999, "new-session", SystemTime::now());
+        let fallback = receipts.0.join(format!("4242-{GENERATION}.json"));
+        std::fs::rename(own, &fallback).unwrap();
+        assert!(receipt_held_in(&receipts.0, 4242, "new-session"));
+        assert!(primary.exists(), "old recovery record is untouched");
+        std::fs::remove_file(fallback).unwrap();
+        assert!(!receipt_held_in(&receipts.0, 4242, "new-session"));
+        receipts.write(4242, "new-session", SystemTime::now());
+        assert!(receipt_held_in(&receipts.0, 4242, "new-session"));
+    }
+
+    #[test]
+    fn cleanup_ignores_other_pids_and_unrelated_recovery_names() {
+        let receipts = Receipts::new();
+        let receipt = receipts.write(9999, "s", SystemTime::now());
+        for name in ["42420.json", "4242-not-a-generation.json", ".pending-4242"] {
+            std::fs::copy(&receipt, receipts.0.join(name)).unwrap();
+        }
+        assert!(!receipt_held_in(&receipts.0, 4242, "s"));
+        assert!(!receipt_held_in(&receipts.0, 1, "s"));
+    }
+
+    #[test]
+    fn cleanup_cannot_be_confirmed_from_corrupt_or_oversized_candidate_records() {
+        let receipts = Receipts::new();
+        let path = receipts.0.join(format!("4242-{GENERATION}.json"));
+        for raw in [b"not json".to_vec(), b"{}".to_vec(), vec![b'x'; 4097]] {
+            std::fs::write(&path, raw).unwrap();
+            assert!(receipt_held_in(&receipts.0, 4242, "s"));
+        }
+        std::fs::remove_file(&path).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(receipts.0.join("missing"), path).unwrap();
+            assert!(receipt_held_in(&receipts.0, 4242, "s"));
+        }
+    }
+
+    #[test]
+    fn cleanup_inspection_is_bounded_and_uncertainty_is_not_success() {
+        let receipts = Receipts::new();
+        for index in 0..513 {
+            std::fs::write(receipts.0.join(format!("unrelated-{index}")), "").unwrap();
+        }
+        assert!(receipt_held_in(&receipts.0, 4242, "s"));
+        let not_a_directory = receipts.0.join("unrelated-0");
+        assert!(receipt_held_in(&not_a_directory, 4242, "s"));
+        assert!(!receipt_held_in(&receipts.0.join("missing"), 4242, "s"));
     }
 
     #[cfg(target_os = "linux")]
