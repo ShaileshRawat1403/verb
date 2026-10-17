@@ -76,8 +76,7 @@ enum Admission {
     EndedUnconfirmed(i32),
 }
 
-/// Waits until the execution boundary admits the external terminal whose client runs as `pid`, or
-/// refuses it. Admission is the controller's lease receipt, so two simultaneous launches cannot both
+/// Waits until the execution boundary admits the external terminal `launch`, or refuses it. Admission is the controller's lease receipt, so two simultaneous launches cannot both
 /// be reported as running when only one slot is free.
 ///
 /// - Admitted (a receipt was observed at any point): `Confirmed`, whatever its later exit code.
@@ -90,14 +89,14 @@ enum Admission {
 fn await_admission(
     terminals: &std::sync::Mutex<HashMap<String, WebTerminal>>,
     id: &str,
-    pid: i32,
+    launch: &crate::isolation::Launch,
     wait: Duration,
-    admitted: impl Fn(i32) -> bool,
+    admitted: impl Fn(&crate::isolation::Launch) -> bool,
 ) -> Result<Admission, String> {
     let deadline = Instant::now() + wait;
     let mut seen = false;
     loop {
-        seen = seen || admitted(pid);
+        seen = seen || admitted(launch);
         let mut map = terminals.lock().unwrap();
         let Some(terminal) = map.get_mut(id) else {
             return Err("the terminal closed before it started".to_owned());
@@ -197,14 +196,14 @@ fn launch_reply(
     session: &str,
     body: Value,
     after: Option<AfterAdmission>,
-    admitted: fn(i32) -> bool,
+    admitted: fn(&crate::isolation::Launch) -> bool,
 ) -> Reply {
     let pending = terminals
         .lock()
         .unwrap()
         .get(session)
-        .and_then(|terminal| terminal.pending_admission);
-    let Some(pid) = pending else {
+        .and_then(|terminal| terminal.pending_admission.clone());
+    let Some(launch) = pending else {
         return Reply::json(201, after_admission(body, after));
     };
     let terminals = Arc::clone(terminals);
@@ -213,7 +212,7 @@ fn launch_reply(
     let mut reply = Reply::json(201, Value::Null);
     reply.permit = Some(permit);
     reply.deferred = Some(Box::new(move || {
-        let result = await_admission(&terminals, &id, pid, ADMISSION_WAIT, admitted);
+        let result = await_admission(&terminals, &id, &launch, ADMISSION_WAIT, admitted);
         generation.fetch_add(1, Ordering::SeqCst);
         result.map(|admission| {
             match admission {
@@ -260,9 +259,9 @@ struct WebTerminal {
     exit_seen_at: Option<Instant>,
     /// Exit status once the process has ended, kept for the launch acknowledgement.
     exit_code: Option<i32>,
-    /// For an external terminal not yet admitted by the execution boundary: the client's PID.
+    /// For an external terminal not yet admitted by the execution boundary: its launch identity.
     /// A pending terminal is not presented as a session until admission is confirmed.
-    pending_admission: Option<i32>,
+    pending_admission: Option<crate::isolation::Launch>,
     failure: Option<String>,
     /// For the observer, in memory only: when this terminal last produced output, and recent
     /// failed commands (shell integration's volatile label, never written anywhere).
@@ -274,7 +273,7 @@ impl WebTerminal {
     fn new(
         mut hosted: Hosted,
         sink: Arc<crate::stream::TerminalStreamSink>,
-        pending_admission: Option<i32>,
+        pending_admission: Option<crate::isolation::Launch>,
     ) -> Self {
         hosted.capture_web_output();
         Self {
@@ -2475,6 +2474,8 @@ impl WebHost {
             return Err("selected session belongs to another project".to_owned());
         }
         let sink = crate::stream::TerminalStreamSink::new(start.session.id.clone());
+        // Before the spawn: the controller's receipt for this launch cannot be older.
+        let spawned_at = std::time::SystemTime::now();
         let hosted = Hosted::start_with_sink(
             &workspace,
             start.session,
@@ -2487,7 +2488,7 @@ impl WebHost {
             Some(Arc::clone(&sink)),
         )?;
         let id = hosted.session.id.clone();
-        let pending = crate::isolation::external().then(|| hosted.pid());
+        let pending = crate::isolation::launch_identity(hosted.pid(), &workspace, &id, spawned_at);
         self.terminals
             .lock()
             .unwrap()
@@ -2631,19 +2632,29 @@ mod tests {
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
-    fn never(_: i32) -> bool {
+    fn never(_: &crate::isolation::Launch) -> bool {
         false
     }
 
-    fn always(_: i32) -> bool {
+    fn always(_: &crate::isolation::Launch) -> bool {
         true
+    }
+
+    fn test_launch(pid: i32) -> crate::isolation::Launch {
+        crate::isolation::Launch {
+            pid,
+            started: Some(1),
+            project: "p".to_owned(),
+            session: "t".to_owned(),
+            spawned_at: std::time::SystemTime::now(),
+        }
     }
 
     fn spec_reply(
         terminal: WebTerminal,
         body: Value,
         after: Option<AfterAdmission>,
-        admitted: fn(i32) -> bool,
+        admitted: fn(&crate::isolation::Launch) -> bool,
     ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
         let terminals = Arc::new(std::sync::Mutex::new(HashMap::from([(
             "spec".to_owned(),
@@ -2666,7 +2677,7 @@ mod tests {
 
     fn spec_handoff_reply(
         terminal: WebTerminal,
-        admitted: fn(i32) -> bool,
+        admitted: fn(&crate::isolation::Launch) -> bool,
     ) -> (Reply, Arc<std::sync::Mutex<HashMap<String, WebTerminal>>>) {
         spec_reply(
             terminal,
@@ -2961,7 +2972,7 @@ mod tests {
             final_screen: Vec::new(),
             exit_seen_at: None,
             exit_code,
-            pending_admission: pending,
+            pending_admission: pending.map(test_launch),
             failure: None,
             last_output: Instant::now(),
             failures: VecDeque::new(),
@@ -2972,8 +2983,14 @@ mod tests {
     fn refused_external_terminal_is_a_capacity_error_not_a_session() {
         let terminals =
             std::sync::Mutex::new(HashMap::from([("t".to_owned(), refused_terminal())]));
-        let error =
-            await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap_err();
+        let error = await_admission(
+            &terminals,
+            "t",
+            &test_launch(4242),
+            Duration::from_secs(5),
+            never,
+        )
+        .unwrap_err();
         assert_eq!(error, TERMINAL_CAPACITY);
         // Never presented as a session, and nothing hidden is left behind once it is closed out.
         assert!(!terminals.lock().unwrap().contains_key("t"));
@@ -2992,12 +3009,25 @@ mod tests {
             bare_terminal(Some(126), Some(4242)),
         )]));
         assert_eq!(
-            await_admission(&terminals, "t", 4242, Duration::from_secs(5), never).unwrap(),
+            await_admission(
+                &terminals,
+                "t",
+                &test_launch(4242),
+                Duration::from_secs(5),
+                never
+            )
+            .unwrap(),
             Admission::EndedUnconfirmed(126)
         );
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
-        let error =
-            await_admission(&terminals, "missing", 4242, Duration::ZERO, never).unwrap_err();
+        let error = await_admission(
+            &terminals,
+            "missing",
+            &test_launch(4242),
+            Duration::ZERO,
+            never,
+        )
+        .unwrap_err();
         assert!(error.contains("closed"), "{error}");
         assert_eq!(deferred_error(&error).0, 400);
     }
@@ -3008,8 +3038,14 @@ mod tests {
             "t".to_owned(),
             bare_terminal(None, Some(4242)),
         )]));
-        let error =
-            await_admission(&terminals, "t", 4242, Duration::from_millis(100), never).unwrap_err();
+        let error = await_admission(
+            &terminals,
+            "t",
+            &test_launch(4242),
+            Duration::from_millis(100),
+            never,
+        )
+        .unwrap_err();
         assert_eq!(error, TERMINAL_START_TIMEOUT);
         assert!(terminals.lock().unwrap().is_empty());
         let (status, body) = deferred_error(&error);
@@ -3027,9 +3063,17 @@ mod tests {
             bare_terminal(None, Some(4242)),
         )]));
         let from = Instant::now();
-        let later = move |_: i32| from.elapsed() >= Duration::from_millis(200);
+        let later =
+            move |_: &crate::isolation::Launch| from.elapsed() >= Duration::from_millis(200);
         assert_eq!(
-            await_admission(&terminals, "t", 4242, Duration::from_secs(3), later).unwrap(),
+            await_admission(
+                &terminals,
+                "t",
+                &test_launch(4242),
+                Duration::from_secs(3),
+                later
+            )
+            .unwrap(),
             Admission::Confirmed
         );
         assert!(from.elapsed() >= Duration::from_millis(200));
@@ -3050,8 +3094,14 @@ mod tests {
             terminal.push(b"Verb execution unavailable: capacity\r\n".to_vec());
             terminal.exit_code = Some(crate::isolation::REFUSED_EXIT);
         });
-        let error =
-            await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap_err();
+        let error = await_admission(
+            &terminals,
+            "t",
+            &test_launch(4242),
+            Duration::from_secs(3),
+            never,
+        )
+        .unwrap_err();
         refuse.join().unwrap();
         assert_eq!(error, TERMINAL_CAPACITY);
         assert!(terminals.lock().unwrap().is_empty());
@@ -3065,7 +3115,14 @@ mod tests {
             bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
         )]));
         assert_eq!(
-            await_admission(&terminals, "t", 4242, Duration::from_secs(3), always).unwrap(),
+            await_admission(
+                &terminals,
+                "t",
+                &test_launch(4242),
+                Duration::from_secs(3),
+                always
+            )
+            .unwrap(),
             Admission::Confirmed
         );
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
@@ -3074,7 +3131,14 @@ mod tests {
         quick.push(b"tool: temporary failure\r\n".to_vec());
         let terminals = std::sync::Mutex::new(HashMap::from([("t".to_owned(), quick)]));
         assert_eq!(
-            await_admission(&terminals, "t", 4242, Duration::from_secs(3), never).unwrap(),
+            await_admission(
+                &terminals,
+                "t",
+                &test_launch(4242),
+                Duration::from_secs(3),
+                never
+            )
+            .unwrap(),
             Admission::EndedUnconfirmed(crate::isolation::REFUSED_EXIT)
         );
         assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
