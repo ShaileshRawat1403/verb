@@ -72,11 +72,18 @@ export function initWorkbench(deps) {
       toast(error.message, "error");
     }
   }
-  async function refreshGit() {
+  // Execution-boundary congestion is retried a bounded number of times; genuine Git errors are
+  // shown as they are.
+  const GIT_RETRY_DELAYS = [1500, 3000, 6000];
+  let gitRetry = null;
+  async function refreshGit(attempt = 0) {
+    clearTimeout(gitRetry);
     try {
       state.git = await api("GET", "/api/git");
     } catch (error) {
-      state.git = { error: error.message, changes: [], recent: [] };
+      const busy = error.code === "capacity" && attempt < GIT_RETRY_DELAYS.length;
+      state.git = { error: busy ? "Busy—retrying" : error.message, busy, changes: [], recent: [] };
+      if (busy) gitRetry = setTimeout(() => refreshGit(attempt + 1), GIT_RETRY_DELAYS[attempt]);
     }
     renderGit();
     renderProof();
@@ -278,7 +285,7 @@ export function initWorkbench(deps) {
     const git = state.git;
     if (!git) return;
     if (git.error) {
-      $("#git-branch").textContent = "Git unavailable";
+      $("#git-branch").textContent = git.busy ? "Git busy" : "Git unavailable";
       $("#git-status").textContent = git.error;
       return;
     }

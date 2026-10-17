@@ -4,6 +4,8 @@ use std::process::{Command, Stdio};
 
 pub(super) const CLIENT: &str = "/usr/local/libexec/verb-boundary-client";
 const PROJECTS: &str = "/srv/verb-boundary/projects";
+/// The client writes `<pid>.json` here only after the controller has issued the session's lease.
+const RECEIPTS: &str = "/home/verb-host/.verb-boundary-clients";
 
 pub(super) fn validate_host() -> Result<(), String> {
     let status = std::fs::read_to_string("/proc/self/status").map_err(|e| e.to_string())?;
@@ -114,6 +116,11 @@ pub(super) fn arguments(
     }
     out.extend_from_slice(args);
     Ok(out)
+}
+
+/// Controller-authoritative startup acknowledgement for the client running as `pid`.
+pub(super) fn admitted(pid: i32) -> bool {
+    pid > 1 && Path::new(RECEIPTS).join(format!("{pid}.json")).is_file()
 }
 
 pub(super) fn stop_client(pid: i32) -> Result<(), String> {

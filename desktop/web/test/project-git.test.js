@@ -45,3 +45,9 @@ test("older hosts remain readable without inventing detached identity", () => {
     "Git status unavailable",
   );
 });
+test("a full execution slot reads as busy and retrying, never as a Git failure", () => {
+  const busy = view({ gitStatus: "busy", changedFiles: null });
+  assert.equal(busy.branch, "Busy—retrying");
+  assert.match(busy.detail, /retries automatically/);
+  assert.notEqual(busy.changes, "0 changed");
+});

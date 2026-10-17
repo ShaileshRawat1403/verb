@@ -22,6 +22,12 @@ use crate::{project, workbench, Agent, SessionState};
 
 const MAX_BODY: usize = 64 * 1024;
 const MAX_BUFFER: usize = 2 * 1024 * 1024;
+/// How long a launch waits for the execution boundary to admit or refuse an external terminal.
+/// The boundary client retries a capacity refusal for up to 3 s before giving up.
+const ADMISSION_WAIT: Duration = Duration::from_secs(6);
+/// Shown when the execution boundary has no free terminal slot.
+const TERMINAL_CAPACITY: &str =
+    "All terminal slots on this host are in use. End a terminal, then start another.";
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
@@ -55,6 +61,58 @@ struct OutputChunk {
     bytes: Vec<u8>,
 }
 
+/// Waits until the execution boundary admits the external terminal whose client runs as `pid`, or
+/// refuses it. Admission is the controller's lease receipt, so two simultaneous launches cannot both
+/// be reported as running when only one slot is free. A refused terminal is never presented as a
+/// session; if neither outcome arrives in time the terminal is shown, and a later refusal still
+/// ends it visibly (the startup-refusal backstop).
+fn await_admission(
+    terminals: &std::sync::Mutex<HashMap<String, WebTerminal>>,
+    id: &str,
+    pid: i32,
+    wait: Duration,
+) -> Result<(), String> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let admitted = crate::isolation::admitted(pid);
+        let mut map = terminals.lock().unwrap();
+        let Some(terminal) = map.get_mut(id) else {
+            return Err("the terminal closed before it started".to_owned());
+        };
+        let refused = terminal.exit_code == Some(crate::isolation::REFUSED_EXIT);
+        if refused && !admitted {
+            // Wait for the terminal loop to close out the session record, then forget the
+            // never-presented terminal so nothing hidden lingers in the host.
+            if terminal.hosted.is_none() || Instant::now() >= deadline + Duration::from_secs(3) {
+                map.remove(id);
+                return Err(TERMINAL_CAPACITY.to_owned());
+            }
+        } else if admitted || terminal.exit_code.is_some() || Instant::now() >= deadline {
+            // Admitted, or ended for any other reason (shown with its exit status, as before),
+            // or no verdict in time: present it. Only a capacity refusal is withheld.
+            terminal.pending_admission = None;
+            return Ok(());
+        }
+        drop(map);
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Status and body for slow work that failed. A full execution boundary is temporary congestion
+/// (503, `code: "capacity"`), never a Git or request failure; everything else stays 400.
+fn deferred_error(error: &str) -> (u16, Vec<u8>) {
+    if error == TERMINAL_CAPACITY || crate::isolation::capacity_message(error) {
+        (
+            503,
+            json!({"error": error, "code": "capacity"})
+                .to_string()
+                .into_bytes(),
+        )
+    } else {
+        (400, json!({"error": error}).to_string().into_bytes())
+    }
+}
+
 struct WebTerminal {
     hosted: Option<Hosted>,
     sink: Arc<crate::stream::TerminalStreamSink>,
@@ -64,6 +122,11 @@ struct WebTerminal {
     buffered: usize,
     final_screen: Vec<u8>,
     exit_seen_at: Option<Instant>,
+    /// Exit status once the process has ended, kept for the launch acknowledgement.
+    exit_code: Option<i32>,
+    /// For an external terminal not yet admitted by the execution boundary: the client's PID.
+    /// A pending terminal is not presented as a session until admission is confirmed.
+    pending_admission: Option<i32>,
     failure: Option<String>,
     /// For the observer, in memory only: when this terminal last produced output, and recent
     /// failed commands (shell integration's volatile label, never written anywhere).
@@ -72,7 +135,11 @@ struct WebTerminal {
 }
 
 impl WebTerminal {
-    fn new(mut hosted: Hosted, sink: Arc<crate::stream::TerminalStreamSink>) -> Self {
+    fn new(
+        mut hosted: Hosted,
+        sink: Arc<crate::stream::TerminalStreamSink>,
+        pending_admission: Option<i32>,
+    ) -> Self {
         hosted.capture_web_output();
         Self {
             hosted: Some(hosted),
@@ -83,6 +150,8 @@ impl WebTerminal {
             buffered: 0,
             final_screen: Vec::new(),
             exit_seen_at: None,
+            exit_code: None,
+            pending_admission,
             failure: None,
             last_output: Instant::now(),
             failures: VecDeque::new(),
@@ -139,6 +208,7 @@ impl WebTerminal {
             self.push(chunk);
         }
         if let Some(code) = exit {
+            self.exit_code = Some(code);
             let seen = self.exit_seen_at.get_or_insert_with(Instant::now);
             if self
                 .hosted
@@ -1156,10 +1226,7 @@ impl WebHost {
                 let _permit = permit;
                 match work() {
                     Ok(body) => reply.body = body,
-                    Err(error) => {
-                        reply.status = 400;
-                        reply.body = json!({"error": error}).to_string().into_bytes();
-                    }
+                    Err(error) => (reply.status, reply.body) = deferred_error(&error),
                 }
                 send_reply(request, reply);
             });
@@ -1169,13 +1236,10 @@ impl WebHost {
             // Only secondary state work leaves the PTY loop. Authentication remains in dispatch.
             std::thread::spawn(move || {
                 let _permit = permit;
-                reply.body = match job.run() {
-                    Ok(body) => body,
-                    Err(error) => {
-                        reply.status = 400;
-                        json!({"error": error}).to_string().into_bytes()
-                    }
-                };
+                match job.run() {
+                    Ok(body) => reply.body = body,
+                    Err(error) => (reply.status, reply.body) = deferred_error(&error),
+                }
                 send_reply(request, reply);
             });
         } else {
@@ -1387,7 +1451,25 @@ impl WebHost {
             let input: LaunchRequest = read_json(request)?;
             let session = self.launch(input)?;
             self.invalidate_state();
-            return Ok(Reply::json(201, json!({"sessionId": session})));
+            let pending = self
+                .terminals
+                .lock()
+                .unwrap()
+                .get(&session)
+                .and_then(|terminal| terminal.pending_admission);
+            let Some(pid) = pending else {
+                return Ok(Reply::json(201, json!({"sessionId": session})));
+            };
+            // Answer off the request loop: live terminals keep streaming while this one waits.
+            let terminals = Arc::clone(&self.terminals);
+            let generation = Arc::clone(&self.state_generation);
+            let mut reply = Reply::json(201, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                let result = await_admission(&terminals, &session, pid, ADMISSION_WAIT);
+                generation.fetch_add(1, Ordering::SeqCst);
+                result.map(|()| json!({"sessionId": session}).to_string().into_bytes())
+            }));
+            return Ok(reply);
         }
         if method == &Method::Post && path == "/api/ask" {
             let input: AskRequest = read_json(request)?;
@@ -2227,10 +2309,11 @@ impl WebHost {
             Some(Arc::clone(&sink)),
         )?;
         let id = hosted.session.id.clone();
+        let pending = crate::isolation::external().then(|| hosted.pid());
         self.terminals
             .lock()
             .unwrap()
-            .insert(id.clone(), WebTerminal::new(hosted, sink));
+            .insert(id.clone(), WebTerminal::new(hosted, sink, pending));
         self.invalidate_state();
         Ok(id)
     }
@@ -2243,6 +2326,7 @@ impl WebHost {
         let terminals = self.terminals.lock().unwrap();
         let sessions = terminals
             .values()
+            .filter(|terminal| terminal.pending_admission.is_none())
             .filter_map(|terminal| {
                 let hosted = terminal.hosted.as_ref()?;
                 let session = &hosted.session;
@@ -2256,7 +2340,7 @@ impl WebHost {
             "anchor": self.identity.anchor, "workspace": self.project,
             "branch": null, "gitStatus": "loading", "changedFiles": null},
             "deployment": self.deployment, "sessions": sessions,
-            "terminalStates": terminals.iter().map(|(id, terminal)|
+            "terminalStates": terminals.iter().filter(|(_, terminal)| terminal.pending_admission.is_none()).map(|(id, terminal)|
                 (id.clone(), terminal_status(Some(terminal.hosted.is_some()))))
                 .collect::<serde_json::Map<String, Value>>(),
             "tasks": [], "memory": ""})
@@ -2369,6 +2453,72 @@ mod tests {
         assert_eq!(counter.load(Ordering::Acquire), 0);
     }
 
+    fn bare_terminal(exit_code: Option<i32>, pending: Option<i32>) -> WebTerminal {
+        WebTerminal {
+            hosted: None,
+            sink: crate::stream::TerminalStreamSink::new("test".to_owned()),
+            chunks: VecDeque::new(),
+            base: 0,
+            next: 0,
+            buffered: 0,
+            final_screen: Vec::new(),
+            exit_seen_at: None,
+            exit_code,
+            pending_admission: pending,
+            failure: None,
+            last_output: Instant::now(),
+            failures: VecDeque::new(),
+        }
+    }
+
+    #[test]
+    fn refused_external_terminal_is_a_capacity_error_not_a_session() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(Some(crate::isolation::REFUSED_EXIT), Some(4242)),
+        )]));
+        let error = await_admission(&terminals, "t", 4242, Duration::from_secs(5)).unwrap_err();
+        assert_eq!(error, TERMINAL_CAPACITY);
+        // Never presented as a session, and nothing hidden is left behind once it is closed out.
+        assert!(!terminals.lock().unwrap().contains_key("t"));
+        let (status, body) = deferred_error(&error);
+        assert_eq!(status, 503);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap()["code"],
+            "capacity"
+        );
+    }
+
+    #[test]
+    fn other_early_exits_are_shown_and_closed_terminals_are_not_capacity() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(Some(126), Some(4242)),
+        )]));
+        await_admission(&terminals, "t", 4242, Duration::from_secs(5)).unwrap();
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+        let error = await_admission(&terminals, "missing", 4242, Duration::ZERO).unwrap_err();
+        assert!(error.contains("closed"), "{error}");
+        assert_eq!(deferred_error(&error).0, 400);
+    }
+
+    #[test]
+    fn admission_wait_ends_with_the_terminal_shown_when_no_outcome_arrives() {
+        let terminals = std::sync::Mutex::new(HashMap::from([(
+            "t".to_owned(),
+            bare_terminal(None, Some(4242)),
+        )]));
+        await_admission(&terminals, "t", 4242, Duration::ZERO).unwrap();
+        assert!(terminals.lock().unwrap()["t"].pending_admission.is_none());
+    }
+
+    #[test]
+    fn boundary_capacity_text_is_congestion_and_git_errors_stay_errors() {
+        let busy = "Verb execution unavailable: busy";
+        assert_eq!(deferred_error(busy).0, 503);
+        assert_eq!(deferred_error("fatal: not a git repository").0, 400);
+    }
+
     #[test]
     fn output_cursor_replays_bytes_and_reports_overflow() {
         let mut terminal = WebTerminal {
@@ -2380,6 +2530,8 @@ mod tests {
             buffered: 0,
             final_screen: b"last screen".to_vec(),
             exit_seen_at: None,
+            exit_code: None,
+            pending_admission: None,
             failure: None,
             last_output: Instant::now(),
             failures: VecDeque::new(),
