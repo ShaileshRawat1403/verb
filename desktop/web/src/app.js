@@ -1,4 +1,5 @@
 import { projectGitPresentation } from "./project-git.js";
+import { agentAvailability, customCommandAvailable } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
 import { isActiveSession, hasTerminalReplay, endedSession, sessionWithRuntime } from "./session-state.js";
@@ -799,7 +800,7 @@ async function activateSession(id) {
     $("#inbox-content").innerHTML =
       items +
       (notHere
-        ? `<p class="inbox-note">${escapeHtml(name)} is not installed on this machine, so this conversation cannot be continued here. Install it on the host, or continue on the machine where it ran.</p>`
+        ? `<p class="inbox-note">${escapeHtml(name)} is unavailable in this execution environment, so this conversation cannot be continued here. Ask the host operator to provision it, or continue on the machine where it ran.</p>`
         : actions);
     showDialog("inbox-dialog");
   } catch (error) {
@@ -1768,7 +1769,9 @@ document.addEventListener("click", async (event) => {
   const actionButton = event.target.closest("[data-action]");
   if (actionButton) {
     if (actionButton.dataset.action === "new-session") {
+      $("#session-launch-error").hidden = true;
       updateLaunchForm();
+      loadInstalledAgents();
       return showDialog("session-dialog");
     }
     if (actionButton.dataset.action === "new-task")
@@ -1921,6 +1924,19 @@ $("#phone-stop").addEventListener("click", async () => {
 $("#refresh-button").addEventListener("click", () => refreshState());
 function updateLaunchForm() {
   const form = $("#session-form");
+  form.querySelectorAll('input[name="agent"]').forEach((input) => {
+    const state = agentAvailability(ui.agentCapabilities, input.value);
+    input.disabled = !state.available;
+    const label = input.closest("label");
+    label.classList.toggle("not-installed", input.disabled);
+    const detail = label.querySelector("small");
+    detail.dataset.originalText ??= detail.textContent;
+    detail.textContent = state.reason || detail.dataset.originalText;
+    label.title = state.reason;
+  });
+  if (form.querySelector('input[name="agent"]:checked')?.disabled) {
+    form.querySelector('input[value="shell"]').checked = true;
+  }
   const agent = form.elements.agent.value;
   $("#custom-command-fields").hidden = agent !== "custom";
   $("#launch-project").textContent =
@@ -1935,7 +1951,16 @@ function updateLaunchForm() {
 }
 document
   .querySelectorAll('#session-dialog input[name="agent"]')
-  .forEach((input) => input.addEventListener("change", updateLaunchForm));
+  .forEach((input) => input.addEventListener("change", () => {
+    $("#session-launch-error").hidden = true;
+    updateLaunchForm();
+  }));
+
+function launchError(message) {
+  const error = $("#session-launch-error");
+  error.textContent = message;
+  error.hidden = false;
+}
 
 $("#session-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1943,8 +1968,13 @@ $("#session-form").addEventListener("submit", async (event) => {
   const agent = form.elements.agent.value;
   const command = form.elements.command.value.trim();
   const isolated = form.elements.isolated.checked;
+  if (!agentAvailability(ui.agentCapabilities, agent).available)
+    return launchError("This agent is unavailable in the current execution environment.");
   if (agent === "custom" && !command)
-    return toast("Enter a CLI executable.", "error");
+    return launchError("Enter a CLI executable.");
+  if (agent === "custom" && !customCommandAvailable(ui.agentCapabilities, command))
+    return launchError("Choose one of the approved commands shown above.");
+  $("#session-launch-error").hidden = true;
   const button = form.querySelector('[type="submit"]');
   button.disabled = true;
   button.textContent = "Opening…";
@@ -1974,7 +2004,7 @@ $("#session-form").addEventListener("submit", async (event) => {
     };
     mountLaunchedSession(sessionObj);
   } catch (error) {
-    toast(error.message, "error");
+    launchError(error.message);
   } finally {
     button.disabled = false;
     updateLaunchForm();
@@ -2159,28 +2189,29 @@ function watchSilence(terminal) {
     );
   }, 15000);
 }
-/** Which agents this machine can start (from the server). Unknown means allowed. */
+/** Which agents this execution environment can start. Unknown stays unavailable. */
 async function loadInstalledAgents() {
   try {
-    ui.installed = (await api("GET", "/api/agents")).installed;
+    ui.agentCapabilities = await api("GET", "/api/agents");
+    ui.installed = ui.agentCapabilities.installed;
   } catch {
     ui.installed = {};
+    ui.agentCapabilities = { unavailable: true };
   }
-  const missing = (agent) => ui.installed[agent] === false;
+  const missing = (agent) => !agentAvailability(ui.agentCapabilities, agent).available;
   document.querySelectorAll("#spec-agent option, #talk-agent option").forEach((option) => {
     option.disabled = missing(option.value);
-    if (option.disabled && !option.textContent.includes("not installed")) option.textContent += " · not installed";
+    option.dataset.originalText ??= option.textContent;
+    option.textContent = option.dataset.originalText + (option.disabled ? " · unavailable here" : "");
   });
-  document.querySelectorAll('input[name="agent"]').forEach((input) => {
-    input.disabled = missing(input.value);
-    input.closest("label")?.classList.toggle("not-installed", input.disabled);
-    input.closest("label")?.setAttribute("title", input.disabled ? "Not installed on this machine" : "");
-  });
-  const picker = $("#spec-agent");
-  if (picker?.selectedOptions[0]?.disabled) {
-    const first = [...picker.options].find((o) => !o.disabled);
-    if (first) picker.value = first.value;
+  for (const selector of ["#spec-agent", "#talk-agent"]) {
+    const picker = $(selector);
+    if (picker?.selectedOptions[0]?.disabled) {
+      const first = [...picker.options].find((o) => !o.disabled);
+      if (first) picker.value = first.value;
+    }
   }
+  updateLaunchForm();
 }
 
 /** Driven with an access token (an agent, a script): say so on every page, with its scope and expiry. */

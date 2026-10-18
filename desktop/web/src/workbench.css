@@ -2783,3 +2783,10 @@ select:focus-visible,
 label.not-installed {
   opacity: 0.5;
 }
+#session-launch-error {
+  margin: 12px 0;
+  color: var(--danger-text);
+  padding: 12px;
+  background: var(--danger-bg);
+  border-radius: var(--radius-sm, 6px);
+}

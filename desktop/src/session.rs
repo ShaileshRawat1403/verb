@@ -65,10 +65,19 @@ impl Agent {
         }
     }
 
-    /// Whether this agent's program can be started here: found on Verb's own `PATH` (the one a
-    /// hosted terminal is started with), or an executable path. A missing agent used to start a
-    /// terminal that failed at exec and showed an empty tile (Antigravity on Node 1).
+    /// Whether this execution environment exposes the agent. An external boundary reports its
+    /// guest programs; otherwise use Verb's own PATH. Host binaries outside the guest do not
+    /// count as installed, and unavailable agents are refused before creating a terminal.
     pub(crate) fn installed(&self) -> bool {
+        if let Some(programs) = isolation::external_programs() {
+            let command = self.command();
+            let name = if matches!(self, Self::Shell) {
+                "bash"
+            } else {
+                command.as_str()
+            };
+            return programs.iter().any(|program| program == name);
+        }
         if matches!(self, Self::Shell | Self::External | Self::Custom(_)) {
             return true;
         }

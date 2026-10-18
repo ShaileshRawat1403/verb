@@ -827,10 +827,15 @@
             ><strong>AGY</strong
             ><small>Google Antigravity coding agent</small></label
           ><label
+            ><input type="radio" name="agent" value="opencode" /><span
+              class="agent-icon custom"
+              >OC</span
+            ><strong>OpenCode</strong><small>AI coding agent</small></label
+          ><label class="full-span"
             ><input type="radio" name="agent" value="custom" /><span
               class="agent-icon custom"
               >&lt;/&gt;</span
-            ><strong>Other CLI</strong><small>Any executable</small></label
+            ><strong>Other CLI</strong><small>Checking availability…</small></label
           >
         </div>
         <div id="custom-command-fields" class="custom-fields" hidden>
@@ -861,6 +866,7 @@
             ></span
           ></label
         >
+        <p id="session-launch-error" role="alert" hidden></p>
         <div class="modal-footer">
           <button
             class="secondary-button"

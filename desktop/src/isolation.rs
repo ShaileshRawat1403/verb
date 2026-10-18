@@ -45,6 +45,11 @@ pub(crate) fn external() -> bool {
     matches!(profile(), Ok(Some(Profile::External)))
 }
 
+/// Programs exposed inside external terminals, never inferred from the host account's PATH.
+pub(crate) fn external_programs() -> Option<Vec<String>> {
+    external().then(external::programs)
+}
+
 /// Exit status of a boundary client whose launch the controller refused before issuing a lease.
 pub(crate) const REFUSED_EXIT: i32 = 75;
 
