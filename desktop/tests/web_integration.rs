@@ -1942,7 +1942,9 @@ fn a_missing_agent_is_refused_before_a_terminal_starts() {
         true,
     );
     assert_eq!(status, 400);
-    assert!(String::from_utf8_lossy(&body).contains("agy is not installed on this machine"));
+    assert!(
+        String::from_utf8_lossy(&body).contains("agy is unavailable in this execution environment")
+    );
     let agents: Value =
         serde_json::from_slice(&server.request("GET", "/api/agents", None, true).1).unwrap();
     assert_eq!(agents["installed"]["agy"], json!(false));

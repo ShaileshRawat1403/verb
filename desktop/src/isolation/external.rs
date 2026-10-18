@@ -1,6 +1,9 @@
 //! Fixed unprivileged client for the explicitly selected private candidate.
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub(super) const CLIENT: &str = "/usr/local/libexec/verb-boundary-client";
 const PROJECTS: &str = "/srv/verb-boundary/projects";
@@ -32,6 +35,96 @@ pub(super) fn client() -> String {
 
 fn receipts() -> PathBuf {
     synthetic().map_or_else(|| PathBuf::from(RECEIPTS), |root| root.join("receipts"))
+}
+
+const LEGACY_PROGRAMS: &[&str] = &["bash", "claude", "codex", "git", "node", "python3"];
+
+/// Advisory availability from the same immutable client used for launches. The root controller
+/// still authorizes every request. Old clients have only the original two-agent runtime.
+pub(super) fn programs() -> Vec<String> {
+    type Cache = Option<(String, Instant, Vec<String>)>;
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+    let client = client();
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some((key, at, programs)) = cache.as_ref() {
+        if key == &client && at.elapsed() < Duration::from_secs(10) {
+            return programs.clone();
+        }
+    }
+    let programs = probe_programs(&client).unwrap_or_else(|| {
+        LEGACY_PROGRAMS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect()
+    });
+    *cache = Some((client, Instant::now(), programs.clone()));
+    programs
+}
+
+fn decode_programs(raw: &[u8]) -> Option<Vec<String>> {
+    if raw.len() > 4096 {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(raw).ok()?;
+    if value["version"] != 1 || value["restricted"] != true {
+        return None;
+    }
+    let entries = value["programs"].as_array()?;
+    if entries.len() > 16 {
+        return None;
+    }
+    let mut programs = Vec::new();
+    for entry in entries {
+        let name = entry.as_str()?;
+        if !LEGACY_PROGRAMS.contains(&name) && !matches!(name, "agy" | "opencode") {
+            return None;
+        }
+        if programs.iter().any(|old| old == name) {
+            return None;
+        }
+        programs.push(name.to_owned());
+    }
+    Some(programs)
+}
+
+fn probe_programs(client: &str) -> Option<Vec<String>> {
+    let mut child = Command::new(client)
+        .arg("--capabilities")
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdout = child.stdout.take()?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut raw = Vec::new();
+        let result = stdout.take(4097).read_to_end(&mut raw).map(|_| raw);
+        let _ = tx.send(result);
+    });
+    let deadline = Instant::now() + Duration::from_secs(1);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return status
+                    .success()
+                    .then(|| rx.recv_timeout(Duration::from_millis(100)).ok()?.ok())
+                    .flatten()
+                    .and_then(|raw| decode_programs(&raw))
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
 }
 
 pub(super) fn validate_host() -> Result<(), String> {
@@ -91,6 +184,8 @@ fn program_name(program: &str) -> Result<&str, String> {
         "python3" | "/usr/bin/python3" => Ok("python3"),
         "claude" | "/usr/local/bin/claude" => Ok("claude"),
         "codex" | "/usr/local/bin/codex" => Ok("codex"),
+        "agy" | "/usr/local/bin/agy" => Ok("agy"),
+        "opencode" | "/usr/local/bin/opencode" => Ok("opencode"),
         "timeout" | "/usr/bin/timeout" => Ok("timeout"),
         "recovery" => Ok("recovery"),
         _ => Err("program is unavailable in the private execution candidate".into()),
@@ -334,7 +429,45 @@ mod tests {
             assert!(project_id(Path::new(project)).is_err());
         }
         assert_eq!(program_name("/usr/local/bin/codex").unwrap(), "codex");
+        assert_eq!(program_name("/usr/local/bin/agy").unwrap(), "agy");
+        assert_eq!(program_name("/usr/local/bin/opencode").unwrap(), "opencode");
         assert!(stop_client(1).is_err());
+    }
+
+    #[test]
+    fn capabilities_are_bounded_and_never_authorize_arbitrary_programs() {
+        let valid = br#"{"version":1,"restricted":true,"programs":["bash","agy","opencode"]}"#;
+        assert_eq!(decode_programs(valid).unwrap(), ["bash", "agy", "opencode"]);
+        for invalid in [
+            br#"{"version":2,"restricted":true,"programs":["bash"]}"#.as_slice(),
+            br#"{"version":1,"restricted":false,"programs":["bash"]}"#,
+            br#"{"version":1,"restricted":true,"programs":["/tmp/bash"]}"#,
+            br#"{"version":1,"restricted":true,"programs":["bash","bash"]}"#,
+            br#"{"version":1,"restricted":true,"programs":[42]}"#,
+        ] {
+            assert!(decode_programs(invalid).is_none());
+        }
+        assert!(decode_programs(&vec![b' '; 4097]).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capability_probe_is_bounded_and_requires_a_successful_versioned_reply() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = Receipts::new();
+        let path = root.0.join("client");
+        std::fs::write(&path, "#!/bin/sh\nprintf '%s\\n' '{\"version\":1,\"restricted\":true,\"programs\":[\"bash\",\"agy\",\"opencode\"]}'\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            probe_programs(path.to_str().unwrap()).unwrap(),
+            ["bash", "agy", "opencode"]
+        );
+        std::fs::write(&path, "#!/bin/sh\nexit 2\n").unwrap();
+        assert!(probe_programs(path.to_str().unwrap()).is_none());
+        std::fs::write(&path, "#!/bin/sh\nexec sleep 10\n").unwrap();
+        let started = Instant::now();
+        assert!(probe_programs(path.to_str().unwrap()).is_none());
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     const PROJECT: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";

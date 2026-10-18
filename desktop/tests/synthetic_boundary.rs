@@ -27,6 +27,10 @@ const PROJECT: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f0";
 /// `--stop-client PID`. Receipts carry the same fields the real client writes after a lease.
 const CLIENT: &str = r#"#!/bin/bash
 root="$(cd "$(dirname "$0")" && pwd)"
+if [ "$1" = --capabilities ]; then
+  if [ -f "$root/capabilities" ]; then cat "$root/capabilities"; exit 0; fi
+  exit 2 # Legacy client: no optional agents.
+fi
 receipt() { # pid session mtime
   printf '{"generation":"0123456789abcdef0123456789abcdef","operation":"stop","project":"%s","session":"%s","version":1}\n' \
     "$project" "$2" > "$root/receipts/.pending-$1"
@@ -353,8 +357,7 @@ fn refusal_is_capacity_and_an_unconfirmed_exit_is_shown_without_a_start() {
 
 #[test]
 fn talks_cannot_reach_a_provider_through_the_boundary() {
-    // agy is not a program the private boundary runs, so a talk (and so talk-to-terminal) is
-    // refused before anything is launched for it.
+    // A legacy boundary has no AGY runtime. A host-side override must never bypass its policy.
     let fixtures = std::env::temp_dir().join(format!(
         "verb-synthetic-agy-{}-{}",
         std::process::id(),
@@ -380,6 +383,32 @@ fn talks_cannot_reach_a_provider_through_the_boundary() {
     assert!(!marker.exists(), "the provider stand-in ran");
     assert!(host.client_pids().is_empty());
     let _ = fs::remove_dir_all(fixtures);
+}
+
+#[test]
+fn agent_catalog_uses_guest_capabilities_and_rejects_unavailable_launches_before_spawn() {
+    let host = Host::start("admit");
+    fs::write(host.root.join("boundary/capabilities"),
+        json!({"version":1,"restricted":true,"programs":["bash","claude","codex","agy","opencode"]}).to_string()).unwrap();
+    let (status, catalog) = host.request("GET", "/api/agents", None);
+    assert_eq!(status, 200);
+    assert_eq!(catalog["restricted"], true);
+    assert_eq!(catalog["installed"]["agy"], true);
+    assert_eq!(catalog["installed"]["opencode"], true);
+    assert_eq!(catalog["installed"]["gemini"], false);
+    assert!(host.client_pids().is_empty());
+
+    let legacy = Host::start("admit");
+    let (_, catalog) = legacy.request("GET", "/api/agents", None);
+    assert_eq!(catalog["installed"]["agy"], false);
+    assert_eq!(catalog["installed"]["opencode"], false);
+    let (status, body) = legacy.request(
+        "POST",
+        "/api/terminals",
+        Some(json!({"agent":"agy","isolated":false})),
+    );
+    assert_eq!(status, 400, "{body}");
+    assert!(legacy.client_pids().is_empty());
 }
 
 /// Times `request` while `stalled` is in flight on another connection.

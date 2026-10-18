@@ -58,6 +58,48 @@ test.beforeAll(async () => {
 
 test.afterAll(() => server?.kill());
 
+test("agent chooser explains isolated availability before a launch", async ({ page }) => {
+  await page.route("**/api/agents", route => route.fulfill({
+    json: { installed: { claude: true, codex: true, agy: false, opencode: false },
+      restricted: true, programs: ["bash", "claude", "codex", "git"] },
+  }));
+  await page.goto(url);
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  const dialog = page.locator("#session-dialog");
+  await expect(dialog.locator('input[value="agy"]')).toBeDisabled();
+  await expect(dialog.locator('input[value="opencode"]')).toBeDisabled();
+  await expect(dialog.locator('input[value="agy"]').locator("..")).toContainText("Unavailable in this isolated runtime");
+  await dialog.locator('label:has(input[value="custom"])').click();
+  await expect(dialog).toContainText("Approved commands: bash, claude, codex, git");
+  await dialog.getByRole("textbox", { name: "Executable", exact: true }).fill("/tmp/unknown-cli");
+  let launches = 0;
+  await page.route("**/api/terminals", route => { launches++; return route.abort(); });
+  await dialog.getByRole("button", { name: "Open CLI →", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("Choose one of the approved commands shown above.");
+  expect(launches).toBe(0);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+});
+
+test("provisioned OpenCode has its own choice and launch errors stay inside the dialog", async ({ page }) => {
+  await page.route("**/api/agents", route => route.fulfill({
+    json: { installed: { claude: true, codex: true, agy: true, opencode: true },
+      restricted: true, programs: ["bash", "claude", "codex", "agy", "opencode"] },
+  }));
+  await page.route("**/api/terminals", async route => {
+    expect(route.request().postDataJSON().agent).toBe("opencode");
+    return route.fulfill({ status: 503, json: { error: "All terminal slots on this host are in use." } });
+  });
+  await page.goto(url);
+  await page.getByRole("button", { name: "New session", exact: true }).click();
+  const dialog = page.locator("#session-dialog");
+  await expect(dialog.locator('input[value="opencode"]')).toBeEnabled();
+  await dialog.locator('label:has(input[value="opencode"])').click();
+  await dialog.getByRole("button", { name: "Open OpenCode →", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toHaveText("All terminal slots on this host are in use.");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+});
+
 test("a fresh project opens directly into a native terminal", async ({ page }) => {
   const errors = [];
   page.on("pageerror", e => errors.push(e.message));

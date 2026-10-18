@@ -1586,11 +1586,14 @@ impl WebHost {
         request: &mut Request,
     ) -> Result<Reply, String> {
         if method == &Method::Get && path == "/api/agents" {
-            let agents: serde_json::Map<String, Value> = crate::installed_agents()
-                .into_iter()
-                .map(|(name, installed)| (name.to_owned(), json!(installed)))
-                .collect();
-            return Ok(Reply::json(200, json!({ "installed": agents })));
+            return Ok(self.off_loop(false, || {
+                let programs = crate::isolation::external_programs();
+                let agents: serde_json::Map<String, Value> = crate::installed_agents()
+                    .into_iter()
+                    .map(|(name, installed)| (name.to_owned(), json!(installed)))
+                    .collect();
+                Ok(json!({ "installed": agents, "restricted": programs.is_some(), "programs": programs }))
+            }));
         }
         if method == &Method::Get && path == "/api/whoami" {
             return Ok(Reply::json(200, json!(self.access)));
@@ -2533,7 +2536,7 @@ impl Launcher {
         };
         if let Some(agent) = missing {
             return Err(format!(
-                "{agent} is not installed on this machine (not found on Verb's PATH). Install it here, or choose another agent."
+                "{agent} is unavailable in this execution environment. Choose an available agent or ask the host operator to provision it."
             ));
         }
         let start = if let Some(id) = input.resume_id {
