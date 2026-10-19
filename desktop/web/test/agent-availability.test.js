@@ -1,12 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { agentAvailability, customCommandAvailable } from "../src/agent-availability.js";
+import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "../src/agent-availability.js";
 
 const privateHost = {
   installed: { claude: true, codex: true, agy: false, opencode: false },
   restricted: true,
   programs: ["bash", "claude", "codex", "git", "node", "python3"],
 };
+test("checkout support must be explicit and stays separate from agent availability", () => {
+  for (const capabilities of [null, { unavailable: true }, privateHost, { restricted: false }]) {
+    assert.equal(isolatedCheckoutAvailability(capabilities).available, false);
+  }
+  assert.equal(isolatedCheckoutAvailability({ isolatedCheckouts: true }).available, true);
+  assert.equal(isolatedCheckoutAvailability({ isolatedCheckouts: "true" }).available, false);
+  assert.match(isolatedCheckoutAvailability(privateHost).reason, /current checkout only/);
+  assert.equal(agentAvailability(privateHost, "claude").available, true);
+});
 test("isolated availability is explicit, including loading and failures", () => {
   assert.equal(agentAvailability(null, "shell").available, true);
   assert.equal(agentAvailability(null, "agy").available, false);

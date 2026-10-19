@@ -68,6 +68,8 @@ test("agent chooser explains isolated availability before a launch", async ({ pa
   const dialog = page.locator("#session-dialog");
   await expect(dialog.locator('input[value="agy"]')).toBeDisabled();
   await expect(dialog.locator('input[value="opencode"]')).toBeDisabled();
+  await expect(dialog.locator('input[name="isolated"]')).toBeDisabled();
+  await expect(dialog.locator('.isolation-option')).toContainText("current checkout only");
   await expect(dialog.locator('input[value="agy"]').locator("..")).toContainText("Unavailable in this isolated runtime");
   await dialog.locator('label:has(input[value="custom"])').click();
   await expect(dialog).toContainText("Approved commands: bash, claude, codex, git");

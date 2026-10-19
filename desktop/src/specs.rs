@@ -10,7 +10,7 @@
 //! versioned. Verb never rewrites or deletes earlier audit lines. Gates warn and record instead of
 //! blocking: moving on with criteria unproven is allowed, and the trail says so.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -46,7 +46,7 @@ pub(crate) struct Spec {
     pub body: String,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct Change {
     pub code: String,
     pub path: String,
@@ -57,7 +57,7 @@ pub(crate) struct Change {
     pub removed: Option<u32>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct GitSummary {
     pub branch: Option<String>,
     pub upstream: Option<String>,
@@ -67,7 +67,7 @@ pub(crate) struct GitSummary {
     pub recent: Vec<Commit>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct Commit {
     pub sha: String,
     pub subject: String,
@@ -578,7 +578,22 @@ fn git(project: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
-    let status = git(project, &["status", "--porcelain=v1", "--branch", "-uall"])?;
+    if crate::isolation::external() {
+        return crate::project_read::request(project, "git", &[]);
+    }
+    let read_git = |args: &[&str]| -> Result<String, String> {
+        let output = crate::exec::git(project)
+            .ok_or("could not prepare read-only git")?
+            .args(args)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+        }
+    };
+    let status = read_git(&["status", "--porcelain=v1", "--branch", "-uall"])?;
     let mut summary = GitSummary {
         branch: None,
         upstream: None,
@@ -618,7 +633,7 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
             }
         }
     }
-    if let Ok(log) = git(project, &["log", "-8", "--format=%h%x1f%s%x1f%an%x1f%cI"]) {
+    if let Ok(log) = read_git(&["log", "-8", "--format=%h%x1f%s%x1f%an%x1f%cI"]) {
         summary.recent = log
             .lines()
             .filter_map(|line| {

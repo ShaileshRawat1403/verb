@@ -1,5 +1,5 @@
 import { projectGitPresentation } from "./project-git.js";
-import { agentAvailability, customCommandAvailable } from "./agent-availability.js";
+import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
 import { isActiveSession, hasTerminalReplay, endedSession, sessionWithRuntime } from "./session-state.js";
@@ -1924,6 +1924,15 @@ $("#phone-stop").addEventListener("click", async () => {
 $("#refresh-button").addEventListener("click", () => refreshState());
 function updateLaunchForm() {
   const form = $("#session-form");
+  const checkout = isolatedCheckoutAvailability(ui.agentCapabilities);
+  const isolated = form.elements.isolated;
+  isolated.disabled = !checkout.available;
+  if (isolated.disabled) isolated.checked = false;
+  const checkoutLabel = isolated.closest("label");
+  const checkoutDetail = checkoutLabel.querySelector("small");
+  checkoutDetail.dataset.originalText ??= checkoutDetail.textContent;
+  checkoutDetail.textContent = checkout.reason || checkoutDetail.dataset.originalText;
+  checkoutLabel.title = checkout.reason;
   form.querySelectorAll('input[name="agent"]').forEach((input) => {
     const state = agentAvailability(ui.agentCapabilities, input.value);
     input.disabled = !state.available;
@@ -1968,6 +1977,8 @@ $("#session-form").addEventListener("submit", async (event) => {
   const agent = form.elements.agent.value;
   const command = form.elements.command.value.trim();
   const isolated = form.elements.isolated.checked;
+  if (isolated && !isolatedCheckoutAvailability(ui.agentCapabilities).available)
+    return launchError(isolatedCheckoutAvailability(ui.agentCapabilities).reason);
   if (!agentAvailability(ui.agentCapabilities, agent).available)
     return launchError("This agent is unavailable in the current execution environment.");
   if (agent === "custom" && !command)

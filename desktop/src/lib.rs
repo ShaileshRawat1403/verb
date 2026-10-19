@@ -34,6 +34,7 @@ mod observer;
 #[cfg(unix)]
 mod phone;
 mod project;
+mod project_read;
 mod pty;
 mod runtime;
 mod session;
@@ -106,6 +107,10 @@ fn run() -> Result<(), Failure> {
     let mut rest: Vec<String> = args.collect();
     if command == "__git-snapshot" {
         gitview::helper(&rest)?;
+        return Ok(());
+    }
+    if command == "__project-read" {
+        project_read::helper(&rest)?;
         return Ok(());
     }
     if command == "--build-info" {
