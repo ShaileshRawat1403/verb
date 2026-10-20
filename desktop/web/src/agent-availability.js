@@ -1,4 +1,12 @@
 // Availability describes this execution environment, not the web server's PATH.
+export function isolatedCheckoutAvailability(capabilities) {
+  if (!capabilities) return { available: false, reason: "Checking checkout support…" };
+  if (capabilities.unavailable) return { available: false, reason: "Checkout support could not be checked. Reopen to retry." };
+  return capabilities.isolatedCheckouts === true
+    ? { available: true, reason: "" }
+    : { available: false, reason: "This host supports terminals in the current checkout only." };
+}
+
 export function agentAvailability(capabilities, agent) {
   if (agent === "shell") return { available: true, reason: "" };
   if (!capabilities) return { available: false, reason: "Checking availability…" };

@@ -9,6 +9,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(test)]
 use std::process::Command;
 
 /// Larger diffs are refused rather than truncated mid-hunk.
@@ -109,7 +110,8 @@ fn hunk_starts(rest: &str) -> (u32, u32) {
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = crate::exec::git(project)
+        .ok_or("could not prepare read-only git")?
         .arg("-C")
         .arg(project)
         .args(["-c", "core.quotepath=off"])

@@ -214,7 +214,18 @@ fn has_work_data(path: &Path) -> Result<bool, String> {
     Ok(false)
 }
 
+/// Separate execution accounts cannot access or register worktrees in the host's private home.
+/// Keep this explicit until the operator can provision additional checkout roots safely.
+pub(crate) fn isolated_checkouts_supported() -> bool {
+    matches!(crate::isolation::profile(), Ok(None))
+}
+
 pub(crate) fn create_isolated_checkout(project: &Path) -> Result<PathBuf, String> {
+    // Check before Git probes, directories or branch creation: a failed worktree add can leave
+    // a new branch even when the destination is inaccessible to the execution account.
+    if !isolated_checkouts_supported() {
+        return Err("Isolated Git checkouts are unavailable on this host. Use the current checkout instead.".to_owned());
+    }
     let location = location(project)?;
     if !location.git
         || git_output(&location.checkout, &["rev-parse", "--is-inside-work-tree"]).as_deref()

@@ -246,6 +246,13 @@ fn deferred_error(error: &str) -> (u16, Vec<u8>) {
                 .to_string()
                 .into_bytes(),
         )
+    } else if error == crate::project_read::TIMEOUT {
+        (
+            503,
+            json!({"error": error, "code": "read_timeout"})
+                .to_string()
+                .into_bytes(),
+        )
     } else if error == TERMINAL_CAPACITY || crate::isolation::capacity_message(error) {
         (
             503,
@@ -1592,7 +1599,8 @@ impl WebHost {
                     .into_iter()
                     .map(|(name, installed)| (name.to_owned(), json!(installed)))
                     .collect();
-                Ok(json!({ "installed": agents, "restricted": programs.is_some(), "programs": programs }))
+                Ok(json!({ "installed": agents, "restricted": programs.is_some(), "programs": programs,
+                    "isolatedCheckouts": project::isolated_checkouts_supported() }))
             }));
         }
         if method == &Method::Get && path == "/api/whoami" {
@@ -2589,10 +2597,11 @@ impl Launcher {
                     input.args,
                     Some(&self.identity),
                 ),
-                "custom" => crate::begin_external_session(
+                "custom" => crate::begin_external_session_with_identity(
                     &workspace,
                     input.command.ok_or("enter a CLI executable")?,
                     input.args,
+                    Some(&self.identity),
                 )?,
                 _ => return Err("choose a supported agent or a custom CLI".to_owned()),
             }

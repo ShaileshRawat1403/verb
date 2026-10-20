@@ -58,6 +58,18 @@ while [ $# -gt 0 ]; do
 done
 echo "launch $$ $mode $session" >> "$root/log"
 if [ "$mode" != terminal ]; then
+  if [ "$program" = git ] && [ "$*" = "rev-parse --git-common-dir" ]; then
+    echo "identity-probe" >> "$root/log"
+  fi
+  case "$*" in
+    *"__project-read"*)
+      if [ -f "$root/project-read-reply" ]; then cat "$root/project-read-reply"; exit 0; fi
+      if [ -f "$root/project-read-capacity" ]; then echo "Verb execution unavailable: capacity" >&2; exit 75; fi
+      if [ -f "$root/project-read-timeout" ]; then exit 124; fi
+      if [ -f "$root/project-read-oversize" ]; then head -c 8388609 /dev/zero; exit 0; fi
+      if [ -f "$root/project-read-stall" ]; then exec sleep 60; fi
+      ;;
+  esac
   # Background jobs (Git, file lists) never get a lease here; a stalled controller holds them.
   if [ -f "$root/pipes-stall" ]; then sleep "$(cat "$root/pipes-stall")"; fi
   echo "Verb execution connection failed; check the candidate controller." >&2
@@ -258,6 +270,66 @@ fn wait_until(seconds: u64, done: impl Fn() -> bool) -> bool {
 
 fn shell() -> Option<Value> {
     Some(json!({"agent": "shell", "isolated": false}))
+}
+
+#[test]
+fn concurrent_custom_launches_reuse_the_hosts_identity_when_git_is_unavailable() {
+    let host = Host::start("admit");
+    let (_, workspace) = host.request("GET", "/api/workspace", None);
+    let project_id = workspace["project"]["id"].as_str().unwrap().to_owned();
+    // The host already established its identity. A Git marker plus the fixture's
+    // failing background client now models an unavailable Git execution slot.
+    fs::create_dir(host.root.join(PROJECT).join(".git")).unwrap();
+    let probes_before = host.log().matches("identity-probe").count();
+    let replies = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..4)
+            .map(|_| {
+                scope.spawn(|| {
+                    host.request(
+                        "POST",
+                        "/api/terminals",
+                        Some(json!({"agent":"custom", "command":"bash",
+                            "args":["-c", "sleep 60"], "isolated":false})),
+                    )
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let records: Vec<_> = fs::read_dir(host.root.join("state/sessions"))
+        .unwrap()
+        .filter_map(|entry| fs::read_to_string(entry.ok()?.path()).ok())
+        .collect();
+    let mut sessions = Vec::new();
+    for (status, reply) in replies {
+        assert_eq!(status, 201, "{reply}");
+        let id = reply["sessionId"].as_str().unwrap().to_owned();
+        let record = records
+            .iter()
+            .find(|record| {
+                record
+                    .lines()
+                    .any(|line| line == format!("session_id={id}"))
+            })
+            .expect("admitted custom session has a durable record");
+        assert!(record
+            .lines()
+            .any(|line| line == format!("verb_project_id={project_id}")));
+        sessions.push(id);
+    }
+    assert_eq!(host.log().matches("identity-probe").count(), probes_before);
+    let listed = host.listed();
+    assert!(sessions.iter().all(|id| listed.contains(id)));
+    for id in sessions {
+        assert_eq!(
+            host.request("DELETE", &format!("/api/terminals/{id}"), None)
+                .0,
+            200
+        );
+    }
 }
 
 fn spec_agent() -> Option<Value> {
@@ -547,4 +619,80 @@ fn an_unpublished_lease_recovery_receipt_still_reports_unconfirmed_cleanup() {
         .collect();
     assert_eq!(names.len(), 1, "{names:?}");
     assert!(names[0].ends_with("-0123456789abcdef0123456789abcdef.json"));
+}
+
+#[test]
+fn unsupported_checkout_is_rejected_before_git_or_worktree_mutations() {
+    let host = Host::start("admit");
+    let (status, capabilities) = host.request("GET", "/api/agents", None);
+    assert_eq!(status, 200);
+    assert_eq!(capabilities["isolatedCheckouts"], false);
+    let before = fs::read_to_string(host.root.join("boundary/log")).unwrap();
+    let (status, reply) = host.request(
+        "POST",
+        "/api/terminals",
+        Some(json!({"agent": "shell", "isolated": true})),
+    );
+    assert_eq!(status, 400, "{reply}");
+    assert!(reply["error"]
+        .as_str()
+        .unwrap()
+        .contains("current checkout"));
+    assert_eq!(
+        fs::read_to_string(host.root.join("boundary/log")).unwrap(),
+        before
+    );
+    assert!(!host.root.join("state/worktrees").exists());
+    assert!(host.listed().is_empty());
+}
+
+#[test]
+fn file_reads_cross_the_boundary_once_and_preserve_capacity_and_timeout_statuses() {
+    let host = Host::start("admit");
+    let reply = host.root.join("boundary/project-read-reply");
+    fs::write(
+        &reply,
+        r#"{"files":[{"path":"synthetic.txt","status":null}],"truncated":false}"#,
+    )
+    .unwrap();
+    let before = host.log().lines().count();
+    let (status, body) = host.request("GET", "/api/files", None);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["files"][0]["path"], "synthetic.txt");
+    assert_eq!(host.log().lines().count() - before, 1);
+    fs::remove_file(&reply).unwrap();
+    for (flag, code) in [("capacity", "capacity"), ("timeout", "read_timeout")] {
+        let flag = host.root.join(format!("boundary/project-read-{flag}"));
+        fs::write(&flag, "").unwrap();
+        let (status, body) = host.request("GET", "/api/files", None);
+        assert_eq!(status, 503, "{body}");
+        assert_eq!(body["code"], code);
+        fs::remove_file(flag).unwrap();
+    }
+    fs::write(host.root.join("boundary/project-read-oversize"), "").unwrap();
+    let (status, body) = host.request("GET", "/api/files", None);
+    assert_eq!(status, 400, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("too much data"));
+    assert_eq!(host.request("GET", "/healthz", None).0, 200);
+}
+
+#[test]
+fn a_stalled_project_read_has_an_overall_deadline_and_keeps_the_host_responsive() {
+    let host = Host::start("admit");
+    fs::write(host.root.join("boundary/project-read-stall"), "").unwrap();
+    let started = Instant::now();
+    let timings = timed_during(
+        &host,
+        |host| {
+            let (status, body) = host.request("GET", "/api/files", None);
+            assert_eq!(status, 503, "{body}");
+            assert_eq!(body["code"], "read_timeout");
+        },
+        &[
+            ("GET", "/healthz".to_owned()),
+            ("GET", "/api/workspace".to_owned()),
+        ],
+    );
+    assert_prompt(&timings);
+    assert!(started.elapsed() < Duration::from_secs(28));
 }

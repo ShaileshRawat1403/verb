@@ -34,6 +34,7 @@ mod observer;
 #[cfg(unix)]
 mod phone;
 mod project;
+mod project_read;
 mod pty;
 mod runtime;
 mod session;
@@ -106,6 +107,10 @@ fn run() -> Result<(), Failure> {
     let mut rest: Vec<String> = args.collect();
     if command == "__git-snapshot" {
         gitview::helper(&rest)?;
+        return Ok(());
+    }
+    if command == "__project-read" {
+        project_read::helper(&rest)?;
         return Ok(());
     }
     if command == "--build-info" {
@@ -777,6 +782,15 @@ pub(crate) fn begin_external_session(
     command: String,
     args: Vec<String>,
 ) -> Result<SessionStart, String> {
+    begin_external_session_with_identity(project, command, args, None)
+}
+
+pub(crate) fn begin_external_session_with_identity(
+    project: &Path,
+    command: String,
+    args: Vec<String>,
+    identity: Option<&project::ProjectIdentity>,
+) -> Result<SessionStart, String> {
     if command.is_empty() {
         return Err("agent command cannot be empty".to_owned());
     }
@@ -792,7 +806,7 @@ pub(crate) fn begin_external_session(
         })
         .unwrap_or("external")
         .to_owned();
-    let mut start = begin_session(project, Agent::External, args);
+    let mut start = begin_session_with_identity(project, Agent::External, args, identity);
     start.session.runtime_id = Some(display);
     start.command = command;
     Ok(start)

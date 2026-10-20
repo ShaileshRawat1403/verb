@@ -11,7 +11,7 @@
 //!   user and is preserved byte for byte.
 
 use crate::specs;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -23,19 +23,19 @@ const END: &str = "<!-- verb:context:end -->";
 const MAX_FILES: usize = 20_000;
 const MAX_PREVIEW: u64 = 200 * 1024;
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct FileEntry {
     pub path: String,
     pub status: Option<String>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct FileList {
     pub files: Vec<FileEntry>,
     pub truncated: bool,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub(crate) struct Preview {
     pub path: String,
     pub text: Option<String>,
@@ -111,6 +111,9 @@ fn visible_files(project: &Path) -> Result<Vec<String>, String> {
 
 /// Every file Git tracks or would track, with its working-tree status.
 pub(crate) fn files(project: &Path) -> Result<FileList, String> {
+    if crate::isolation::external() {
+        return crate::project_read::request(project, "files", &[]);
+    }
     let mut status: HashMap<String, String> = HashMap::new();
     for line in git(project, &["status", "--porcelain=v1", "-uall"])?.lines() {
         if line.len() > 3 {
@@ -148,6 +151,9 @@ fn safe_relative(path: &str) -> Result<PathBuf, String> {
 /// A read-only preview of one visible text file.
 pub(crate) fn preview(project: &Path, path: &str) -> Result<Preview, String> {
     let relative = safe_relative(path)?;
+    if crate::isolation::external() {
+        return crate::project_read::request(project, "preview", &[path]);
+    }
     if !visible_files(project)?.iter().any(|f| f == path) {
         return Err(
             "Verb only shows files Git tracks or would track; this one is ignored or absent"
