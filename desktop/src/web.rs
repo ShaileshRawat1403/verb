@@ -2597,10 +2597,11 @@ impl Launcher {
                     input.args,
                     Some(&self.identity),
                 ),
-                "custom" => crate::begin_external_session(
+                "custom" => crate::begin_external_session_with_identity(
                     &workspace,
                     input.command.ok_or("enter a CLI executable")?,
                     input.args,
+                    Some(&self.identity),
                 )?,
                 _ => return Err("choose a supported agent or a custom CLI".to_owned()),
             }
