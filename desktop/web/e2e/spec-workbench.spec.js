@@ -163,6 +163,16 @@ test("an unreadable individual Spec surfaces an error and refuses new IDs withou
     await expect(page.locator("#spec-work-items")).toContainText("work list is unavailable");
     await expect(page.locator("#spec-empty")).toBeHidden();
   } finally { writeFileSync(path, original); }
+  // The shared host may retain the read failure in its brief state cache. Prove recovery
+  // before another journey starts instead of leaking that deliberate failure into it.
+  await expect.poll(async () => {
+    const restored = await request.get(`${origin}/api/state`, { headers });
+    expect(restored.ok()).toBeTruthy();
+    return Boolean((await restored.json()).specError);
+  }).toBe(false);
+  await page.getByRole("button", { name: "Refresh observations", exact: true }).click();
+  await expect(page.locator("#spec-workbench-error")).toBeHidden();
+  await expect(page.locator("#spec-work-items article")).toHaveCount(2);
 });
 
 test("desktop board preserves stage order, scrolls by keyboard and remembers focused filters", async ({ page }) => {
