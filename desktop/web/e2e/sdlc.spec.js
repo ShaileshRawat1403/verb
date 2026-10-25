@@ -43,6 +43,7 @@ test("complete evidence, acceptance, review and delivery workflow retains proven
   await tab(page, "Plan"); await action(page, "Write plan…");
   await page.locator("#sdlc-text").fill("Implement the answer, run the Python test, review the source, then report the fixture deployment and health.");
   await page.locator("#sdlc-target").fill("phone fixture"); await page.locator("#sdlc-goal").selectOption("service"); await save(page);
+  await expect(page.locator("#sdlc-content")).toContainText("service · phone fixture");
   await tab(page, "Verify"); await action(page, "Run a check…"); await page.locator("#sdlc-check").selectOption("python"); await save(page);
   await expect(page.locator(".sdlc-criteria")).toContainText("Verb-observed");
   await expect(page.locator(".sdlc-result")).toHaveText("Not accepted · passed · current");
@@ -55,6 +56,7 @@ test("complete evidence, acceptance, review and delivery workflow retains proven
   await page.locator("#sdlc-text").fill("Reviewed the implementation and accepted check. No additional execution authority was granted."); await save(page);
   await expect(page.locator("#sdlc-content")).toContainText("Review: approved");
   await tab(page, "Ship"); await action(page, "Check remote and record observation…"); await save(page);
+  await expect(page.locator("#sdlc-content")).toContainText("service · phone fixture");
   await expect(page.locator("#sdlc-content")).toContainText("Implementation present in the last explicit remote check");
   await action(page, "Record delivery report…"); await page.locator("#sdlc-milestone").selectOption("health");
   await page.locator("#sdlc-text").fill("Fixture health report"); await page.locator("#sdlc-submit").click();

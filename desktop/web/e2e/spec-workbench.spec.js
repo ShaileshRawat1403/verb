@@ -95,23 +95,28 @@ test("phone layout keeps named controls usable without dragging or motion", asyn
   await page.getByRole("button", { name: "Board", exact: true }).click();
   await expect(page.locator("#spec-work-items article")).toHaveCount(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  for (const control of await page.locator(".spec-overview button, #spec-search").all()) {
+  for (const control of await page.locator(".spec-overview button, #spec-search, #spec-stage-filter").all()) {
     const bounds = await control.boundingBox();
     expect(bounds.height).toBeGreaterThanOrEqual(44);
     expect(bounds.x).toBeGreaterThanOrEqual(0);
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
   }
   await expect(page.getByLabel("Find work", { exact: true })).toBeVisible();
+  await page.getByLabel("Show stage", { exact: true }).selectOption("review");
+  await expect(page.locator("#spec-work-items article")).toHaveCount(1);
+  await expect(page.locator("#spec-work-items")).toContainText("Improve contrast");
+  await page.getByLabel("Show stage", { exact: true }).selectOption("all");
   for (const theme of ["dark", "light"]) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await page.getByRole("button", { name: "Board", exact: true }).hover();
     const contrasts = await page.evaluate(() => {
       const luminance = color => {
         const values = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(n => n / 255).map(n => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4);
         return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
       };
-      return [...document.querySelectorAll(".work-card-note")].map(node => {
+      return [...document.querySelectorAll('.work-card-note, .work-card-fact b, .spec-view-switch [aria-pressed="true"]')].map(node => {
         const foreground = luminance(getComputedStyle(node).color);
-        const background = luminance(getComputedStyle(node.closest(".spec-work-card")).backgroundColor);
+        const background = luminance(getComputedStyle(node.matches("button") ? node : node.closest(".spec-work-card")).backgroundColor);
         return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
       });
     });
@@ -155,4 +160,33 @@ test("an unreadable individual Spec surfaces an error and refuses new IDs withou
     await expect(page.locator("#spec-work-items")).toContainText("work list is unavailable");
     await expect(page.locator("#spec-empty")).toBeHidden();
   } finally { writeFileSync(path, original); }
+});
+
+test("desktop board preserves stage order, scrolls by keyboard and remembers focused filters", async ({ page }) => {
+  await page.goto(url); await page.keyboard.press("Alt+Digit1");
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await expect(page.locator(".spec-board-column")).toHaveCount(6);
+  const rows = await page.locator(".spec-board-column").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top)));
+  expect(new Set(rows).size).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
+  const region = page.getByRole("region", { name: "Spec board", exact: true });
+  await region.focus(); await page.keyboard.press("ArrowRight");
+  await expect.poll(() => region.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
+  await page.getByLabel("Show stage", { exact: true }).selectOption("review");
+  await expect(page.locator(".spec-board-column")).toHaveCount(1);
+  await expect(page.locator("#spec-work-items article")).toHaveCount(1);
+  await page.getByLabel("Needs you only").check();
+  await page.getByLabel("Find work", { exact: true }).fill("missing");
+  await expect(page.locator("#spec-work-items")).toContainText("No specs match these filters");
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(page.getByLabel("Find work", { exact: true })).toBeFocused();
+  await expect(page.getByLabel("Show stage", { exact: true })).toHaveValue("all");
+  await expect(page.getByLabel("Needs you only")).not.toBeChecked();
+  await expect(page.locator("#spec-work-items article")).toHaveCount(2);
+  await page.getByLabel("Show stage", { exact: true }).selectOption("review");
+  await page.reload(); await page.keyboard.press("Alt+Digit1");
+  await expect(page.getByRole("button", { name: "Board", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Show stage", { exact: true })).toHaveValue("review");
+  await expect(page.locator("#spec-work-items article")).toHaveCount(1);
+  await page.screenshot({ path: test.info().outputPath("stage-focused-board.png") });
 });

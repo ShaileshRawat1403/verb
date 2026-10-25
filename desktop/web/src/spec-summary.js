@@ -18,6 +18,10 @@ export function specPresentation(spec, summary, signals = {}, now = Date.now()) 
     current, observed, attention,
     sdlc: current ? summary.sdlc : null,
     verificationNote: current && summary.sdlc && !summary.sdlc.error ? `Verification ${summary.sdlc.verification} · review ${String(summary.sdlc.reviewState).replaceAll("_", " ")}` : "Result and freshness not established",
+    cardVerification: current && summary.sdlc?.error ? "Evidence unavailable" : current && summary.sdlc
+      ? `${summary.sdlc.accepted}/${summary.sdlc.total} accepted · ${observed ? ({ accepted: "current", unproven: "needs evidence", failed: "failed", stale: "stale" }[summary.sdlc.verification] || "unknown") : "freshness unconfirmed"}`
+      : current ? summary.verification.label : "Evidence unavailable",
+    cardReview: current && summary.sdlc && !summary.sdlc.error && observed ? `Review ${String(summary.sdlc.reviewState).replaceAll("_", " ")}` : "Review observation unavailable",
     execution: waiting.length ? "Agent reported: needs your input" : observed ? summary.execution.label : "Execution observations unavailable",
     verification: current ? summary.verification.label : "Updating criterion records…",
     verificationDetail: current ? summary.verification.detail : "Refresh to read this spec's current evidence records.",
@@ -30,8 +34,8 @@ export function specPresentation(spec, summary, signals = {}, now = Date.now()) 
   };
 }
 
-export function filterSpecs(specs, presentations, query, attentionOnly) {
+export function filterSpecs(specs, presentations, query, attentionOnly, stage = "all") {
   const words = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  return specs.filter(spec => (!attentionOnly || presentations.get(spec.id)?.attention.length)
+  return specs.filter(spec => (stage === "all" || spec.stage === stage) && (!attentionOnly || presentations.get(spec.id)?.attention.length)
     && words.every(word => `${spec.id} ${spec.title} ${spec.stage} ${spec.branch}`.toLocaleLowerCase().includes(word)));
 }

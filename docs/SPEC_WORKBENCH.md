@@ -8,6 +8,9 @@ verification and delivery remain independent; moving a card never creates proof.
 
 1. Open Specs, find work by title, ID, branch or stage, and use Needs you only to
    focus on review requests, failures and stale evidence. Choose List or Board.
+   Show stage combines with search and Needs you only; Clear filters restores all
+   work and returns focus to search. The browser remembers the view and stage
+   selection as optional local preferences, without changing any Spec state.
 2. Open a Spec to reach its terminal/session actions and focused workspaces.
    Back to work overview restores the list and keyboard focus to search.
 3. In Plan, record the approach, risks, verification strategy and completion goal:
@@ -33,6 +36,13 @@ shows skipped stages and incomplete readiness. Changed Spec/source/evidence
 rejects a stale reviewed move; external edits are preserved. Legacy callers may
 omit the optional context guard. This is optimistic concurrency, not a filesystem
 lock against arbitrary editors.
+
+Desktop board columns keep their stage order in one horizontally scrollable
+region. Focus the board to scroll with the keyboard, or select a stage directly.
+On phones the stages stack vertically; Show stage avoids scanning every group.
+Cards show concise execution, accepted-evidence and delivery facts with review
+freshness on its own line. Expired evidence observations are explicitly labelled
+freshness unconfirmed. Plan and Ship show the named delivery environment/channel.
 
 ## Evidence and limits
 
@@ -90,6 +100,17 @@ Mac), and 10 workstate backup checks passed. The five new SDLC invariants also
 passed on ARM64 GNU Linux in Docker. Formatting, diff whitespace checks, local
 Clippy, pinned Rust 1.99 Clippy with the synthetic-boundary feature, and the final
 optimized release build passed. Embedded assets were rebuilt from source.
+
+UI refinement on 2026-10-25: 64 browser unit tests passed. Across the broader run
+and affected-file reruns, all 32 distinct browser journeys passed; the existing
+Linux-only journey remains skipped on Mac. The first pass caught an ambiguous
+stage-select label, corrected by separating the native label from its options.
+The final eight lifecycle/board journeys and the final five layout/filter journeys
+passed, including keyboard horizontal scrolling, filter persistence, phone
+overflow/touch targets, selected-button hover contrast and delivery target names.
+Rust behavior is unchanged by this UI refinement; the preceding 401-test native
+validation remains the backend baseline. No live service or node operation is
+part of this validation.
 
 The candidate is developed and validated locally. Read Git for its current commit
 and working-tree state. No production remote, deployment, service restart or phone

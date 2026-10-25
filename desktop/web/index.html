@@ -344,7 +344,7 @@
                 <div><h1 id="spec-overview-title">Work overview</h1><p id="spec-overview-count" role="status" aria-live="polite">Reading specs…</p></div>
                 <button class="secondary-button" type="button" data-action="new-spec">New spec</button>
               </div>
-              <p class="muted">Choose a piece of work to see its sessions, criterion records and delivery observations.</p>
+              <p class="muted">Choose work to continue. Stages show intent; evidence and delivery show what is known.</p>
               <p id="spec-workbench-error" class="warning-box" role="alert" hidden></p>
               <div class="spec-view-controls">
                 <label class="spec-search-label" for="spec-search">Find work<input id="spec-search" type="search" placeholder="Title, number, branch or stage…" autocomplete="off" /></label>
@@ -352,14 +352,17 @@
                   <button type="button" id="spec-view-list" class="secondary-button" aria-pressed="true">List</button>
                   <button type="button" id="spec-view-board" class="secondary-button" aria-pressed="false">Board</button>
                 </div>
+                <div class="spec-filter-label"><label for="spec-stage-filter">Show stage</label><select id="spec-stage-filter"><option value="all">All stages</option><option value="spec">Spec</option><option value="plan">Plan</option><option value="build">Build</option><option value="verify">Verify</option><option value="review">Review</option><option value="ship">Ship</option></select></div>
                 <label class="check-row"><input type="checkbox" id="spec-attention-only" /> Needs you only</label>
-                <button class="text-button" type="button" data-action="refresh-spec-workbench">Refresh observations</button>
+                <button class="text-button" id="spec-clear-filters" type="button" disabled>Clear filters</button>
+                <button class="text-button" type="button" data-action="refresh-spec-workbench" aria-label="Refresh observations">Refresh</button>
               </div>
               <section class="spec-attention" aria-labelledby="spec-attention-title">
                 <h2 id="spec-attention-title">Needs you</h2>
                 <div id="spec-attention-list"></div>
               </section>
-              <div id="spec-work-items" class="spec-work-items"></div>
+              <p id="spec-board-help" class="muted spec-board-help" hidden>Browse stages or use Show stage to focus. Open a card to review a move. On desktop, scroll sideways or drag a card to open the same review.</p>
+              <div id="spec-work-items" class="spec-work-items" role="region" aria-label="Spec list"></div>
             </section>
             <div class="specs-layout">
               

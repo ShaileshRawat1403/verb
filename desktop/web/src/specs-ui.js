@@ -46,12 +46,20 @@ export function initWorkbench(deps) {
     summaries: {},
     specsError: null,
     specsLoaded: false,
-    specView: "list",
+    specView: preference("verb.specView", ["list", "board"], "list"),
+    stageFilter: preference("verb.specStageFilter", ["all", ...STAGES], "all"),
     overviewCollapsed: false,
     palette: [],
     paletteIndex: 0,
   };
 
+  function preference(key, allowed, fallback) {
+    try { const value = localStorage.getItem(key); return allowed.includes(value) ? value : fallback; }
+    catch { return fallback; }
+  }
+  function savePreference(key, value) {
+    try { localStorage.setItem(key, value); } catch { /* View preferences are optional. */ }
+  }
   function readSelected() {
     try {
       return localStorage.getItem("verb.selectedSpec");
@@ -182,19 +190,28 @@ export function initWorkbench(deps) {
       attentionSignature = attentionHtml;
       replaceKeepingFocus($("#spec-attention-list"), attentionHtml);
     }
-    const visible = filterSpecs(state.specs, views, $("#spec-search").value, $("#spec-attention-only").checked);
-    const count = !state.specsLoaded && !error ? "Reading specs…" : `${visible.length} of ${state.specs.length} specs shown · ${attention.length} need you`;
+    const visible = filterSpecs(state.specs, views, $("#spec-search").value, $("#spec-attention-only").checked, state.stageFilter);
+    $("#spec-stage-filter").value = state.stageFilter;
+    const count = !state.specsLoaded && !error ? "Reading specs…" : `${visible.length} of ${state.specs.length} specs shown · ${attention.length} ${attention.length === 1 ? "needs" : "need"} you`;
     if ($("#spec-overview-count").textContent !== count) $("#spec-overview-count").textContent = count;
     const card = spec => {
       const view = views.get(spec.id);
-      return `<article draggable="true" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage">${STAGE_GUIDE[spec.stage].label}</span><span><b>Execution</b> ${escapeHtml(view.execution)}</span><span><b>Verification</b> ${escapeHtml(view.verification)}</span><span class="work-card-note">${escapeHtml(view.verificationNote)}</span><span><b>Delivery</b> ${escapeHtml(view.delivery)}</span>${view.attention.length ? '<strong class="work-card-attention">Needs you</strong>' : ""}<span class="work-card-note">Open work details · move with Target stage</span></button></article>`;
+      const fact = (label, value) => `<span class="work-card-fact"><b>${label}</b><span>${escapeHtml(value)}</span></span>`;
+      return `<article draggable="${state.specView === "board"}" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage">${STAGE_GUIDE[spec.stage].label}</span>${view.attention.length ? `<strong class="work-card-attention">Needs you · ${escapeHtml(view.attention[0].reason)}</strong>` : ""}${fact("Execution", view.execution)}${fact("Evidence", view.cardVerification)}${fact("Delivery", view.delivery)}<span class="work-card-note">${escapeHtml(view.cardReview)}</span></button></article>`;
     };
     const html = !visible.length
-      ? `<p class="spec-work-empty">${error ? "The work list is unavailable. Refresh observations to retry." : !state.specsLoaded ? "Reading specs…" : state.specs.length ? "No specs match these filters. Clear the search or turn off Needs you only." : "No specs yet. Create a spec to describe what you want to build."}</p>`
+      ? `<p class="spec-work-empty">${error ? "The work list is unavailable. Refresh observations to retry." : !state.specsLoaded ? "Reading specs…" : state.specs.length ? "No specs match these filters. Clear filters to see all work." : "No specs yet. Create a spec to describe what you want to build."}</p>`
       : state.specView === "board"
-        ? STAGES.map(stage => `<section class="spec-board-column" data-board-stage="${stage}" aria-label="${STAGE_GUIDE[stage].label}"><h2>${STAGE_GUIDE[stage].label} <span>${visible.filter(s => s.stage === stage).length}</span></h2>${visible.filter(s => s.stage === stage).map(card).join("") || '<p class="muted">No matching specs</p>'}</section>`).join("")
+        ? STAGES.filter(stage => state.stageFilter === "all" || stage === state.stageFilter).map(stage => `<section class="spec-board-column" data-board-stage="${stage}" aria-label="${STAGE_GUIDE[stage].label}"><h2><span>${STAGE_GUIDE[stage].label}</span><span class="spec-stage-count" aria-label="${visible.filter(s => s.stage === stage).length} specs">${visible.filter(s => s.stage === stage).length}</span></h2>${visible.filter(s => s.stage === stage).map(card).join("") || '<p class="muted">No work here</p>'}</section>`).join("")
         : visible.map(card).join("");
     $("#spec-work-items").dataset.mode = state.specView;
+    $("#spec-work-items").dataset.stageFilter = state.stageFilter;
+    $("#spec-work-items").tabIndex = state.specView === "board" ? 0 : -1;
+    $("#spec-work-items").setAttribute("aria-label", state.specView === "board" ? "Spec board" : "Spec list");
+    if (state.specView === "board") $("#spec-work-items").setAttribute("aria-describedby", "spec-board-help");
+    else $("#spec-work-items").removeAttribute("aria-describedby");
+    $("#spec-board-help").hidden = state.specView !== "board";
+    $("#spec-clear-filters").disabled = !$("#spec-search").value && !$("#spec-attention-only").checked && state.stageFilter === "all";
     $("#spec-view-list").setAttribute("aria-pressed", String(state.specView === "list"));
     $("#spec-view-board").setAttribute("aria-pressed", String(state.specView === "board"));
     if (html !== overviewSignature) {
@@ -942,6 +959,15 @@ export function initWorkbench(deps) {
   });
 
   $("#spec-search").addEventListener("input", renderOverview);
+  $("#spec-stage-filter").addEventListener("change", event => {
+    state.stageFilter = event.target.value;
+    savePreference("verb.specStageFilter", state.stageFilter);
+    renderOverview();
+  });
+  $("#spec-clear-filters").addEventListener("click", () => {
+    $("#spec-search").value = ""; $("#spec-attention-only").checked = false; state.stageFilter = "all";
+    savePreference("verb.specStageFilter", "all"); renderOverview(); $("#spec-search").focus();
+  });
   let dragged = null;
   $("#spec-work-items").addEventListener("dragstart", event => {
     const id = event.target.closest(".spec-work-card")?.querySelector("[data-spec-id]")?.dataset.specId;
@@ -967,7 +993,7 @@ export function initWorkbench(deps) {
   $("#spec-attention-only").addEventListener("change", renderOverview);
   $("#spec-stage-target").addEventListener("change", () => { $("#spec-stage-move").disabled = $("#spec-stage-target").value === selected()?.stage; });
   for (const view of ["list", "board"]) {
-    $(`#spec-view-${view}`).addEventListener("click", () => { state.specView = view; renderOverview(); });
+    $(`#spec-view-${view}`).addEventListener("click", () => { state.specView = view; savePreference("verb.specView", view); renderOverview(); });
   }
 
   // A diff loads when its row opens; the rail's file names open (and scroll to) their row.

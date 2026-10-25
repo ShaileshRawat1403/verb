@@ -23,7 +23,7 @@ export const STAGE_GUIDE = {
   verify: {
     label: "Verify",
     goal: "Prove it works",
-    next: "Run the tests and tick each acceptance criterion with the evidence that proves it.",
+    next: "Run a check or link a report in Verify, then accept current evidence for each criterion. Checkmarks alone remain claims.",
   },
   review: {
     label: "Review",
