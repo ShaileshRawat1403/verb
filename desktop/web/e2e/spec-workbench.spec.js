@@ -94,7 +94,10 @@ test("phone layout keeps named controls usable without dragging or motion", asyn
   await page.goto(url); await page.keyboard.press("Alt+Digit1");
   await page.getByRole("button", { name: "Board", exact: true }).click();
   await expect(page.locator("#spec-work-items article")).toHaveCount(2);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  const overflow = await page.evaluate(() => [...document.querySelectorAll("body *")]
+    .filter(node => node.getBoundingClientRect().right > innerWidth && getComputedStyle(node).position !== "fixed")
+    .map(node => ({ tag: node.tagName, id: node.id, className: node.className, right: node.getBoundingClientRect().right })));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), JSON.stringify(overflow)).toBeLessThanOrEqual(390);
   for (const control of await page.locator(".spec-overview button, #spec-search, #spec-stage-filter").all()) {
     const bounds = await control.boundingBox();
     expect(bounds.height).toBeGreaterThanOrEqual(44);

@@ -1202,6 +1202,7 @@ select:focus-visible,
     flex-basis: 100%;
     margin: 6px 0 0;
   }
+  .sidebar-specs { min-width: 0; max-width: 100%; }
   .sidebar-specs .spec-list {
     display: flex;
     gap: 4px;
@@ -2843,10 +2844,13 @@ select:focus-visible,
     order: -1;
     display: flex;
     flex: 1 1 100%;
+    min-width: 0;
+    flex-wrap: wrap;
     gap: 8px;
   }
+  .spec-actions .agent-picker button { flex: 1 1 180px; white-space: normal; }
   .spec-actions .agent-picker select {
-    flex: 1 1 auto;
+    flex: 1 1 120px;
     min-width: 0;
   }
   .spec-actions > .secondary-button,
