@@ -1,0 +1,158 @@
+import { test, expect } from "@playwright/test";
+import { spawn, execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { createServer } from "node:net";
+
+const TOKEN = "spec-workbench-fixture-0000000000000000000";
+let server, repo, url, origin, first, second;
+const headers = { "X-Verb-Token": TOKEN };
+test.beforeAll(async ({ request }) => {
+  const root = mkdtempSync(join(tmpdir(), "verb-spec-workbench-"));
+  repo = join(root, "repo"); const home = join(root, "home");
+  mkdirSync(repo); mkdirSync(home, { mode: 0o700 });
+  for (const args of [["init", "-q", "-b", "main"], ["config", "user.name", "Fixture"], ["config", "user.email", "fixture@example.invalid"], ["commit", "--allow-empty", "-qm", "initial"]]) {
+    execFileSync("git", ["-C", repo, ...args], { env: { PATH: process.env.PATH, HOME: home } });
+  }
+  const port = await new Promise(ok => {
+    const listener = createServer().listen(0, "127.0.0.1", () => { const port = listener.address().port; listener.close(() => ok(port)); });
+  });
+  origin = `http://127.0.0.1:${port}`; url = `${origin}/#${TOKEN}`;
+  server = spawn(resolve(process.env.VERB_BIN ?? "../target/debug/verb"), ["web", "--port", String(port)], {
+    cwd: repo, env: { PATH: process.env.PATH, HOME: home, LANG: "C", VERB_TOKEN: TOKEN, VERB_STATE_DIR: join(root, "state") }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  await new Promise((ok, fail) => {
+    const timer = setTimeout(() => fail(new Error("fixture host did not start")), 20_000);
+    server.stdout.on("data", chunk => { if (String(chunk).includes("Verb web UI")) { clearTimeout(timer); ok(); } });
+    server.on("exit", () => { clearTimeout(timer); fail(new Error("fixture host exited")); });
+  });
+  async function post(path, data) {
+    const response = await request.post(`${origin}${path}`, { headers, data });
+    expect(response.ok()).toBeTruthy(); return response.json();
+  }
+  first = await post("/api/specs", { title: "Recover sessions", criteria: ["Reconnect restores the session", "Interrupted work remains visible"] });
+  first = await post(`/api/specs/${first.id}/criteria/0`, { done: true, evidence: "A person reported checking the fixture; no automated result claimed." });
+  second = await post("/api/specs", { title: "Improve contrast <label>", criteria: ["Text is readable"] });
+  await post(`/api/specs/${second.id}/stage`, { stage: "review", note: "Fixture review request", expectedRevision: second.revision });
+});
+test.afterAll(() => server?.kill());
+
+test("shared list and board support keyboard selection, attention filters and reviewed stage moves", async ({ page }) => {
+  await page.goto(url); await page.keyboard.press("Alt+Digit1");
+  await expect(page.locator("#spec-work-items article")).toHaveCount(2);
+  await expect(page.locator("#spec-attention-list")).toContainText("Review requested");
+  const board = page.getByRole("button", { name: "Board", exact: true });
+  await board.focus(); await page.keyboard.press("Space");
+  await expect(board).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".spec-board-column")).toHaveCount(6);
+  await expect(page.locator("#spec-work-items label")).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("spec-board-desktop.png") });
+  await page.locator(`#spec-work-items [data-spec-id="${first.id}"]`).dragTo(page.locator('[data-board-stage="plan"]'));
+  await expect(page.locator("#stage-dialog")).toBeVisible();
+  expect(readFileSync(join(repo, first.file), "utf8")).toContain("stage: spec");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Back to work overview", exact: true }).click();
+  await page.locator(`#spec-work-items [data-spec-id="${first.id}"]`).click();
+  await expect(page.locator("#spec-title")).toBeFocused();
+  await expect(page.locator("#spec-facts")).toContainText("1/2 criteria recorded complete");
+  await expect(page.locator("#spec-facts")).toContainText("Independent test results and evidence freshness have not been established");
+  await expect(page.locator("#spec-facts")).toContainText("Release not observed");
+  await page.getByLabel("Target stage", { exact: true }).selectOption("build");
+  await page.getByRole("button", { name: "Review move…", exact: true }).click();
+  await expect(page.locator("#stage-warnings")).toContainText("skipped plan");
+  await page.locator("#stage-dialog-submit").click();
+  await expect(page.locator(`#spec-work-items .spec-board-column[aria-label="Build"] [data-spec-id="${first.id}"]`)).toHaveCount(1);
+  expect(readFileSync(join(repo, first.file), "utf8")).toContain("stage spec → build");
+  await page.getByRole("button", { name: "Back to work overview", exact: true }).click();
+  await expect(page.getByLabel("Find work", { exact: true })).toBeFocused();
+  await page.getByLabel("Find work", { exact: true }).fill("contrast");
+  await page.getByLabel("Needs you only").check();
+  await expect(page.locator("#spec-work-items article")).toHaveCount(1);
+  await page.getByLabel("Find work", { exact: true }).fill("recovery-does-not-match");
+  await expect(page.locator("#spec-work-items")).toContainText("No specs match these filters");
+  await page.getByLabel("Find work", { exact: true }).fill(""); await page.getByLabel("Needs you only").uncheck();
+  const card = page.locator(`#spec-work-items [data-spec-id="${first.id}"]`);
+  await card.focus(); await page.waitForTimeout(4500); // A workspace poll must not steal keyboard focus.
+  await expect(card).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.getByLabel("Target stage", { exact: true }).selectOption("plan");
+  await page.getByRole("button", { name: "Review move…", exact: true }).click();
+  await expect(page.locator("#stage-dialog")).toBeVisible();
+  appendFileSync(join(repo, first.file), "\n<!-- owner edit while reviewing -->\n");
+  await page.locator("#stage-dialog-submit").click();
+  await expect(page.locator("#toast")).toContainText("spec changed");
+  await expect(page.locator("#stage-dialog")).toBeVisible();
+  const raw = readFileSync(join(repo, first.file), "utf8");
+  expect(raw).toContain("stage: build"); expect(raw).toContain("owner edit while reviewing");
+  expect(raw).not.toContain("stage build → plan");
+});
+
+test("phone layout keeps named controls usable without dragging or motion", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(url); await page.keyboard.press("Alt+Digit1");
+  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await expect(page.locator("#spec-work-items article")).toHaveCount(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  for (const control of await page.locator(".spec-overview button, #spec-search").all()) {
+    const bounds = await control.boundingBox();
+    expect(bounds.height).toBeGreaterThanOrEqual(44);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
+  }
+  await expect(page.getByLabel("Find work", { exact: true })).toBeVisible();
+  for (const theme of ["dark", "light"]) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    const contrasts = await page.evaluate(() => {
+      const luminance = color => {
+        const values = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(n => n / 255).map(n => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4);
+        return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
+      };
+      return [...document.querySelectorAll(".work-card-note")].map(node => {
+        const foreground = luminance(getComputedStyle(node).color);
+        const background = luminance(getComputedStyle(node.closest(".spec-work-card")).backgroundColor);
+        return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05);
+      });
+    });
+    for (const contrast of contrasts) expect(contrast, `${theme} card text contrast`).toBeGreaterThanOrEqual(4.5);
+  }
+  await page.screenshot({ path: test.info().outputPath("spec-board-phone.png") });
+  await page.locator(`#spec-work-items [data-spec-id="${first.id}"]`).click();
+  await expect(page.getByLabel("Target stage", { exact: true })).toBeVisible();
+  await expect(page.locator(".spec-overview")).toBeHidden();
+  const terminal = page.getByRole("button", { name: "Terminal", exact: true });
+  await expect(terminal).toBeVisible();
+  expect((await terminal.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  const titleBounds = await page.locator("#spec-title").boundingBox();
+  expect(titleBounds.y).toBeGreaterThanOrEqual(130);
+  expect(titleBounds.y).toBeLessThan(350);
+  await page.screenshot({ path: test.info().outputPath("spec-detail-phone.png") });
+});
+
+test("a failed spec read exposes an error instead of a false empty project", async ({ page }) => {
+  await page.route("**/api/specs", route => route.fulfill({ status: 500, json: { error: "Could not read project specs" } }));
+  await page.goto(url); await page.keyboard.press("Alt+Digit1");
+  await expect(page.locator("#spec-workbench-error")).toContainText("Could not read project specs");
+  await expect(page.locator("#spec-work-items")).toContainText("work list is unavailable");
+  await expect(page.locator("#spec-empty")).toBeHidden();
+});
+
+test("an unreadable individual Spec surfaces an error and refuses new IDs without replacing it", async ({ page, request }) => {
+  const path = join(repo, first.file), original = readFileSync(path);
+  const broken = Buffer.from([0xff, 0xfe, 0xfd]);
+  writeFileSync(path, broken);
+  try {
+    const listing = await request.get(`${origin}/api/specs`, { headers });
+    expect(listing.ok()).toBe(false);
+    expect((await listing.json()).error).toContain("every spec file");
+    const creation = await request.post(`${origin}/api/specs`, { headers, data: { title: "Must not reuse an unreadable ID", criteria: ["Safe identity allocation"] } });
+    expect(creation.ok()).toBe(false);
+    expect(readFileSync(path).equals(broken)).toBe(true);
+    await page.goto(url); await page.keyboard.press("Alt+Digit1");
+    await expect(page.locator("#spec-workbench-error")).toContainText("every spec file");
+    await expect(page.locator("#spec-work-items")).toContainText("work list is unavailable");
+    await expect(page.locator("#spec-empty")).toBeHidden();
+  } finally { writeFileSync(path, original); }
+});

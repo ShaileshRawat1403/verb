@@ -684,6 +684,9 @@ async function refreshWorkspace() {
       ...workspace,
       tasks: previous?.tasks || [],
       memory: previous?.memory || "",
+      specSummaries: previous?.specSummaries,
+      specError: previous?.specError,
+      observedAt: previous?.observedAt,
       project: {
         ...workspace.project,
         gitStatus: previous?.project.gitStatus ?? workspace.project.gitStatus,
@@ -2269,6 +2272,7 @@ async function bootstrap() {
   host = initHost({ api, escapeHtml, $ });
   project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
   workbench = initWorkbench({
+    refreshState,
     extras,
     project,
     api,

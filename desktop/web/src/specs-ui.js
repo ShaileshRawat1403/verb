@@ -19,6 +19,9 @@ import {
 } from "./workbench.js";
 import { agentDisplayName } from "./view.js";
 import { icon } from "./icons.js";
+import { gitRemoteDescription } from "./project-git.js";
+import { specPresentation, filterSpecs } from "./spec-summary.js";
+import { initSdlc } from "./sdlc-ui.js";
 
 const SHORTCUTS = [
   ["⌘K / Ctrl+K", "Command palette: search specs and run any action"],
@@ -40,6 +43,11 @@ export function initWorkbench(deps) {
     selectedId: readSelected(),
     pending: null, // what an open stage/evidence dialog will do on submit
     meters: {}, // session id -> context meter, for running Claude/Codex sessions
+    summaries: {},
+    specsError: null,
+    specsLoaded: false,
+    specView: "list",
+    overviewCollapsed: false,
     palette: [],
     paletteIndex: 0,
   };
@@ -59,16 +67,27 @@ export function initWorkbench(deps) {
     }
   }
   const selected = () => state.specs.find((spec) => spec.id === state.selectedId) ?? null;
+  const lifecycle = initSdlc({ api, $, escapeHtml, toast, showDialog, closeDialog, current: selected,
+    changed: () => Promise.all([refreshSpecs(), deps.refreshState(true)]), openGit: openTransfer });
 
   // ------------------------------------------------------------------------------- data
 
+  let specsRequest = 0;
   async function refreshSpecs() {
+    const request = ++specsRequest;
     try {
       const result = await api("GET", "/api/specs");
+      if (request !== specsRequest) return;
       state.specs = (result.specs || []).map(normalize);
+      state.summaries = result.summaries || {};
+      state.specsError = null;
+      state.specsLoaded = true;
       if (!selected() && state.specs.length) state.selectedId = state.specs.at(-1).id;
       render();
     } catch (error) {
+      if (request !== specsRequest) return;
+      state.specsError = error.message;
+      renderOverview();
       toast(error.message, "error");
     }
   }
@@ -95,6 +114,8 @@ export function initWorkbench(deps) {
     state.specs = state.specs.map((s) => (s.id === next.id ? next : s));
     if (!state.specs.some((s) => s.id === next.id)) state.specs.push(next);
     render();
+    refreshSpecs();
+    deps.refreshState(true);
   }
 
   // ----------------------------------------------------------------------------- render
@@ -102,6 +123,7 @@ export function initWorkbench(deps) {
   function render() {
     $("#nav-spec-count").textContent = state.specs.filter((s) => s.stage !== "ship").length;
     renderList();
+    renderOverview();
     renderDetail();
     renderSessions();
     renderProof();
@@ -119,25 +141,88 @@ export function initWorkbench(deps) {
               `<div class="spec-group"><div class="spec-group-label">${STAGE_GUIDE[stage].label}</div>${specs
                 .map(
                   (spec) =>
-                    `<button type="button" class="spec-item${spec.id === state.selectedId ? " current" : ""}${specNeedsYou(spec) ? " needs-you" : ""}" data-spec-id="${escapeHtml(spec.id)}" data-stage="${escapeHtml(spec.stage)}"><i class="spec-dot" aria-hidden="true"></i><span class="spec-name">${escapeHtml(spec.title)}</span><small>${specNeedsYou(spec) ? '<em class="needs-text">An agent needs you</em>' : `<span class="spec-id">${escapeHtml(spec.id)}</span> · ${escapeHtml(progressLabel(spec))}`}</small></button>`,
+                    `<button type="button" class="spec-item${spec.id === state.selectedId ? " current" : ""}${specNeedsYou(spec) ? " needs-you" : ""}" data-spec-id="${escapeHtml(spec.id)}" data-stage="${escapeHtml(spec.stage)}"><i class="spec-dot" aria-hidden="true"></i><span class="spec-name">${escapeHtml(spec.title)}</span><small>${specNeedsYou(spec) ? `<em class="needs-text">${presentation(spec).attention[0].source === "spec stage" ? "Review requested" : "Needs your input"}</em>` : `<span class="spec-id">${escapeHtml(spec.id)}</span> · ${escapeHtml(progressLabel(spec))}`}</small></button>`,
                 )
                 .join("")}</div>`,
           )
           .join("")
-      : '<p class="rail-empty">No specs yet. A spec is a short description of one piece of work.</p>';
+      : `<p class="rail-empty">${state.specsError ? "Specs unavailable. Refresh observations." : !state.specsLoaded ? "Reading specs…" : "No specs yet. A spec is a short description of one piece of work."}</p>`;
+  }
+
+  function presentation(spec) {
+    const fromState = deps.ui.state?.specSummaries?.[spec.id];
+    const summary = fromState?.revision === spec.revision ? fromState : state.summaries[spec.id];
+    return specPresentation(spec, summary, {
+      waitingTerminals: deps.ui.waitingTerminals,
+      waitingTalkSpecs: deps.ui.waitingTalkSpecs,
+      liveIds: new Set((deps.ui.state?.sessions || []).filter(s => s.state === "live").map(s => s.id)),
+    });
+  }
+
+  let overviewSignature = "";
+  let attentionSignature = "";
+  function replaceKeepingFocus(node, html) {
+    const focused = node.contains(document.activeElement) ? document.activeElement.closest("[data-spec-id]")?.dataset.specId : null;
+    node.innerHTML = html;
+    if (focused) node.querySelector(`[data-spec-id="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+  }
+  function renderOverview() {
+    $(".spec-overview").hidden = state.overviewCollapsed;
+    const error = state.specsError || deps.ui.state?.specError;
+    $("#spec-workbench-error").hidden = !error;
+    $("#spec-workbench-error").textContent = error ? `${error} Showing the last loaded list, if available.` : "";
+    const views = new Map(state.specs.map(spec => [spec.id, presentation(spec)]));
+    const attention = state.specs.filter(spec => views.get(spec.id).attention.length);
+    const attentionHtml = attention.length ? attention.map(spec => {
+      const item = views.get(spec.id).attention[0];
+      const canOpen = item.sessionId && deps.ui.state?.sessions?.some(s => s.id === item.sessionId && s.hostedHere && s.terminal?.running);
+      return `<button type="button" class="spec-attention-item" data-spec-id="${escapeHtml(spec.id)}"${canOpen ? ` data-focus-session="${escapeHtml(item.sessionId)}"` : ""}><strong>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</strong><span>${escapeHtml(item.reason)}</span><small>${canOpen ? "Open session" : "Open spec"} · ${escapeHtml(item.source)}</small></button>`;
+    }).join("") : `<p class="muted">${error ? "Attention observations are unavailable." : !state.specsLoaded ? "Reading attention requests…" : state.specs.some(s => !views.get(s.id).observed) ? "Some observations are unavailable. Open a spec for details." : "No current requests for your attention."}</p>`;
+    if (attentionHtml !== attentionSignature) {
+      attentionSignature = attentionHtml;
+      replaceKeepingFocus($("#spec-attention-list"), attentionHtml);
+    }
+    const visible = filterSpecs(state.specs, views, $("#spec-search").value, $("#spec-attention-only").checked);
+    const count = !state.specsLoaded && !error ? "Reading specs…" : `${visible.length} of ${state.specs.length} specs shown · ${attention.length} need you`;
+    if ($("#spec-overview-count").textContent !== count) $("#spec-overview-count").textContent = count;
+    const card = spec => {
+      const view = views.get(spec.id);
+      return `<article draggable="true" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage">${STAGE_GUIDE[spec.stage].label}</span><span><b>Execution</b> ${escapeHtml(view.execution)}</span><span><b>Verification</b> ${escapeHtml(view.verification)}</span><span class="work-card-note">${escapeHtml(view.verificationNote)}</span><span><b>Delivery</b> ${escapeHtml(view.delivery)}</span>${view.attention.length ? '<strong class="work-card-attention">Needs you</strong>' : ""}<span class="work-card-note">Open work details · move with Target stage</span></button></article>`;
+    };
+    const html = !visible.length
+      ? `<p class="spec-work-empty">${error ? "The work list is unavailable. Refresh observations to retry." : !state.specsLoaded ? "Reading specs…" : state.specs.length ? "No specs match these filters. Clear the search or turn off Needs you only." : "No specs yet. Create a spec to describe what you want to build."}</p>`
+      : state.specView === "board"
+        ? STAGES.map(stage => `<section class="spec-board-column" data-board-stage="${stage}" aria-label="${STAGE_GUIDE[stage].label}"><h2>${STAGE_GUIDE[stage].label} <span>${visible.filter(s => s.stage === stage).length}</span></h2>${visible.filter(s => s.stage === stage).map(card).join("") || '<p class="muted">No matching specs</p>'}</section>`).join("")
+        : visible.map(card).join("");
+    $("#spec-work-items").dataset.mode = state.specView;
+    $("#spec-view-list").setAttribute("aria-pressed", String(state.specView === "list"));
+    $("#spec-view-board").setAttribute("aria-pressed", String(state.specView === "board"));
+    if (html !== overviewSignature) {
+      overviewSignature = html;
+      replaceKeepingFocus($("#spec-work-items"), html);
+    }
   }
 
   function renderDetail() {
     const spec = selected();
-    $("#spec-empty").hidden = Boolean(spec);
+    $("#spec-empty").hidden = Boolean(spec) || !state.specsLoaded || Boolean(state.specsError || deps.ui.state?.specError);
     $("#spec-detail").hidden = !spec;
     $("#flow-explainer").innerHTML = STAGES.map(
       (stage, i) =>
         `<li><b>${i + 1}. ${STAGE_GUIDE[stage].label}</b><span>${escapeHtml(STAGE_GUIDE[stage].goal)}</span></li>`,
     ).join("");
     if (!spec) return;
+    const facts = presentation(spec);
+    lifecycle.sync(spec, false, facts.sdlc?.context);
     $("#spec-kicker").textContent = `Spec ${spec.id} · ${spec.file}`;
     $("#spec-title").textContent = spec.title;
+    $("#spec-facts").innerHTML = `<div><dt>Stage · chosen</dt><dd>${STAGE_GUIDE[spec.stage].label}</dd></div><div><dt>Execution · observed</dt><dd>${escapeHtml(facts.execution)}</dd></div><div><dt>Verification · recorded</dt><dd>${escapeHtml(facts.verification)}</dd><dd class="muted">${escapeHtml(facts.verificationDetail)}</dd></div><div><dt>Delivery · observed</dt><dd>${escapeHtml(facts.delivery)}</dd><dd class="muted">${escapeHtml(facts.deliveryDetail)}</dd></div><div class="spec-facts-context"><dt>Scope and freshness</dt><dd>${escapeHtml(facts.checkout)}</dd><dd class="muted">${facts.observedAt ? `Workspace last observed ${escapeHtml(new Date(facts.observedAt).toLocaleTimeString())}.` : "Live observations unavailable. Refresh observations to check again."}</dd></div>`;
+    const target = $("#spec-stage-target");
+    if (target.dataset.specId !== spec.id) {
+      target.dataset.specId = spec.id;
+      target.value = STAGES[Math.min(STAGES.indexOf(spec.stage) + 1, STAGES.length - 1)];
+    }
+    $("#spec-stage-move").disabled = target.value === spec.stage;
     $("#spec-branch-chip").textContent = spec.branch || "no branch";
     const onBranch = state.git?.branch && state.git.branch === spec.branch;
     const switchButton = document.querySelector('[data-action="switch-branch"]');
@@ -161,7 +246,7 @@ export function initWorkbench(deps) {
     // work (a nudge, never a block; moving still shows its usual warnings).
     $("#stage-guide").innerHTML =
       agentLive && current < STAGES.indexOf("build")
-        ? `<div><b>An agent is working on this spec while it is still in ${escapeHtml(guide.label)}.</b> Move it to Build so the record matches the work.</div><button class="text-button" type="button" data-stage="build">Move to Build</button>`
+        ? `<div><b>An associated agent session is live while this spec is in ${escapeHtml(guide.label)}.</b> If implementation has started, move it to Build.</div><button class="text-button" type="button" data-stage="build">Move to Build</button>`
         : `<div><b>${escapeHtml(guide.goal)}.</b> ${escapeHtml(guide.next)}</div>${
             nextStage
               ? `<button class="text-button" type="button" data-stage="${nextStage}">Move to ${STAGE_GUIDE[nextStage].label}</button>`
@@ -193,18 +278,17 @@ export function initWorkbench(deps) {
     const todo = [];
     if (ship?.uncommitted) todo.push(`commit ${ship.uncommitted} change${ship.uncommitted === 1 ? "" : "s"}`);
     if (ship?.unmerged) todo.push(`merge ${ship.unmerged[0]} into ${ship.unmerged[1]}`);
-    const text = !ship ? "Ship" : todo.length ? `To finish: ${todo.join(", then ")}` : "Shipped";
-    state.shipBadge = { id: spec.id, text, pending: todo.length > 0 };
-    badge.classList.toggle("pending", todo.length > 0);
+    const text = !ship || ship.unknown ? "Git readiness unknown · release not observed" : todo.length ? `To finish Git integration: ${todo.join(", then ")}` : "Git integration checked · release not observed";
+    const pending = !ship || ship.unknown || todo.length > 0;
+    state.shipBadge = { id: spec.id, text, pending };
+    badge.classList.toggle("pending", pending);
     badge.textContent = text;
   }
 
   /** Who has worked on this spec, from its audit trail, and which of them are running now. */
   /** Whether a session is an agent waiting for the person's answer (from the observer reply). */
   const needsYou = (id) => deps.ui.waitingTerminals?.has(id) ?? false;
-  const specNeedsYou = (spec) =>
-    specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && needsYou(x.id)) ||
-    (deps.ui.waitingTalkSpecs?.has(spec.id) ?? false);
+  const specNeedsYou = (spec) => presentation(spec).attention.length > 0;
 
   function renderSessions() {
     const spec = selected();
@@ -287,15 +371,14 @@ export function initWorkbench(deps) {
     if (git.error) {
       $("#git-branch").textContent = git.busy ? "Git busy" : "Git unavailable";
       $("#git-status").textContent = git.error;
+      $("#git-remote").textContent = gitRemoteDescription(git);
       return;
     }
     $("#git-branch").innerHTML = `<span class="branch-icon">${icon("branch", { size: 14 })}</span> ${escapeHtml(git.branch ?? "detached")}`;
-    const parts = [
-      git.changes.length ? `${git.changes.length} unsaved change${git.changes.length === 1 ? "" : "s"}` : "All changes saved",
-    ];
-    if (git.ahead) parts.push(`${git.ahead} to push`);
-    if (git.behind) parts.push(`${git.behind} to pull`);
-    $("#git-status").textContent = parts.join(" · ");
+    $("#git-status").textContent = git.changes.length
+      ? `${git.changes.length} changed file${git.changes.length === 1 ? "" : "s"} outside local history`
+      : "No uncommitted changes";
+    $("#git-remote").textContent = gitRemoteDescription(git);
     // The top bar's count comes from a slower poll; keep it in step with what this card shows.
     $("#top-changes").textContent = `${git.changes.length} changed`;
     const commit = $("#top-commit");
@@ -397,9 +480,12 @@ export function initWorkbench(deps) {
 
   function selectSpec(id) {
     state.selectedId = id;
+    state.overviewCollapsed = true;
     remember(id);
     if (deps.ui.view !== "specs") deps.showView("specs");
     render();
+    $("#spec-title").focus({ preventScroll: true });
+    $("#spec-title").scrollIntoView({ block: "start" });
   }
 
   function openNewSpec() {
@@ -414,12 +500,18 @@ export function initWorkbench(deps) {
     // The server's list is the one the move records (it also knows git: uncommitted work, an
     // unmerged branch); the local rules are the fallback if it cannot be asked.
     let warnings = stageWarnings(spec, stage);
+    let context = null;
     try {
-      warnings = (await api("GET", `/api/specs/${spec.id}/stage-check?to=${encodeURIComponent(stage)}`)).warnings;
+      const result = await api("GET", `/api/specs/${spec.id}/stage-check?to=${encodeURIComponent(stage)}`);
+      warnings = result.warnings; context = result.context;
     } catch {
-      /* keep the local warnings */
+      warnings.push("Readiness checks are unavailable. Changing stage does not confirm verification or release.");
     }
-    state.pending = { kind: "stage", stage };
+    if (selected()?.id !== spec.id || selected()?.revision !== spec.revision) {
+      toast("The selected spec changed. Review its current state before moving it.", "error");
+      return;
+    }
+    state.pending = { kind: "stage", stage, specId: spec.id, revision: spec.revision, context };
     $("#stage-dialog-title").textContent = `Move to ${STAGE_GUIDE[stage].label}`;
     $("#stage-dialog-sub").textContent = `${STAGE_GUIDE[spec.stage].label} → ${STAGE_GUIDE[stage].label}. ${STAGE_GUIDE[stage].next}`;
     $("#stage-warnings").hidden = !warnings.length;
@@ -459,10 +551,11 @@ export function initWorkbench(deps) {
     const changes = state.git?.changes ?? [];
     $("#commit-files").innerHTML = changes.length
       ? changes
-          .slice(0, 40)
           .map((c) => `<li><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></li>`)
           .join("")
-      : '<li class="muted">No changes to commit.</li>';
+      : `<li class="muted">${!state.git || state.git.error ? "Changes unavailable. Close this dialog and refresh Git status before committing." : "No changes to commit."}</li>`;
+    $("#commit-scope").textContent = "Includes all changed files in this project, including new files and work outside the selected spec. New files matched by Git's ignore rules are excluded. Files changed before you submit are included too.";
+    $("#commit-dialog-submit").disabled = !state.git || Boolean(state.git.error) || changes.length === 0;
     // A suggestion from what changed, selected so typing replaces it; the prefix stays.
     const prefix = commitPrefix(spec);
     $("#commit-message").value = suggestCommitMessage(spec, changes);
@@ -480,6 +573,59 @@ export function initWorkbench(deps) {
     const box = $("#commit-message");
     box.focus();
     box.setSelectionRange(prefix.length, box.value.length);
+  }
+
+  let transferReview = null;
+  let transferRunning = false;
+  let transferGeneration = 0;
+  function paintTransfer(message, checked = false) {
+    $("#git-transfer-status").textContent = message;
+    const review = transferReview;
+    $("#git-transfer-commits").innerHTML = review
+      ? [["Upload", review.outgoing], ["Download", review.incoming]]
+          .flatMap(([direction, commits]) => commits.map(commit => `<li><span class="change-kind">${direction}</span><span>${escapeHtml(commit)}</span></li>`)).join("")
+      : "";
+    $("#git-transfer-check").disabled = transferRunning || !review;
+    $("#git-transfer-upload").disabled = transferRunning || !checked || !review || Boolean(review.blocked) || !review.ahead || Boolean(review.behind);
+    $("#git-transfer-download").disabled = transferRunning || !checked || !review || Boolean(review.blocked) || !review.behind || Boolean(review.ahead);
+  }
+  function transferDescription(review) {
+    return `${review.branch.replace(/^refs\/heads\//, "")} → ${review.remote}/${review.remote_ref.replace(/^refs\/heads\//, "")} (server: ${review.server}): ${review.ahead} local commit${review.ahead === 1 ? "" : "s"} to upload; ${review.behind} remote commit${review.behind === 1 ? "" : "s"} to download. ${review.blocked || "Review this destination before choosing a transfer."}`;
+  }
+  async function openTransfer() {
+    if (transferRunning) { showDialog("git-transfer-dialog"); return; }
+    const generation = ++transferGeneration;
+    transferReview = null;
+    paintTransfer("Reading local branch information…");
+    showDialog("git-transfer-dialog");
+    try {
+      const review = await api("GET", "/api/git/transfer");
+      if (generation !== transferGeneration) return;
+      transferReview = review;
+      paintTransfer(`${transferDescription(review)} This comparison uses local records. Choose Check remote before uploading or downloading.`);
+    } catch (error) {
+      if (generation === transferGeneration) paintTransfer(error.message);
+    }
+  }
+  for (const action of ["check", "upload", "download"]) {
+    $(`#git-transfer-${action}`).addEventListener("click", async () => {
+      if (transferRunning || !transferReview) return;
+      transferRunning = true;
+      paintTransfer(action === "check" ? "Checking the remote…" : `${action === "upload" ? "Uploading" : "Downloading"} reviewed commits…`);
+      try {
+        transferReview = await api("POST", "/api/git/transfer", { action, review: transferReview });
+        transferRunning = false;
+        paintTransfer(`${action === "check" ? "Remote checked." : "Git transfer completed."} ${transferDescription(transferReview)}`, true);
+        await refreshGit();
+      } catch (error) {
+        transferRunning = false;
+        // A failure can mean the remote changed or completion is uncertain. Never leave a
+        // previously enabled upload button available against that obsolete observation.
+        transferReview = null;
+        paintTransfer(`${error.message} Close and reopen this review to check again.`);
+        await refreshGit();
+      }
+    });
   }
 
   /** Starts an agent, or a plain terminal ("shell"), on the selected spec. Recorded server-side. */
@@ -589,9 +735,11 @@ export function initWorkbench(deps) {
     const spec = selected();
     if (!spec || state.pending?.kind !== "stage") return;
     try {
-      const result = await api("POST", `/api/specs/${spec.id}/stage`, {
+      const result = await api("POST", `/api/specs/${state.pending.specId}/stage`, {
         stage: state.pending.stage,
         note: $("#stage-note").value,
+        expectedRevision: state.pending.revision,
+        expectedContext: state.pending.context,
       });
       closeDialog("stage-dialog");
       replaceSpec(result.spec);
@@ -602,8 +750,11 @@ export function initWorkbench(deps) {
         result.warnings.length ? "error" : "info",
       );
       refreshGit();
+      refreshSpecs();
+      deps.refreshState(true);
     } catch (error) {
       toast(error.message, "error");
+      refreshSpecs();
     }
   });
 
@@ -619,7 +770,7 @@ export function initWorkbench(deps) {
         }),
       );
       closeDialog("evidence-dialog");
-      toast(`Criterion ${state.pending.index + 1} proven. Evidence recorded.`);
+      toast(`Criterion ${state.pending.index + 1} recorded complete. Accept structured evidence in Verify.`);
       refreshGit();
     } catch (error) {
       toast(error.message, "error");
@@ -666,6 +817,7 @@ export function initWorkbench(deps) {
       { title: "New terminal", hint: "Alt+T", run: deps.launchQuickTerminal },
       { title: "Commit changes", hint: "Alt+C", run: openCommit },
       { title: "Refresh Git status", run: refreshGit },
+      { title: "Review Git upload / download", run: openTransfer },
       { title: "Keyboard shortcuts", hint: "?", run: () => showDialog("shortcuts-dialog") },
       ...["system", "light", "dark"].map((choice) => ({
         title: `Theme: ${choice === "system" ? "follow system" : choice}`,
@@ -762,6 +914,10 @@ export function initWorkbench(deps) {
     const handlers = {
       "new-spec": openNewSpec,
       commit: openCommit,
+      "git-transfer": openTransfer,
+      "move-spec-stage": () => openStage($("#spec-stage-target").value),
+      "spec-overview": () => { state.overviewCollapsed = false; renderOverview(); $("#spec-search").focus(); $("#spec-overview-title").scrollIntoView({ block: "start" }); },
+      "refresh-spec-workbench": () => Promise.all([refreshSpecs(), deps.refreshState(true)]),
       "refresh-git": refreshGit,
       "switch-branch": switchBranch,
       "copy-spec-path": copySpecPath,
@@ -781,7 +937,38 @@ export function initWorkbench(deps) {
   document.addEventListener("verb:observer", () => {
     renderList();
     renderSessions();
+    renderOverview();
+    renderDetail();
   });
+
+  $("#spec-search").addEventListener("input", renderOverview);
+  let dragged = null;
+  $("#spec-work-items").addEventListener("dragstart", event => {
+    const id = event.target.closest(".spec-work-card")?.querySelector("[data-spec-id]")?.dataset.specId;
+    const spec = state.specs.find(s => s.id === id);
+    if (!spec || state.specView !== "board") return event.preventDefault();
+    dragged = { id, revision: spec.revision };
+    event.dataTransfer.setData("text/x-verb-spec", id); event.dataTransfer.effectAllowed = "move";
+  });
+  $("#spec-work-items").addEventListener("dragover", event => {
+    if (dragged && event.target.closest("[data-board-stage]")) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }
+  });
+  $("#spec-work-items").addEventListener("drop", event => {
+    const stage = event.target.closest("[data-board-stage]")?.dataset.boardStage;
+    if (!dragged || !stage) return;
+    event.preventDefault();
+    const spec = state.specs.find(s => s.id === dragged.id);
+    if (!spec || spec.revision !== dragged.revision) { dragged = null; toast("The work changed while dragging. Open it and review the move again.", "error"); return; }
+    dragged = null;
+    if (stage === spec.stage) return;
+    selectSpec(spec.id); state.overviewCollapsed = false; renderOverview(); openStage(stage);
+  });
+  $("#spec-work-items").addEventListener("dragend", () => { dragged = null; });
+  $("#spec-attention-only").addEventListener("change", renderOverview);
+  $("#spec-stage-target").addEventListener("change", () => { $("#spec-stage-move").disabled = $("#spec-stage-target").value === selected()?.stage; });
+  for (const view of ["list", "board"]) {
+    $(`#spec-view-${view}`).addEventListener("click", () => { state.specView = view; renderOverview(); });
+  }
 
   // A diff loads when its row opens; the rail's file names open (and scroll to) their row.
   document.addEventListener(

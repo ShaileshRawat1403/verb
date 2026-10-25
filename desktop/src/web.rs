@@ -746,6 +746,10 @@ struct SpecStageRequest {
     stage: String,
     #[serde(default)]
     note: String,
+    #[serde(default, rename = "expectedRevision")]
+    expected_revision: Option<String>,
+    #[serde(default, rename = "expectedContext")]
+    expected_context: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1900,10 +1904,22 @@ impl WebHost {
             ));
         }
         if method == &Method::Get && path == "/api/specs" {
-            return Ok(Reply::json(
-                200,
-                json!({"specs": crate::specs::list(&self.project), "stages": crate::specs::STAGES}),
-            ));
+            let project = self.project.clone();
+            let project_id = self.identity.id.clone();
+            let cache = Arc::clone(&self.state_cache);
+            return Ok(self.off_loop(false, move || {
+                let workspace = cache.try_lock().ok().and_then(|cache| {
+                    cache
+                        .as_ref()
+                        .filter(|c| c.cached_at.elapsed() < Duration::from_secs(30))
+                        .and_then(|c| serde_json::from_slice::<Value>(&c.body).ok())
+                });
+                let specs = crate::specs::list_checked(&project)?;
+                let mut summaries =
+                    crate::spec_summary::resolve_all(&specs, workspace.as_ref(), &project);
+                crate::sdlc::enrich_all(&project, &project_id, &specs, &mut summaries);
+                Ok(json!({"specs": specs, "summaries": summaries, "stages": crate::specs::STAGES}))
+            }));
         }
         if method == &Method::Post && path == "/api/specs" {
             let input: SpecCreateRequest = read_json(request)?;
@@ -1963,8 +1979,58 @@ impl WebHost {
                 Ok(json!({"sha": sha, "message": format!("Committed {sha}")}))
             }));
         }
+        if method == &Method::Get && path == "/api/git/transfer" {
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || Ok(json!(crate::git_sync::review(&project)?))));
+        }
+        if method == &Method::Post && path == "/api/git/transfer" {
+            let input: crate::git_sync::Request = read_json(request)?;
+            let project = self.project.clone();
+            return Ok(self.off_loop(true, move || {
+                Ok(json!(crate::git_sync::transfer(&project, input)?))
+            }));
+        }
         let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
         match parts.as_slice() {
+            ["api", "specs", id, "sdlc-diff"] if method == &Method::Get => {
+                let (project, id) = (self.project.clone(), id.to_string());
+                Ok(self.off_loop(false, move || {
+                    crate::specs::find(&project, &id)?;
+                    crate::sdlc::implementation_diff(&project)
+                }))
+            }
+            ["api", "specs", id, "sdlc-export"] if method == &Method::Get => {
+                let (project, project_id, id) = (
+                    self.project.clone(),
+                    self.identity.id.clone(),
+                    id.to_string(),
+                );
+                Ok(self.off_loop(false, move || {
+                    crate::sdlc::export(&project_id, &crate::specs::find(&project, &id)?.1)
+                }))
+            }
+            ["api", "specs", id, "sdlc"] if method == &Method::Get => {
+                let (project, project_id, id) = (
+                    self.project.clone(),
+                    self.identity.id.clone(),
+                    id.to_string(),
+                );
+                Ok(self.off_loop(false, move || {
+                    crate::sdlc::view(&project, &project_id, &crate::specs::find(&project, &id)?.1)
+                }))
+            }
+            ["api", "specs", id, "sdlc"] if method == &Method::Post => {
+                let input: crate::sdlc::Request = read_json(request)?;
+                let (project, project_id, id, actor) = (
+                    self.project.clone(),
+                    self.identity.id.clone(),
+                    id.to_string(),
+                    self.actor(),
+                );
+                Ok(self.off_loop(true, move || {
+                    crate::sdlc::act(&project, &project_id, &id, input, &actor)
+                }))
+            }
             ["api", "specs", id] if method == &Method::Get => Ok(Reply::json(
                 200,
                 json!(crate::specs::find(&self.project, id)?.1),
@@ -1981,10 +2047,16 @@ impl WebHost {
                     .position(|s| *s == to)
                     .ok_or("unknown stage")?;
                 let project = self.project.clone();
+                let project_id = self.identity.id.clone();
                 Ok(self.off_loop(false, move || {
                     let ship = crate::specs::ship_state(&project, &spec);
+                    let flow = crate::sdlc::view(&project, &project_id, &spec)?;
+                    let mut gate_spec = spec.clone();
+                    gate_spec.criteria_done = flow["accepted"].as_u64().unwrap_or(0) as usize;
+                    let mut warnings = crate::specs::stage_warnings(&project, &gate_spec, target);
+                    warnings.extend(crate::sdlc::warnings(&flow, crate::specs::STAGES[target]));
                     Ok(json!({
-                        "warnings": crate::specs::stage_warnings(&project, &spec, target),
+                        "warnings": warnings, "context": flow["context"],
                         "ship": ship,
                     }))
                 }))
@@ -1992,9 +2064,26 @@ impl WebHost {
             ["api", "specs", id, "stage"] if method == &Method::Post => {
                 let input: SpecStageRequest = read_json(request)?;
                 let (project, actor, id) = (self.project.clone(), self.actor(), id.to_string());
+                let project_id = self.identity.id.clone();
                 Ok(self.off_loop(true, move || {
-                    let (spec, warnings) =
-                        crate::specs::set_stage(&project, &id, &input.stage, &input.note, &actor)?;
+                    let current = crate::specs::find(&project, &id)?.1;
+                    if input.expected_revision.as_deref().is_some_and(|r| r != current.revision) { return Err("This spec changed while you were reviewing it. Refresh the spec and review the move again.".into()); }
+                    let flow = crate::sdlc::view(&project, &project_id, &current)?;
+                    if input.expected_context.as_deref().is_some_and(|context| flow["context"].as_str() != Some(context)) {
+                        return Err("The source or evidence changed while this move was open. Refresh and review it again.".into());
+                    }
+                    let extra = crate::sdlc::warnings(&flow, &input.stage);
+                    let note = if extra.is_empty() { input.note.clone() } else { format!("{}; SDLC readiness warnings: {}", input.note, extra.join("; ")) };
+                    let (spec, mut warnings) = crate::specs::set_stage(
+                        &project,
+                        &id,
+                        &input.stage,
+                        &note,
+                        &actor,
+                        input.expected_revision.as_deref(),
+                        flow["accepted"].as_u64().map(|n| n as usize),
+                    )?;
+                    warnings.extend(extra);
                     Ok(json!({"spec": spec, "warnings": warnings}))
                 }))
             }

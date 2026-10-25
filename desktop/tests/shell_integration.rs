@@ -316,7 +316,11 @@ fn verb_never_touches_the_users_own_shell_configuration() {
     };
     let sandbox = Sandbox::new("untouched");
     let zshrc = sandbox.home().join(".zshrc");
-    let original = format!("export VERB_TEST_MARKER={MARKER}\n");
+    // Saving history is the user's choice; zsh's SAVEHIST default is zero on some
+    // Linux distributions. Configure that choice explicitly before testing its preservation.
+    let original = format!(
+        "export VERB_TEST_MARKER={MARKER}\nHISTFILE=\"$HOME/.zsh_history\"\nHISTSIZE=1000\nSAVEHIST=1000\n"
+    );
     fs::write(&zshrc, &original).unwrap();
 
     run_shell(&sandbox, &shell, &format!("{SECRET_COMMAND}\nexit\n"));

@@ -363,11 +363,6 @@ impl Hosted {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn stream_sink(&self) -> Option<&std::sync::Arc<crate::stream::TerminalStreamSink>> {
-        self.sink.as_ref()
-    }
-
     pub fn signal(&self, signal: i32) -> Result<(), String> {
         pty::signal_group(self.pid, signal)
     }

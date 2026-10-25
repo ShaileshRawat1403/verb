@@ -55,5 +55,3 @@ export function fileIconName(name) {
   if (/^(js|mjs|cjs|ts|tsx|jsx|rs|py|go|java|kt|swift|c|h|cpp|rb|php|sh|bash|zsh|css|html|sql)$/.test(ext)) return "file-code";
   return "file";
 }
-
-export const ICON_NAMES = Object.keys(PATHS);

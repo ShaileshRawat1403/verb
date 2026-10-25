@@ -11,6 +11,7 @@
 //! blocking: moving on with criteria unproven is allowed, and the trail says so.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,6 +36,8 @@ pub(crate) struct AuditEntry {
 #[derive(Serialize, Clone, Debug)]
 pub(crate) struct Spec {
     pub id: String,
+    /// Derived from the file, never an additional durable store.
+    pub revision: String,
     pub title: String,
     pub stage: String,
     pub branch: String,
@@ -149,7 +152,11 @@ fn parse_audit(body: &str) -> Vec<AuditEntry> {
 
 fn parse(file: &Path, project: &Path) -> Option<Spec> {
     let raw = fs::read_to_string(file).ok()?;
-    let (fields, body) = front_matter(&raw)?;
+    parse_contents(file, project, &raw)
+}
+
+fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
+    let (fields, body) = front_matter(raw)?;
     let field = |key: &str| {
         fields
             .iter()
@@ -158,11 +165,12 @@ fn parse(file: &Path, project: &Path) -> Option<Spec> {
             .unwrap_or_default()
     };
     let id = field("id");
-    if id.is_empty() {
+    if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) || id.len() > 32 {
         return None;
     }
     let criteria = parse_criteria(body);
     Some(Spec {
+        revision: format!("{:x}", Sha256::digest(raw.as_bytes())),
         title: field("title"),
         stage: Some(field("stage"))
             .filter(|stage| STAGES.contains(&stage.as_str()))
@@ -185,17 +193,39 @@ fn parse(file: &Path, project: &Path) -> Option<Spec> {
 // --------------------------------------------------------------------------------------- reading
 
 pub(crate) fn list(project: &Path) -> Vec<Spec> {
-    let Ok(entries) = fs::read_dir(specs_dir(project)) else {
-        return Vec::new();
+    list_checked(project).unwrap_or_default()
+}
+
+pub(crate) fn list_checked(project: &Path) -> Result<Vec<Spec>, String> {
+    let entries = match fs::read_dir(specs_dir(project)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && project.is_dir() => {
+            return Ok(Vec::new())
+        }
+        Err(_) => {
+            return Err(
+                "Could not read this project's specs. Check folder access, then refresh.".into(),
+            )
+        }
     };
-    let mut specs: Vec<Spec> = entries
-        .flatten()
+    let entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "Could not read every spec entry. Check folder access, then refresh.")?;
+    let mut specs = Vec::new();
+    for path in entries
+        .into_iter()
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "md"))
-        .filter_map(|path| parse(&path, project))
-        .collect();
+    {
+        let raw = fs::read_to_string(&path).map_err(|_| {
+            "Could not read every spec file. Check file access and UTF-8 encoding, then refresh."
+        })?;
+        if let Some(spec) = parse_contents(&path, project, &raw) {
+            specs.push(spec);
+        }
+    }
     specs.sort_by(|a, b| a.id.cmp(&b.id));
-    specs
+    Ok(specs)
 }
 
 pub(crate) fn find(project: &Path, id: &str) -> Result<(PathBuf, Spec), String> {
@@ -316,7 +346,7 @@ pub(crate) fn create(project: &Path, input: NewSpec, actor: &str) -> Result<Spec
     fs::create_dir_all(&dir).map_err(|e| format!("could not create specs/: {e}"))?;
     // Choosing the next id and writing its file must not interleave with another create.
     let _writing = writing();
-    let next = list(project)
+    let next = list_checked(project)?
         .iter()
         .filter_map(|spec| spec.id.parse::<u32>().ok())
         .max()
@@ -374,17 +404,26 @@ pub(crate) fn set_stage(
     stage: &str,
     note: &str,
     actor: &str,
+    expected_revision: Option<&str>,
+    evidence_accepted: Option<usize>,
 ) -> Result<(Spec, Vec<String>), String> {
     let target = STAGES
         .iter()
         .position(|s| *s == stage)
         .ok_or("unknown stage")?;
     let (path, spec) = find(project, id)?;
+    if expected_revision.is_some_and(|revision| revision != spec.revision) {
+        return Err("This spec changed while you were reviewing it. Refresh the spec and review the move again.".into());
+    }
     let current = STAGES.iter().position(|s| *s == spec.stage).unwrap_or(0);
     if target == current {
         return Ok((spec, Vec::new()));
     }
-    let warnings = stage_warnings(project, &spec, target);
+    let mut gate_spec = spec.clone();
+    if let Some(count) = evidence_accepted {
+        gate_spec.criteria_done = count.min(gate_spec.criteria.len());
+    }
+    let warnings = stage_warnings(project, &gate_spec, target);
     let mut action = format!("stage {} → {stage}", spec.stage);
     if !warnings.is_empty() {
         action.push_str(&format!(" (warning: {})", warnings.join("; ")));
@@ -394,6 +433,9 @@ pub(crate) fn set_stage(
     }
     let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if format!("{:x}", Sha256::digest(raw.as_bytes())) != spec.revision {
+        return Err("This spec changed while you were reviewing it. Refresh the spec and review the move again.".into());
+    }
     let raw = set_field(&raw, "stage", stage);
     write_atomic(&path, &append_audit(&raw, &audit_line(actor, &action)))?;
     Ok((find(project, id)?.1, warnings))
@@ -424,6 +466,10 @@ pub(crate) fn stage_warnings(project: &Path, spec: &Spec, target: usize) -> Vec<
     // (a user test reached "Shipped" with the spec file uncommitted and its branch unmerged).
     if STAGES[target] == "ship" {
         let ship = ship_state(project, spec);
+        if ship.unknown {
+            warnings
+                .push("Git readiness could not be established; release status is unknown".into());
+        }
         if ship.uncommitted > 0 {
             warnings.push(format!(
                 "{} uncommitted change{} in the project",
@@ -441,55 +487,66 @@ pub(crate) fn stage_warnings(project: &Path, spec: &Spec, target: usize) -> Vec<
 /// Whether a spec's work has reached history and the main line.
 #[derive(Serialize, Debug, Default, PartialEq)]
 pub(crate) struct ShipState {
+    pub unknown: bool,
     pub uncommitted: usize,
     /// The spec's branch and the branch it has not been merged into.
     pub unmerged: Option<(String, String)>,
 }
 
 pub(crate) fn ship_state(project: &Path, spec: &Spec) -> ShipState {
-    let uncommitted = git(project, &["status", "--porcelain=v1", "-uall"])
+    let status = observed_git(project, &["status", "--porcelain=v1", "-uall"]);
+    let mut unknown = status.as_ref().is_none_or(|s| !s.status.success());
+    let uncommitted = status
+        .filter(|s| s.status.success())
+        .map(|s| String::from_utf8_lossy(&s.stdout).into_owned())
         .map(|out| out.lines().filter(|l| !l.trim().is_empty()).count())
         .unwrap_or(0);
-    let exists = |branch: &str| {
-        git(
-            project,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("refs/heads/{branch}"),
-            ],
-        )
-        .is_ok()
-    };
-    let unmerged = default_branch(project)
-        .filter(|base| !spec.branch.is_empty() && *base != spec.branch && exists(&spec.branch))
-        .filter(|base| {
-            git(
+    let mut unmerged = None;
+    match default_branch(project).filter(|_| !spec.branch.is_empty()) {
+        Some(base) => {
+            let result = observed_git(
                 project,
-                &["merge-base", "--is-ancestor", &spec.branch, base],
-            )
-            .is_err()
-        })
-        .map(|base| (spec.branch.clone(), base));
+                &[
+                    "merge-base",
+                    "--is-ancestor",
+                    &format!("refs/heads/{}", spec.branch),
+                    &format!("refs/heads/{base}"),
+                ],
+            );
+            match result.and_then(|r| r.status.code()) {
+                Some(0) => {}
+                Some(1) => unmerged = Some((spec.branch.clone(), base)),
+                _ => unknown = true,
+            }
+        }
+        None => unknown = true,
+    }
     ShipState {
+        unknown,
         uncommitted,
         unmerged,
     }
 }
 
+fn observed_git(project: &Path, args: &[&str]) -> Option<std::process::Output> {
+    crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()
+}
+
 /// The branch work is merged into: the remote's default, else `main` or `master` if present.
 fn default_branch(project: &Path) -> Option<String> {
-    if let Ok(head) = git(
+    if let Some(head) = observed_git(
         project,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    ) {
+    )
+    .filter(|o| o.status.success())
+    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+    {
         if let Some(name) = head.trim().strip_prefix("origin/") {
             return Some(name.to_owned());
         }
     }
     ["main", "master"].into_iter().map(str::to_owned).find(|b| {
-        git(
+        observed_git(
             project,
             &[
                 "rev-parse",
@@ -498,7 +555,7 @@ fn default_branch(project: &Path) -> Option<String> {
                 &format!("refs/heads/{b}"),
             ],
         )
-        .is_ok()
+        .is_some_and(|o| o.status.success())
     })
 }
 
@@ -563,18 +620,14 @@ pub(crate) fn set_criterion(
 // ------------------------------------------------------------------------------------------- Git
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::exec::user_git(project)
-        .ok_or("could not prepare isolated git")?
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_owned())
-    }
+    crate::exec::git_text(
+        crate::exec::user_git(project)
+            .ok_or("could not prepare isolated git")?
+            .arg("-C")
+            .arg(project)
+            .args(args)
+            .output(),
+    )
 }
 
 pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
@@ -877,6 +930,80 @@ pub(crate) fn handoff(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_stale_stage_review_does_not_overwrite_a_newer_spec() {
+        let project = temp_repo();
+        let original = new_spec(&project);
+        let updated = set_stage(
+            &project,
+            &original.id,
+            "plan",
+            "reviewed",
+            "fixture",
+            Some(&original.revision),
+            None,
+        )
+        .unwrap()
+        .0;
+        assert_ne!(original.revision, updated.revision);
+        assert!(set_stage(
+            &project,
+            &original.id,
+            "build",
+            "stale move",
+            "fixture",
+            Some(&original.revision),
+            None
+        )
+        .unwrap_err()
+        .contains("spec changed"));
+        let current = find(&project, &original.id).unwrap().1;
+        assert_eq!(current.stage, "plan");
+        assert_eq!(current.audit.len(), updated.audit.len());
+        assert_eq!(current.revision, updated.revision);
+    }
+
+    #[test]
+    fn unreadable_spec_directory_and_git_readiness_remain_unknown() {
+        let project = temp_repo();
+        assert!(list_checked(&project).unwrap().is_empty());
+        fs::write(project.join("specs"), "not a directory").unwrap();
+        assert!(list_checked(&project).is_err());
+        fs::remove_file(project.join("specs")).unwrap();
+        let spec = new_spec(&project);
+        fs::write(project.join(".git/config"), "[invalid\n").unwrap();
+        assert!(ship_state(&project, &spec).unknown);
+        assert!(stage_warnings(&project, &spec, 5)
+            .iter()
+            .any(|w| w.contains("unknown")));
+    }
+
+    #[test]
+    fn an_unreadable_spec_file_blocks_partial_lists_and_new_identity_allocation() {
+        let project = temp_repo();
+        let existing = new_spec(&project);
+        let path = project.join(&existing.file);
+        let broken = [0xff, 0xfe, 0xfd];
+        fs::write(&path, broken).unwrap();
+        assert!(list_checked(&project)
+            .unwrap_err()
+            .contains("every spec file"));
+        let result = create(
+            &project,
+            NewSpec {
+                title: existing.title,
+                problem: String::new(),
+                users: String::new(),
+                criteria: vec![],
+                out_of_scope: String::new(),
+            },
+            "fixture",
+        );
+        assert!(result.unwrap_err().contains("every spec file"));
+        assert_eq!(fs::read(&path).unwrap(), broken);
+        assert_eq!(fs::read_dir(project.join("specs")).unwrap().count(), 1);
+    }
+
     fn temp_repo() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -934,7 +1061,8 @@ mod tests {
     fn stage_changes_never_block_but_record_skips_and_unproven_criteria() {
         let project = temp_repo();
         new_spec(&project);
-        let (spec, warnings) = set_stage(&project, "001", "review", "", "A via test").unwrap();
+        let (spec, warnings) =
+            set_stage(&project, "001", "review", "", "A via test", None, None).unwrap();
         assert_eq!(spec.stage, "review");
         assert_eq!(warnings.len(), 2, "{warnings:?}");
         let last = spec.audit.last().unwrap();
@@ -1027,6 +1155,8 @@ mod tests {
             "plan",
             "x · forged · y\n- fake line",
             "A via test",
+            None,
+            None,
         )
         .unwrap()
         .0;

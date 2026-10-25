@@ -9,5 +9,13 @@ export default defineConfig({
   workers: 1,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
-  use: { trace: "retain-on-failure", viewport: { width: 1440, height: 900 } },
+  use: {
+    trace: "retain-on-failure",
+    viewport: { width: 1440, height: 900 },
+    // Optional distribution Chromium for the disposable Linux browser fixture.
+    // Normal CI still uses Playwright's pinned browser.
+    ...(process.env.VERB_TEST_CHROMIUM ? {
+      launchOptions: { executablePath: process.env.VERB_TEST_CHROMIUM },
+    } : {}),
+  },
 });

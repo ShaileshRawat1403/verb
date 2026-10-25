@@ -339,6 +339,28 @@
           </section>
 
           <section id="view-specs" class="view">
+            <section class="panel spec-overview" aria-labelledby="spec-overview-title">
+              <div class="spec-overview-heading">
+                <div><h1 id="spec-overview-title">Work overview</h1><p id="spec-overview-count" role="status" aria-live="polite">Reading specs…</p></div>
+                <button class="secondary-button" type="button" data-action="new-spec">New spec</button>
+              </div>
+              <p class="muted">Choose a piece of work to see its sessions, criterion records and delivery observations.</p>
+              <p id="spec-workbench-error" class="warning-box" role="alert" hidden></p>
+              <div class="spec-view-controls">
+                <label class="spec-search-label" for="spec-search">Find work<input id="spec-search" type="search" placeholder="Title, number, branch or stage…" autocomplete="off" /></label>
+                <div class="spec-view-switch" role="group" aria-label="Work presentation">
+                  <button type="button" id="spec-view-list" class="secondary-button" aria-pressed="true">List</button>
+                  <button type="button" id="spec-view-board" class="secondary-button" aria-pressed="false">Board</button>
+                </div>
+                <label class="check-row"><input type="checkbox" id="spec-attention-only" /> Needs you only</label>
+                <button class="text-button" type="button" data-action="refresh-spec-workbench">Refresh observations</button>
+              </div>
+              <section class="spec-attention" aria-labelledby="spec-attention-title">
+                <h2 id="spec-attention-title">Needs you</h2>
+                <div id="spec-attention-list"></div>
+              </section>
+              <div id="spec-work-items" class="spec-work-items"></div>
+            </section>
             <div class="specs-layout">
               
 
@@ -363,7 +385,8 @@
                 <div id="spec-detail" class="spec-detail" hidden>
                   <header class="spec-header">
                     <span class="section-kicker" id="spec-kicker">SPEC</span>
-                    <h1 id="spec-title"></h1>
+                    <h2 id="spec-title" tabindex="-1"></h2>
+                    <button class="text-button" type="button" data-action="spec-overview">Back to work overview</button>
                     <div class="spec-meta">
                       <span class="chip" id="spec-branch-chip" title="This spec's branch"></span>
                       <button class="text-button" type="button" data-action="switch-branch">
@@ -374,8 +397,6 @@
                       </button>
                     </div>
                   </header>
-                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
-                  <div class="stage-guide" id="stage-guide"></div>
                   <div class="spec-actions">
                     <button
                       class="secondary-button"
@@ -402,6 +423,24 @@
                       Hand off…
                     </button>
                   </div>
+                  <section id="sdlc-workflow" class="sdlc-workflow" aria-labelledby="sdlc-title">
+                    <div class="sdlc-heading"><h3 id="sdlc-title">Work through this spec</h3><button type="button" class="text-button" data-sdlc-action="refresh">Refresh evidence</button></div>
+                    <div id="sdlc-tabs" class="sdlc-tabs" role="group" aria-label="Lifecycle workspace"></div>
+                    <p id="sdlc-context" class="muted"></p>
+                    <p id="sdlc-status" role="status" aria-live="polite"></p>
+                    <div id="sdlc-content" class="sdlc-content" tabindex="-1"></div>
+                    <details class="sdlc-records"><summary>Evidence and delivery history</summary><ol id="sdlc-history"></ol><button class="secondary-button" type="button" data-sdlc-action="export">Export all evidence metadata</button></details>
+                  </section>
+                  <dl id="spec-facts" class="spec-facts" aria-label="Independent work observations"></dl>
+                  <div class="spec-move-controls">
+                    <label for="spec-stage-target">Move this spec to</label>
+                    <select id="spec-stage-target" aria-label="Target stage">
+                      <option value="spec">Spec</option><option value="plan">Plan</option><option value="build">Build</option><option value="verify">Verify</option><option value="review">Review</option><option value="ship">Ship</option>
+                    </select>
+                    <button class="secondary-button" type="button" id="spec-stage-move" data-action="move-spec-stage">Review move…</button>
+                  </div>
+                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
+                  <div class="stage-guide" id="stage-guide"></div>
                   <div id="spec-work" class="spec-work">
                     <p class="work-hint">Terminals and agents you open for this spec appear here. Agents start by reading the spec.</p>
                   </div>
@@ -417,13 +456,13 @@
               </section>
 
               <div class="resize-handle resize-proof" id="resize-proof" aria-label="Resize the proof column"></div>
-              <aside class="panel spec-proof" aria-label="Proof">
+              <aside class="panel spec-proof" aria-label="Criterion claims and changes">
                 <section>
                   <div class="proof-head">
                     <h3>Acceptance criteria</h3>
                     <span id="criteria-progress" class="count-chip"></span>
                   </div>
-                  <p class="proof-hint">Tick one when you can show it works. Verb asks how you know.</p>
+                  <p class="proof-hint">Checkmarks record your claim. Use Verify to link and accept current evidence.</p>
                   <ul id="criteria-list" class="criteria-list"></ul>
                 </section>
                 <section>
@@ -454,6 +493,8 @@
                   </div>
                   <div id="git-branch" class="git-branch">Reading…</div>
                   <div id="git-status" class="git-status"></div>
+                  <p id="git-remote" class="muted"></p>
+                  <button class="secondary-button full" type="button" data-action="git-transfer">Upload / download…</button>
                   <button
                     class="secondary-button full"
                     type="button"
@@ -478,6 +519,7 @@
                   <h2>Files</h2>
                   <span class="count-chip" id="file-count"></span>
                 </div>
+                <button class="secondary-button full" type="button" data-action="git-transfer">Upload / download…</button>
                 <input
                   id="file-filter"
                   class="list-search"
@@ -932,7 +974,7 @@
       <form id="evidence-dialog-form" class="modal-content">
         <div class="modal-heading">
           <div>
-            <span class="section-kicker">PROVE A CRITERION</span>
+            <span class="section-kicker">RECORD A CRITERION CLAIM</span>
             <h2 id="evidence-dialog-title">How do you know it works?</h2>
             <p id="evidence-dialog-sub"></p>
           </div>
@@ -942,8 +984,36 @@
         ><textarea id="evidence-text" rows="3" placeholder="login.test.ts passes; checked on a phone"></textarea>
         <div class="modal-footer">
           <button class="secondary-button" type="button" data-close="evidence-dialog">Cancel</button
-          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Mark as proven</button>
+          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Record as complete</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="git-transfer-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div><span class="section-kicker">GIT</span><h2>Review upload / download</h2></div>
+          <button class="modal-close" type="button" data-close="git-transfer-dialog" aria-label="Close">×</button>
+        </div>
+        <p>Checking the remote downloads branch information without changing your files. Upload sends committed work to the linked remote. Download updates your files only when the histories fit together without a merge.</p>
+        <p id="git-transfer-status" role="status" aria-live="polite"></p>
+        <p class="muted">Latest 20 commits in each direction:</p>
+        <ul id="git-transfer-commits" class="changes-list compact"></ul>
+        <p class="muted">Transfers use this project's existing Git sign-in and hooks. New remote setup and combining different histories need a terminal. Other tools can change the project while this review is open; Verb checks again before acting.</p>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" id="git-transfer-check" disabled>Check remote</button>
+          <button class="secondary-button" type="button" id="git-transfer-download" disabled>Download commits</button>
+          <button class="primary-button" type="button" id="git-transfer-upload" disabled>Upload commits</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="sdlc-dialog" class="modal" aria-labelledby="sdlc-dialog-title">
+      <form id="sdlc-form" class="modal-content">
+        <div class="modal-heading"><h2 id="sdlc-dialog-title">Lifecycle record</h2><button class="modal-close" type="button" data-close="sdlc-dialog" aria-label="Close lifecycle record">×</button></div>
+        <div id="sdlc-fields" class="sdlc-fields"></div>
+        <p id="sdlc-dialog-error" class="warning-box" role="alert" hidden></p>
+        <div class="modal-footer"><button class="secondary-button" type="button" data-close="sdlc-dialog">Cancel</button><button id="sdlc-submit" class="primary-button" type="submit">Save record</button></div>
       </form>
     </dialog>
 
@@ -953,10 +1023,11 @@
           <div>
             <span class="section-kicker">COMMIT</span>
             <h2 id="commit-dialog-title">Save these changes to history</h2>
-            <p id="commit-dialog-sub">A commit is a named snapshot you can always come back to.</p>
+            <p id="commit-dialog-sub">A commit records a snapshot in this project's local Git history. It does not upload your work or create a backup on another server.</p>
           </div>
           <button class="modal-close" type="button" data-close="commit-dialog" aria-label="Close">×</button>
         </div>
+        <p id="commit-scope" class="warning-box"></p>
         <ul id="commit-files" class="changes-list compact"></ul>
         <p id="commit-branch-note" class="warning-box" hidden></p>
         <label class="field-label" for="commit-message">What changed and why</label

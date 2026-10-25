@@ -2,7 +2,7 @@
 """Private, offline Verb ledger snapshots. Not a project/provider credential backup.
 
 Stop writers before snapshotting. Restore only into a new directory; never into live state.
-Only projects, sessions, events and work are included. Logs, tokens, caches, session locks,
+Only projects, sessions, events, work and SDLC evidence are included. Logs, tokens, caches, session locks,
 provider homes and project source remain outside this deliberately narrow boundary.
 """
 import argparse
@@ -14,7 +14,7 @@ import stat
 import tarfile
 import tempfile
 
-ROOTS = {"projects", "sessions", "events", "work"}
+ROOTS = {"projects", "sessions", "events", "work", "sdlc"}
 MAX_BYTES = 2 * 1024**3
 MAX_FILES = 100000
 MAX_MANIFEST = 8 * 1024**2

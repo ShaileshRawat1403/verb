@@ -68,7 +68,7 @@ export function skippedStages(spec) {
 
 export function progressLabel(spec) {
   if (!spec.criteria.length) return "no criteria yet";
-  return `${spec.criteriaDone}/${spec.criteria.length} proven`;
+  return `${spec.criteriaDone}/${spec.criteria.length} recorded complete`;
 }
 
 /** Specs grouped in stage order; stages with no specs are left out. */
@@ -238,7 +238,8 @@ export function specSessions(spec, liveSessions = []) {
     const m = /^started (\S+) on this spec \(session ([0-9a-zA-Z_-]+)\)/.exec(entry.action);
     if (!m) continue;
     const [, agent, short] = m;
-    const live = liveSessions.find((s) => s.id.startsWith(short) && s.state === "live");
+    const candidates = liveSessions.filter((s) => s.id.startsWith(short));
+    const live = candidates.length === 1 && candidates[0].state === "live" ? candidates[0] : null;
     out.push({ agent, short, at: entry.at, live: Boolean(live), id: live?.id ?? null });
   }
   return out.reverse();
