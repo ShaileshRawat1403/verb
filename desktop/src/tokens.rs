@@ -315,6 +315,8 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                     | "/api/git/diff"
                     | "/api/files"
                     | "/api/files/preview"
+                    | "/api/studio/workspace"
+                    | "/api/studio/file"
                     | "/api/host"
                     | "/api/hub"
                     | "/api/checks"

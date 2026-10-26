@@ -115,6 +115,7 @@ export function initWorkbench(deps) {
     renderGit();
     renderProof();
     renderChanges();
+    deps.extras.onWorkbenchChange?.();
   }
   const normalize = (spec) => ({ ...spec, criteriaDone: spec.criteria_done ?? spec.criteriaDone ?? 0 });
   function replaceSpec(spec) {
@@ -138,6 +139,7 @@ export function initWorkbench(deps) {
     renderChanges();
     renderGit();
     placeTerminals();
+    deps.extras.onWorkbenchChange?.();
   }
 
   function renderList() {
@@ -495,18 +497,22 @@ export function initWorkbench(deps) {
 
   // ---------------------------------------------------------------------------- actions
 
-  function selectSpec(id) {
+  function selectSpec(id, { navigate = true } = {}) {
     state.selectedId = id;
     state.overviewCollapsed = true;
     remember(id);
-    if (deps.ui.view !== "specs") deps.showView("specs");
+    if (navigate && deps.ui.view !== "specs") deps.showView("specs");
     render();
+    if (!navigate) return;
     $("#spec-title").focus({ preventScroll: true });
     $("#spec-title").scrollIntoView({ block: "start" });
   }
 
-  function openNewSpec() {
+  function openNewSpec(draft = {}) {
+    state.newSpecView = deps.ui.view;
     $("#spec-dialog-form").reset();
+    $("#spec-title-input").value = draft.title ?? "";
+    $("#spec-dialog-form").elements.problem.value = draft.problem ?? "";
     showDialog("spec-dialog");
     $("#spec-title-input").focus();
   }
@@ -729,6 +735,7 @@ export function initWorkbench(deps) {
   $("#spec-dialog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
+    const fromStudio = state.newSpecView === "studio";
     try {
       const spec = await api("POST", "/api/specs", {
         title: form.get("title"),
@@ -739,7 +746,11 @@ export function initWorkbench(deps) {
       });
       closeDialog("spec-dialog");
       replaceSpec(spec);
-      selectSpec(spec.id);
+      selectSpec(spec.id, { navigate: !fromStudio });
+      if (fromStudio) {
+        deps.showView("studio");
+        deps.extras.onStudioSpecCreated?.(String(form.get("problem") || ""));
+      }
       toast(`Spec ${spec.id} created in ${spec.file}`);
       refreshGit();
     } catch (error) {
@@ -1095,7 +1106,7 @@ export function initWorkbench(deps) {
   refreshSpecs();
   refreshGit();
   setInterval(() => {
-    if (deps.ui.view !== "specs" || document.hidden) return;
+    if (!["specs", "studio"].includes(deps.ui.view) || document.hidden) return;
     refreshGit();
     renderSessions(); // live/ended follows the workspace poll
   }, 5000);
@@ -1105,7 +1116,9 @@ export function initWorkbench(deps) {
     selectSpec,
     switchBranch,
     openHandoff,
-    current: () => ({ spec: selected(), git: state.git, meters: state.meters }),
+    openNewSpec,
+    current: () => ({ spec: selected(), git: state.git, meters: state.meters,
+      presentation: selected() ? presentation(selected()) : null, specs: state.specs, error: state.specsError, loaded: state.specsLoaded }),
     meterFor: (id) => state.meters?.[id] ?? null,
     render,
     /** Opens the evidence dialog for a criterion of the selected spec, prefilled; the person decides. */
@@ -1121,7 +1134,7 @@ export function initWorkbench(deps) {
       return true;
     },
     onShowView(view) {
-      if (view === "specs") {
+      if (view === "specs" || view === "studio") {
         refreshMeters();
         refreshSpecs();
         refreshGit();

@@ -239,7 +239,14 @@ fn answer_launch(
 /// Status and body for slow work that failed. A full execution boundary is temporary congestion
 /// (503, `code: "capacity"`), never a Git or request failure; everything else stays 400.
 fn deferred_error(error: &str) -> (u16, Vec<u8>) {
-    if error.starts_with(TERMINAL_START_TIMEOUT) {
+    if let Some(message) = error.strip_prefix(crate::studio::CONFLICT) {
+        (
+            409,
+            json!({"error": message, "code": "file_conflict"})
+                .to_string()
+                .into_bytes(),
+        )
+    } else if error.starts_with(TERMINAL_START_TIMEOUT) {
         (
             503,
             json!({"error": error, "code": "startup_timeout"})
@@ -620,6 +627,7 @@ struct WebHost {
     state_cache: Arc<std::sync::Mutex<Option<StateCache>>>,
     state_generation: Arc<AtomicU64>,
     talks: crate::talk::Talks,
+    studio_previews: Arc<std::sync::Mutex<crate::studio::Previews>>,
     /// Who is making the request being handled: the owner, or a named access token.
     access: crate::tokens::Access,
 }
@@ -826,6 +834,8 @@ type DeferredWork = Box<dyn FnOnce() -> Result<Vec<u8>, String> + Send>;
 struct Reply {
     status: u16,
     mime: &'static str,
+    sandbox_preview: bool,
+    studio_frames: bool,
     body: Vec<u8>,
     set_cookie: Option<String>,
     cache_control: Option<&'static str>,
@@ -840,6 +850,8 @@ impl Reply {
     fn json(status: u16, value: Value) -> Self {
         Self {
             status,
+            sandbox_preview: false,
+            studio_frames: false,
             mime: "application/json; charset=utf-8",
             body: value.to_string().into_bytes(),
             set_cookie: None,
@@ -857,6 +869,8 @@ impl Reply {
     fn asset(mime: &'static str, bytes: &[u8]) -> Self {
         Self {
             status: 200,
+            sandbox_preview: false,
+            studio_frames: false,
             mime,
             body: bytes.to_vec(),
             set_cookie: None,
@@ -870,6 +884,8 @@ impl Reply {
     fn asset_cached(mime: &'static str, bytes: &[u8]) -> Self {
         Self {
             status: 200,
+            sandbox_preview: false,
+            studio_frames: false,
             mime,
             body: bytes.to_vec(),
             set_cookie: None,
@@ -937,6 +953,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         state_cache: Arc::default(),
         state_generation: Arc::new(AtomicU64::new(0)),
         talks: crate::talk::Talks::default(),
+        studio_previews: Arc::default(),
         access: crate::tokens::Access::owner(),
     };
     if let Some(jwks) = load_initial_jwks() {
@@ -1472,6 +1489,18 @@ impl WebHost {
         }
     }
 
+    fn studio_native(&self) -> bool {
+        matches!(crate::isolation::profile(), Ok(None))
+            && self.allowed_origin.is_none()
+            && self.cf_access_iss.is_none()
+            && self.cf_access_aud.is_none()
+            && self.deployment["mode"] == "LOCAL"
+    }
+
+    fn studio_connected(&self) -> bool {
+        self.studio_native() || crate::studio_bridge::configured()
+    }
+
     fn dispatch(&mut self, request: &mut Request) -> Reply {
         if !request
             .remote_addr()
@@ -1499,6 +1528,35 @@ impl WebHost {
                     .is_some_and(|allowed| origin == allowed);
             if !origin_allowed {
                 return Reply::error(403, "unexpected origin");
+            }
+        }
+        // One-use, short-lived document capabilities. These authorize only this immutable
+        // snapshot, never an API or file read. No owner token or session cookie is embedded.
+        if request.method() == &Method::Get {
+            if let Some(ticket) = request.url().strip_prefix("/studio-preview/") {
+                if !self.studio_connected() || header(request, "Sec-Fetch-Dest") != Some("iframe") {
+                    return Reply::error(
+                        403,
+                        "Studio preview requires a connected workspace and iframe navigation",
+                    );
+                }
+                let html = self
+                    .studio_previews
+                    .lock()
+                    .ok()
+                    .and_then(|mut p| p.take(ticket));
+                return match html {
+                    Some(html) => {
+                        let mut reply = Reply::asset("text/html; charset=utf-8", &[]);
+                        reply.sandbox_preview = true;
+                        reply.deferred = Some(Box::new(move || Ok(html)));
+                        reply
+                    }
+                    None => Reply::error(
+                        410,
+                        "Preview expired or already opened. Create a new preview.",
+                    ),
+                };
             }
         }
         let cf_authenticated = self.authenticate_cf_access(request);
@@ -1548,6 +1606,7 @@ impl WebHost {
                 _ => None,
             };
             if let Some(mut reply) = asset_reply {
+                reply.studio_frames = path == "/" && self.studio_connected();
                 if let Some(cookie) = session_cookie {
                     reply.set_cookie = Some(cookie);
                 }
@@ -1596,6 +1655,89 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if method == &Method::Get && path == "/api/studio/workspace" {
+            let native = self.studio_native();
+            let boundary = crate::studio_bridge::configured();
+            let drive = self.access.allows(crate::tokens::Scope::Drive);
+            let project = self.project.clone();
+            let id = self.project_id.clone();
+            return Ok(self.off_loop(false, move || {
+                let probe = if boundary && drive { crate::studio_bridge::probe(&project) } else { Ok(()) };
+                let available = (native || boundary) && drive && probe.is_ok();
+                let reason = if available {
+                    "UTF-8 edits up to 200 KB and saved single-file HTML previews. Saves do not commit or publish.".to_owned()
+                } else if let Err(error) = probe { error } else {
+                    "Editing and app previews require drive access and a connected workspace bridge.".to_owned()
+                };
+                Ok(json!({"schemaVersion":1,"workspaceId":id,
+                    "editing":{"available":available,"maxBytes":crate::studio::MAX_BYTES},
+                    "preview":{"available":available,"kind":"single-file-html","expiresSeconds":120},
+                    "transport":if boundary {"monitored-v1"} else if native {"native-local"} else {"unavailable"},
+                    "reason":reason}))
+            }));
+        }
+
+        if path == "/api/studio/file" || path == "/api/studio/preview" {
+            if !self.studio_connected() {
+                return Ok(Reply::error(403, "Studio editing and app preview are not connected through this execution boundary"));
+            }
+            let project = self.project.clone();
+            let id = self.project_id.clone();
+            let boundary = crate::studio_bridge::configured();
+            if method == &Method::Get && path == "/api/studio/file" {
+                let wanted = url
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("path=")))
+                    .map(crate::shell::percent_decode)
+                    .ok_or("which file?")?;
+                return Ok(self.off_loop(false, move || {
+                    let file = if boundary {
+                        crate::studio_bridge::read(&project, &wanted)?
+                    } else {
+                        crate::studio::read(&project, &wanted)?
+                    };
+                    Ok(json!({"workspaceId":id,"file":file}))
+                }));
+            }
+            if method == &Method::Post && path == "/api/studio/file" {
+                let input: crate::studio::SaveRequest =
+                    read_json_limit(request, crate::studio::MAX_BYTES * 6 + 1024)?;
+                if input.workspace_id != id {
+                    return Ok(Reply::error(
+                        409,
+                        "Workspace changed; reopen the file before saving",
+                    ));
+                }
+                return Ok(self.off_loop(true, move || {
+                    let file = if boundary {
+                        crate::studio_bridge::save(&project, input)?
+                    } else {
+                        crate::studio::save(&project, input)?
+                    };
+                    Ok(json!({"workspaceId":id,"file":file}))
+                }));
+            }
+            if method == &Method::Post && path == "/api/studio/preview" {
+                let input: crate::studio::FileRequest = read_json(request)?;
+                if input.workspace_id != id {
+                    return Ok(Reply::error(
+                        409,
+                        "Workspace changed; reopen the file before previewing",
+                    ));
+                }
+                let previews = Arc::clone(&self.studio_previews);
+                let ticket = secure_token()?;
+                return Ok(self.off_loop(false, move || {
+                    let doc = if boundary { crate::studio_bridge::read(&project, &input.path)? } else { crate::studio::read(&project, &input.path)? };
+                    crate::studio::expect_revision(&doc.revision, &input.expected_revision)?;
+                    let revision = doc.revision.clone();
+                    previews.lock().map_err(|_| "Preview registry unavailable")?.insert(ticket.clone(), doc)?;
+                    Ok(json!({"url":format!("/studio-preview/{ticket}"),"workspaceId":id,"revision":revision,"expiresSeconds":120}))
+                }));
+            }
+            return Ok(Reply::error(405, "unsupported Studio method"));
+        }
         if method == &Method::Get && path == "/api/agents" {
             return Ok(self.off_loop(false, || {
                 let programs = crate::isolation::external_programs();
@@ -2747,20 +2889,34 @@ fn deployment_info() -> Value {
 fn send_reply(request: Request, reply: Reply) {
     let mut response = Response::from_data(reply.body).with_status_code(StatusCode(reply.status));
     let cache_control = reply.cache_control.unwrap_or("no-store");
+    let csp = if reply.sandbox_preview {
+        "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; frame-ancestors 'self'"
+    } else if reply.studio_frames {
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    } else {
+        "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"
+    };
     for (name, value) in [
-            ("Content-Type", reply.mime),
-            ("Cache-Control", cache_control),
-            ("X-Content-Type-Options", "nosniff"),
-            ("X-Frame-Options", "DENY"),
-            ("Referrer-Policy", "no-referrer"),
-            ("Cross-Origin-Resource-Policy", "same-origin"),
-            // 'wasm-unsafe-eval' lets the terminal's image addon compile its WebAssembly Sixel
-            // decoder. It permits WebAssembly compilation only, not JavaScript eval. Without it every
-            // terminal threw a CSP error and inline images never worked (caught by browser tests).
-            ("Content-Security-Policy", "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'"),
-        ] {
-            response.add_header(Header::from_bytes(name, value).expect("static HTTP header"));
-        }
+        ("Content-Type", reply.mime),
+        ("Cache-Control", cache_control),
+        ("X-Content-Type-Options", "nosniff"),
+        (
+            "X-Frame-Options",
+            if reply.sandbox_preview {
+                "SAMEORIGIN"
+            } else {
+                "DENY"
+            },
+        ),
+        ("Referrer-Policy", "no-referrer"),
+        ("Cross-Origin-Resource-Policy", "same-origin"),
+        // 'wasm-unsafe-eval' lets the terminal's image addon compile its WebAssembly Sixel
+        // decoder. It permits WebAssembly compilation only, not JavaScript eval. Without it every
+        // terminal threw a CSP error and inline images never worked (caught by browser tests).
+        ("Content-Security-Policy", csp),
+    ] {
+        response.add_header(Header::from_bytes(name, value).expect("static HTTP header"));
+    }
     if let Some(cookie) = reply.set_cookie {
         if let Ok(header) = Header::from_bytes("Set-Cookie", cookie) {
             response.add_header(header);
@@ -2794,10 +2950,17 @@ impl Read for DeadlineReader<'_> {
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, String> {
+    read_json_limit(request, MAX_BODY)
+}
+
+fn read_json_limit<T: for<'de> Deserialize<'de>>(
+    request: &mut Request,
+    limit: usize,
+) -> Result<T, String> {
     if !header(request, "Content-Type").is_some_and(|value| value.starts_with("application/json")) {
         return Err("send application/json".to_owned());
     }
-    if request.body_length().is_none_or(|length| length > MAX_BODY) {
+    if request.body_length().is_none_or(|length| length > limit) {
         return Err("request body exceeds limit or has no length".to_owned());
     }
     let mut body = Vec::new();
@@ -2805,10 +2968,10 @@ fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, S
         inner: request.as_reader(),
         until: Instant::now() + Duration::from_secs(2),
     }
-    .take((MAX_BODY + 1) as u64)
+    .take((limit + 1) as u64)
     .read_to_end(&mut body)
     .map_err(|error| format!("could not read request: {error}"))?;
-    if body.len() > MAX_BODY {
+    if body.len() > limit {
         return Err("request body exceeds limit".to_owned());
     }
     serde_json::from_slice(&body).map_err(|error| format!("invalid request: {error}"))

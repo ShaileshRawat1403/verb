@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -82,11 +82,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
 
       - name: Format
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: cargo fmt --check
 
       - name: Clippy
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           cargo clippy --all-targets -- -D warnings
           cargo clippy --all-targets --features synthetic-boundary -- -D warnings
@@ -99,9 +99,12 @@ jobs:
       - name: Synthetic boundary tests
         # External terminal admission over HTTP against a stand-in execution boundary: delayed
         # admission, start timeout cleanup, refusal, stale receipts. Test builds only.
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         # Its own target directory, so every other step keeps testing the normal build.
         run: CARGO_TARGET_DIR=target/synthetic cargo test --features synthetic-boundary --test synthetic_boundary
+
+      - name: Studio guest helper contract
+        run: python3 scripts/test-studio-workspace.py
 
       - name: Offline work-state restore
         run: python3 scripts/test-workstate.py
@@ -109,17 +112,17 @@ jobs:
       - name: Browser tests (real verb web + headless Chromium)
         # Drives the workbench like a person: create a spec, prove a criterion with evidence, commit,
         # palette, theme, terminal. `cargo test --all-targets` above already built target/debug/verb.
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           npx --prefix web playwright install --with-deps chromium
           # The synthetic boundary build (previous step) drives the stalled-cleanup browser test only.
           VERB_BIN="$PWD/target/debug/verb" VERB_SYNTHETIC_BIN="$PWD/target/synthetic/debug/verb" npm run e2e --prefix web
 
       - name: Upload browser test report
-        if: failure() && matrix.os == 'ubuntu-latest'
+        if: failure() && startsWith(matrix.os, 'ubuntu')
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.os }}
           path: |
             desktop/web/playwright-report/
             desktop/web/test-results/
@@ -133,5 +136,5 @@ jobs:
         run: python3 scripts/test-release.py --binary target/release/verb --version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 
       - name: Linux agent isolation (disposable accounts and cgroup)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: scripts/test-agent-isolation.sh

@@ -46,6 +46,10 @@ mod spec_summary;
 mod specs;
 #[cfg(unix)]
 pub mod stream;
+#[cfg(unix)]
+mod studio;
+#[cfg(unix)]
+mod studio_bridge;
 mod talk;
 mod tokens;
 mod transcript;

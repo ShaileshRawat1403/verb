@@ -22,6 +22,15 @@ use std::time::Duration;
 
 mod bounded;
 
+/// Explicit Studio operations carry bounded JSON over stdin, never shell source or argv.
+#[cfg(unix)]
+pub(crate) fn studio_exchange(
+    command: &mut Command,
+    input: &[u8],
+) -> std::io::Result<std::process::Output> {
+    bounded::exchange(command, Duration::from_secs(20), 2 * 1024 * 1024, input)
+}
+
 /// Automatic reads only. Command construction may separately perform a bounded config probe.
 pub(crate) fn read_output(command: &mut Command) -> std::io::Result<std::process::Output> {
     bounded::output(command, Duration::from_secs(15), 8 * 1024 * 1024)

@@ -45,7 +45,15 @@ fn main() {
         "cargo:rustc-env=VERB_BUILD_DIRTY={}",
         dirty.map_or("unknown", |d| if d { "true" } else { "false" })
     );
-    for path in ["src", "web/dist", "Cargo.toml", "Cargo.lock", "build.rs"] {
+    for path in [
+        "src",
+        "web/dist",
+        "Cargo.toml",
+        "Cargo.lock",
+        "build.rs",
+        "scripts/studio-workspace.py",
+        "scripts/studio-workspace.wire",
+    ] {
         println!("cargo:rerun-if-changed={path}");
     }
     // Worktrees may keep HEAD/index in a separate directory from shared refs.

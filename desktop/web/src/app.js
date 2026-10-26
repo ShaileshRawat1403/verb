@@ -16,6 +16,8 @@ import "@xterm/xterm/css/xterm.css";
 import "./style.css";
 import "./workbench.css";
 import "./motion.css";
+import "./studio.css";
+import { initStudio } from "./studio-ui.js";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
 import { initHost } from "./host-ui.js";
@@ -51,6 +53,7 @@ if (location.hash && token) {
 
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
+let studio = null;
 // The Project view (project-ui.js): file tree, preview and context hub.
 let project = null;
 // The Host view (host-ui.js): read-only machine health.
@@ -303,6 +306,7 @@ async function api(method, path, body) {
 
 function showView(view) {
   ui.view = view;
+  $("#app").classList.toggle("studio-open", view === "studio");
   document
     .querySelectorAll(".view")
     .forEach((element) =>
@@ -324,6 +328,7 @@ function showView(view) {
   workbench?.onShowView(view);
   project?.onShowView(view);
   host?.onShowView(view);
+  studio?.onShowView(view);
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -457,6 +462,7 @@ function render() {
     ui.selectedTask = tasks[0]?.id || null;
   renderTaskDetail();
   syncHostedTerminals();
+  studio?.render();
 }
 
 function renderListResults() {
@@ -2290,6 +2296,9 @@ async function bootstrap() {
     selectTerminal,
     theme,
   });
+  studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml });
+  extras.onWorkbenchChange = () => studio.render();
+  extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
   extras.selectSpec = workbench.selectSpec;
   extras.openFile = project.openFile;

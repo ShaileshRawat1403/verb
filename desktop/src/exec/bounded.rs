@@ -7,7 +7,7 @@ use std::time::Duration;
 pub(super) fn output(command: &mut Command, timeout: Duration, limit: usize) -> io::Result<Output> {
     #[cfg(unix)]
     {
-        unix::output(command, timeout, limit)
+        unix::output(command, timeout, limit, None)
     }
     #[cfg(not(unix))]
     {
@@ -19,10 +19,21 @@ pub(super) fn output(command: &mut Command, timeout: Duration, limit: usize) -> 
     }
 }
 
+/// Bounded full-duplex exchange; stdin is closed after the supplied bytes are written.
+#[cfg(unix)]
+pub(super) fn exchange(
+    command: &mut Command,
+    timeout: Duration,
+    limit: usize,
+    input: &[u8],
+) -> io::Result<Output> {
+    unix::output(command, timeout, limit, Some(input))
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;
-    use std::io::Read;
+    use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     use std::process::{Child, Stdio};
@@ -75,17 +86,28 @@ mod unix {
         command: &mut Command,
         timeout: Duration,
         limit: usize,
+        input: Option<&[u8]>,
     ) -> io::Result<Output> {
         let deadline = Instant::now() + timeout;
         let mut probe = Probe {
             child: command
                 .process_group(0)
-                .stdin(Stdio::null())
+                .stdin(if input.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()?,
             reaped: false,
         };
+        let mut stdin = probe.child.stdin.take();
+        if let Some(pipe) = stdin.as_ref() {
+            crate::pty::set_nonblocking(pipe.as_raw_fd())?;
+        }
+        let input = input.unwrap_or_default();
+        let mut sent = 0;
         let mut stdout = probe
             .child
             .stdout
@@ -106,6 +128,29 @@ mod unix {
                     io::ErrorKind::TimedOut,
                     "observation timed out",
                 ));
+            }
+            if let Some(pipe) = stdin.as_mut() {
+                if sent < input.len() {
+                    let end = (sent + 8192).min(input.len());
+                    match pipe.write(&input[sent..end]) {
+                        Ok(0) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "helper input closed",
+                            ))
+                        }
+                        Ok(n) => sent += n,
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                            ) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+                if sent == input.len() {
+                    stdin.take();
+                }
             }
             if !out_done {
                 out_done = drain(&mut stdout, &mut out, limit)?;
@@ -135,7 +180,30 @@ mod unix {
         use super::*;
 
         fn run(script: &str, timeout: Duration, limit: usize) -> io::Result<Output> {
-            output(Command::new("/bin/sh").args(["-c", script]), timeout, limit)
+            super::super::output(Command::new("/bin/sh").args(["-c", script]), timeout, limit)
+        }
+
+        #[test]
+        fn exchanges_large_input_and_bounds_a_nonreader() {
+            let input = vec![b'x'; 300_000];
+            let result = super::super::exchange(
+                &mut Command::new("/bin/cat"),
+                Duration::from_secs(5),
+                400_000,
+                &input,
+            )
+            .unwrap();
+            assert_eq!(result.stdout, input);
+            let start = Instant::now();
+            let error = super::super::exchange(
+                Command::new("/bin/sh").args(["-c", "sleep 30"]),
+                Duration::from_millis(100),
+                100,
+                &input,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert!(start.elapsed() < Duration::from_secs(3));
         }
 
         #[test]
@@ -181,7 +249,7 @@ mod unix {
         #[test]
         fn timeout_stops_descendant_work_after_leader_exits() {
             let marker = std::env::temp_dir().join(format!("verb-probe-{}", crate::new_id()));
-            let error = output(
+            let error = super::super::output(
                 Command::new("/bin/sh")
                     .args([
                         "-c",

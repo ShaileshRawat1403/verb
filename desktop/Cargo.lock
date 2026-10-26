@@ -1680,6 +1680,7 @@ dependencies = [
  "ctrlc",
  "if-addrs",
  "jsonwebtoken",
+ "libc",
  "ratatui",
  "rcgen",
  "rustls",
