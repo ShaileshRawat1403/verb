@@ -36,7 +36,7 @@ test("stage warnings match the server's rules", () => {
 });
 
 test("progress and grouping", () => {
-  assert.equal(progressLabel(spec("build", 1)), "1/3 proven");
+  assert.equal(progressLabel(spec("build", 1)), "1/3 recorded complete");
   assert.equal(progressLabel(spec("build", 0, 0)), "no criteria yet");
   const groups = groupByStage([spec("build"), spec("spec"), spec("build")]);
   assert.deepEqual(groups.map((g) => [g.stage, g.specs.length]), [["spec", 1], ["build", 2]]);

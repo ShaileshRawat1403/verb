@@ -20,6 +20,8 @@
           </div>
         </div>
         <nav class="main-nav" aria-label="Workspace">
+          <button class="nav-item" type="button" data-view="studio" aria-label="Studio" title="Studio · canvas workspace"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M16 4v16M3 16h13"/></svg></span><span>Studio</span></button>
+
           <button
             class="nav-item active"
             aria-current="page"
@@ -339,6 +341,31 @@
           </section>
 
           <section id="view-specs" class="view">
+            <section class="panel spec-overview" aria-labelledby="spec-overview-title">
+              <div class="spec-overview-heading">
+                <div><h1 id="spec-overview-title">Work overview</h1><p id="spec-overview-count" role="status" aria-live="polite">Reading specs…</p></div>
+                <button class="secondary-button" type="button" data-action="new-spec">New spec</button>
+              </div>
+              <p class="muted">Choose work to continue. Stages show intent; evidence and delivery show what is known.</p>
+              <p id="spec-workbench-error" class="warning-box" role="alert" hidden></p>
+              <div class="spec-view-controls">
+                <label class="spec-search-label" for="spec-search">Find work<input id="spec-search" type="search" placeholder="Title, number, branch or stage…" autocomplete="off" /></label>
+                <div class="spec-view-switch" role="group" aria-label="Work presentation">
+                  <button type="button" id="spec-view-list" class="secondary-button" aria-pressed="true">List</button>
+                  <button type="button" id="spec-view-board" class="secondary-button" aria-pressed="false">Board</button>
+                </div>
+                <div class="spec-filter-label"><label for="spec-stage-filter">Show stage</label><select id="spec-stage-filter"><option value="all">All stages</option><option value="spec">Spec</option><option value="plan">Plan</option><option value="build">Build</option><option value="verify">Verify</option><option value="review">Review</option><option value="ship">Ship</option></select></div>
+                <label class="check-row"><input type="checkbox" id="spec-attention-only" /> Needs you only</label>
+                <button class="text-button" id="spec-clear-filters" type="button" disabled>Clear filters</button>
+                <button class="text-button" type="button" data-action="refresh-spec-workbench" aria-label="Refresh observations">Refresh</button>
+              </div>
+              <section class="spec-attention" aria-labelledby="spec-attention-title">
+                <h2 id="spec-attention-title">Needs you</h2>
+                <div id="spec-attention-list"></div>
+              </section>
+              <p id="spec-board-help" class="muted spec-board-help" hidden>Browse stages or use Show stage to focus. Open a card to review a move. On desktop, scroll sideways or drag a card to open the same review.</p>
+              <div id="spec-work-items" class="spec-work-items" role="region" aria-label="Spec list"></div>
+            </section>
             <div class="specs-layout">
               
 
@@ -363,7 +390,8 @@
                 <div id="spec-detail" class="spec-detail" hidden>
                   <header class="spec-header">
                     <span class="section-kicker" id="spec-kicker">SPEC</span>
-                    <h1 id="spec-title"></h1>
+                    <h2 id="spec-title" tabindex="-1"></h2>
+                    <button class="text-button" type="button" data-action="spec-overview">Back to work overview</button>
                     <div class="spec-meta">
                       <span class="chip" id="spec-branch-chip" title="This spec's branch"></span>
                       <button class="text-button" type="button" data-action="switch-branch">
@@ -374,8 +402,6 @@
                       </button>
                     </div>
                   </header>
-                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
-                  <div class="stage-guide" id="stage-guide"></div>
                   <div class="spec-actions">
                     <button
                       class="secondary-button"
@@ -402,6 +428,24 @@
                       Hand off…
                     </button>
                   </div>
+                  <section id="sdlc-workflow" class="sdlc-workflow" aria-labelledby="sdlc-title">
+                    <div class="sdlc-heading"><h3 id="sdlc-title">Work through this spec</h3><button type="button" class="text-button" data-sdlc-action="refresh">Refresh evidence</button></div>
+                    <div id="sdlc-tabs" class="sdlc-tabs" role="group" aria-label="Lifecycle workspace"></div>
+                    <p id="sdlc-context" class="muted"></p>
+                    <p id="sdlc-status" role="status" aria-live="polite"></p>
+                    <div id="sdlc-content" class="sdlc-content" tabindex="-1"></div>
+                    <details class="sdlc-records"><summary>Evidence and delivery history</summary><ol id="sdlc-history"></ol><button class="secondary-button" type="button" data-sdlc-action="export">Export all evidence metadata</button></details>
+                  </section>
+                  <dl id="spec-facts" class="spec-facts" aria-label="Independent work observations"></dl>
+                  <div class="spec-move-controls">
+                    <label for="spec-stage-target">Move this spec to</label>
+                    <select id="spec-stage-target" aria-label="Target stage">
+                      <option value="spec">Spec</option><option value="plan">Plan</option><option value="build">Build</option><option value="verify">Verify</option><option value="review">Review</option><option value="ship">Ship</option>
+                    </select>
+                    <button class="secondary-button" type="button" id="spec-stage-move" data-action="move-spec-stage">Review move…</button>
+                  </div>
+                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
+                  <div class="stage-guide" id="stage-guide"></div>
                   <div id="spec-work" class="spec-work">
                     <p class="work-hint">Terminals and agents you open for this spec appear here. Agents start by reading the spec.</p>
                   </div>
@@ -417,13 +461,13 @@
               </section>
 
               <div class="resize-handle resize-proof" id="resize-proof" aria-label="Resize the proof column"></div>
-              <aside class="panel spec-proof" aria-label="Proof">
+              <aside class="panel spec-proof" aria-label="Criterion claims and changes">
                 <section>
                   <div class="proof-head">
                     <h3>Acceptance criteria</h3>
                     <span id="criteria-progress" class="count-chip"></span>
                   </div>
-                  <p class="proof-hint">Tick one when you can show it works. Verb asks how you know.</p>
+                  <p class="proof-hint">Checkmarks record your claim. Use Verify to link and accept current evidence.</p>
                   <ul id="criteria-list" class="criteria-list"></ul>
                 </section>
                 <section>
@@ -454,6 +498,8 @@
                   </div>
                   <div id="git-branch" class="git-branch">Reading…</div>
                   <div id="git-status" class="git-status"></div>
+                  <p id="git-remote" class="muted"></p>
+                  <button class="secondary-button full" type="button" data-action="git-transfer">Upload / download…</button>
                   <button
                     class="secondary-button full"
                     type="button"
@@ -471,6 +517,35 @@
             </div>
           </section>
 
+          <section id="view-studio" class="view" aria-label="Studio canvas workspace" data-focus="canvas">
+            <div class="studio-focus" role="group" aria-label="Studio focus"><button id="studio-focus-canvas" class="text-button" type="button" aria-controls="studio-canvas-panel" aria-pressed="true">Canvas</button><button id="studio-focus-work" class="text-button" type="button" aria-controls="studio-work-panel" aria-pressed="false">Current work</button></div>
+            <div class="studio-layout">
+              <div class="studio-canvas" id="studio-canvas-panel">
+                <header class="studio-heading"><div><span class="studio-kicker">Project canvas · early access</span><h1 id="studio-project-name">Your project</h1></div><button id="studio-refresh" class="text-button" type="button">Refresh canvas</button></header>
+                <nav class="studio-toolstrip" aria-label="Studio tools"><button class="text-button" id="studio-show-document" type="button" aria-pressed="true">Document</button><button class="text-button" id="studio-edit-file" type="button" aria-pressed="false" disabled>Edit file</button><button class="text-button" id="studio-preview-app" type="button" aria-pressed="false" disabled>App preview</button><button class="text-button" id="studio-source" type="button" aria-pressed="false" disabled>Source</button><button class="text-button" id="studio-use-selection" type="button" title="Attach up to 4,000 characters selected inside the document" disabled>Use selected text</button><button class="text-button" type="button" data-view="project">Files</button><button class="text-button" type="button" data-view="sessions">Terminal &amp; sessions</button><button class="text-button" type="button" data-action="commit">Review Git changes</button><button class="text-button" type="button" data-view="specs">Work board</button></nav>
+                <section class="studio-document-frame" aria-label="Project document">
+                  <div class="studio-document-head"><span id="studio-document-path">Project canvas</span><span id="studio-document-meta">Read-only project document</span></div>
+                  <div class="studio-file-picker"><label for="studio-file-search">Find a canvas file</label><input id="studio-file-search" type="search" placeholder="Search paths…" autocomplete="off" /><label for="studio-file">Canvas file</label><select id="studio-file"><option value="">Choose a project file…</option></select><p id="studio-file-note">Reading workspace files…</p></div>
+                  <div id="studio-document" class="studio-document"><h2 class="studio-empty-title">Start with what you’re making.</h2><p>Open a project document, or describe the change you want to make.</p></div>
+                  <section id="studio-edit-panel" class="studio-edit-panel" aria-label="Native text editor" hidden>
+                    <div class="studio-edit-actions"><span id="studio-draft-state"></span><button class="primary-button" id="studio-save-file" type="button" disabled>Save file</button><button class="text-button" id="studio-copy-draft" type="button">Copy draft</button><button class="text-button" id="studio-reload-file" type="button">Load disk version</button><button class="text-button" id="studio-restore-draft" type="button" hidden>Restore previous draft</button></div>
+                    <p id="studio-editor-conflict" class="warning-box" role="alert" hidden>The file changed on disk. Your draft is intact. Copy it or load the disk version; the previous draft will remain recoverable.</p>
+                    <label class="studio-kicker" for="studio-editor-text">File contents · UTF-8 text editor</label><textarea id="studio-editor-text" wrap="off" spellcheck="false" aria-describedby="studio-draft-state"></textarea>
+                  </section>
+                  <section id="studio-app-panel" class="studio-app-panel" aria-label="Isolated application preview" hidden><div class="studio-edit-actions"><span id="studio-app-caption"></span><button class="text-button" id="studio-refresh-app" type="button">Refresh app preview</button><button class="text-button" id="studio-stop-app" type="button">Stop preview</button></div><div id="studio-app-frame"></div></section>
+                  <div class="studio-limits"><span aria-hidden="true">↗</span><span id="studio-bridge-note">Project files are read-only while the workspace bridge is checked.</span></div>
+                </section>
+
+                <p id="studio-editor-status" role="status" aria-live="polite"></p><p id="studio-checkout" class="studio-context">Reading Git observations…</p><p id="studio-message" role="status" aria-live="polite"></p>
+              </div>
+              <aside class="studio-thread" id="studio-work-panel" aria-label="Current work thread">
+                <header class="studio-thread-head"><label class="studio-kicker" for="studio-thread">Current work</label><select id="studio-thread"><option value="">Reading work…</option></select></header>
+                <div class="studio-thread-body"><p id="studio-thread-error" role="alert" hidden></p><h2 id="studio-thread-title">What would you like to change?</h2><p id="studio-thread-problem">Describe an outcome. Define how to check it, then choose how to do the work.</p><div id="studio-spec-context" hidden><dl id="studio-facts"></dl><h3 class="studio-kicker">What needs to be true</h3><ul id="studio-criteria"></ul><div id="studio-live-sessions"></div></div><button class="studio-link" id="studio-inspect-work" type="button" disabled>Inspect work &amp; evidence ↗</button></div>
+                <form id="studio-intent-form" class="studio-compose"><label for="studio-intent">Describe a new change</label><div id="studio-context" class="studio-attached-context" hidden><div class="studio-context-heading"><span>Attached context · snapshot</span><button class="text-button" id="studio-clear-context" type="button" aria-label="Remove attached context">Remove</button></div><span id="studio-context-path"></span><blockquote id="studio-context-text"></blockquote></div><textarea id="studio-intent" placeholder="What should be different, and who is it for?" required maxlength="20000"></textarea><div class="studio-compose-footer"><small>Draft in this tab. No agent starts automatically.</small><button class="primary-button" type="submit">Define change ↗</button></div></form>
+              </aside>
+            </div>
+          </section>
+
           <section id="view-project" class="view">
             <div class="project-layout">
               <aside class="panel files-panel" aria-label="Project files">
@@ -478,6 +553,7 @@
                   <h2>Files</h2>
                   <span class="count-chip" id="file-count"></span>
                 </div>
+                <button class="secondary-button full" type="button" data-action="git-transfer">Upload / download…</button>
                 <input
                   id="file-filter"
                   class="list-search"
@@ -932,7 +1008,7 @@
       <form id="evidence-dialog-form" class="modal-content">
         <div class="modal-heading">
           <div>
-            <span class="section-kicker">PROVE A CRITERION</span>
+            <span class="section-kicker">RECORD A CRITERION CLAIM</span>
             <h2 id="evidence-dialog-title">How do you know it works?</h2>
             <p id="evidence-dialog-sub"></p>
           </div>
@@ -942,8 +1018,36 @@
         ><textarea id="evidence-text" rows="3" placeholder="login.test.ts passes; checked on a phone"></textarea>
         <div class="modal-footer">
           <button class="secondary-button" type="button" data-close="evidence-dialog">Cancel</button
-          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Mark as proven</button>
+          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Record as complete</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="git-transfer-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-heading">
+          <div><span class="section-kicker">GIT</span><h2>Review upload / download</h2></div>
+          <button class="modal-close" type="button" data-close="git-transfer-dialog" aria-label="Close">×</button>
+        </div>
+        <p>Checking the remote downloads branch information without changing your files. Upload sends committed work to the linked remote. Download updates your files only when the histories fit together without a merge.</p>
+        <p id="git-transfer-status" role="status" aria-live="polite"></p>
+        <p class="muted">Latest 20 commits in each direction:</p>
+        <ul id="git-transfer-commits" class="changes-list compact"></ul>
+        <p class="muted">Transfers use this project's existing Git sign-in and hooks. New remote setup and combining different histories need a terminal. Other tools can change the project while this review is open; Verb checks again before acting.</p>
+        <div class="modal-footer">
+          <button class="secondary-button" type="button" id="git-transfer-check" disabled>Check remote</button>
+          <button class="secondary-button" type="button" id="git-transfer-download" disabled>Download commits</button>
+          <button class="primary-button" type="button" id="git-transfer-upload" disabled>Upload commits</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="sdlc-dialog" class="modal" aria-labelledby="sdlc-dialog-title">
+      <form id="sdlc-form" class="modal-content">
+        <div class="modal-heading"><h2 id="sdlc-dialog-title">Lifecycle record</h2><button class="modal-close" type="button" data-close="sdlc-dialog" aria-label="Close lifecycle record">×</button></div>
+        <div id="sdlc-fields" class="sdlc-fields"></div>
+        <p id="sdlc-dialog-error" class="warning-box" role="alert" hidden></p>
+        <div class="modal-footer"><button class="secondary-button" type="button" data-close="sdlc-dialog">Cancel</button><button id="sdlc-submit" class="primary-button" type="submit">Save record</button></div>
       </form>
     </dialog>
 
@@ -953,10 +1057,11 @@
           <div>
             <span class="section-kicker">COMMIT</span>
             <h2 id="commit-dialog-title">Save these changes to history</h2>
-            <p id="commit-dialog-sub">A commit is a named snapshot you can always come back to.</p>
+            <p id="commit-dialog-sub">A commit records a snapshot in this project's local Git history. It does not upload your work or create a backup on another server.</p>
           </div>
           <button class="modal-close" type="button" data-close="commit-dialog" aria-label="Close">×</button>
         </div>
+        <p id="commit-scope" class="warning-box"></p>
         <ul id="commit-files" class="changes-list compact"></ul>
         <p id="commit-branch-note" class="warning-box" hidden></p>
         <label class="field-label" for="commit-message">What changed and why</label

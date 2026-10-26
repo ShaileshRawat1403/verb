@@ -643,7 +643,7 @@ mod tests {
     #[test]
     fn history_surfaces_recorded_warnings() {
         let p = repo();
-        specs::set_stage(&p, "001", "build", "", "A via test").unwrap();
+        specs::set_stage(&p, "001", "build", "", "A via test", None, None).unwrap();
         let a = answer(&p, "why did spec 1 skip plan", &[]);
         assert!(
             a.summary.contains("moved on with warnings 1 time"),

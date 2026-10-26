@@ -58,6 +58,15 @@ while [ $# -gt 0 ]; do
 done
 echo "launch $$ $mode $session" >> "$root/log"
 if [ "$mode" != terminal ]; then
+  if [ -f "$root/studio-enabled" ]; then
+    case "$*" in
+      *"import base64,zlib"*)
+        if [ -f "$root/studio-reply" ]; then cat "$root/studio-reply"; exit 0; fi
+        # Fixture executes the exact fixed guest command after the boundary arguments.
+        exec /bin/bash "$@"
+        ;;
+    esac
+  fi
   if [ "$program" = git ] && [ "$*" = "rev-parse --git-common-dir" ]; then
     echo "identity-probe" >> "$root/log"
   fi
@@ -695,4 +704,81 @@ fn a_stalled_project_read_has_an_overall_deadline_and_keeps_the_host_responsive(
     );
     assert_prompt(&timings);
     assert!(started.elapsed() < Duration::from_secs(28));
+}
+
+// This fixture exercises the real guest helper through the real host transport. It does not
+// substitute a controller, identity or cleanup proof for the installed public boundary.
+#[test]
+fn studio_boundary_saves_as_guest_and_preserves_conflicts_without_host_fallback() {
+    let host = Host::start_with(
+        "admit",
+        &[("VERB_STUDIO_BOUNDARY", Path::new("monitored-v1"))],
+    );
+    let repo = host.root.join(PROJECT);
+    assert!(Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&repo)
+        .status()
+        .unwrap()
+        .success());
+    fs::write(repo.join("app.html"), "<h1>Before</h1>").unwrap();
+    fs::write(repo.join(".gitignore"), "private.txt\n").unwrap();
+    fs::write(repo.join("private.txt"), "fixture secret").unwrap();
+    let boundary = host.root.join("boundary");
+    fs::write(boundary.join("studio-enabled"), "").unwrap();
+    let (status, cap) = host.request("GET", "/api/studio/workspace", None);
+    assert_eq!(status, 200, "{cap}");
+    assert_eq!(cap["editing"]["available"], true, "{cap}");
+    assert_eq!(cap["transport"], "monitored-v1");
+    let (status, read) = host.request("GET", "/api/studio/file?path=app.html", None);
+    assert_eq!(status, 200, "{read}");
+    let mut payload = json!({"workspaceId":cap["workspaceId"],"path":"app.html", "expectedRevision":read["file"]["revision"],"text":"<h1>After</h1>"});
+    let (status, saved) = host.request("POST", "/api/studio/file", Some(payload.clone()));
+    assert_eq!(status, 200, "{saved}");
+    assert_eq!(
+        fs::read_to_string(repo.join("app.html")).unwrap(),
+        "<h1>After</h1>"
+    );
+    let (status, conflict) = host.request("POST", "/api/studio/file", Some(payload.clone()));
+    assert_eq!(status, 409, "{conflict}");
+    let (status, ticket) = host.request("POST", "/api/studio/preview", Some(json!({"workspaceId":cap["workspaceId"],"path":"app.html","expectedRevision":saved["file"]["revision"]})));
+    assert_eq!(status, 200, "{ticket}");
+    assert!(ticket["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("/studio-preview/"));
+    // Real transport handles payloads larger than a pipe buffer and Linux's single-argv limit.
+    payload["expectedRevision"] = saved["file"]["revision"].clone();
+    payload["text"] = json!("x".repeat(190_000));
+    let (status, large) = host.request("POST", "/api/studio/file", Some(payload.clone()));
+    assert_eq!(status, 200, "{large}");
+    assert_eq!(fs::metadata(repo.join("app.html")).unwrap().len(), 190_000);
+    for path in ["private.txt", "../outside.txt"] {
+        let (status, reply) = host.request("GET", &format!("/api/studio/file?path={path}"), None);
+        assert_ne!(status, 200, "{reply}");
+    }
+    // Wrong protocol/version disables capability discovery. Malformed replies never cause a
+    // fallback write through the host's accessible view of this synthetic project.
+    fs::write(
+        boundary.join("studio-reply"),
+        r#"{"protocol":1,"sourceRevision":"wrong"}"#,
+    )
+    .unwrap();
+    let (_, cap) = host.request("GET", "/api/studio/workspace", None);
+    assert_eq!(cap["editing"]["available"], false);
+    let (status, _) = host.request("POST", "/api/studio/file", Some(payload));
+    assert_ne!(status, 200);
+    assert_eq!(fs::metadata(repo.join("app.html")).unwrap().len(), 190_000);
+}
+
+#[test]
+fn studio_external_boundary_is_disabled_without_opt_in() {
+    let host = Host::start("admit");
+    let (_, cap) = host.request("GET", "/api/studio/workspace", None);
+    assert_eq!(cap["editing"]["available"], false);
+    let (status, _) = host.request("GET", "/api/studio/file?path=app.html", None);
+    assert_eq!(status, 403);
+    assert!(!fs::read_to_string(host.root.join("boundary/log"))
+        .unwrap()
+        .contains("import base64,zlib"));
 }

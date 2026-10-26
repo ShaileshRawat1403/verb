@@ -268,14 +268,14 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
   await page.locator("#spec-criteria").fill("A sign-in link arrives\nA bad email shows a message");
   await page.getByRole("button", { name: "Create spec" }).click();
   await expect(page.locator("#spec-title")).toHaveText("Let people sign in with email");
-  await expect(page.locator(".spec-item.current")).toContainText("0/2 proven");
+  await expect(page.locator(".spec-item.current")).toContainText("0/2 recorded complete");
 
   // Prove a criterion: Verb asks for evidence and records it.
   await page.locator('[data-criterion="1"]').click({ force: true });
   await expect(page.getByRole("heading", { name: "How do you know it works?" })).toBeVisible();
   await page.locator("#evidence-text").fill("unit test rejects a@");
-  await page.getByRole("button", { name: "Mark as proven" }).click();
-  await expect(page.locator(".spec-item.current")).toContainText("1/2 proven");
+  await page.getByRole("button", { name: "Record as complete" }).click();
+  await expect(page.locator(".spec-item.current")).toContainText("1/2 recorded complete");
   await expect(page.locator("#audit-list li").first()).toContainText("evidence: unit test rejects a@");
 
   // Skipping stages is allowed, warned about, and shown as skipped.
@@ -292,10 +292,13 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
 
   // Commit from the dialog; the audit line lands in the same commit.
   await page.keyboard.press("Alt+KeyC");
+  await expect(page.locator("#commit-dialog-sub")).toContainText("does not upload your work");
+  await expect(page.locator("#commit-scope")).toContainText("all changed files");
   await expect(page.locator("#commit-message")).toHaveValue(/^spec:001 /);
   await page.locator("#commit-message").fill("spec:001 add the sign-in spec");
   await page.getByRole("button", { name: "Commit", exact: true }).click();
-  await expect(page.locator("#git-status")).toHaveText("All changes saved");
+  await expect(page.locator("#git-status")).toHaveText("No uncommitted changes");
+  await expect(page.locator("#git-remote")).toContainText("No remote branch is linked");
   expect(git("log", "-1", "--format=%s").trim()).toBe("spec:001 add the sign-in spec");
   const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
   expect(file).toContain("committed: spec:001 add the sign-in spec");
@@ -327,7 +330,7 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   expect(await resolved()).toBe("dark");
 
   // A terminal opened from the spec appears in the spec's work area.
-  await page.locator('[data-action="spec-terminal"]').click();
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
   await expect(page.locator("#spec-work .work-hint")).toBeHidden();
   // A terminal must start without page errors (it once threw a CSP error compiling the image
@@ -402,13 +405,14 @@ test("host view: read-only machine health", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test("host supervisor visibility does not imply service outage", async ({ page }) => {
-  await page.route("**/api/host", async route => {
-    const response = await route.fetch();
-    const report = await response.json();
-    report.services = [{name:"verb",state:"unknown",uptime_secs:null},{name:"worker",state:"down",uptime_secs:0}];
-    await route.fulfill({response,json:report});
-  });
+test("host supervisor visibility does not imply service outage", async ({ page, request }) => {
+  // Fetch once outside interception: a polling route.fetch can still be in flight
+  // when the browser context closes, causing teardown failure and fixture restart.
+  const response = await request.get(new URL("/api/host", url).href, { headers: { "X-Verb-Token": TOKEN } });
+  expect(response.ok()).toBeTruthy();
+  const report = await response.json();
+  report.services = [{name:"verb",state:"unknown",uptime_secs:null},{name:"worker",state:"down",uptime_secs:0}];
+  await page.route("**/api/host", route => route.fulfill({json:report}));
   await page.goto(url);
   await page.keyboard.press("Alt+Digit7");
   const services = page.locator("#host-services");
@@ -540,7 +544,7 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   // Terminals still running from earlier tests come back with the page, so "the new one" is the
   // selected tab once one more terminal exists, not necessarily the last in the page.
   const before = await page.locator("#spec-work .terminal-tile").count();
-  await page.locator('[data-action="spec-terminal"]').click();
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(before + 1);
   const tile = page.locator("#spec-work .terminal-tile.focused");
   await tile.locator(".terminal-mount").click();
@@ -620,6 +624,28 @@ test("terminal input stays hidden when the real PTY disables echo", async ({ pag
   } finally {
     await page.request.delete(`${origin}/api/terminals/${sessionId}`, { headers });
   }
+});
+
+test("commit review lists every file and explains local versus remote history", async ({ page }) => {
+  await page.route("**/api/git", route => route.fulfill({ json: {
+    branch: "main", upstream: "origin/main", ahead: 2, behind: 1,
+    changes: Array.from({ length: 41 }, (_, i) => ({ code: "??", path: `new-file-${i}.txt` })),
+    recent: [],
+  } }));
+  await page.goto(url);
+  await expect(page.locator("#git-remote")).toContainText("2 local commits to upload; 1 remote commit to bring in");
+  await page.keyboard.press("Alt+KeyC");
+  await expect(page.locator("#commit-files li")).toHaveCount(41);
+  await expect(page.locator("#commit-files li").last()).toContainText("new-file-40.txt");
+  await expect(page.locator("#commit-scope")).toContainText("work outside the selected spec");
+  await expect(page.locator("#commit-dialog-sub")).toContainText("local Git history");
+  // A failed observation must not offer an empty commit as if the checkout were clean.
+  await page.keyboard.press("Escape");
+  await page.route("**/api/git", route => route.fulfill({ status: 500, json: { error: "Git read failed" } }));
+  await page.reload();
+  await expect(page.locator("#git-remote")).toHaveText("Remote comparison unavailable.");
+  await page.keyboard.press("Alt+KeyC");
+  await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
 });
 
 test("Git diagnostics survive lightweight terminal refreshes", async ({page}) => {

@@ -1,3 +1,14 @@
+// Git status compares local records; it does not contact the remote server.
+export function gitRemoteDescription(git) {
+  if (!git || git.error) return "Remote comparison unavailable.";
+  if (!git.upstream)
+    return "No remote branch is linked to this branch. A local commit does not upload your work.";
+  const parts = [];
+  if (git.ahead) parts.push(`${git.ahead} local commit${git.ahead === 1 ? "" : "s"} to upload`);
+  if (git.behind) parts.push(`${git.behind} remote commit${git.behind === 1 ? "" : "s"} to bring in`);
+  return `${git.upstream}: ${parts.join("; ") || "matches the last known remote state"}. Based on local records; refresh does not check the server.`;
+}
+
 // Completed failures and initial loading are different observations.
 export function projectGitPresentation(project) {
   const states = {

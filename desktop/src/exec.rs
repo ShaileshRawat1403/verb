@@ -18,6 +18,58 @@
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
+
+mod bounded;
+
+/// Explicit Studio operations carry bounded JSON over stdin, never shell source or argv.
+#[cfg(unix)]
+pub(crate) fn studio_exchange(
+    command: &mut Command,
+    input: &[u8],
+) -> std::io::Result<std::process::Output> {
+    bounded::exchange(command, Duration::from_secs(20), 2 * 1024 * 1024, input)
+}
+
+/// Automatic reads only. Command construction may separately perform a bounded config probe.
+pub(crate) fn read_output(command: &mut Command) -> std::io::Result<std::process::Output> {
+    bounded::output(command, Duration::from_secs(15), 8 * 1024 * 1024)
+}
+
+pub(crate) fn read_output_before(
+    command: &mut Command,
+    deadline: std::time::Instant,
+) -> std::io::Result<std::process::Output> {
+    let remaining = deadline
+        .checked_duration_since(std::time::Instant::now())
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "Git review deadline reached")
+        })?;
+    bounded::output(
+        command,
+        remaining.min(Duration::from_secs(15)),
+        8 * 1024 * 1024,
+    )
+}
+
+/// Explicit user operations may contact a remote, but must still release their worker.
+pub(crate) fn git_operation_output(command: &mut Command) -> std::io::Result<std::process::Output> {
+    bounded::output(command, Duration::from_secs(60), 1024 * 1024)
+}
+
+pub(crate) fn check_output(command: &mut Command) -> std::io::Result<std::process::Output> {
+    bounded::output(command, Duration::from_secs(180), 1024 * 1024)
+}
+
+/// Decode a prepared Git command's result after the caller's chosen execution path.
+pub(crate) fn git_text(output: std::io::Result<std::process::Output>) -> Result<String, String> {
+    let output = output.map_err(|error| format!("could not run git: {error}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
+}
 
 /// `name` resolved against absolute `PATH` entries, refusing any candidate inside `project`.
 pub(crate) fn trusted_program(name: &str, project: &Path) -> Option<PathBuf> {
@@ -62,7 +114,7 @@ fn is_executable(path: &Path) -> bool {
 pub(crate) fn git(project: &Path) -> Option<Command> {
     let program = trusted_program("git", project)?;
     let mut command = base_git(&program, project)?;
-    for name in local_filters(&program, project) {
+    for name in local_filters(&program, project)? {
         for key in ["clean", "smudge", "process"] {
             command.arg("-c").arg(format!("filter.{name}.{key}="));
         }
@@ -98,11 +150,9 @@ fn base_git(program: &Path, project: &Path) -> Option<Command> {
 }
 
 /// Names of filter drivers the repository-local config defines. Reading config runs nothing.
-fn local_filters(program: &Path, project: &Path) -> Vec<String> {
-    let Some(mut command) = base_git(program, project) else {
-        return Vec::new();
-    };
-    let Ok(output) = command
+fn local_filters(program: &Path, project: &Path) -> Option<Vec<String>> {
+    let mut command = base_git(program, project)?;
+    command
         .args([
             "config",
             "--local",
@@ -112,12 +162,22 @@ fn local_filters(program: &Path, project: &Path) -> Vec<String> {
             "--get-regexp",
             r"^filter\.",
         ])
-        .stderr(Stdio::null())
-        .output()
-    else {
-        return Vec::new();
-    };
-    let mut names: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .env("LC_ALL", "C");
+    let output = bounded::output(&mut command, Duration::from_secs(5), 65536).ok()?;
+    // Exit 1 with empty output is Git's ordinary "no matching keys" result.
+    // An unreadable config must never silently re-enable repository-controlled filters.
+    let no_matches = output.status.code() == Some(1) && output.stdout.is_empty();
+    let not_repository = output.status.code() == Some(128)
+        && output.stdout.is_empty()
+        && output.stderr == b"fatal: --local can only be used inside a git repository\n";
+    if not_repository {
+        return Some(Vec::new());
+    }
+    if !(output.status.success() || no_matches) {
+        return None;
+    }
+    let raw = std::str::from_utf8(&output.stdout).ok()?;
+    let mut names: Vec<String> = raw
         .split('\0')
         .filter_map(|key| {
             let rest = key.strip_prefix("filter.")?;
@@ -128,7 +188,7 @@ fn local_filters(program: &Path, project: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names.dedup();
-    names
+    Some(names)
 }
 
 #[cfg(all(test, unix))]
@@ -136,6 +196,48 @@ mod tests {
     use super::*;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn filter_discovery_fails_closed_on_invalid_config() {
+        let root = std::env::temp_dir().join(format!("verb-filters-{}", crate::new_id()));
+        fs::create_dir_all(&root).unwrap();
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .arg(&root)
+            .status()
+            .unwrap()
+            .success());
+        fs::write(root.join(".git/config"), "[broken\n").unwrap();
+        let program = trusted_program("git", &root).unwrap();
+        assert!(local_filters(&program, &root).is_none());
+        assert!(git(&root).is_none());
+        fs::write(
+            root.join(".git/config"),
+            "[core]\nrepositoryformatversion = 0\n",
+        )
+        .unwrap();
+        assert_eq!(local_filters(&program, &root), Some(Vec::new()));
+        fs::write(
+            root.join(".git/config"),
+            "[filter \"danger\"]\nclean = false\nprocess = false\n",
+        )
+        .unwrap();
+        assert_eq!(local_filters(&program, &root), Some(vec!["danger".into()]));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stalled_filter_discovery_has_a_deadline() {
+        let root = std::env::temp_dir().join(format!("verb-filter-stall-{}", crate::new_id()));
+        fs::create_dir_all(&root).unwrap();
+        let program = root.join("git-fixture");
+        fs::write(&program, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let start = std::time::Instant::now();
+        assert!(local_filters(&program, &root).is_none());
+        assert!(start.elapsed() < Duration::from_secs(8));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn a_binary_inside_the_project_is_never_chosen() {

@@ -19,6 +19,7 @@ mod continuity;
 mod diff;
 mod exec;
 mod fsutil;
+mod git_sync;
 mod gitstate;
 mod good;
 mod host;
@@ -37,12 +38,18 @@ mod project;
 mod project_read;
 mod pty;
 mod runtime;
+mod sdlc;
 mod session;
 mod shell;
 use session::{Agent, ResumeVerdict, Session, SessionState};
+mod spec_summary;
 mod specs;
 #[cfg(unix)]
 pub mod stream;
+#[cfg(unix)]
+mod studio;
+#[cfg(unix)]
+mod studio_bridge;
 mod talk;
 mod tokens;
 mod transcript;

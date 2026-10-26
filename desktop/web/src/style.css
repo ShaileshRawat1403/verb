@@ -2812,7 +2812,8 @@ details[open] > .panel-summary::after {
 .flow-explainer span {
   color: var(--muted);
 }
-.spec-header h1 {
+.spec-header h1,
+.spec-header h2 {
   margin: 4px 0 8px;
   font-size: 22px;
 }

@@ -97,7 +97,7 @@ impl StateJob {
                 "attention": attention, "contextState": "not applicable",
             }));
         }
-        Ok(json!({
+        let mut snapshot = json!({
             "project": {"id": identity.id, "name": identity.anchor.file_name()
                 .map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
                 "anchor": identity.anchor, "workspace": self.project,
@@ -105,8 +105,21 @@ impl StateJob {
                 "changedFiles": git.changes_known.then_some(git.changed_files)},
             "deployment": self.deployment,
             "memory": workbench::shared_memory_for_identity(identity)?,
-            "tasks": tasks, "sessions": session_rows,
-        }))
+            "tasks": tasks, "sessions": session_rows, "observedAt": crate::now_millis(),
+        });
+        match crate::specs::list_checked(&self.project) {
+            Ok(specs) => {
+                let mut summaries =
+                    crate::spec_summary::resolve_all(&specs, Some(&snapshot), &self.project);
+                crate::sdlc::enrich_all(&self.project, &identity.id, &specs, &mut summaries);
+                snapshot["specSummaries"] = json!(summaries);
+            }
+            Err(error) => {
+                snapshot["specSummaries"] = json!({});
+                snapshot["specError"] = json!(error);
+            }
+        }
+        Ok(snapshot)
     }
 }
 

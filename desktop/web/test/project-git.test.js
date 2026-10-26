@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { projectGitPresentation as view } from "../src/project-git.js";
+import { gitRemoteDescription } from "../src/project-git.js";
+
+test("remote guidance distinguishes local commits, incoming work and cached comparisons", () => {
+  assert.match(gitRemoteDescription({ upstream: "origin/main", ahead: 2, behind: 1 }), /2 local commits to upload; 1 remote commit to bring in/);
+  const matched = gitRemoteDescription({ upstream: "origin/main", ahead: 0, behind: 0 });
+  assert.match(matched, /last known remote state/);
+  assert.match(matched, /refresh does not check the server/);
+  assert.match(gitRemoteDescription({ upstream: null }), /No remote branch is linked/);
+  assert.equal(gitRemoteDescription({ error: "failed", upstream: "origin/main" }), "Remote comparison unavailable.");
+});
 test("completed Git failure never reads as loading or zero changes", () => {
   assert.equal(view({ gitStatus: "loading" }).changes, "Reading changes…");
   const failure = view({ gitStatus: "unavailable", changedFiles: 0 });

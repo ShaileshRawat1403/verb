@@ -36,6 +36,14 @@ class RecoveryTests(unittest.TestCase):
     def snapshot(self):
         return workstate.snapshot(self.state, self.backup, True)
 
+    def test_sdlc_evidence_roundtrips_in_private_host_backup(self):
+        evidence = self.state / "sdlc/v1/project/001.json"
+        evidence.parent.mkdir(parents=True)
+        evidence.write_text('{"version":1,"records":[]}')
+        self.snapshot()
+        self.assertTrue(workstate.restore(self.backup, self.restored)["verified"])
+        self.assertEqual((self.restored / "sdlc/v1/project/001.json").read_text(), evidence.read_text())
+
     def malicious(self, name):
         self.backup.mkdir()
         record = {"path": name, "size": 1, "sha256": "a" * 64}
