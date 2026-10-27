@@ -81,6 +81,8 @@ test.beforeAll(async () => {
     "# Native Studio\n\nAn isolated project.\n",
   );
   writeFileSync(join(repo, "app.html"), APP);
+  writeFileSync(join(repo, "sample.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
+  writeFileSync(join(repo, "disguised.png"), '<svg onload="alert(1)"></svg>');
   writeFileSync(join(repo, "conflict.txt"), "original");
   writeFileSync(join(repo, "typing.txt"), "original");
   writeFileSync(join(repo, ".gitignore"), ".env\n");
@@ -445,6 +447,8 @@ test("read-scoped clients cannot edit files or authorize script previews", async
   );
   const token = output.match(/verb_at_[A-Za-z0-9_-]+/)[0];
   const reader = { "X-Verb-Token": token, Connection: "close" };
+  const raster = await request.get(`${origin}/api/studio/image?path=sample.png`, { headers: reader });
+  expect(raster.ok()).toBeTruthy();
   const cap = await request.get(`${origin}/api/studio/workspace`, {
     headers: reader,
   });
@@ -523,4 +527,83 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
   });
   await page.getByRole("button", { name: "Stop preview", exact: true }).click();
   await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
+});
+
+
+test("console tabs, image zoom and keyboard resize preserve editable drafts", async ({ page, request }) => {
+  await page.goto(url);
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await expect(page.locator("#studio-document h1")).toHaveText("Native Studio");
+  const work = await page.locator("#studio-work-panel").boundingBox();
+  const preview = await page.locator("#studio-canvas-panel").boundingBox();
+  expect(work.x).toBeLessThan(preview.x);
+  const divider = page.getByRole("separator", { name: "Resize work and preview" });
+  await divider.focus(); await divider.press("ArrowRight");
+  await expect(divider).toHaveAttribute("aria-valuenow", "48");
+  await page.getByLabel("Canvas file", { exact: true }).selectOption("sample.png");
+  await expect(page.locator("#studio-image-state")).toContainText("1 × 1");
+  await expect(page.getByRole("button", { name: "Edit file", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Zoom image in", exact: true }).click();
+  await expect(page.locator("#studio-image-scale")).toHaveText("125%");
+  await page.getByRole("button", { name: "Fit image", exact: true }).click();
+  await expect(page.locator("#studio-image-scale")).toHaveText("Fit");
+  const response = await request.get(`${origin}/api/studio/image?path=disguised.png`, { headers });
+  expect(response.ok()).toBe(false);
+  await page.getByRole("button", { name: "Close current preview", exact: true }).click();
+  await expect(page.getByRole("tab", { name: /sample.png/ })).toHaveCount(0);
+  await page.getByLabel("Canvas file", { exact: true }).selectOption("app.html");
+  await page.getByRole("tab", { name: /README.md/ }).click();
+  await page.getByRole("tab", { name: /README.md/ }).press("ArrowRight");
+  await expect(page.getByRole("tab", { name: /app.html/ })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  const editor = page.getByLabel("File contents · UTF-8 text editor", { exact: true });
+  await expect(editor).toBeVisible(); await editor.fill("an unsaved tab draft");
+  await page.getByRole("button", { name: "Close current preview", exact: true }).click();
+  await expect(editor).toHaveValue("an unsaved tab draft");
+  await expect(page.locator("#studio-message")).toContainText("Your text is retained");
+});
+
+test("preview dock reviews real Git diffs and expands without losing the work thread", async ({ page }, testInfo) => {
+  await openFile(page, "app.html");
+  await page.getByRole("button", { name: "Document", exact: true }).click();
+  await page.getByRole("button", { name: "Show changes", exact: true }).click();
+  await expect(page.locator("#studio-changed-files")).toContainText("app.html");
+  await page.locator("#studio-changed-files").getByRole("button", { name: /app.html/ }).click();
+  await expect(page.locator("#studio-diff")).toContainText("Fieldnotes");
+  await page.getByRole("button", { name: "Back to preview", exact: true }).click();
+  await page.getByRole("button", { name: "Expand preview", exact: true }).click();
+  await expect(page.locator("#studio-work-panel")).not.toBeVisible();
+  await page.getByRole("button", { name: "Restore split", exact: true }).press("Escape");
+  await expect(page.locator("#studio-work-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await page.getByLabel("File contents · UTF-8 text editor", { exact: true }).fill(`<!doctype html><html lang="en"><meta charset="utf-8"><style>body{margin:0;padding:38px;background:#f4f0e5;color:#243b32;font:16px/1.6 system-ui}small{text-transform:uppercase;letter-spacing:.16em;color:#68776b}h1{font:46px/1.1 Georgia,serif;letter-spacing:-1px;margin:32px 0 18px}p{max-width:340px}.details{border-top:1px solid #cbd1c5;padding:20px 0;margin:24px 0}button{border:0;border-radius:4px;padding:13px 19px;background:#284e3b;color:white;font:inherit}</style><small>Fieldnotes / local walks</small><h1>A slower Sunday.<br>A different way home.</h1><p>Small groups. Open air. Explore the familiar with fresh eyes.</p><div class="details">Sunday 1 Nov · 2 hours<br><strong>₹850 per person</strong></div><button id="book">See walk details</button><p id="details" hidden>Meet at the park gate at 9am. Comfortable shoes and curiosity welcome.</p><script>document.querySelector('#book').onclick=()=>document.querySelector('#details').hidden=false;</script></html>`);
+  await page.getByRole("button", { name: "Save file", exact: true }).click();
+  await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
+  await page.getByLabel("Describe a new change", { exact: true }).fill("Make the walk booking clearer\nShow the date, duration and price before someone books.");
+  await page.getByRole("button", { name: "Define change", exact: false }).click();
+  await page.locator('#spec-dialog [name="criteria"]').fill("The date, duration and price are visible before booking");
+  await page.locator('#spec-dialog button[type="submit"]').click();
+  await expect(page.locator("#spec-dialog")).not.toBeVisible();
+  await expect(page.locator("#studio-work-activity")).not.toBeEmpty();
+  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  const frame = page.frameLocator("#studio-app-frame iframe");
+  await expect(frame.getByRole("heading", { name: /A slower Sunday/ })).toBeVisible();
+  await frame.getByRole("button", { name: "See walk details" }).click();
+  await expect(frame.locator("#details")).toBeVisible();
+  for (let step = 0; step < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== "dark"; step++) await page.locator("#theme-toggle").click();
+  await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", "dark");
+  await expect(page.locator(".toast.visible")).toHaveCount(0, { timeout: 8000 });
+  await page.screenshot({ path: testInfo.outputPath("console-preview-desktop.png") });
+  writeFileSync(join(repo, "walk-preview.png"), await page.locator("#studio-app-frame").screenshot());
+  await page.getByRole("button", { name: "Refresh canvas", exact: true }).click();
+  await expect(page.getByLabel("Canvas file", { exact: true }).locator('option[value="walk-preview.png"]')).toHaveCount(1);
+  await page.getByLabel("Canvas file", { exact: true }).selectOption("walk-preview.png");
+  await expect(page.locator("#studio-image-state")).toContainText("KB");
+  await expect(page.locator("#studio-preview-image")).toBeVisible();
+  const imageBounds = await page.locator("#studio-preview-image").boundingBox();
+  const imageViewport = await page.locator(".studio-image-viewport").boundingBox();
+  expect(imageBounds.height).toBeLessThanOrEqual(imageViewport.height);
+  expect(imageBounds.width).toBeLessThanOrEqual(imageViewport.width);
+  await page.screenshot({ path: testInfo.outputPath("console-image-desktop.png") });
+
 });

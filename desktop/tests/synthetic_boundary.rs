@@ -60,7 +60,7 @@ echo "launch $$ $mode $session" >> "$root/log"
 if [ "$mode" != terminal ]; then
   if [ -f "$root/studio-enabled" ]; then
     case "$*" in
-      *"import base64,zlib"*)
+      *"<verb-studio-adapter>"*)
         if [ -f "$root/studio-reply" ]; then cat "$root/studio-reply"; exit 0; fi
         # Fixture executes the exact fixed guest command after the boundary arguments.
         exec /bin/bash "$@"
@@ -730,6 +730,19 @@ fn studio_boundary_saves_as_guest_and_preserves_conflicts_without_host_fallback(
     assert_eq!(status, 200, "{cap}");
     assert_eq!(cap["editing"]["available"], true, "{cap}");
     assert_eq!(cap["transport"], "monitored-v1");
+    let mut raster = b"\x89PNG\r\n\x1a\n".to_vec();
+    raster.resize(2_000_000, 0);
+    fs::write(repo.join("large.png"), &raster).unwrap();
+    let (status, image) = host.request("GET", "/api/studio/image?path=large.png", None);
+    assert_eq!(status, 200);
+    assert_eq!(image["image"]["bytes"], 2_000_000);
+    assert_eq!(image["image"]["mime"], "image/png");
+    fs::write(repo.join("active.png"), b"<svg onload='alert(1)'/>").unwrap();
+    assert_ne!(
+        host.request("GET", "/api/studio/image?path=active.png", None)
+            .0,
+        200
+    );
     let (status, read) = host.request("GET", "/api/studio/file?path=app.html", None);
     assert_eq!(status, 200, "{read}");
     let mut payload = json!({"workspaceId":cap["workspaceId"],"path":"app.html", "expectedRevision":read["file"]["revision"],"text":"<h1>After</h1>"});
@@ -780,5 +793,5 @@ fn studio_external_boundary_is_disabled_without_opt_in() {
     assert_eq!(status, 403);
     assert!(!fs::read_to_string(host.root.join("boundary/log"))
         .unwrap()
-        .contains("import base64,zlib"));
+        .contains("<verb-studio-adapter>"));
 }

@@ -3,6 +3,7 @@
 The host supplies this source as a literal Python -I -S -c argument, never project text.
 Only JSON data enters stdin. No installation, imports from the project, or host file access.
 """
+import base64
 import hashlib
 import json
 import os
@@ -146,6 +147,37 @@ def save(request):
         os.close(directory)
 
 
+def image(path):
+    directory, leaf = location(path)
+    fd = None
+    limit = 2 * 1024 * 1024
+    try:
+        fd = os.open(leaf, os.O_RDONLY | FLAGS, dir_fd=directory)
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > limit:
+            raise ValueError("Images must be regular files without links, up to 2 MB")
+        raw = bytearray()
+        while len(raw) <= limit:
+            chunk = os.read(fd, min(65536, limit + 1 - len(raw)))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        after = os.fstat(fd)
+        if len(raw) > limit or len(raw) != before.st_size or (before.st_mtime_ns, before.st_ctime_ns, before.st_nlink) != (after.st_mtime_ns, after.st_ctime_ns, after.st_nlink):
+            raise ValueError(CONFLICT + "Image changed while reading; reopen it")
+        mime = ("image/png" if raw.startswith(b"\x89PNG\r\n\x1a\n") else
+                "image/jpeg" if raw.startswith(b"\xff\xd8\xff") else
+                "image/gif" if raw[:6] in (b"GIF87a", b"GIF89a") else
+                "image/webp" if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP" else None)
+        if mime is None:
+            raise ValueError("Preview supports PNG, JPEG, GIF and WebP")
+        return {"path": path, "mime": mime, "data": base64.b64encode(raw).decode(), "bytes": len(raw), "revision": revision(raw)}
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(directory)
+
+
 def main():
     raw = sys.stdin.buffer.read(MAX_INPUT + 1)
     if len(raw) > MAX_INPUT:
@@ -158,6 +190,8 @@ def main():
         return {"maxBytes": MAX_BYTES, "kind": "single-file-html", "projectUid": os.geteuid()}
     if action == "read" and set(request) == {"action", "path"}:
         return {"file": read(request["path"])}
+    if action == "image" and set(request) == {"action", "path"}:
+        return {"image": image(request["path"])}
     if action == "save" and set(request) == {"action", "request"}:
         return {"file": save(request["request"])}
     raise ValueError("Invalid Studio helper operation")
