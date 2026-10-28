@@ -574,12 +574,23 @@ export function initWorkbench(deps) {
     const count = $("#commit-files").querySelectorAll("input:checked").length;
     $("#commit-selection-count").textContent = `${count} of ${commitReview?.files.length || 0} files selected`;
     $("#commit-dialog-submit").disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || count === 0;
-    $("#commit-dialog-submit").textContent = commitRunning ? "Committing…" : "Commit";
+    $("#commit-dialog-submit").textContent = commitRunning ? (commitReview?.recovery ? "Repairing…" : "Committing…") : "Commit";
     for (const input of $("#commit-files").querySelectorAll("input"))
       input.disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || Boolean(commitReview.unsupported?.[input.dataset.commitPath]);
     for (const id of ["commit-select-all", "commit-select-none", "commit-message"])
       $("#" + id).disabled = commitRunning || !commitReview || Boolean(commitReview.blocked);
-    $("#commit-record").disabled = commitRunning || !commitSpec;
+    const recovering = Boolean(commitReview?.recovery);
+    $("#commit-record").disabled = commitRunning || !commitSpec || Boolean(commitReview?.blocked);
+    $("#commit-record").closest("label").hidden = recovering;
+    $("#commit-message").hidden = recovering;
+    $("label[for='commit-message']").hidden = recovering;
+    $("#commit-dialog-submit").hidden = recovering;
+    $(".commit-selection-actions").hidden = recovering;
+    $("#commit-files").hidden = recovering;
+    $("#commit-dialog-title").textContent = recovering ? "Review interrupted commit" : "Save these changes to history";
+    $("#commit-dialog-sub").textContent = recovering
+      ? "Repair reconciles Git state only. It does not run the commit again, upload work or deploy anything."
+      : "A commit records a snapshot in this project's local Git history. It does not upload your work or create a backup on another server.";
     for (const button of $("#commit-dialog").querySelectorAll("[data-close]")) button.disabled = commitRunning;
   }
   for (const [id, checked] of [["all", true], ["none", false]]) $("#commit-select-" + id).addEventListener("click", () => {
@@ -611,6 +622,8 @@ export function initWorkbench(deps) {
     commitReview = null;
     $("#commit-files").replaceChildren();
     $("#commit-diff-panel").hidden = true;
+    $("#commit-repair").hidden = true;
+    $("#commit-repair").textContent = "Repair interrupted Git operation";
     $("#commit-scope").textContent = "Reading a fresh snapshot. No files are staged by opening this review.";
     updateCommitSelection();
     // A suggestion from what changed, selected so typing replaces it; the prefix stays.
@@ -634,6 +647,8 @@ export function initWorkbench(deps) {
       const review = await api("GET", "/api/git/commit-review");
       if (generation !== commitGeneration || !$("#commit-dialog").open) return;
       commitReview = review;
+      $("#commit-repair").hidden = !review.recovery?.canRepair;
+      $("#commit-repair").disabled = false;
       $("#commit-files").innerHTML = review.files.map(path => `<li><label class="commit-file-choice"><input type="checkbox" data-commit-path="${escapeHtml(path)}" ${review.unsupported?.[path] ? "" : "checked"} ${review.blocked || review.unsupported?.[path] ? "disabled" : ""} /><code>${escapeHtml(path)}</code>${review.unsupported?.[path] ? `<small>${escapeHtml(review.unsupported[path])}</small>` : ""}</label><button type="button" class="text-button" data-commit-diff="${escapeHtml(path)}">View diff</button></li>`).join("");
       $("#commit-scope").textContent = review.blocked || "Only selected files enter this commit; they may include work outside the selected spec. Unselected files stay as they are. Any change since this snapshot requires a new review. Existing staged work is never taken over.";
       updateCommitSelection();
@@ -846,6 +861,27 @@ export function initWorkbench(deps) {
       refreshGit();
     } catch (error) {
       toast(error.message, "error");
+    }
+  });
+
+  $("#commit-repair").addEventListener("click", async () => {
+    const recovery = commitReview?.recovery;
+    if (!recovery?.canRepair || commitRunning) return;
+    commitRunning = true;
+    $("#commit-repair").disabled = true;
+    $("#commit-repair").textContent = "Repairing…";
+    updateCommitSelection();
+    try {
+      const result = await api("POST", "/api/git/commit-recovery", { version: recovery.version });
+      closeDialog("commit-dialog");
+      toast(result.message);
+      await Promise.all([refreshGit(), refreshSpecs()]);
+    } catch (error) {
+      $("#commit-scope").textContent = `Repair not confirmed: ${error.message}. Reopen review before trying again.`;
+      commitReview = { ...commitReview, recovery: { ...recovery, canRepair: false } };
+    } finally {
+      commitRunning = false;
+      updateCommitSelection();
     }
   });
 

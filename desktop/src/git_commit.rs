@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod recovery;
+static TRANSACTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Review {
@@ -14,6 +17,7 @@ pub(crate) struct Review {
     pub files: Vec<String>,
     pub unsupported: std::collections::BTreeMap<String, String>,
     pub blocked: Option<String>,
+    pub recovery: Option<recovery::Status>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -91,10 +95,21 @@ fn file(project: &Path, path: &str) -> Result<Option<(String, u32)>, String> {
     let mode = 0o100644;
     Ok(Some((format!("{:x}", Sha256::digest(&bytes)), mode)))
 }
+fn workspace_root(project: &Path) -> Result<(), String> {
+    let actual = PathBuf::from(text(project, &["rev-parse", "--show-toplevel"], None)?)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let expected = project.canonicalize().map_err(|e| e.to_string())?;
+    if actual != expected {
+        return Err("Open the Git repository root before using guided commits or recovery. Git points outside this workspace.".into());
+    }
+    Ok(())
+}
 fn snapshot(project: &Path) -> Result<Snapshot, String> {
     if crate::isolation::external() {
         return Err("Selected-file commits need native-local workspace support. Use the terminal on this host.".into());
     }
+    workspace_root(project)?;
     let branch = text(project, &["symbolic-ref", "--quiet", "HEAD"], None)?;
     if !branch.starts_with("refs/heads/") {
         return Err("Choose a branch in the terminal first".into());
@@ -196,12 +211,22 @@ fn snapshot(project: &Path) -> Result<Snapshot, String> {
             files,
             unsupported,
             blocked,
+            recovery: None,
         },
         branch,
         head,
     })
 }
 pub(crate) fn review(project: &Path) -> Result<Review, String> {
+    if let Some(status) = recovery::status(project)? {
+        return Ok(Review {
+            version: String::new(),
+            files: Vec::new(),
+            unsupported: Default::default(),
+            blocked: Some(status.message.clone()),
+            recovery: Some(status),
+        });
+    }
     Ok(snapshot(project)?.review)
 }
 struct Cleanup(Vec<PathBuf>);
@@ -221,6 +246,10 @@ pub(crate) fn commit(
 ) -> Result<String, String> {
     if crate::isolation::external() {
         return Err("Selected-file commits need native-local workspace support. Use the terminal on this host.".into());
+    }
+    let _transaction = TRANSACTION.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(status) = recovery::status(project)? {
+        return Err(status.message);
     }
     let message = message.trim();
     if message.is_empty() || message.len() > 4096 {
@@ -295,6 +324,7 @@ pub(crate) fn commit(
         return Err("The selection does not match this review".into());
     }
     let mut audit_written = false;
+    let mut receipt_written = false;
     let outcome = (|| {
         let mut expected = snap.states.clone();
         if let Some((path, before, after)) = &audit {
@@ -364,6 +394,10 @@ pub(crate) fn commit(
             .write_all(&bytes)
             .and_then(|_| locked.sync_all())
             .map_err(|e| e.to_string())?;
+        recovery::prepare(project, &index, &temp, &snap, &oid, &audit)?;
+        receipt_written = true;
+        #[cfg(all(test, unix))]
+        crash_point("before_ref");
         let old = if snap.head.is_empty() {
             "0".repeat(oid.len())
         } else {
@@ -381,11 +415,27 @@ pub(crate) fn commit(
             ],
             None,
         )?;
+        #[cfg(all(test, unix))]
+        crash_point("after_ref");
         // The ref now names a commit. Never roll back its audit or offer an automatic retry.
         audit_written = false;
         fs::rename(&lock, &index).map_err(|_| format!("Commit {} exists, but the Git index could not be updated. Inspect git status in the terminal before doing anything else.", &oid[..8]))?;
+        #[cfg(all(test, unix))]
+        crash_point("after_index");
+        recovery::complete(&index).map_err(|error| {
+            format!(
+                "Commit {} exists; recovery cleanup needs review: {error}",
+                &oid[..8]
+            )
+        })?;
+        receipt_written = false;
         Ok(oid[..8].to_owned())
     })();
+    if receipt_written {
+        // Preserve the verified index and audit until explicit recovery resolves the outcome.
+        cleanup.0.clear();
+        return outcome.map_err(|error| format!("Commit outcome needs recovery review: {error}. Reopen the commit dialog; do not resend the commit."));
+    }
     if audit_written {
         if let Some((path, before, after)) = &audit {
             if fs::read_to_string(path).ok().as_ref() == Some(after) {
@@ -394,6 +444,25 @@ pub(crate) fn commit(
         }
     }
     outcome
+}
+
+pub(crate) fn repair(project: &Path, request: &recovery::Request) -> Result<String, String> {
+    let _spec_writes = crate::specs::writing();
+    let _transaction = TRANSACTION.lock().unwrap_or_else(|e| e.into_inner());
+    recovery::repair(project, request)
+}
+pub(crate) use recovery::Request as RecoveryRequest;
+
+#[cfg(all(test, unix))]
+fn crash_point(phase: &str) {
+    if std::env::var("VERB_GIT_TEST_CRASH_PHASE").as_deref() == Ok(phase) {
+        unsafe {
+            libc::kill(libc::getpid(), libc::SIGKILL);
+        }
+        loop {
+            std::thread::park();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -552,5 +621,196 @@ mod tests {
             .unwrap()
             .starts_with('h'));
         fs::remove_dir_all(p).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn recovery_crash_worker() {
+        let Ok(project) = std::env::var("VERB_GIT_TEST_CRASH_PROJECT") else {
+            return;
+        };
+        let p = PathBuf::from(project);
+        let audit = p.join("spec.md");
+        commit(
+            &p,
+            "crash probe",
+            &request(&p, &["a"]),
+            Some((
+                audit,
+                "original spec".into(),
+                "spec with commit audit".into(),
+            )),
+        )
+        .unwrap();
+        panic!("crash point did not fire");
+    }
+    #[cfg(unix)]
+    fn killed_transaction(p: &Path, phase: &str) {
+        fs::write(p.join("a"), "reviewed edit").unwrap();
+        fs::write(p.join("spec.md"), "original spec").unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git_commit::tests::recovery_crash_worker",
+                "--nocapture",
+            ])
+            .env("VERB_GIT_TEST_CRASH_PROJECT", p)
+            .env("VERB_GIT_TEST_CRASH_PHASE", phase)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        use std::os::unix::process::ExitStatusExt;
+        assert_eq!(status.signal(), Some(libc::SIGKILL));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn actual_process_death_recovers_before_and_after_ref_without_replaying_commit() {
+        for phase in ["before_ref", "after_ref", "after_index"] {
+            let p = fixture();
+            let before = text(&p, &["rev-parse", "HEAD"], None).unwrap();
+            killed_transaction(&p, phase);
+            let state = review(&p).unwrap();
+            let status = state.recovery.unwrap();
+            assert!(status.can_repair, "{}", status.message);
+            let observed = text(&p, &["rev-parse", "HEAD"], None).unwrap();
+            assert_eq!(observed == before, phase == "before_ref");
+            repair(
+                &p,
+                &RecoveryRequest {
+                    version: status.version,
+                },
+            )
+            .unwrap();
+            assert_eq!(text(&p, &["rev-parse", "HEAD"], None).unwrap(), observed);
+            assert!(recovery::status(&p).unwrap().is_none());
+            assert!(!p.join(".git/index.lock").exists());
+            if phase == "before_ref" {
+                assert_eq!(
+                    fs::read_to_string(p.join("spec.md")).unwrap(),
+                    "original spec"
+                );
+                assert_eq!(fs::read_to_string(p.join("a")).unwrap(), "reviewed edit");
+            } else {
+                assert_eq!(
+                    text(&p, &["show", "HEAD:a"], None).unwrap(),
+                    "reviewed edit"
+                );
+                assert!(text(&p, &["diff", "--cached", "--name-only"], None)
+                    .unwrap()
+                    .is_empty());
+            }
+            fs::remove_dir_all(p).unwrap();
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn recovery_preserves_new_staging_foreign_locks_and_newer_spec_text() {
+        let p = fixture();
+        killed_transaction(&p, "after_ref");
+        let old_lock = p.join(".git/index.lock");
+        fs::rename(&old_lock, p.join(".git/our-old-lock")).unwrap();
+        fs::write(&old_lock, "someone else's Git lock").unwrap();
+        let status = review(&p).unwrap().recovery.unwrap();
+        assert!(!status.can_repair);
+        assert!(repair(
+            &p,
+            &RecoveryRequest {
+                version: status.version
+            }
+        )
+        .is_err());
+        assert_eq!(
+            fs::read_to_string(&old_lock).unwrap(),
+            "someone else's Git lock"
+        );
+        fs::remove_dir_all(p).unwrap();
+        let p = fixture();
+        killed_transaction(&p, "after_ref");
+        fs::rename(p.join(".git/index.lock"), p.join(".git/previous-lock")).unwrap();
+        fs::write(p.join("other"), "new staged work").unwrap();
+        command(&p, &["add", "other"], None).unwrap();
+        let before = fs::read(p.join(".git/index")).unwrap();
+        let status = review(&p).unwrap().recovery.unwrap();
+        assert!(!status.can_repair);
+        assert!(repair(
+            &p,
+            &RecoveryRequest {
+                version: status.version
+            }
+        )
+        .is_err());
+        assert_eq!(before, fs::read(p.join(".git/index")).unwrap());
+        fs::remove_dir_all(p).unwrap();
+        let p = fixture();
+        killed_transaction(&p, "before_ref");
+        fs::write(p.join("spec.md"), "newer external edits").unwrap();
+        let status = review(&p).unwrap().recovery.unwrap();
+        repair(
+            &p,
+            &RecoveryRequest {
+                version: status.version,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(p.join("spec.md")).unwrap(),
+            "newer external edits"
+        );
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn stale_and_corrupt_recovery_never_modify_history_or_staging() {
+        let p = fixture();
+        killed_transaction(&p, "after_ref");
+        let head = text(&p, &["rev-parse", "HEAD"], None).unwrap();
+        let before = fs::read(p.join(".git/index")).ok();
+        assert!(repair(
+            &p,
+            &RecoveryRequest {
+                version: "stale".into()
+            }
+        )
+        .is_err());
+        assert_eq!(text(&p, &["rev-parse", "HEAD"], None).unwrap(), head);
+        assert_eq!(fs::read(p.join(".git/index")).ok(), before);
+        let record = p.join(".git/verb-commit-recovery.json");
+        fs::write(&record, "{malformed").unwrap();
+        assert!(!review(&p).unwrap().recovery.unwrap().can_repair);
+        assert!(repair(
+            &p,
+            &RecoveryRequest {
+                version: "unknown".into()
+            }
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(record).unwrap(), "{malformed");
+        assert_eq!(text(&p, &["rev-parse", "HEAD"], None).unwrap(), head);
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn guided_git_refuses_a_different_worktree_root() {
+        let p = fixture();
+        let sub = p.join("nested");
+        fs::create_dir(&sub).unwrap();
+        assert!(review(&sub).err().unwrap().contains("repository root"));
+        let other = fixture();
+        text(
+            &p,
+            &["config", "core.worktree", other.to_str().unwrap()],
+            None,
+        )
+        .unwrap();
+        assert!(review(&p).err().unwrap().contains("repository root"));
+        assert!(repair(
+            &p,
+            &RecoveryRequest {
+                version: "unknown".into()
+            }
+        )
+        .is_err());
+        assert!(!p.join(".git/index.lock").exists());
+        fs::remove_dir_all(p).unwrap();
+        fs::remove_dir_all(other).unwrap();
     }
 }

@@ -1,3 +1,4 @@
+import { readWithBusyRetry } from "./read-retry.js";
 // Studio is a second presentation of the existing project, Specs and sessions.
 // It never launches work on entry or owns another task store. App execution is explicit.
 import { renderMarkdown, specSessions, STAGE_GUIDE } from "./workbench.js";
@@ -164,7 +165,7 @@ export function initStudio({
 
   async function refreshFiles() {
     try {
-      const result = await api("GET", "/api/files");
+      const result = await readWithBusyRetry(api, "/api/files");
       state.files = result.files ?? [];
       state.loaded = true;
       state.truncated = result.truncated;

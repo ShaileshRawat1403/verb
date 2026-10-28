@@ -2309,6 +2309,13 @@ impl WebHost {
                 Ok(json!(crate::git_commit::review(&project)?))
             }));
         }
+        if method == &Method::Post && path == "/api/git/commit-recovery" {
+            let input: crate::git_commit::RecoveryRequest = read_json(request)?;
+            let project = self.project.clone();
+            return Ok(self.off_loop(true, move || {
+                Ok(json!({ "message": crate::git_commit::repair(&project, &input)? }))
+            }));
+        }
         if method == &Method::Post && path == "/api/git/commit" {
             let input: CommitRequest = read_json(request)?;
             let (project, actor) = (self.project.clone(), self.actor());

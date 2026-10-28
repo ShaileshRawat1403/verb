@@ -276,7 +276,7 @@ fn audit_line(actor: &str, action: &str) -> String {
 /// from workers (Git-backed changes, start records after admission), and an unserialized pair could
 /// each append to the same old contents and lose a line. Held only from the read to the atomic
 /// write, never across Git or the execution boundary, so the loop never waits behind a stall.
-fn writing() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn writing() -> std::sync::MutexGuard<'static, ()> {
     static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     WRITES.lock().unwrap_or_else(|poison| poison.into_inner())
 }

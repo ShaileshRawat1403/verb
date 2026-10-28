@@ -55,9 +55,10 @@ the selected Spec's audit and unavailable-review recovery. Test run results belo
 ## Remaining production work
 
 Boundary parity is required for guided selective commits on the phone server. Until then, it uses the
-terminal. This slice does not add hunk staging, conflict resolution or automatic recovery after host
-process death midway between ref update and index installation. Keep an uncertain result visible and
-inspect Git history/status before further writes. Real-provider conversation acceptance and measured
+terminal. This slice does not add hunk staging or conflict resolution. The native ref/index interruption gap
+now has explicit receipt-based repair, described in GIT_RECOVERY_CONTRACT.md; unknown early locks,
+interrupted repairs and missing evidence still need terminal inspection. Keep uncertain results
+visible and inspect history/status before further writes. Real-provider conversation acceptance and measured
 phone resource/reconnect acceptance also remain separate release requirements.
 
 

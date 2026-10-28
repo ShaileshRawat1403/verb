@@ -7,8 +7,11 @@ import {
   readFileSync,
   symlinkSync,
   linkSync,
+  copyFileSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
 
@@ -463,6 +466,8 @@ test("read-scoped clients cannot edit files or authorize script previews", async
   );
   const token = output.match(/verb_at_[A-Za-z0-9_-]+/)[0];
   const reader = { "X-Verb-Token": token, Connection: "close" };
+  expect((await request.get(`${origin}/api/git/commit-review`, { headers: reader })).status()).toBe(403);
+  expect((await request.post(`${origin}/api/git/commit-recovery`, { headers: reader, data: { version: "not-authorized" } })).status()).toBe(403);
   expect((await request.get(`${origin}/api/browser`, { headers: reader })).status()).toBe(403);
   expect((await request.post(`${origin}/api/browser`, { headers: reader, data: { op: "start", client: "reader-fixture" } })).status()).toBe(403);
   const raster = await request.get(`${origin}/api/studio/image?path=sample.png`, { headers: reader });
@@ -861,4 +866,66 @@ for (const width of [1440, 390]) test(`a person commits chosen files at ${width}
   const result = await request.post(`${origin}/api/git/commit`, { headers, data: { message: "stale", selection: { version: review.version, paths: [experiment] } } });
   expect(result.ok()).toBe(false);
   expect(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { env: nativeEnv, encoding: "utf8" })).toBe(before);
+});
+
+
+for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px confirms history without creating another commit`, async ({ page, request }) => {
+  const gitAt = (args, extra = {}) => execFileSync("git", args, { cwd: repo, env: { ...nativeEnv, ...extra }, encoding: "utf8" }).trim();
+  const index = join(repo, ".git/index");
+  const temp = join(repo, `.git/verb-commit-recovery-${width}`);
+  const lock = join(repo, ".git/index.lock");
+  const hash = data => createHash("sha256").update(data).digest("hex");
+  const previous = gitAt(["rev-parse", "HEAD"]);
+  const before = hash(readFileSync(index));
+  copyFileSync(index, temp);
+  const name = `repair-${width}.txt`;
+  writeFileSync(join(repo, name), "a reviewed saved change");
+  const env = { GIT_INDEX_FILE: temp };
+  gitAt(["add", "--", name], env);
+  const tree = gitAt(["write-tree"], env);
+  const oid = gitAt(["commit-tree", tree, "-p", previous, "-m", "recorded before interruption"]);
+  const prepared = readFileSync(temp);
+  writeFileSync(lock, prepared, { mode: 0o600 });
+  const identity = statSync(lock);
+  writeFileSync(join(repo, ".git/verb-commit-recovery.json"), JSON.stringify({ schema: 1, pid: 2147483647, branch: "refs/heads/main", before: previous, commit: oid, original_index: before, prepared_index: hash(prepared), temp_name: `verb-commit-recovery-${width}`, lock_id: [identity.dev, identity.ino], audit: null }), { mode: 0o600 });
+  gitAt(["update-ref", "refs/heads/main", oid, previous]);
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto(url);
+  await page.keyboard.press("Alt+KeyC");
+  const dialog = page.locator("#commit-dialog");
+  await expect(page.locator("#commit-scope")).toContainText(`Commit ${oid.slice(0, 8)} was recorded`);
+  await expect(dialog.getByRole("heading", { name: "Review interrupted commit", exact: true })).toBeVisible();
+  await expect(page.locator("#commit-message")).toBeHidden();
+  if (width === 390) {
+    const repair = dialog.getByRole("button", { name: "Repair interrupted Git operation", exact: true });
+    expect(await repair.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await dialog.screenshot({ path: "/private/tmp/verb-recovery-dialog-phone.png" });
+  }
+  await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
+  const review = await request.get(`${origin}/api/git/commit-review`, { headers }).then(r => r.json());
+  expect((await request.post(`${origin}/api/git/commit-recovery`, { headers, data: { version: "stale" } })).ok()).toBe(false);
+  expect(review.recovery.canRepair).toBe(true);
+  await dialog.getByRole("button", { name: "Repair interrupted Git operation", exact: true }).click();
+  await expect(dialog).toBeHidden();
+  expect(gitAt(["rev-parse", "HEAD"])).toBe(oid);
+  expect(gitAt(["diff", "--cached", "--name-only"])).toBe("");
+  expect(gitAt(["show", `HEAD:${name}`])).toBe("a reviewed saved change");
+  expect((await request.get(`${origin}/api/git/commit-review`, { headers }).then(r => r.json())).recovery).toBe(null);
+});
+
+
+test("Studio retries busy file reads, then exposes manual recovery if the host stays busy", async ({ page }) => {
+  let available = false, reads = 0;
+  await page.route("**/api/files", route => {
+    reads++;
+    return available ? route.continue() : route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } });
+  });
+  await page.goto(url);
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.");
+  expect(reads).toBe(3);
+  available = true;
+  await page.getByRole("button", { name: "Refresh canvas", exact: true }).click();
+  await expect(page.locator("#studio-file option[value='app.html']")).toHaveCount(1);
+  expect(reads).toBe(4);
 });
