@@ -20,6 +20,7 @@ mod conversation;
 mod diff;
 mod exec;
 mod fsutil;
+mod git_commit;
 mod git_sync;
 mod gitstate;
 mod good;

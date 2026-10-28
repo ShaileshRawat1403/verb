@@ -827,3 +827,38 @@ test("disk reload clears replacement undo and oversized replacement retains the 
   expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe("two two");
   await editor.fill("two two");
 });
+
+for (const width of [1440, 390]) test(`a person commits chosen files at ${width}px and stale review never commits newer bytes`, async ({ page, request }) => {
+  await page.setViewportSize({ width, height: 900 });
+  const finished = `finished-${width}.txt`, experiment = `experiment-${width}.txt`;
+  writeFileSync(join(repo, finished), "ready for review\n");
+  writeFileSync(join(repo, experiment), "unfinished\n");
+  await page.goto(url);
+  await page.keyboard.press("Alt+KeyC");
+  const dialog = page.locator("#commit-dialog");
+  await expect(dialog.locator(`input[data-commit-path="${finished}"]`)).toBeVisible();
+  for (const input of await dialog.locator("input[data-commit-path]:enabled").all()) await input.uncheck();
+  await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
+  await dialog.locator(`input[data-commit-path="${finished}"]`).check();
+  await expect(page.locator("#commit-selection-count")).toContainText("1 of");
+  await dialog.locator(`li:has(input[data-commit-path="${finished}"])`).getByRole("button", { name: "View diff" }).click();
+  await expect(page.locator("#commit-diff-text")).toContainText("ready for review");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (width === 390) {
+    expect(await page.locator("#commit-dialog-submit").evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    await dialog.screenshot({ path: "/private/tmp/verb-select-phone.png" });
+  }
+  await page.locator("#commit-message").fill("finish one file");
+  await page.locator("#commit-dialog-submit").click();
+  await expect(dialog).toBeHidden();
+  const tree = execFileSync("git", ["-C", repo, "show", "--format=", "--name-only", "HEAD"], { env: nativeEnv, encoding: "utf8" });
+  expect(tree.trim()).toBe(finished);
+  expect(readFileSync(join(repo, experiment), "utf8")).toBe("unfinished\n");
+  expect(execFileSync("git", ["-C", repo, "diff", "--cached", "--name-only"], { env: nativeEnv, encoding: "utf8" }).trim()).toBe("");
+  const review = await request.get(`${origin}/api/git/commit-review`, { headers }).then(r => r.json());
+  writeFileSync(join(repo, experiment), "newer content\n");
+  const before = execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { env: nativeEnv, encoding: "utf8" });
+  const result = await request.post(`${origin}/api/git/commit`, { headers, data: { message: "stale", selection: { version: review.version, paths: [experiment] } } });
+  expect(result.ok()).toBe(false);
+  expect(execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], { env: nativeEnv, encoding: "utf8" })).toBe(before);
+});

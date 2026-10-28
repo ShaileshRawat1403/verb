@@ -569,16 +569,50 @@ export function initWorkbench(deps) {
     }
   }
 
-  function openCommit() {
+  let commitReview = null, commitGeneration = 0, commitRunning = false, commitSpec = null, commitDiffGeneration = 0;
+  function updateCommitSelection() {
+    const count = $("#commit-files").querySelectorAll("input:checked").length;
+    $("#commit-selection-count").textContent = `${count} of ${commitReview?.files.length || 0} files selected`;
+    $("#commit-dialog-submit").disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || count === 0;
+    $("#commit-dialog-submit").textContent = commitRunning ? "Committing…" : "Commit";
+    for (const input of $("#commit-files").querySelectorAll("input"))
+      input.disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || Boolean(commitReview.unsupported?.[input.dataset.commitPath]);
+    for (const id of ["commit-select-all", "commit-select-none", "commit-message"])
+      $("#" + id).disabled = commitRunning || !commitReview || Boolean(commitReview.blocked);
+    $("#commit-record").disabled = commitRunning || !commitSpec;
+    for (const button of $("#commit-dialog").querySelectorAll("[data-close]")) button.disabled = commitRunning;
+  }
+  for (const [id, checked] of [["all", true], ["none", false]]) $("#commit-select-" + id).addEventListener("click", () => {
+    if (!commitReview || commitReview.blocked || commitRunning) return;
+    for (const input of $("#commit-files").querySelectorAll("input:not(:disabled)")) input.checked = checked;
+    updateCommitSelection();
+  });
+  $("#commit-dialog").addEventListener("cancel", event => { if (commitRunning) event.preventDefault(); });
+  $("#commit-files").addEventListener("change", updateCommitSelection);
+  $("#commit-files").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-commit-diff]");
+    if (!button) return;
+    const generation = commitGeneration, diffGeneration = ++commitDiffGeneration;
+    $("#commit-diff-panel").hidden = false;
+    $("#commit-diff-title").textContent = button.dataset.commitDiff;
+    $("#commit-diff-text").textContent = "Reading changes…";
+    try {
+      const result = await api("GET", `/api/git/diff?path=${encodeURIComponent(button.dataset.commitDiff)}`);
+      if (generation !== commitGeneration || diffGeneration !== commitDiffGeneration) return;
+      $("#commit-diff-text").textContent = result.reason || result.hunks?.map(h => `${h.header}\n${h.lines.map(l => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`).join("\n")}`).join("\n") || "No text diff available; inspect binary files in Studio.";
+    } catch (error) { if (generation === commitGeneration && diffGeneration === commitDiffGeneration) $("#commit-diff-text").textContent = error.message; }
+  });
+  async function openCommit() {
+    if (commitRunning) return;
     const spec = selected();
+    commitSpec = spec;
     const changes = state.git?.changes ?? [];
-    $("#commit-files").innerHTML = changes.length
-      ? changes
-          .map((c) => `<li><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></li>`)
-          .join("")
-      : `<li class="muted">${!state.git || state.git.error ? "Changes unavailable. Close this dialog and refresh Git status before committing." : "No changes to commit."}</li>`;
-    $("#commit-scope").textContent = "Includes all changed files in this project, including new files and work outside the selected spec. New files matched by Git's ignore rules are excluded. Files changed before you submit are included too.";
-    $("#commit-dialog-submit").disabled = !state.git || Boolean(state.git.error) || changes.length === 0;
+    const generation = ++commitGeneration;
+    commitReview = null;
+    $("#commit-files").replaceChildren();
+    $("#commit-diff-panel").hidden = true;
+    $("#commit-scope").textContent = "Reading a fresh snapshot. No files are staged by opening this review.";
+    updateCommitSelection();
     // A suggestion from what changed, selected so typing replaces it; the prefix stays.
     const prefix = commitPrefix(spec);
     $("#commit-message").value = suggestCommitMessage(spec, changes);
@@ -590,12 +624,22 @@ export function initWorkbench(deps) {
     $("#commit-record").checked = Boolean(spec);
     $("#commit-record").disabled = !spec;
     $("#commit-record-label").textContent = spec
-      ? `Record this commit in spec ${spec.id}'s audit trail`
+      ? `Include spec ${spec.id}'s file and record this commit in its audit trail`
       : "Select a spec to record this commit in its audit trail";
     showDialog("commit-dialog");
     const box = $("#commit-message");
     box.focus();
     box.setSelectionRange(prefix.length, box.value.length);
+    try {
+      const review = await api("GET", "/api/git/commit-review");
+      if (generation !== commitGeneration || !$("#commit-dialog").open) return;
+      commitReview = review;
+      $("#commit-files").innerHTML = review.files.map(path => `<li><label class="commit-file-choice"><input type="checkbox" data-commit-path="${escapeHtml(path)}" ${review.unsupported?.[path] ? "" : "checked"} ${review.blocked || review.unsupported?.[path] ? "disabled" : ""} /><code>${escapeHtml(path)}</code>${review.unsupported?.[path] ? `<small>${escapeHtml(review.unsupported[path])}</small>` : ""}</label><button type="button" class="text-button" data-commit-diff="${escapeHtml(path)}">View diff</button></li>`).join("");
+      $("#commit-scope").textContent = review.blocked || "Only selected files enter this commit; they may include work outside the selected spec. Unselected files stay as they are. Any change since this snapshot requires a new review. Existing staged work is never taken over.";
+      updateCommitSelection();
+    } catch (error) {
+      if (generation === commitGeneration) $("#commit-scope").textContent = `Commit review unavailable: ${error.message}`;
+    }
   }
 
   let transferReview = null;
@@ -807,9 +851,15 @@ export function initWorkbench(deps) {
 
   $("#commit-dialog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const spec = selected();
+    const spec = commitSpec;
+    if (commitRunning || !commitReview || commitReview.blocked) return;
+    const paths = [...$("#commit-files").querySelectorAll("input:checked")].map(input => input.dataset.commitPath);
+    if (!paths.length) return;
+    commitRunning = true;
+    updateCommitSelection();
     try {
       const result = await api("POST", "/api/git/commit", {
+        selection: { version: commitReview.version, paths },
         message: $("#commit-message").value,
         specId: $("#commit-record").checked && spec ? spec.id : null,
       });
@@ -818,6 +868,12 @@ export function initWorkbench(deps) {
       await Promise.all([refreshGit(), refreshSpecs()]);
     } catch (error) {
       toast(error.message, "error");
+      $("#commit-scope").textContent = `Commit not confirmed: ${error.message} Close and reopen this review before trying again. Check Git history if the connection was interrupted; do not resend blindly.`;
+      commitReview = null;
+      refreshGit();
+    } finally {
+      commitRunning = false;
+      updateCommitSelection();
     }
   });
 

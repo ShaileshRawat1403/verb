@@ -3012,3 +3012,17 @@ label.not-installed {
   #view-specs .spec-overview { padding: 18px 0; }
   .spec-work-items[data-mode="list"] .work-card-open { padding-inline: 4px; }
 }
+
+.commit-file-choice { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; min-height: 44px; }
+.commit-file-choice code { overflow-wrap: anywhere; }
+#commit-files li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+#commit-diff-text { max-height: 260px; overflow: auto; padding: 12px; border: 1px solid var(--line); white-space: pre; font: 12px/1.6 var(--mono); }
+#commit-selection-count { color: var(--text-muted); font-size: 13px; }
+#commit-files { max-height: 280px; overflow-y: auto; }
+
+.commit-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.commit-selection-actions p { flex: 1; }
+@media (max-width: 700px) { #commit-dialog button { min-height: 44px; } }
+
+.commit-file-choice { flex-wrap: wrap; }
+.commit-file-choice small { flex-basis: 100%; padding-left: 26px; color: var(--text-muted); font-size: 12px; }

@@ -890,6 +890,7 @@ struct SpecAgentRequest {
 #[serde(deny_unknown_fields)]
 struct CommitRequest {
     message: String,
+    selection: crate::git_commit::Request,
     #[serde(default, rename = "specId")]
     spec_id: Option<String>,
 }
@@ -2302,15 +2303,22 @@ impl WebHost {
             }));
             return Ok(reply);
         }
+        if method == &Method::Get && path == "/api/git/commit-review" {
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || {
+                Ok(json!(crate::git_commit::review(&project)?))
+            }));
+        }
         if method == &Method::Post && path == "/api/git/commit" {
             let input: CommitRequest = read_json(request)?;
             let (project, actor) = (self.project.clone(), self.actor());
             return Ok(self.off_loop(true, move || {
-                let sha = crate::specs::commit(
+                let sha = crate::specs::commit_selected(
                     &project,
                     &input.message,
                     input.spec_id.as_deref(),
                     &actor,
+                    &input.selection,
                 )?;
                 Ok(json!({"sha": sha, "message": format!("Committed {sha}")}))
             }));

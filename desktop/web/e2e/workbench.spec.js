@@ -293,7 +293,7 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
   // Commit from the dialog; the audit line lands in the same commit.
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-dialog-sub")).toContainText("does not upload your work");
-  await expect(page.locator("#commit-scope")).toContainText("all changed files");
+  await expect(page.locator("#commit-scope")).toContainText("Only selected files");
   await expect(page.locator("#commit-message")).toHaveValue(/^spec:001 /);
   await page.locator("#commit-message").fill("spec:001 add the sign-in spec");
   await page.getByRole("button", { name: "Commit", exact: true }).click();
@@ -632,6 +632,7 @@ test("commit review lists every file and explains local versus remote history", 
     changes: Array.from({ length: 41 }, (_, i) => ({ code: "??", path: `new-file-${i}.txt` })),
     recent: [],
   } }));
+  await page.route("**/api/git/commit-review", route => route.fulfill({ json: { version: "fixture", files: Array.from({ length: 41 }, (_, i) => `new-file-${i}.txt`), blocked: null } }));
   await page.goto(url);
   await expect(page.locator("#git-remote")).toContainText("2 local commits to upload; 1 remote commit to bring in");
   await page.keyboard.press("Alt+KeyC");
@@ -641,6 +642,7 @@ test("commit review lists every file and explains local versus remote history", 
   await expect(page.locator("#commit-dialog-sub")).toContainText("local Git history");
   // A failed observation must not offer an empty commit as if the checkout were clean.
   await page.keyboard.press("Escape");
+  await page.route("**/api/git/commit-review", route => route.fulfill({ status: 500, json: { error: "Git review failed" } }));
   await page.route("**/api/git", route => route.fulfill({ status: 500, json: { error: "Git read failed" } }));
   await page.reload();
   await expect(page.locator("#git-remote")).toHaveText("Remote comparison unavailable.");
