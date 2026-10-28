@@ -82,14 +82,17 @@ try:
     line = server.stdout.readline()
     assert line.startswith("Verb web UI:"), line
     origin = line.split("Verb web UI: ", 1)[1].split(" (", 1)[0].strip()
-    def api(method, path, data=None):
+    def api(method, path, data=None, expected_status=None):
         body = None if data is None else json.dumps(data).encode()
         request = urllib.request.Request(origin + path, body, {"X-Verb-Token": "synthetic-owner-token", "Content-Type": "application/json", "Origin": origin}, method=method)
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
+                assert expected_status is None or response.status == expected_status, response.status
                 return json.load(response)
         except urllib.error.HTTPError as error:
-            raise AssertionError(error.read().decode()) from error
+            payload = json.load(error)
+            assert error.code == expected_status, payload
+            return payload
     terminal = api("POST", "/api/terminals", {"agent":"shell", "isolated":False})["sessionId"]
     api("POST", f"/api/terminals/{terminal}/input", {"data":f"python3 {identity} > identity.json\n"})
     result = project / "identity.json"
@@ -127,9 +130,29 @@ try:
     hook = project / ".git/hooks/pre-commit"
     hook.write_text("#!/bin/sh\nid -u > hook-uid\n")
     hook.chmod(0o775)
-    # Run the real Verb commit path; repository hooks must run as agent, not host.
-    api("POST", "/api/git/commit", {"message":"fixture commit"})
+    # Guided commits must refuse hooks; the terminal runs the project's checks as agent.
+    review = api("GET", "/api/git/commit-review")
+    assert "hooks" in review["blocked"], review
+    before = run("runuser", "-u", "verb-agent", "--", "git", "-C", str(project), "rev-parse", "HEAD").stdout
+    refused = api("POST", "/api/git/commit", {
+        "message": "fixture commit",
+        "selection": {"version": review["version"], "paths": ["identity.py"]},
+    }, expected_status=400)
+    # Separate-UID workspaces may refuse index ownership before the hook guard.
+    assert refused.get("error"), refused
+    assert not (project / "hook-uid").exists(), "guided commit bypassed hook policy"
+    assert run("runuser", "-u", "verb-agent", "--", "git", "-C", str(project), "rev-parse", "HEAD").stdout == before
+    api("POST", f"/api/terminals/{terminal}/input", {
+        "data": "git add --all && git commit -m 'fixture terminal commit'\n",
+    })
+    for _ in range(100):
+        if (project / "hook-uid").exists(): break
+        time.sleep(.1)
     assert (project / "hook-uid").read_text().strip() == str(uid)
+    for _ in range(100):
+        if run("runuser", "-u", "verb-agent", "--", "git", "-C", str(project), "rev-parse", "HEAD").stdout != before: break
+        time.sleep(.1)
+    else: raise AssertionError("terminal commit did not finish")
     api("DELETE", f"/api/terminals/{terminal}")
     for _ in range(100):
         stat = Path(f"/proc/{stubborn_pid}/stat")
