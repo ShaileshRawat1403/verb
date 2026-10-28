@@ -734,3 +734,96 @@ test("Studio visual themes keep readable hierarchy and phone-sized controls", as
     }
   }
 });
+
+test("find and replace stays in the draft, supports undo and explicit save", async ({ page }) => {
+  await openFile(page, "app.html");
+  const editor = page.locator("#studio-editor-text");
+  const disk = readFileSync(join(repo, "app.html"), "utf8");
+  const draft = "Verb verb VERB\nsecond verb\n$& and a.*b";
+  await editor.fill(draft);
+  await editor.press("ControlOrMeta+f");
+  const query = page.getByRole("textbox", { name: "Find in this file", exact: true });
+  await expect(query).toBeFocused();
+  await query.fill("verb");
+  await expect(page.locator("#studio-find-count")).toHaveText("1 of 4");
+  await query.press("Enter");
+  await expect(page.locator("#studio-find-count")).toHaveText("2 of 4");
+  await query.press("Shift+Enter");
+  await expect(page.locator("#studio-find-count")).toHaveText("1 of 4");
+  await page.getByRole("checkbox", { name: "Match case", exact: true }).check();
+  await expect(page.locator("#studio-find-count")).toHaveText("1 of 2");
+  await page.getByRole("checkbox", { name: "Match case", exact: true }).uncheck();
+  await page.getByRole("textbox", { name: "Replace with", exact: true }).fill("$&");
+  await page.getByRole("button", { name: "Replace all", exact: true }).click();
+  await expect(editor).toHaveValue("$& $& $&\nsecond $&\n$& and a.*b");
+  expect(readFileSync(join(repo, "app.html"), "utf8")).toBe(disk);
+  await page.getByRole("button", { name: "Undo replacement", exact: true }).click();
+  await expect(editor).toHaveValue(draft);
+  await query.fill("a.*b");
+  await page.getByRole("textbox", { name: "Replace with", exact: true }).fill("literal");
+  await page.getByRole("button", { name: "Replace", exact: true }).click();
+  await expect(editor).toHaveValue(draft.replace("a.*b", "literal"));
+  await page.locator("#studio-find-panel").screenshot({ path: "/private/tmp/verb-find-desktop.png" });
+  await editor.fill("newer edit must survive");
+  await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
+  await query.fill("missing");
+  await expect(page.locator("#studio-find-count")).toHaveText("No matches");
+  await expect(page.getByRole("button", { name: "Replace all", exact: true })).toBeDisabled();
+  await query.press("Escape");
+  await expect(page.locator("#studio-find-panel")).toBeHidden();
+  await expect(editor).toBeFocused();
+  await page.getByRole("button", { name: "Save file", exact: true }).click();
+  await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
+  expect(readFileSync(join(repo, "app.html"), "utf8")).toBe("newer edit must survive");
+});
+
+test("file find fits a phone and undo cannot cross files", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFile(page, "app.html");
+  const editor = page.locator("#studio-editor-text");
+  await editor.fill("one one");
+  await page.getByRole("button", { name: "Find & replace", exact: true }).click();
+  await page.getByRole("textbox", { name: "Find in this file", exact: true }).fill("one");
+  await page.getByRole("textbox", { name: "Replace with", exact: true }).fill("two");
+  await page.getByRole("button", { name: "Replace all", exact: true }).click();
+  await expect(editor).toHaveValue("two two");
+  await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeEnabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  for (const button of await page.locator("#studio-find-panel button").all())
+    expect(await button.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+  await page.locator("#studio-find-panel").screenshot({ path: "/private/tmp/verb-find-phone.png" });
+  await page.locator("#studio-file").selectOption("conflict.txt");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
+  await page.locator("#studio-file").selectOption("app.html");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await expect(editor).toHaveValue("two two");
+  await editor.fill(readFileSync(join(repo, "app.html"), "utf8"));
+});
+
+
+test("disk reload clears replacement undo and oversized replacement retains the draft", async ({ page }) => {
+  await openFile(page, "typing.txt");
+  const editor = page.locator("#studio-editor-text");
+  await editor.fill("one one");
+  await page.getByRole("button", { name: "Find & replace", exact: true }).click();
+  await page.getByRole("textbox", { name: "Find in this file", exact: true }).fill("one");
+  const replacement = page.getByRole("textbox", { name: "Replace with", exact: true });
+  await replacement.fill("two");
+  await page.getByRole("button", { name: "Replace all", exact: true }).click();
+  await page.getByRole("button", { name: "Save file", exact: true }).click();
+  await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
+  await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Load disk version", exact: true }).click();
+  await expect(page.locator("#studio-editor-status")).toHaveText("Disk version loaded.");
+  await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
+  await expect(editor).toHaveValue("two two");
+  await editor.fill("a".repeat(204800));
+  await page.getByRole("textbox", { name: "Find in this file", exact: true }).fill("a");
+  await replacement.fill("too large");
+  await page.getByRole("button", { name: "Replace all", exact: true }).click();
+  await expect(page.locator("#studio-find-count")).toContainText("exceed the 200 KB");
+  await expect(editor).toHaveValue("a".repeat(204800));
+  expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe("two two");
+  await editor.fill("two two");
+});

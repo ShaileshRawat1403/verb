@@ -1,3 +1,4 @@
+import { initEditorFind } from "./studio-find.js";
 // Local text editing is an adapter, not a replacement for the full IDE foundation.
 // File drafts live in this tab only. No writes, app code, or server commands run on entry.
 export function initStudioEditor({ $, api, onMode, onSaved }) {
@@ -12,6 +13,13 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   };
   const dirty = (draft) => draft && draft.text !== draft.base.text;
   const current = () => drafts.get(path);
+  const find = initEditorFind({
+    $, editor, getKey: () => path,
+    onChange() {
+      if (current()) current().text = editor.value;
+      update();
+    },
+  });
   function setMode(next) {
     if (mode === "app" && next !== "app")
       $("#studio-app-frame").replaceChildren();
@@ -35,6 +43,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     update();
   }
   function update() {
+    find.sync();
     const draft = current();
     $("#studio-edit-file").disabled =
       !capability?.editing.available ||
@@ -158,6 +167,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       const next = remember(doc);
       next.recovery = recovery;
       editor.value = next.text;
+      find.resetUndo();
       $("#studio-editor-conflict").hidden = true;
       status(
         recovery != null
@@ -217,7 +227,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     update();
   });
   editor.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    if (!event.isComposing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
       save();
     }
