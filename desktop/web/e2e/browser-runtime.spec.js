@@ -104,7 +104,7 @@ test('bounded browser resource and cleanup sample',async()=>{
  }
  children(host.pid);
  const sample=execFileSync('ps',['-p',owned.join(','),'-o','pid=,ppid=,rss=,pcpu=,comm='],{encoding:'utf8'});
- writeFileSync('/private/tmp/verb-browser-resource-sample-20261028.json',JSON.stringify({platform:process.platform,launchMs,openMs,captureMs:captures,ownedProcesses:sample,notes:'One local fixture, one viewport; sum of RSS includes shared pages and is not unique memory. Not phone-hosted or production evidence.'},null,2));
+ writeFileSync(join(tmpdir(),'verb-browser-resource-sample-20261028.json'),JSON.stringify({platform:process.platform,launchMs,openMs,captureMs:captures,ownedProcesses:sample,notes:'One local fixture, one viewport; sum of RSS includes shared pages and is not unique memory. Not phone-hosted or production evidence.'},null,2));
  await action('stop',view);
  await expect.poll(()=>owned.filter(pid=>{try{process.kill(pid,0);return true;}catch{return false;}}).length,{timeout:7000}).toBe(0);
 });

@@ -740,7 +740,7 @@ test("Studio visual themes keep readable hierarchy and phone-sized controls", as
   }
 });
 
-test("find and replace stays in the draft, supports undo and explicit save", async ({ page }) => {
+test("find and replace stays in the draft, supports undo and explicit save", async ({ page }, testInfo) => {
   await openFile(page, "app.html");
   const editor = page.locator("#studio-editor-text");
   const disk = readFileSync(join(repo, "app.html"), "utf8");
@@ -768,7 +768,7 @@ test("find and replace stays in the draft, supports undo and explicit save", asy
   await page.getByRole("textbox", { name: "Replace with", exact: true }).fill("literal");
   await page.getByRole("button", { name: "Replace", exact: true }).click();
   await expect(editor).toHaveValue(draft.replace("a.*b", "literal"));
-  await page.locator("#studio-find-panel").screenshot({ path: "/private/tmp/verb-find-desktop.png" });
+  await page.locator("#studio-find-panel").screenshot({ path: testInfo.outputPath("verb-find-desktop.png") });
   await editor.fill("newer edit must survive");
   await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
   await query.fill("missing");
@@ -782,7 +782,7 @@ test("find and replace stays in the draft, supports undo and explicit save", asy
   expect(readFileSync(join(repo, "app.html"), "utf8")).toBe("newer edit must survive");
 });
 
-test("file find fits a phone and undo cannot cross files", async ({ page }) => {
+test("file find fits a phone and undo cannot cross files", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openFile(page, "app.html");
   const editor = page.locator("#studio-editor-text");
@@ -795,8 +795,8 @@ test("file find fits a phone and undo cannot cross files", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeEnabled();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   for (const button of await page.locator("#studio-find-panel button").all())
-    expect(await button.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-  await page.locator("#studio-find-panel").screenshot({ path: "/private/tmp/verb-find-phone.png" });
+    expect(Math.round(await button.evaluate((el) => el.getBoundingClientRect().height) * 1000) / 1000).toBeGreaterThanOrEqual(44);
+  await page.locator("#studio-find-panel").screenshot({ path: testInfo.outputPath("verb-find-phone.png") });
   await page.locator("#studio-file").selectOption("conflict.txt");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
@@ -833,7 +833,7 @@ test("disk reload clears replacement undo and oversized replacement retains the 
   await editor.fill("two two");
 });
 
-for (const width of [1440, 390]) test(`a person commits chosen files at ${width}px and stale review never commits newer bytes`, async ({ page, request }) => {
+for (const width of [1440, 390]) test(`a person commits chosen files at ${width}px and stale review never commits newer bytes`, async ({ page, request }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   const finished = `finished-${width}.txt`, experiment = `experiment-${width}.txt`;
   writeFileSync(join(repo, finished), "ready for review\n");
@@ -850,8 +850,8 @@ for (const width of [1440, 390]) test(`a person commits chosen files at ${width}
   await expect(page.locator("#commit-diff-text")).toContainText("ready for review");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   if (width === 390) {
-    expect(await page.locator("#commit-dialog-submit").evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-    await dialog.screenshot({ path: "/private/tmp/verb-select-phone.png" });
+    expect(Math.round(await page.locator("#commit-dialog-submit").evaluate(el => el.getBoundingClientRect().height) * 1000) / 1000).toBeGreaterThanOrEqual(44);
+    await dialog.screenshot({ path: testInfo.outputPath("verb-select-phone.png") });
   }
   await page.locator("#commit-message").fill("finish one file");
   await page.locator("#commit-dialog-submit").click();
@@ -869,7 +869,7 @@ for (const width of [1440, 390]) test(`a person commits chosen files at ${width}
 });
 
 
-for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px confirms history without creating another commit`, async ({ page, request }) => {
+for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px confirms history without creating another commit`, async ({ page, request }, testInfo) => {
   const gitAt = (args, extra = {}) => execFileSync("git", args, { cwd: repo, env: { ...nativeEnv, ...extra }, encoding: "utf8" }).trim();
   const index = join(repo, ".git/index");
   const temp = join(repo, `.git/verb-commit-recovery-${width}`);
@@ -898,8 +898,9 @@ for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px c
   await expect(page.locator("#commit-message")).toBeHidden();
   if (width === 390) {
     const repair = dialog.getByRole("button", { name: "Repair interrupted Git operation", exact: true });
-    expect(await repair.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
-    await dialog.screenshot({ path: "/private/tmp/verb-recovery-dialog-phone.png" });
+    // Chromium may report 43.999969px for a 44px transformed modal control.
+    expect(Math.round(await repair.evaluate(el => el.getBoundingClientRect().height) * 1000) / 1000).toBeGreaterThanOrEqual(44);
+    await dialog.screenshot({ path: testInfo.outputPath("verb-recovery-dialog-phone.png") });
   }
   await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
   const review = await request.get(`${origin}/api/git/commit-review`, { headers }).then(r => r.json());
