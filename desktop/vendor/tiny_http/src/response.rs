@@ -246,6 +246,12 @@ where
         self.chunked_threshold.unwrap_or(32768)
     }
 
+    /// Transport-owned close signaling; arbitrary response headers cannot set Connection.
+    pub(crate) fn force_connection_close(&mut self) {
+        self.headers.retain(|header| !header.field.equiv("Connection"));
+        self.headers.push(Header::from_bytes("Connection", "close").expect("static header"));
+    }
+
     /// Adds a header to the list.
     /// Does all the checks.
     pub fn add_header<H>(&mut self, header: H)

@@ -33,3 +33,12 @@ is capped at 128, header lines at 8 KiB, total headers at 64 KiB/64 fields, and 
 a total deadline. Verb sets a shorter body-read deadline when dispatching a request. WebSocket
 terminal handlers use nonblocking socket I/O and their own separate connection budget.
 The authenticated stalled-body integration test exercises the former small-body failure.
+
+
+**Patch 4 (rejected-body keep-alive):** `Request::respond_and_close` advertises `Connection: close`
+and shuts down plain TCP before releasing an unread body to the next request parser. Verb uses it
+for body-bearing error responses, including authentication and capacity refusals. Merely returning
+an error from `EqualReader::drop` did not suffice because its completion receiver is not used by the
+pipelined reader. Closing avoids consuming or allocating rejected bodies and preserves the earlier
+DoS protections. The pooled Node browser fixture and an explicit keep-alive integration regression
+exercise this path; successful API requests and WebSocket upgrades retain their existing behavior.

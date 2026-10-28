@@ -3132,6 +3132,11 @@ fn deployment_info() -> Value {
 }
 
 fn send_reply(request: Request, reply: Reply) {
+    // Early authentication/capacity failures deliberately do not drain bodies. Closing
+    // before releasing the reader prevents a keep-alive parser from adopting those bytes.
+    let retire_connection = reply.status >= 400
+        && (request.body_length().is_some_and(|length| length > 0)
+            || header(&request, "Transfer-Encoding").is_some());
     let mut response = Response::from_data(reply.body).with_status_code(StatusCode(reply.status));
     let cache_control = reply.cache_control.unwrap_or("no-store");
     let csp = if reply.sandbox_preview {
@@ -3167,7 +3172,11 @@ fn send_reply(request: Request, reply: Reply) {
             response.add_header(header);
         }
     }
-    let _ = request.respond(response);
+    if retire_connection {
+        let _ = request.respond_and_close(response);
+    } else {
+        let _ = request.respond(response);
+    }
 }
 
 fn header<'a>(request: &'a Request, name: &'static str) -> Option<&'a str> {

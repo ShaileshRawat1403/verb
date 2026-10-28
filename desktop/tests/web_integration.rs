@@ -2263,3 +2263,51 @@ fn talk_continues_in_a_terminal_and_records_the_start_once() {
     let (status, _) = server.request("DELETE", &format!("/api/terminals/{session}"), None, true);
     assert_eq!(status, 200);
 }
+
+#[test]
+fn a_rejected_body_retires_keep_alive_without_draining_or_poisoning_another_request() {
+    let server = WebServer::start();
+    let host = format!("127.0.0.1:{}", server.port);
+    let stream = TcpStream::connect(&host).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let body = r#"{"op":"start"}"#;
+    write!(reader.get_mut(), "POST /api/browser HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+    let mut status = String::new();
+    reader.read_line(&mut status).unwrap();
+    assert!(status.contains("403"), "{status}");
+    let mut closing = false;
+    let mut length = None;
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        if line == "\r\n" {
+            break;
+        }
+        if line.to_ascii_lowercase().starts_with("connection:") {
+            closing = line.trim().eq_ignore_ascii_case("connection: close");
+        }
+        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            length = value.trim().parse::<usize>().ok();
+        }
+    }
+    assert!(
+        closing,
+        "a body-bearing refusal must advertise connection closure"
+    );
+    let mut data = vec![0; length.unwrap()];
+    reader.read_exact(&mut data).unwrap();
+    let mut next = [0; 1];
+    match reader.read(&mut next) {
+        Ok(0) => {}
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) => {}
+        result => panic!("rejected connection was not closed: {result:?}"),
+    }
+    assert_eq!(server.request("GET", "/api/state", None, true).0, 200);
+}
