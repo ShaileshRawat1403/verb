@@ -1,0 +1,489 @@
+/* The conversation panel (src/conversation-ui.js), in the Sessions tile and the Studio work thread.
+   Chat and the terminal never look alike: chat is set in the interface face with a light "Chat"
+   tag; anything that leads to the terminal carries a dark monospaced "Terminal" tag. Every status
+   has a "Based on" line, and colour is never the only signal. */
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.conv {
+  display: grid;
+  grid-template-rows: auto auto minmax(120px, 1fr) auto;
+  min-height: 0;
+  height: 100%;
+  background: var(--term-bg);
+  color: var(--text);
+}
+.agent-stream.conv {
+  position: absolute;
+  inset: 0;
+  /* A short tile scrolls the panel instead of letting it spill over the terminal bar. */
+  overflow-y: auto;
+}
+
+.conv-head {
+  grid-row: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.conv-identity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.conv-identity div {
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+}
+.conv-identity dt {
+  color: var(--text-faint);
+}
+.conv-identity dd {
+  margin: 0;
+  color: var(--text);
+}
+.conv-identity code {
+  font: 11.5px var(--mono);
+}
+.conv-continuity[data-state="resumed"] dd {
+  color: var(--success-text);
+}
+.conv-continuity[data-state="not_established"] dd {
+  color: var(--warning-text);
+  text-decoration: underline dashed;
+  text-underline-offset: 3px;
+}
+.conv-status {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  max-width: 46ch;
+  text-align: right;
+}
+.conv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--surface-2, var(--raised));
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+.conv-chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.conv-chip[data-tone="ok"] { background: var(--success-bg); color: var(--success-text); box-shadow: inset 0 0 0 1px var(--success-line); }
+.conv-chip[data-tone="ok"]::before { background: var(--success); }
+.conv-chip[data-tone="busy"] { background: var(--info-bg); color: var(--info-text); box-shadow: inset 0 0 0 1px var(--info-line); }
+.conv-chip[data-tone="busy"]::before { background: var(--info); }
+.conv-chip[data-tone="attention"] { background: var(--warning-bg); color: var(--warning-text); box-shadow: inset 0 0 0 1px var(--warning-line); }
+.conv-chip[data-tone="attention"]::before { background: var(--warning); }
+.conv-chip[data-tone="problem"] { background: var(--danger-bg); color: var(--danger-text); box-shadow: inset 0 0 0 1px var(--danger-line); }
+.conv-chip[data-tone="problem"]::before { background: var(--danger); }
+.conv-chip[data-tone="unknown"]::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-dim); }
+.conv-based {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+.conv-based b {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.conv-banner {
+  grid-row: 2;
+  padding: 7px 16px;
+  font-size: 12.5px;
+  background: var(--info-bg);
+  color: var(--info-text);
+  border-bottom: 1px solid var(--info-line);
+}
+.conv-banner[data-tone="ok"] { background: var(--success-bg); color: var(--success-text); border-color: var(--success-line); }
+.conv-banner[data-tone="attention"] { background: var(--warning-bg); color: var(--warning-text); border-color: var(--warning-line); }
+.conv-banner[hidden] {
+  /* Stays in the grid with no size, so the feed keeps the stretching row. */
+  display: block;
+  height: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+}
+
+.conv-feed {
+  grid-row: 3;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 18px 16px 12px;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+.conv-feed > * {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.conv-feed:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.conv-who {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 4px;
+  font-size: 12.5px;
+}
+.conv-who b { color: var(--text-strong); font-weight: 600; }
+.conv-who span { color: var(--text-faint); font-size: 11.5px; }
+.conv-muted { color: var(--text-dim); font-style: italic; }
+.conv-you {
+  justify-self: end;
+  width: auto;
+  max-width: min(82%, 720px);
+  margin-right: max(0px, calc((100% - 720px) / 2));
+  padding: 10px 14px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.conv-you p, .conv-body p { margin: 0 0 8px; }
+.conv-you p:last-child, .conv-body p:last-child { margin-bottom: 0; }
+.conv-you code, .conv-body code, .conv-work code {
+  font: 12px var(--mono);
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--surface);
+}
+.conv-body pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--canvas);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: 12px/1.6 var(--mono);
+  overflow-x: auto;
+}
+.conv-agent {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 12px;
+}
+.conv-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--raised);
+  color: var(--text-muted);
+  font: 600 9.5px var(--mono);
+}
+.conv-body {
+  min-width: 0;
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+/* Delivery: a message whose fate is not known has a dashed edge, never a tick. */
+.conv-delivery[data-state="unknown"], .conv-delivery[data-state="lost"] {
+  background: transparent;
+  box-shadow: none;
+  outline: 1.5px dashed var(--warning);
+  outline-offset: -1.5px;
+}
+.conv-delivery[data-state="failed"] {
+  box-shadow: inset 0 0 0 1px var(--danger-line);
+}
+.conv-delivery[data-state="sent"], .conv-delivery[data-state="sending"], .conv-delivery[data-state="posting"] {
+  opacity: 0.92;
+}
+.conv-delivery[data-state="discarded"], .conv-delivery[data-state="replaced"] {
+  opacity: 0.6;
+}
+.conv-delivery-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.conv-delivery-line[data-tone="ok"] { color: var(--success-text); }
+.conv-delivery-line[data-tone="attention"] { color: var(--warning-text); font-weight: 600; }
+.conv-delivery-line[data-tone="problem"] { color: var(--danger-text); }
+.conv-delivery-line small { font-weight: 400; color: var(--text-dim); }
+.conv-delivery-detail {
+  margin: 4px 0 0 !important;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.conv-delivery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.secondary-button.danger {
+  color: var(--warning-text);
+  box-shadow: inset 0 0 0 1px var(--warning-line);
+}
+
+.conv-work {
+  margin-left: 38px !important;
+  width: auto !important;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.conv-work summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+.conv-work summary::-webkit-details-marker { display: none; }
+.conv-work[open] summary .icon { transform: rotate(90deg); }
+.conv-work ol {
+  list-style: none;
+  margin: 8px 0 0 7px;
+  padding: 0 0 0 14px;
+  border-left: 1px solid var(--line-strong);
+  display: grid;
+  gap: 5px;
+}
+.conv-work li.failed { color: var(--danger-text); }
+.conv-failed { color: var(--danger-text); font-weight: 600; }
+.conv-running {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--info-bg);
+  color: var(--info-text);
+}
+.conv-file {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent-text);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.conv-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.conv-card h4 { margin: 0; font-size: 14.5px; color: var(--text-strong); }
+.conv-card p { margin: 0; }
+.conv-card > button { justify-self: start; }
+.conv-card[data-tone="attention"] { box-shadow: inset 0 0 0 1px var(--warning-line), inset 4px 0 0 var(--warning); }
+.conv-card[data-tone="problem"] { box-shadow: inset 0 0 0 1px var(--danger-line), inset 4px 0 0 var(--danger); }
+.conv-card[data-tone="unknown"] { box-shadow: inset 0 0 0 1.5px var(--line-strong); border: 1.5px dashed var(--warning-line); }
+.conv-devices {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.conv-devices li span { color: var(--text-muted); }
+.conv-devices li[data-state="not_confirmed"] span { color: var(--warning-text); }
+.conv-devices li[data-state="acknowledged"] span,
+.conv-devices li[data-state="cleared"] span { color: var(--success-text); }
+.conv-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.conv-empty {
+  margin: 32px auto !important;
+  max-width: 460px !important;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 13.5px;
+}
+.conv-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--accent-bg);
+  font-size: 13px;
+}
+.conv-suggest span { flex: 1 1 260px; }
+.conv-suggest small { display: block; color: var(--text-dim); }
+
+.conv-composer {
+  grid-row: 4;
+  align-self: end;
+  grid-auto-rows: min-content;
+  margin: 0 auto 12px;
+  width: calc(100% - 32px);
+  max-width: 720px;
+  padding: 10px 12px 8px;
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: var(--shadow-float);
+  display: grid;
+  gap: 6px;
+}
+.conv-channel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.conv-channel b { color: var(--text-strong); font-weight: 600; }
+.conv-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font: 600 10px/1.5 Inter, -apple-system, sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--accent-bg);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.conv-tag-terminal {
+  font-family: var(--mono);
+  background: #15181c;
+  color: #e7eaee;
+  box-shadow: none;
+}
+.conv-composer textarea {
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-strong);
+  font: 14.5px/1.5 Inter, -apple-system, sans-serif;
+  min-height: 44px;
+  max-height: 180px;
+  padding: 4px 0;
+}
+.conv-composer textarea:focus-visible {
+  box-shadow: 0 2px 0 var(--accent);
+}
+.conv-block {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.conv-block[hidden] { display: none; }
+.conv-notice {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--danger-text);
+}
+.conv-notice[hidden] { display: none; }
+.conv-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+.conv-chips {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 auto;
+}
+.conv-actions .text-button {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.conv-send {
+  min-height: 34px;
+  min-width: 72px;
+}
+.conv-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.conv-terminal-only .conv-composer textarea,
+.conv-terminal-only .conv-send,
+.conv-terminal-only .conv-channel {
+  display: none;
+}
+
+/* Studio work thread: the panel sits inside the thread, not over a terminal. */
+.studio-conversation {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+.studio-conversation-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+}
+.studio-conversation-head h3 { margin: 0; }
+.studio-conversation-head select { max-width: 100%; min-height: 32px; }
+.studio-conversation-empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.studio-conversation-empty[hidden] { display: none; }
+#studio-conversation-mount.conv {
+  height: min(70vh, 640px);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+@media (max-width: 820px) {
+  .conv-head { padding: 8px 12px; }
+  .conv-status { justify-items: start; text-align: left; max-width: none; }
+  .conv-feed { padding: 12px 10px; }
+  .conv-you { max-width: 92%; }
+  .conv-work { margin-left: 0 !important; }
+  .conv-composer { width: calc(100% - 16px); margin-bottom: 8px; }
+  .conv-actions .text-button, .conv-send, .conv-delivery-actions button { min-height: 44px; }
+  #studio-conversation-mount.conv { height: 78vh; }
+}

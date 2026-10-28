@@ -181,6 +181,16 @@ test("edit, explicit save, app interaction and Git review share one actual file"
   await expect(frame.locator("#parent-access")).toHaveText("parent blocked");
   await expect(frame.locator("#storage-access")).toHaveText("storage blocked");
   await expect(frame.locator("#api-access")).toHaveText("API blocked");
+  const previewFrame = page.locator("#studio-app-frame iframe");
+  await page.getByRole("button", { name: "Phone", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Phone", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#studio-viewport-label")).toHaveText("Phone · 390 px");
+  expect(await previewFrame.evaluate((frame) => frame.getBoundingClientRect().width)).toBe(390);
+  await expect(frame.locator("body")).toBeVisible();
+  await page.getByRole("button", { name: "Tablet", exact: true }).click();
+  expect(await previewFrame.evaluate((frame) => frame.getBoundingClientRect().width)).toBe(768);
+  await page.getByRole("button", { name: "Fit", exact: true }).click();
+  await expect(frame.getByRole("button", { name: "Book a walk · 1" })).toBeVisible();
   expect(
     await page.locator("#studio-app-frame iframe").getAttribute("sandbox"),
   ).toBe("allow-scripts");
@@ -190,6 +200,10 @@ test("edit, explicit save, app interaction and Git review share one actual file"
   await page
     .getByRole("button", { name: "Review Git changes", exact: true })
     .click();
+  await expect(page.getByRole("region", { name: "Git changes preview", exact: true })).toBeVisible();
+  await expect(page.locator("#commit-dialog")).toBeHidden();
+  await expect(page.locator("#studio-changed-files")).toContainText("app.html");
+  await page.getByRole("region", { name: "Git changes preview", exact: true }).getByRole("button", { name: "Commit changes…", exact: true }).click();
   await expect(page.locator("#commit-dialog")).toBeVisible();
   await expect(page.locator("#commit-dialog")).toContainText("app.html");
   await page
@@ -385,6 +399,8 @@ test("preview tickets are scoped, single-use, iframe-only and carry HTTP sandbox
 test("remote hosts remain read-only and cannot mint or serve Studio app previews", async ({
   request,
 }) => {
+  expect((await request.get(`${remoteOrigin}/api/browser`, { headers })).status()).toBe(403);
+  expect((await request.post(`${remoteOrigin}/api/browser`, { headers, data: { op: "start", client: "remote-fixture" } })).status()).toBe(403);
   const cap = await request.get(`${remoteOrigin}/api/studio/workspace`, {
     headers,
   });
@@ -447,6 +463,8 @@ test("read-scoped clients cannot edit files or authorize script previews", async
   );
   const token = output.match(/verb_at_[A-Za-z0-9_-]+/)[0];
   const reader = { "X-Verb-Token": token, Connection: "close" };
+  expect((await request.get(`${origin}/api/browser`, { headers: reader })).status()).toBe(403);
+  expect((await request.post(`${origin}/api/browser`, { headers: reader, data: { op: "start", client: "reader-fixture" } })).status()).toBe(403);
   const raster = await request.get(`${origin}/api/studio/image?path=sample.png`, { headers: reader });
   expect(raster.ok()).toBeTruthy();
   const cap = await request.get(`${origin}/api/studio/workspace`, {
@@ -525,7 +543,7 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
     path: test.info().outputPath("native-preview-phone.png"),
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Stop preview", exact: true }).click();
+  await page.getByRole("button", { name: "Close preview", exact: true }).click();
   await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
 });
 
@@ -579,6 +597,8 @@ test("preview dock reviews real Git diffs and expands without losing the work th
   await page.getByLabel("File contents · UTF-8 text editor", { exact: true }).fill(`<!doctype html><html lang="en"><meta charset="utf-8"><style>body{margin:0;padding:38px;background:#f4f0e5;color:#243b32;font:16px/1.6 system-ui}small{text-transform:uppercase;letter-spacing:.16em;color:#68776b}h1{font:46px/1.1 Georgia,serif;letter-spacing:-1px;margin:32px 0 18px}p{max-width:340px}.details{border-top:1px solid #cbd1c5;padding:20px 0;margin:24px 0}button{border:0;border-radius:4px;padding:13px 19px;background:#284e3b;color:white;font:inherit}</style><small>Fieldnotes / local walks</small><h1>A slower Sunday.<br>A different way home.</h1><p>Small groups. Open air. Explore the familiar with fresh eyes.</p><div class="details">Sunday 1 Nov · 2 hours<br><strong>₹850 per person</strong></div><button id="book">See walk details</button><p id="details" hidden>Meet at the park gate at 9am. Comfortable shoes and curiosity welcome.</p><script>document.querySelector('#book').onclick=()=>document.querySelector('#details').hidden=false;</script></html>`);
   await page.getByRole("button", { name: "Save file", exact: true }).click();
   await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
+  if (await page.locator("#studio-intent-form").isHidden())
+    await page.getByRole("button", { name: "Define another change", exact: true }).click();
   await page.getByLabel("Describe a new change", { exact: true }).fill("Make the walk booking clearer\nShow the date, duration and price before someone books.");
   await page.getByRole("button", { name: "Define change", exact: false }).click();
   await page.locator('#spec-dialog [name="criteria"]').fill("The date, duration and price are visible before booking");
@@ -606,4 +626,111 @@ test("preview dock reviews real Git diffs and expands without losing the work th
   expect(imageBounds.width).toBeLessThanOrEqual(imageViewport.width);
   await page.screenshot({ path: testInfo.outputPath("console-image-desktop.png") });
 
+});
+
+
+test("Files and review stay in Studio and retain drafts on desktop and phone", async ({ page }) => {
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await openFile(page, "typing.txt");
+    await page.getByRole("button", { name: "Edit file", exact: true }).click();
+    const editor = page.getByRole("textbox", { name: "File contents · UTF-8 text editor", exact: true });
+    await editor.fill(`Keep my unsaved ${width} draft`);
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await expect(page.locator("#view-studio")).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Find a canvas file", exact: true })).toBeFocused();
+    await expect(page.locator("#studio-preview-content")).toBeVisible();
+    await page.getByRole("button", { name: "Edit file", exact: true }).click();
+    await expect(editor).toHaveValue(`Keep my unsaved ${width} draft`);
+    await page.getByRole("button", { name: "Review Git changes", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Git changes preview", exact: true })).toBeFocused();
+    await expect(page.locator("#commit-dialog")).toBeHidden();
+    await page.getByRole("button", { name: "Files", exact: true }).click();
+    await page.getByRole("button", { name: "Edit file", exact: true }).click();
+    await expect(editor).toHaveValue(`Keep my unsaved ${width} draft`);
+  }
+});
+
+
+test("Studio prioritises selected work, keeps details optional and preserves the next-change draft", async ({ page, request }) => {
+  const response = await request.post(`${origin}/api/specs`, { headers, data: { title: "Review the reading experience", problem: "Make the task easy to understand without losing access to its tools.", criteria: ["A person can review the actual wording change"] } });
+  const spec = await response.json();
+  await request.post(`${origin}/api/specs/${spec.id}/stage`, { headers, data: { stage: "review", expectedRevision: spec.revision, note: "UX fixture, not a completion claim" } });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(url);
+    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    if (width === 390) await page.getByRole("button", { name: "Current work", exact: true }).click();
+    await page.getByRole("combobox", { name: "Current work", exact: true }).selectOption(spec.id);
+    await expect(page.locator("#studio-next-hint")).toHaveText("Inspect the actual changes before deciding what to keep.");
+    await expect(page.locator("#studio-intent-form")).toBeHidden();
+    if (width === 1440) await expect(page.locator("#studio-work-details")).not.toHaveAttribute("open", "");
+    else if (await page.locator("#studio-work-details").evaluate(node => node.open))
+      await page.getByText("Task details & acceptance criteria", { exact: true }).click();
+    await expect(page.locator("#studio-history")).not.toHaveAttribute("open", "");
+    await page.getByText("Task details & acceptance criteria", { exact: true }).click();
+    await expect(page.locator("#studio-criteria")).toContainText("A person can review");
+    await page.getByRole("button", { name: "Define another change", exact: true }).click();
+    const draft = page.getByRole("textbox", { name: "Describe a new change", exact: true });
+    await draft.fill(`Next idea for ${width}`);
+    await page.getByRole("button", { name: "Hide new change", exact: true }).click();
+    await page.getByRole("button", { name: "Define another change", exact: true }).click();
+    await expect(draft).toHaveValue(`Next idea for ${width}`);
+    await page.getByRole("button", { name: "Hide new change", exact: true }).click();
+    await page.getByRole("button", { name: "Review changes", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Git changes preview", exact: true })).toBeVisible();
+    await expect(page.locator("#commit-dialog")).toBeHidden();
+    await expect(page.locator("#studio-changed-files button").first()).toBeVisible();
+    await page.locator("#studio-changed-files button").first().click();
+    await expect(page.locator("#studio-diff-path")).not.toHaveText("Select a changed file");
+    if (width === 390) {
+      expect((await page.locator(".studio-diff-wrap").boundingBox()).width).toBeGreaterThan(300);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+    }
+    await page.screenshot({ path: test.info().outputPath(`studio-task-review-${width}.png`) });
+  }
+});
+
+test("Studio visual themes keep readable hierarchy and phone-sized controls", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" }); // Measure settled colours, not theme-transition interpolation.
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    // Seed a task through the normal form/API fixture so the hierarchy is exercised in isolation too.
+    const created = await page.request.post(`${origin}/api/specs`, { headers, data: { title: "Make the workspace welcoming", problem: "Help someone understand the task and confidently choose their next action.", criteria: ["The next action is readable and reachable"] } });
+    const spec = await created.json();
+    await page.goto(url);
+    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    if (width === 390) await page.getByRole("button", { name: "Current work", exact: true }).click();
+    await page.getByRole("combobox", { name: "Current work", exact: true }).selectOption(spec.id);
+    await expect(page.locator("#studio-next-action")).toBeVisible();
+    for (const theme of ["dark", "light"]) {
+      for (let i = 0; i < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== theme; i++)
+        await page.getByRole("button", { name: "Change theme", exact: true }).click();
+      await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", theme);
+      expect(await page.locator("#studio-next-action").evaluate(node => getComputedStyle(node).transitionDuration)).toBe("0s");
+      const contrast = await page.locator("#studio-next-hint, #studio-next-action, #studio-stage-label, #studio-conversation-empty").evaluateAll(nodes => {
+        const luminance = color => {
+          const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+          return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+        };
+        return nodes.map(node => {
+          let parent = node, bg;
+          while (parent) {
+            bg = getComputedStyle(parent).backgroundColor;
+            if (bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") break;
+            parent = parent.parentElement;
+          }
+          const a = luminance(getComputedStyle(node).color), b = luminance(bg);
+          return { id: node.id, fg: getComputedStyle(node).color, bg, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
+        });
+      });
+      contrast.forEach(sample => expect(sample.ratio, `${theme} text contrast ${JSON.stringify(sample)}`).toBeGreaterThanOrEqual(4.5));
+      if (width === 390) {
+        expect((await page.locator("#studio-next-action").boundingBox()).height).toBeGreaterThanOrEqual(44);
+        expect((await page.locator("#studio-thread-title").boundingBox()).y).toBeLessThan((await page.locator("#studio-new-change-toggle").boundingBox()).y);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      }
+      await page.screenshot({ path: test.info().outputPath(`studio-finish-${theme}-${width}.png`) });
+    }
+  }
 });

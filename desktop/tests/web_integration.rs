@@ -1751,28 +1751,30 @@ fn the_agent_stream_is_off_until_turned_on_and_shells_have_none() {
         .unwrap()
         .to_owned();
 
-    // Off: nothing is read, whatever the terminal is.
-    let (_, body) = server.request("GET", &format!("/api/terminals/{id}/stream"), None, true);
-    let off: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(off["enabled"], false);
-    assert_eq!(off["items"], json!([]));
-    // Unauthenticated requests never reach it.
-    let (status, _) = server.request("GET", &format!("/api/terminals/{id}/stream"), None, false);
+    // The superseded content route is gone, including when the stream is off.
+    let (status, _) = server.request("GET", &format!("/api/terminals/{id}/stream"), None, true);
+    assert_ne!(status, 200);
+    let (status, _) = server.request(
+        "GET",
+        &format!("/api/terminals/{id}/conversation"),
+        None,
+        false,
+    );
     assert_ne!(status, 200);
 
-    // On: a plain shell has no agent log, and says so instead of guessing.
     let (_, body) = server.request("POST", "/api/stream", Some(json!({"enabled": true})), true);
     assert_eq!(
         serde_json::from_slice::<Value>(&body).unwrap()["enabled"],
         true
     );
-    let (_, body) = server.request("GET", &format!("/api/terminals/{id}/stream"), None, true);
-    let on: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(on["enabled"], true);
-    assert!(on["note"]
-        .as_str()
-        .unwrap()
-        .contains("Claude Code and Codex"));
+    // A shell cannot acquire an agent conversation by opting in.
+    let (status, _) = server.request(
+        "GET",
+        &format!("/api/terminals/{id}/conversation"),
+        None,
+        true,
+    );
+    assert_ne!(status, 200);
 
     let (_, body) = server.request("POST", "/api/stream", Some(json!({"enabled": false})), true);
     assert_eq!(

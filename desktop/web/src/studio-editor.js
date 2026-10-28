@@ -247,6 +247,15 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       status("Select the editor text and copy it with your keyboard.");
     }
   });
+  $(".studio-viewport-group").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-preview-width]");
+    if (!button) return;
+    const width = button.dataset.previewWidth;
+    $("#studio-app-frame").dataset.viewport = width;
+    for (const option of $(".studio-viewport-group").querySelectorAll("button"))
+      option.setAttribute("aria-pressed", String(option === button));
+    $("#studio-viewport-label").textContent = width === "phone" ? "Phone · 390 px" : width === "tablet" ? "Tablet · 768 px" : "Fits available space";
+  });
   $("#studio-preview-app").addEventListener("click", preview);
   $("#studio-refresh-app").addEventListener("click", preview);
   $("#studio-show-document").addEventListener("click", () =>

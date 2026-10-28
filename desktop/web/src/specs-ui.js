@@ -186,7 +186,7 @@ export function initWorkbench(deps) {
     const attentionHtml = attention.length ? attention.map(spec => {
       const item = views.get(spec.id).attention[0];
       const canOpen = item.sessionId && deps.ui.state?.sessions?.some(s => s.id === item.sessionId && s.hostedHere && s.terminal?.running);
-      return `<button type="button" class="spec-attention-item" data-spec-id="${escapeHtml(spec.id)}"${canOpen ? ` data-focus-session="${escapeHtml(item.sessionId)}"` : ""}><strong>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</strong><span>${escapeHtml(item.reason)}</span><small>${canOpen ? "Open session" : "Open spec"} · ${escapeHtml(item.source)}</small></button>`;
+      return `<button type="button" class="spec-attention-item" data-spec-id="${escapeHtml(spec.id)}"${canOpen ? ` data-focus-session="${escapeHtml(item.sessionId)}"` : ""}><strong>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</strong><span>${escapeHtml(item.reason)}</span><small>${canOpen ? "Open session" : "Open task"} · ${escapeHtml(item.source === "spec stage" ? "Based on chosen stage" : item.source)}</small></button>`;
     }).join("") : `<p class="muted">${error ? "Attention observations are unavailable." : !state.specsLoaded ? "Reading attention requests…" : state.specs.some(s => !views.get(s.id).observed) ? "Some observations are unavailable. Open a spec for details." : "No current requests for your attention."}</p>`;
     if (attentionHtml !== attentionSignature) {
       attentionSignature = attentionHtml;
@@ -199,13 +199,13 @@ export function initWorkbench(deps) {
     const card = spec => {
       const view = views.get(spec.id);
       const fact = (label, value) => `<span class="work-card-fact"><b>${label}</b><span>${escapeHtml(value)}</span></span>`;
-      return `<article draggable="${state.specView === "board"}" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage">${STAGE_GUIDE[spec.stage].label}</span>${view.attention.length ? `<strong class="work-card-attention">Needs you · ${escapeHtml(view.attention[0].reason)}</strong>` : ""}${fact("Execution", view.execution)}${fact("Evidence", view.cardVerification)}${fact("Delivery", view.delivery)}<span class="work-card-note">${escapeHtml(view.cardReview)}</span></button></article>`;
+      return `<article draggable="${state.specView === "board"}" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-heading"><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage" title="Chosen workflow stage">${STAGE_GUIDE[spec.stage].label}</span></span><span class="work-card-observations">${fact("Execution", view.execution)}${fact("Evidence", view.cardVerification)}${fact("Delivery", view.delivery)}</span><span class="work-card-footer">${view.attention.length ? `<strong class="work-card-attention">Needs you · ${escapeHtml(view.attention[0].reason)}</strong>` : ""}<span class="work-card-note">${escapeHtml(view.cardReview)}</span></span></button></article>`;
     };
     const html = !visible.length
       ? `<p class="spec-work-empty">${error ? "The work list is unavailable. Refresh observations to retry." : !state.specsLoaded ? "Reading specs…" : state.specs.length ? "No specs match these filters. Clear filters to see all work." : "No specs yet. Create a spec to describe what you want to build."}</p>`
       : state.specView === "board"
         ? STAGES.filter(stage => state.stageFilter === "all" || stage === state.stageFilter).map(stage => `<section class="spec-board-column" data-board-stage="${stage}" aria-label="${STAGE_GUIDE[stage].label}"><h2><span>${STAGE_GUIDE[stage].label}</span><span class="spec-stage-count" aria-label="${visible.filter(s => s.stage === stage).length} specs">${visible.filter(s => s.stage === stage).length}</span></h2>${visible.filter(s => s.stage === stage).map(card).join("") || '<p class="muted">No work here</p>'}</section>`).join("")
-        : visible.map(card).join("");
+        : `<div class="work-list-columns" aria-hidden="true"><span>Work</span><span class="work-list-observation-columns"><span>Execution</span><span>Evidence</span><span>Delivery</span></span></div>` + visible.map(card).join("");
     $("#spec-work-items").dataset.mode = state.specView;
     $("#spec-work-items").dataset.stageFilter = state.stageFilter;
     $("#spec-work-items").tabIndex = state.specView === "board" ? 0 : -1;

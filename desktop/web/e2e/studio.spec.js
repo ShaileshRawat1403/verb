@@ -201,6 +201,10 @@ test("phone Studio switches surfaces and preserves direction through navigation"
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openStudio(page);
   await page.getByRole("button", { name: "Current work", exact: true }).click();
+  await expect(page.locator("#studio-thread option").first()).not.toHaveText("Reading work…");
+  if (await page.locator("#studio-intent-form").isHidden())
+    await page.getByRole("button", { name: "Define another change", exact: true }).click();
+
   await expect(page.locator("#studio-canvas-panel")).toBeHidden();
   await page
     .getByLabel("Describe a new change", { exact: true })
@@ -208,7 +212,8 @@ test("phone Studio switches surfaces and preserves direction through navigation"
   await page.getByRole("button", { name: "Canvas", exact: true }).click();
   await expect(page.locator("#studio-work-panel")).toBeHidden();
   await page.getByRole("button", { name: "Files", exact: true }).click();
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await expect(page.locator("#view-studio")).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Find a canvas file", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Current work", exact: true }).click();
   await expect(page.locator("#studio-intent")).toHaveValue(
     "Keep my direction while I inspect files",

@@ -261,10 +261,12 @@ fn forward(session_id: &str, request: &Value) -> Result<Value, String> {
     let fields = request
         .as_object()
         .ok_or("phone request must be an object")?;
-    if fields
-        .keys()
-        .any(|key| !matches!(key.as_str(), "version" | "op" | "secret" | "bytes"))
-    {
+    if fields.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "version" | "op" | "secret" | "bytes" | "messageId" | "text" | "ack"
+        )
+    }) {
         return Err("unknown phone request field".to_owned());
     }
     if request["version"].as_u64() != Some(1) {
@@ -275,7 +277,7 @@ fn forward(session_id: &str, request: &Value) -> Result<Value, String> {
         .ok_or("phone operation is required")?;
     if !matches!(
         op,
-        "pair" | "reconnect" | "disconnect" | "take" | "input" | "snapshot"
+        "pair" | "reconnect" | "disconnect" | "take" | "input" | "snapshot" | "chat"
     ) {
         return Err("this action belongs to the desktop".to_owned());
     }
@@ -286,6 +288,13 @@ fn forward(session_id: &str, request: &Value) -> Result<Value, String> {
     if op != "input" && fields.contains_key("bytes") {
         return Err("this phone operation has no input bytes".to_owned());
     }
+    // A chat message and terminal keystrokes are separate operations with separate checks.
+    if op != "chat" && (fields.contains_key("messageId") || fields.contains_key("text")) {
+        return Err("only a chat message has a message id and text".to_owned());
+    }
+    if op != "snapshot" && fields.contains_key("ack") {
+        return Err("only a snapshot acknowledges the stream".to_owned());
+    }
     let bytes: Vec<u8> = if op == "input" {
         serde_json::from_value(request["bytes"].clone()).map_err(|_| "phone input must be bytes")?
     } else {
@@ -294,10 +303,23 @@ fn forward(session_id: &str, request: &Value) -> Result<Value, String> {
     if bytes.len() > 4 * 1024 {
         return Err("phone input is too long".to_owned());
     }
-    let mut local = serde_json::to_vec(&json!({
-        "version":1,"op":op,"secret":secret,"bytes":bytes
-    }))
-    .map_err(|error| error.to_string())?;
+    let mut local = json!({"version":1,"op":op,"secret":secret,"bytes":bytes});
+    if op == "chat" {
+        let id = request["messageId"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 64)
+            .ok_or("a phone message needs a message id")?;
+        let text = request["text"]
+            .as_str()
+            .filter(|text| !text.is_empty() && text.len() <= crate::conversation::MAX_MESSAGE)
+            .ok_or("a phone message needs 1–8000 bytes of text")?;
+        local["message_id"] = json!(id);
+        local["text"] = json!(text);
+    }
+    if let Some(ack) = fields.get("ack") {
+        local["ack"] = json!(ack.as_u64().ok_or("ack must be a stream generation")?);
+    }
+    let mut local = serde_json::to_vec(&local).map_err(|error| error.to_string())?;
     local.push(b'\n');
     mobile::request_local(session_id, &local)
 }

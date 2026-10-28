@@ -59,7 +59,7 @@ dialog[open]::backdrop,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *, *::before, *::after, .theme-switching, .theme-switching * {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;

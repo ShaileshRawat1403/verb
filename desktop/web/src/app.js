@@ -17,6 +17,7 @@ import "./style.css";
 import "./workbench.css";
 import "./motion.css";
 import "./studio.css";
+import "./conversation.css";
 import { initStudio } from "./studio-ui.js";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
@@ -307,6 +308,7 @@ async function api(method, path, body) {
 function showView(view) {
   ui.view = view;
   $("#app").classList.toggle("studio-open", view === "studio");
+  $("#app").classList.toggle("specs-open", view === "specs");
   document
     .querySelectorAll(".view")
     .forEach((element) =>
@@ -2296,7 +2298,7 @@ async function bootstrap() {
     selectTerminal,
     theme,
   });
-  studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml });
+  studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   extras.onWorkbenchChange = () => studio.render();
   extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });

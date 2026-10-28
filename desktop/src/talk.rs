@@ -299,14 +299,7 @@ fn bounded_line(reader: &mut impl BufRead) -> std::io::Result<Option<Vec<u8>>> {
 }
 
 fn clone_item(i: &Item) -> Item {
-    Item {
-        kind: i.kind,
-        text: i.text.clone(),
-        tool: i.tool.clone(),
-        target: i.target.clone(),
-        failed: i.failed,
-        at: i.at.clone(),
-    }
+    i.clone()
 }
 
 fn push(t: &mut Talk, item: Item) {

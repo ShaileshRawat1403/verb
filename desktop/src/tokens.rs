@@ -298,7 +298,8 @@ fn verify_in(store: &Path, presented: &str) -> Option<Access> {
 /// token management and phone sharing need the owner.
 pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    let owner_only = path.starts_with("/api/tokens")
+    let owner_only = path == "/api/browser"
+        || path.starts_with("/api/tokens")
         || (method != "GET" && (path == "/api/stream" || path == "/api/observer"))
         || matches!(parts.as_slice(), ["api", "terminals", _, "phone", ..]);
     if owner_only {
@@ -331,8 +332,9 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                 ["api", "specs", _] | ["api", "specs", _, "stage-check"]
             )
         }
-        // Ask Verb only reads the project's evidence.
-        "POST" => path == "/api/ask",
+        // Ask Verb only reads the project's evidence. A stream acknowledgement only says that a
+        // client cleared what it was showing, so any client that can show content may send one.
+        "POST" => path == "/api/ask" || path == "/api/stream/ack",
         _ => false,
     };
     if read {
@@ -456,6 +458,8 @@ mod tests {
         assert!(drive.allows(Scope::Read) && drive.allows(Scope::Drive));
         assert!(!drive.allows(Scope::Owner));
 
+        assert_eq!(required_scope("GET", "/api/browser"), Scope::Owner);
+        assert_eq!(required_scope("POST", "/api/browser"), Scope::Owner);
         assert_eq!(required_scope("GET", "/api/specs"), Scope::Read);
         assert_eq!(required_scope("GET", "/api/specs/001"), Scope::Read);
         assert_eq!(required_scope("POST", "/api/ask"), Scope::Read);

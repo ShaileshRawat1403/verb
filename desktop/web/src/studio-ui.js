@@ -4,6 +4,8 @@ import { renderMarkdown, specSessions, STAGE_GUIDE } from "./workbench.js";
 import { icon } from "./icons.js";
 import { initStudioPreviews } from "./studio-previews.js";
 import { initStudioEditor } from "./studio-editor.js";
+import { mountConversation } from "./conversation-ui.js";
+import { initStudioBrowser } from "./studio-browser.js";
 
 export function initStudio({
   $,
@@ -13,6 +15,9 @@ export function initStudio({
   showView,
   selectTerminal,
   escapeHtml,
+  toast,
+  agentDisplayName,
+  agentMark,
 }) {
   const root = $("#view-studio");
   const state = {
@@ -22,6 +27,8 @@ export function initStudio({
     request: 0,
     mode: "document",
     context: null,
+    composeScope: undefined,
+    composeChoice: null,
     focus: "canvas",
   };
   const setText = (selector, text) => {
@@ -66,6 +73,13 @@ export function initStudio({
     canClose: (path) => !bridge.hasUnsaved(path),
     stopApp: () => bridge.document(),
   });
+  const browser = initStudioBrowser({ $, api, beforeOpen() {
+    bridge.document();
+    if (!$("#studio-changes-panel").hidden) $("#studio-toggle-changes").click();
+  } });
+  for (const selector of ["#studio-show-document", "#studio-edit-file", "#studio-preview-app", "#studio-source"])
+    $(selector).addEventListener("click", () => browser.hide());
+  $("#studio-toggle-changes").addEventListener("click", () => browser.hide({ restore: false }));
   // Keep one set of development actions reachable from both phone surfaces.
   const tools = $(".studio-work-tools");
   const toolsHome = document.createComment("Studio development tools");
@@ -155,7 +169,8 @@ export function initStudio({
       state.loaded = true;
       state.truncated = result.truncated;
       renderFileOptions();
-      if (!state.selected) {
+      // Background file discovery must not replace the browser the person just opened.
+      if (!state.selected && $("#studio-browser").hidden) {
         const path =
           state.files.find((f) => f.path === "docs/project/BRIEF.md")?.path ??
           state.files.find((f) => /^readme\.md$/i.test(f.path))?.path;
@@ -172,6 +187,7 @@ export function initStudio({
 
   async function openFile(path) {
     if (!dock.open(path)) return;
+    browser.hide();
     const request = ++state.request;
     state.selected = path;
     renderFileOptions();
@@ -234,9 +250,122 @@ export function initStudio({
     else $("#studio-document").textContent = preview.text;
   }
 
+  // The agent conversation: the same panel as the Sessions tile, mounted in the work thread.
+  // Choosing a session only reads it; nothing starts, and the terminal is one step away.
+  const conversation = { id: null, panel: null };
+  function showChangeDraft(open, { focus = false, user = false } = {}) {
+    if (user) state.composeChoice = open;
+    else if (state.composeChoice != null) open = state.composeChoice;
+    const form = $("#studio-intent-form");
+    const toggle = $("#studio-new-change-toggle");
+    form.hidden = !open;
+    toggle.hidden = !conversation.id && !workbench.current().spec;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = open ? "Hide new change" : "Define another change";
+    if (focus && open) $("#studio-intent").focus();
+    if (focus && !open) toggle.focus();
+  }
+  $("#studio-new-change-toggle").addEventListener("click", () => {
+    showChangeDraft($("#studio-intent-form").hidden, { focus: true, user: true });
+  });
+  function agentSessions(spec) {
+    const live = (ui.state?.sessions || []).filter(
+      (s) => s.state === "live" && s.hostedHere && s.agent && s.agent !== "shell",
+    );
+    const forSpec = new Set(
+      spec ? specSessions(spec, ui.state?.sessions || []).map((s) => s.id).filter(Boolean) : [],
+    );
+    return live.sort((a, b) => Number(forSpec.has(b.id)) - Number(forSpec.has(a.id)) || (b.lastSeenAt ?? 0) - (a.lastSeenAt ?? 0)).map((s) => ({ ...s, forSpec: forSpec.has(s.id) }));
+  }
+  function renderConversationPicker(spec) {
+    const sessions = agentSessions(spec);
+    const picker = $("#studio-conversation-session");
+    const signature = JSON.stringify([sessions.map((s) => [s.id, s.forSpec]), conversation.id]);
+    if (picker.dataset.signature === signature) return;
+    picker.dataset.signature = signature;
+    const options = sessions.map(
+      (s) => new Option(`${agentDisplayName(s.agent)} · ${s.id.slice(0, 6)}${s.forSpec ? " · this work" : ""}`, s.id),
+    );
+    if (conversation.id && !sessions.some((s) => s.id === conversation.id))
+      options.unshift(new Option(`${conversation.id.slice(0, 6)} · no longer running`, conversation.id));
+    picker.replaceChildren(
+      new Option(sessions.length ? "Choose a running agent session…" : "No running agent sessions", ""),
+      ...options,
+    );
+    picker.value = conversation.id ?? "";
+    $("#studio-conversation-empty").hidden = Boolean(conversation.id);
+  }
+  function selectConversation(id) {
+    if (conversation.id === id) return;
+    conversation.panel?.dispose();
+    conversation.panel = null;
+    conversation.id = id || null;
+    // Keep an existing work draft visible; otherwise make room for the active conversation.
+    showChangeDraft((!id && !workbench.current().spec) || Boolean($("#studio-intent").value.trim() || state.context));
+    const mount = $("#studio-conversation-mount");
+    mount.replaceChildren();
+    mount.className = "";
+    $("#studio-conversation-empty").hidden = Boolean(id);
+    if (!id) {
+      renderConversationPicker(workbench.current().spec);
+      return;
+    }
+    const session = (ui.state?.sessions || []).find((s) => s.id === id);
+    const agent = session?.agent ?? "agent";
+    conversation.panel = mountConversation(mount, id, {
+      api,
+      escapeHtml,
+      icon,
+      toast,
+      agentName: agentDisplayName(agent),
+      agentMark: agentMark(agent),
+      workbench: () => workbench,
+      openFile(path) {
+        $("#studio-file").value = path;
+        openFile(path);
+        focusSurface("canvas", { focus: true });
+      },
+      openTerminal() {
+        showView("sessions");
+        selectTerminal(id);
+        ui.terminals?.get(id)?.stream?.setMode("terminal");
+      },
+    });
+    if (ui.view === "studio") conversation.panel.start();
+    renderConversationPicker(workbench.current().spec);
+  }
+  $("#studio-conversation-session").addEventListener("change", (event) =>
+    selectConversation(event.target.value),
+  );
+
   function render() {
     if (ui.view !== "studio") return;
     const { spec, presentation, specs, error, loaded } = workbench.current();
+    renderConversationPicker(spec);
+    root.dataset.hasTask = String(Boolean(spec && !error));
+    const composeScope = spec?.id || conversation.id || null;
+    if (!loaded) {
+      // Do not briefly invite a second task while the current one is still loading.
+      $("#studio-intent-form").hidden = true;
+      $("#studio-new-change-toggle").hidden = true;
+      state.composeScope = undefined;
+    } else if (state.composeScope !== composeScope) {
+      state.composeScope = composeScope;
+      showChangeDraft(!composeScope || Boolean($("#studio-intent").value.trim() || state.context || document.activeElement === $("#studio-intent")));
+    }
+    $("#studio-history").hidden = !spec || Boolean(error);
+    setText("#studio-history-count", spec ? `(${spec.audit?.length || 0})` : "");
+    setText("#studio-stage-label", spec ? `${STAGE_GUIDE[spec.stage]?.label || spec.stage} · chosen stage` : "");
+    const next = {
+      spec: ["Agree on the outcome and what would demonstrate success.", "Review task & criteria"],
+      plan: ["Break the work into manageable steps and make its scope clear.", "Review the plan"],
+      build: ["Choose a terminal or an installed agent to work on this task.", "Choose how to work"],
+      verify: ["Check each acceptance criterion against current evidence.", "Review evidence"],
+      review: ["Inspect the actual changes before deciding what to keep.", "Review changes"],
+      ship: ["Review delivery records. A chosen stage does not confirm a release.", "Review delivery"],
+    }[spec?.stage];
+    setText("#studio-next-hint", next?.[0] || "Review the task and decide how to continue.");
+    setText("#studio-next-action", next?.[1] || "Inspect task");
     const picker = $("#studio-thread");
     const signature = JSON.stringify([
       specs.map((s) => [s.id, s.title]),
@@ -264,17 +393,18 @@ export function initStudio({
       "#studio-thread-title",
       error
         ? "Work unavailable"
-        : spec?.title || "What would you like to change?",
+        : !loaded ? "Loading your work…" : spec?.title || "What would you like to change?",
     );
-    const problem = spec?.body
+    const rawProblem = spec?.body
       ?.split(/^## Problem[ \t]*\r?$/m)[1]
       ?.split(/^## /m)[0]
       ?.trim();
+    const problem = rawProblem === "_What is wrong or missing today, and why it matters._" ? "" : rawProblem;
     setText(
       "#studio-thread-problem",
-      error ||
-        problem ||
-        "Describe an outcome. Define how to check it, then choose how to do the work.",
+      error || problem || (spec
+        ? "Review the task’s criteria, then choose how to continue."
+        : "Describe an outcome. Define how to check it, then choose how to do the work."),
     );
     $("#studio-thread-error").hidden = !error;
     setText("#studio-thread-error", error || "");
@@ -316,7 +446,7 @@ export function initStudio({
       sessions
         .map(
           (s) =>
-            `<button class="studio-link" type="button" data-studio-session="${escapeHtml(s.id)}">${icon("terminal")} Continue ${escapeHtml(s.agent)} <small>${escapeHtml(s.short)}</small></button>`,
+            `<button class="studio-link" type="button" data-studio-conversation="${escapeHtml(s.id)}">${icon("ask")} Read ${escapeHtml(agentDisplayName(s.agent))}'s conversation <small>${escapeHtml(s.short)}</small></button><button class="studio-link" type="button" data-studio-session="${escapeHtml(s.id)}">${icon("terminal")} Open its terminal</button>`,
         )
         .join(""),
     );
@@ -345,6 +475,22 @@ export function initStudio({
     focusSurface("canvas"),
   );
   $("#studio-focus-work").addEventListener("click", () => focusSurface("work"));
+  $("#studio-find-files").addEventListener("click", () => {
+    browser.hide();
+    if (!$("#studio-changes-panel").hidden) $("#studio-toggle-changes").click();
+    bridge.document();
+    focusSurface("canvas");
+    $("#studio-file-search").focus();
+    $("#studio-file-search").scrollIntoView({ block: "nearest" });
+    message("Choose a file here. Your editor drafts are kept in this tab.");
+  });
+  $("#studio-review-changes").addEventListener("click", () => {
+    focusSurface("canvas");
+    if ($("#studio-changes-panel").hidden) $("#studio-toggle-changes").click();
+    $("#studio-changes-panel").focus();
+    $("#studio-changes-panel").scrollIntoView({ block: "nearest" });
+    message("Inspect the changed files first. Commit changes opens a separate review; nothing is uploaded.");
+  });
   $("#studio-file-search").addEventListener("input", renderFileOptions);
   document.addEventListener("selectionchange", () => {
     $("#studio-use-selection").disabled = !selectedContext();
@@ -357,6 +503,7 @@ export function initStudio({
     if (!context) return;
     state.context = context;
     renderContext();
+    showChangeDraft(true, { user: true });
     focusSurface("work");
     $("#studio-intent").focus();
     message(
@@ -372,6 +519,7 @@ export function initStudio({
     openFile(event.target.value),
   );
   $("#studio-thread").addEventListener("change", (event) => {
+    state.composeChoice = null;
     if (event.target.value)
       workbench.selectSpec(event.target.value, { navigate: false });
     render();
@@ -392,6 +540,13 @@ export function initStudio({
     );
     renderDocument();
   });
+  $("#studio-next-action").addEventListener("click", () => {
+    const spec = workbench.current().spec;
+    if (!spec || workbench.current().error) return;
+    if (spec.stage === "review") $("#studio-review-changes").click();
+    else if (spec.stage === "build") showView("sessions");
+    else workbench.selectSpec(spec.id);
+  });
   $("#studio-inspect-work").addEventListener("click", () => {
     const spec = workbench.current().spec;
     if (spec && !workbench.current().error) workbench.selectSpec(spec.id);
@@ -410,6 +565,13 @@ export function initStudio({
     });
   });
   root.addEventListener("click", (event) => {
+    const read = event.target.closest("[data-studio-conversation]");
+    if (read) {
+      selectConversation(read.dataset.studioConversation);
+      $("#studio-conversation").scrollIntoView({ block: "nearest" });
+      conversation.panel?.focus();
+      return;
+    }
     const session = event.target.closest("[data-studio-session]");
     if (session) {
       showView("sessions");
@@ -424,6 +586,8 @@ export function initStudio({
         state.context = null;
         renderContext();
       }
+      state.composeChoice = null;
+      if (workbench.current().spec) showChangeDraft(false);
       focusSurface("work", { focus: true });
       message(
         "Work defined. Inspect its criteria and choose a terminal or agent when ready.",
@@ -431,9 +595,12 @@ export function initStudio({
     },
     onShowView(view) {
       if (view !== "studio") {
+        browser.hide();
         bridge.document(); // Stop app code on navigation; retain file drafts.
+        conversation.panel?.stop();
         return;
       }
+      conversation.panel?.start();
       render();
       if (!state.loaded) refreshFiles();
     },

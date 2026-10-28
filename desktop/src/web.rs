@@ -630,6 +630,10 @@ struct WebHost {
     studio_previews: Arc<std::sync::Mutex<crate::studio::Previews>>,
     /// Who is making the request being handled: the owner, or a named access token.
     access: crate::tokens::Access,
+    stream_clients: HashMap<String, StreamClient>,
+    browser: Arc<std::sync::Mutex<crate::browser::Browser>>,
+    browser_cancel: Arc<AtomicBool>,
+    browser_identity: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// `verb check` runs Git and several `--version` probes, which can take seconds. The web host has one
@@ -645,6 +649,48 @@ struct ChecksCache {
 const CHECKS_FRESH: Duration = Duration::from_secs(20);
 
 impl WebHost {
+    fn record_stream_ack(&mut self, id: &str, label: Option<&str>, generation: u64) {
+        let Some(id) = stream_client_id(id) else {
+            return;
+        };
+        let now = crate::now_millis();
+        let entry = self
+            .stream_clients
+            .entry(id.to_owned())
+            .or_insert_with(|| StreamClient {
+                id: id.to_owned(),
+                label: String::new(),
+                acked_generation: 0,
+                acked_at: now,
+                seen_at: now,
+            });
+        entry.label = stream_client_label(label);
+        entry.seen_at = now;
+        if generation >= entry.acked_generation {
+            entry.acked_generation = generation;
+            entry.acked_at = now;
+        }
+        while self.stream_clients.len() > MAX_STREAM_CLIENTS {
+            let oldest = self
+                .stream_clients
+                .values()
+                .min_by_key(|client| client.seen_at)
+                .map(|client| client.id.clone());
+            match oldest {
+                Some(oldest) => self.stream_clients.remove(&oldest),
+                None => break,
+            };
+        }
+    }
+
+    /// The switch, its generation, and every browser that has acknowledged a generation. A browser
+    /// behind the current generation has not confirmed that it cleared.
+    fn stream_status(&self, settings: &crate::transcript::Settings) -> Value {
+        let mut clients: Vec<&StreamClient> = self.stream_clients.values().collect();
+        clients.sort_by_key(|client| std::cmp::Reverse(client.seen_at));
+        json!({"enabled": settings.enabled, "generation": settings.generation, "clients": clients})
+    }
+
     fn checks(&self) -> Value {
         let mut cache = self
             .checks
@@ -703,6 +749,62 @@ struct TalkMessage {
 #[derive(Deserialize)]
 struct StreamRequest {
     enabled: bool,
+    #[serde(default, rename = "clientId")]
+    client_id: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StreamAckRequest {
+    #[serde(rename = "clientId")]
+    client_id: String,
+    #[serde(default)]
+    label: Option<String>,
+    generation: u64,
+}
+
+#[derive(Deserialize)]
+struct ChatRequest {
+    #[serde(rename = "messageId")]
+    message_id: String,
+    text: String,
+}
+
+/// A browser that has shown this project's conversation, and the newest stream generation it
+/// has said it applied. Memory only; a restart forgets every client.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamClient {
+    id: String,
+    label: String,
+    acked_generation: u64,
+    acked_at: u128,
+    /// The last time this browser said anything, cleared or not.
+    seen_at: u128,
+}
+
+const MAX_STREAM_CLIENTS: usize = 16;
+
+fn stream_client_id(id: &str) -> Option<&str> {
+    (8..=64).contains(&id.len()).then_some(id).filter(|id| {
+        id.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    })
+}
+
+fn stream_client_label(label: Option<&str>) -> String {
+    let label: String = label
+        .unwrap_or("A browser")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(40)
+        .collect();
+    if label.trim().is_empty() {
+        "A browser".to_owned()
+    } else {
+        label
+    }
 }
 
 #[derive(Deserialize)]
@@ -954,6 +1056,10 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         state_generation: Arc::new(AtomicU64::new(0)),
         talks: crate::talk::Talks::default(),
         studio_previews: Arc::default(),
+        stream_clients: HashMap::new(),
+        browser: Arc::default(),
+        browser_cancel: Arc::default(),
+        browser_identity: Arc::default(),
         access: crate::tokens::Access::owner(),
     };
     if let Some(jwks) = load_initial_jwks() {
@@ -1655,6 +1761,57 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if path == "/api/browser" {
+            // Initial browser runtime is owner-only, native-local, and explicitly configured.
+            if !self.access.allows(crate::tokens::Scope::Owner) || !self.studio_native() {
+                return Ok(Reply::error(
+                    403,
+                    "Browser runtime needs the owner on a native-local host.",
+                ));
+            }
+            let configured = crate::browser::Browser::configured();
+            if method == &Method::Get {
+                return Ok(Reply::json(
+                    200,
+                    json!({"available":configured,"location":"This Verb host", "reason": if configured { "Start a fresh, isolated browser session." } else { "A browser runtime has not been configured on this host." }}),
+                ));
+            }
+            if method != &Method::Post {
+                return Ok(Reply::error(405, "Use GET or POST."));
+            }
+            let input: Value = read_json(request)?;
+            let stopping = input["op"] == "stop";
+            if stopping {
+                let identity = self
+                    .browser_identity
+                    .lock()
+                    .map_err(|_| "Browser identity unavailable.")?;
+                if identity.is_some() && input["session"].as_str() != identity.as_deref() {
+                    return Ok(Reply::error(
+                        409,
+                        "Browser session changed. Reopen it before stopping it.",
+                    ));
+                }
+                self.browser_cancel.store(true, Ordering::SeqCst);
+            }
+            let cancel = self.browser_cancel.clone();
+            let identity = self.browser_identity.clone();
+            let browser = self.browser.clone();
+            let origin = self.origin.clone();
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                let mut browser = if stopping {
+                    browser.lock().map_err(|_| "Browser lock is unavailable.")?
+                } else {
+                    browser.try_lock().map_err(|_| {
+                        "Browser is busy. Wait for the current action; it was not queued."
+                    })?
+                };
+                let view = browser.command(&origin, input, &cancel, &identity)?;
+                serde_json::to_vec(&view).map_err(|e| e.to_string())
+            }));
+            return Ok(reply);
+        }
         if method == &Method::Get && path == "/api/studio/workspace" {
             let native = self.studio_native();
             let boundary = crate::studio_bridge::configured();
@@ -1876,10 +2033,28 @@ impl WebHost {
             let mut settings = crate::transcript::load(&store);
             if method == &Method::Post {
                 let input: StreamRequest = read_json(request)?;
-                settings.enabled = input.enabled;
-                crate::transcript::save(&store, &settings)?;
+                settings = crate::transcript::set_enabled(&store, input.enabled)?;
+                // Every hosted terminal clears or rereads now, not at its next settings check.
+                for terminal in self.terminals.lock().unwrap().values_mut() {
+                    if let Some(hosted) = terminal.hosted.as_mut() {
+                        hosted.apply_stream(settings.clone());
+                    }
+                }
+                // The browser that turned it off cleared itself before asking.
+                if let Some(id) = input.client_id.as_deref() {
+                    self.record_stream_ack(id, input.label.as_deref(), settings.generation);
+                }
             }
-            return Ok(Reply::json(200, json!({"enabled": settings.enabled})));
+            return Ok(Reply::json(200, self.stream_status(&settings)));
+        }
+        if path == "/api/stream/ack" && method == &Method::Post {
+            let input: StreamAckRequest = read_json(request)?;
+            let settings = crate::transcript::load(&self.identity.store);
+            if input.generation > settings.generation {
+                return Err("that stream generation does not exist yet".to_owned());
+            }
+            self.record_stream_ack(&input.client_id, input.label.as_deref(), input.generation);
+            return Ok(Reply::json(200, self.stream_status(&settings)));
         }
         if path == "/api/observer" && (method == &Method::Get || method == &Method::Post) {
             let store = self.identity.store.clone();
@@ -2402,49 +2577,85 @@ impl WebHost {
                 let inbox = workbench::inbox_snapshot(&self.project, id)?;
                 Ok(Reply::json(200, json!(inbox)))
             }
-            ["api", "terminals", id, "stream"] if method == &Method::Get => {
-                // Content from the agent's own log, and only with the project's opt-in: see
-                // `crate::transcript` for the rules. Nothing here is stored or sent elsewhere.
-                if !crate::transcript::load(&self.identity.store).enabled {
-                    return Ok(Reply::json(200, json!({"enabled": false, "items": []})));
-                }
-                let (record, created, conversation) = {
-                    let terminals = self.terminals.lock().unwrap();
-                    let terminal = terminals.get(*id).ok_or("terminal is not hosted here")?;
-                    let session = &terminal
-                        .hosted
-                        .as_ref()
-                        .ok_or("terminal is not hosted here")?
-                        .session;
-                    let record = match session.agent.as_ref() {
-                        Some(crate::Agent::Claude) => crate::observe::Record::Claude,
-                        Some(crate::Agent::Codex) => crate::observe::Record::Codex,
-                        _ => {
-                            return Ok(Reply::json(
-                                200,
-                                json!({"enabled": true, "items": [], "note": "Verb can read the stream of Claude Code and Codex sessions."}),
-                            ))
-                        }
-                    };
-                    (record, session.created_at, session.resume_identity.clone())
+            // The conversation, as `crate::conversation` reads it: content only with the
+            // project's stream on, and never from a generation older than the current setting.
+            ["api", "terminals", id, "conversation"] if method == &Method::Get => {
+                let fresh = crate::transcript::load(&self.identity.store);
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let Some(hosted) = terminal.hosted.as_mut() else {
+                    return Ok(Reply::json(
+                        200,
+                        json!({"available": false, "running": false, "stream": fresh,
+                            "reason": "The agent's process has ended, so Verb no longer follows its conversation here."}),
+                    ));
                 };
-                let project = self.project.clone();
-                let mut reply = Reply::json(200, Value::Null);
-                reply.deferred = Some(Box::new(move || {
-                    let home = crate::isolation::agent_home().unwrap_or_default();
-                    let stream = crate::transcript::for_session(
-                        record,
-                        &home,
-                        &project,
-                        created,
-                        conversation.as_deref(),
-                    );
-                    serde_json::to_vec(
-                        &json!({"enabled": true, "items": stream.items, "note": stream.note}),
-                    )
-                    .map_err(|e| e.to_string())
-                }));
-                Ok(reply)
+                let mut view = hosted
+                    .conversation_view(crate::transcript::MAX_ITEMS)
+                    .ok_or("This terminal has no agent conversation.")?;
+                if view["stream"]["generation"].as_u64() != Some(fresh.generation) {
+                    hosted.apply_stream(fresh);
+                    view = hosted
+                        .conversation_view(crate::transcript::MAX_ITEMS)
+                        .ok_or("This terminal has no agent conversation.")?;
+                }
+                view["available"] = json!(true);
+                view["running"] = json!(true);
+                Ok(Reply::json(200, view))
+            }
+            // A chat message: never raw keystrokes, never sent twice for one id, and refused unless
+            // the agent is ready on evidence. Terminal input keeps its own route, ungated.
+            ["api", "terminals", id, "chat"] if method == &Method::Post => {
+                let input: ChatRequest = read_json(request)?;
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
+                match hosted.chat_send(
+                    &input.message_id,
+                    &input.text,
+                    crate::conversation::Origin::Desktop,
+                ) {
+                    Ok(()) => Ok(Reply::json(
+                        200,
+                        hosted
+                            .conversation_view(crate::transcript::MAX_ITEMS)
+                            .unwrap_or(Value::Null),
+                    )),
+                    Err(refusal) => Ok(Reply::json(
+                        409,
+                        json!({"error": refusal.reason, "code": refusal.code}),
+                    )),
+                }
+            }
+            ["api", "terminals", id, "chat", message, action @ ("check" | "discard")]
+                if method == &Method::Post =>
+            {
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
+                let outcome = if *action == "check" {
+                    hosted.chat_check(message)
+                } else {
+                    hosted.chat_discard(message)
+                };
+                match outcome {
+                    Ok(()) => Ok(Reply::json(
+                        200,
+                        hosted
+                            .conversation_view(crate::transcript::MAX_ITEMS)
+                            .unwrap_or(Value::Null),
+                    )),
+                    Err(error) => Ok(Reply::json(
+                        404,
+                        json!({"error": error, "code": "unknown_message"}),
+                    )),
+                }
             }
             ["api", "terminals", id, "output"] if method == &Method::Get => {
                 let after = url

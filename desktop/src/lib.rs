@@ -10,12 +10,13 @@ use std::process::Command;
 use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-mod agent_chat;
 mod agents;
 mod ask;
+mod browser;
 mod checks;
 mod context;
 mod continuity;
+mod conversation;
 mod diff;
 mod exec;
 mod fsutil;
@@ -1675,6 +1676,22 @@ pub(crate) fn event_log_path(project: &Path, session_id: &str) -> Result<PathBuf
         .join("events")
         .join(hex_encode(project))
         .join(format!("{}.jsonl", session_id)))
+}
+
+/// How many processes this session has started, read from its own event log: each start is one
+/// execution attempt. At least 1, since it is asked for after a start has been recorded.
+pub(crate) fn process_starts(session: &Session) -> u32 {
+    event_log_path(&session.project_id, &session.id)
+        .ok()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .map(|log| {
+            log.lines()
+                .filter(|line| line.contains("\"type\":\"PROCESS_STARTED\""))
+                .count()
+        })
+        .and_then(|count| u32::try_from(count).ok())
+        .unwrap_or(1)
+        .max(1)
 }
 
 pub(crate) fn json_escape(value: &str) -> String {
