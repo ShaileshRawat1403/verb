@@ -1206,6 +1206,17 @@ export function initWorkbench(deps) {
 
   return {
     selectSpec,
+    runCheck: () => lifecycle.openCheck(),
+    reviewEvidence() {
+      const spec = selected();
+      if (!spec) return;
+      if (!lifecycle.showVerification()) {
+        toast("Evidence for this work is not ready. Wait for the current action, then try again.", "error");
+        return;
+      }
+      selectSpec(spec.id);
+      $("#sdlc-workflow").scrollIntoView({ block: "start" });
+    },
     switchBranch,
     openHandoff,
     openNewSpec,

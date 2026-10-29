@@ -84,3 +84,50 @@ one existing fixture skipped**. After the cached-search change, all three utilit
 passed again. Web/native builds, JavaScript syntax checks and `git diff --check` passed. No Rust source
 changed, so the Rust test suite was not repeated for this utility. Logs: `/private/tmp/verb-utility-review-unit-final.log`,
 `/private/tmp/verb-utility-review-e2e.log`, `/private/tmp/verb-utility-final-e2e.log`.
+
+## Local continuation — 29 October: editor navigation
+
+Studio now has a compact Go to line control beside the file contents label, opened by its
+button or Ctrl+G while the editor is focused. It works against the current draft, including
+unsaved lines. Enter or Go places the caret at the selected line and scrolls inside the
+unwrapped editor. Escape or Cancel preserves the selection and returns focus. Invalid,
+fractional, out-of-range and unsafe numeric values keep the panel open with an inline error.
+The readout below the editor shows line, column and total lines; columns count Unicode code
+points, while textarea selection uses UTF-16 offsets. An empty file has one line, and a final
+newline adds an empty last line. The line index is cached until draft text changes.
+
+No file is saved, command executed or API called by navigation. Changing file or leaving
+Edit closes the jump strip. Existing per-file drafts, explicit save/conflict handling and
+find/replace remain in place. Phone fields and buttons have 44 px minimum height. No new
+dependency or editor framework is introduced. Browser acceptance and final results are
+recorded in the private local handoff. Work remains uncommitted; deployment permission was
+revoked by the owner. Do not apply the previously staged release or access PocketFabric.
+
+## Guided project checks in Studio — 29 October
+
+The selected work thread now exposes **Run project check** and **Review evidence** beside
+its verification summary. This connects the existing SDLC runner rather than creating a
+second execution path. Without a selected Spec and criterion it cannot run. Opening a
+check reads current source/evidence and shows the criterion, branch, commit and command;
+only the dialog's explicit Run check submits execution. Cancelling does not run anything.
+
+Supported checks remain Rust (`cargo test --offline`), Node (`npm --offline test`, including
+package lifecycle scripts), and Python unittest discovery. No arbitrary task definition,
+build runner, package installation or new boundary policy is introduced. These commands
+run in the project root with the runner's existing permissions and three-minute bound.
+Offline package options do not isolate test code from the network. The command explanation
+makes this distinction explicit. Python discovery with zero tests and missing runtimes
+remain inconclusive. Existing source/intent/version guards and private evidence storage
+remain authoritative; raw output is not persisted as evidence.
+
+Running status is visible inside the dialog and the matching Studio work thread. The
+original Spec identity is frozen when the dialog opens. An uncertain response asks the
+person to inspect evidence before trying again; execution requests are not automatically
+resent. A recorded pass still needs separate evidence acceptance. Review evidence opens
+the existing Verify surface, including provenance and freshness, rather than duplicating
+its controls in Studio. Source changes continue to invalidate previous proof.
+
+The owner subsequently authorized committing and deploying the validated work, clarified
+as updating/restarting **only the Verb service** on the phone host. PocketFabric code,
+services and configuration and Android remain outside scope. Actual release status and
+host-specific proofs belong in the ignored operator handoff, not in this public document.

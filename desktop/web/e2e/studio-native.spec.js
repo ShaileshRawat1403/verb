@@ -930,3 +930,72 @@ test("Studio retries busy file reads, then exposes manual recovery if the host s
   await expect(page.locator("#studio-file option[value='app.html']")).toHaveCount(1);
   expect(reads).toBe(4);
 });
+
+test("go to line navigates the current draft without saving and tracks cursor position", async ({ page }) => {
+  await openFile(page, "typing.txt");
+  const editor = page.locator("#studio-editor-text");
+  const disk = readFileSync(join(repo, "typing.txt"), "utf8");
+  const draft = "first\n🙂 second\nthird\n";
+  await editor.fill(draft);
+  await expect(page.locator("#studio-editor-position")).toHaveText("Line 4, column 1 · 4 lines");
+  await editor.press("Control+g");
+  const line = page.getByRole("textbox", { name: "Line number", exact: true });
+  await expect(line).toBeFocused();
+  await line.fill("2");
+  await line.press("Enter");
+  await expect(editor).toBeFocused();
+  await expect(page.locator("#studio-line-panel")).toBeHidden();
+  expect(await editor.evaluate(el => el.selectionStart)).toBe(6);
+  await expect(page.locator("#studio-editor-position")).toHaveText("Line 2, column 1 · 4 lines");
+  await editor.press("ArrowRight");
+  await expect(page.locator("#studio-editor-position")).toHaveText("Line 2, column 2 · 4 lines");
+  await editor.press("Control+g");
+  for (const invalid of ["0", "-1", "2.5", "2e0", "99999999999999999999", "5", ""]) {
+    await line.fill(invalid);
+    await line.press("Enter");
+    await expect(line).toHaveAttribute("aria-invalid", "true");
+    await expect(line).toBeFocused();
+    await expect(page.locator("#studio-line-note")).toHaveText("Enter a whole line number from 1 to 4.");
+  }
+  await line.fill("4");
+  await line.press("Enter");
+  expect(await editor.evaluate(el => el.selectionStart)).toBe(draft.length);
+  await expect(page.locator("#studio-editor-position")).toHaveText("Line 4, column 1 · 4 lines");
+  await editor.press("Control+g");
+  await line.fill("2");
+  await line.press("Escape");
+  await expect(editor).toBeFocused();
+  expect(await editor.evaluate(el => el.selectionStart)).toBe(draft.length);
+  await expect(editor).toHaveValue(draft);
+  expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe(disk);
+  await page.locator("#studio-file").selectOption("conflict.txt");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await expect(page.locator("#studio-line-panel")).toBeHidden();
+  await editor.fill("");
+  await expect(page.locator("#studio-editor-position")).toHaveText("Line 1, column 1 · 1 line");
+  await page.locator("#studio-file").selectOption("typing.txt");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await expect(editor).toHaveValue(draft);
+  await editor.fill(disk);
+});
+
+test("go to line remains reachable on phone and scrolls only inside a long draft", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFile(page, "typing.txt");
+  const editor = page.locator("#studio-editor-text");
+  const disk = readFileSync(join(repo, "typing.txt"), "utf8");
+  await editor.fill(Array.from({ length: 300 }, (_, i) => `Line ${i + 1}`).join("\n"));
+  await page.getByRole("button", { name: "Go to line", exact: true }).click();
+  const input = page.getByRole("textbox", { name: "Line number", exact: true });
+  await input.fill("250");
+  for (const control of [page.locator("#studio-line-toggle"), input, page.locator("#studio-line-go"), page.locator("#studio-line-close")])
+    expect(Math.round((await control.boundingBox()).height * 1000) / 1000).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator("#studio-edit-panel").screenshot({ path: testInfo.outputPath("verb-line-phone.png") });
+  await page.getByRole("button", { name: "Go", exact: true }).click();
+  await expect(editor).toBeFocused();
+  await expect(page.locator("#studio-editor-position")).toHaveText("Line 250, column 1 · 300 lines");
+  expect(await editor.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+  expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe(disk);
+  await editor.fill(disk);
+});

@@ -1,4 +1,5 @@
 import { initEditorFind } from "./studio-find.js";
+import { initEditorNavigation } from "./studio-navigation.js";
 // Local text editing is an adapter, not a replacement for the full IDE foundation.
 // File drafts live in this tab only. No writes, app code, or server commands run on entry.
 export function initStudioEditor({ $, api, onMode, onSaved }) {
@@ -13,6 +14,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   };
   const dirty = (draft) => draft && draft.text !== draft.base.text;
   const current = () => drafts.get(path);
+  const navigation = initEditorNavigation({ $, editor });
   const find = initEditorFind({
     $, editor, getKey: () => path,
     onChange() {
@@ -24,6 +26,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     if (mode === "app" && next !== "app")
       $("#studio-app-frame").replaceChildren();
     mode = next;
+    if (next !== "edit") navigation.reset();
     $("#studio-edit-panel").hidden = next !== "edit";
     $("#studio-app-panel").hidden = next !== "app";
     $("#studio-document").hidden = next !== "document";
@@ -44,6 +47,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   }
   function update() {
     find.sync();
+    navigation.sync();
     const draft = current();
     $("#studio-edit-file").disabled =
       !capability?.editing.available ||

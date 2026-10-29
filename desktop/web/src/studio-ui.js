@@ -367,6 +367,13 @@ export function initStudio({
     }[spec?.stage];
     setText("#studio-next-hint", next?.[0] || "Review the task and decide how to continue.");
     setText("#studio-next-action", next?.[1] || "Inspect task");
+    if ($("#studio-checks").dataset.checkSpec !== (spec?.id || "")) {
+      $("#studio-checks").dataset.checkSpec = spec?.id || "";
+      setText("#studio-check-status", "");
+    }
+    $("#studio-checks").hidden = !spec || Boolean(error);
+    $("#studio-run-check").disabled = !spec || Boolean(error) || !spec.criteria?.length;
+    setText("#studio-check-summary", presentation?.cardVerification || "Evidence has not been established.");
     const picker = $("#studio-thread");
     const signature = JSON.stringify([
       specs.map((s) => [s.id, s.title]),
@@ -541,11 +548,28 @@ export function initStudio({
     );
     renderDocument();
   });
+  document.addEventListener("verb:evidence-status", (event) => {
+    if (event.detail.specId === workbench.current().spec?.id)
+      setText("#studio-check-status", event.detail.message);
+  });
+  $("#studio-run-check").addEventListener("click", async () => {
+    const button = $("#studio-run-check");
+    button.disabled = true;
+    setText("#studio-check-status", "Reading current source and evidence…");
+    try {
+      await workbench.runCheck();
+      setText("#studio-check-status", "Review the command and criterion. Nothing runs until you choose Run check.");
+    } catch (error) {
+      setText("#studio-check-status", error.message);
+    } finally { button.disabled = !workbench.current().spec?.criteria?.length; }
+  });
+  $("#studio-review-evidence").addEventListener("click", () => workbench.reviewEvidence());
   $("#studio-next-action").addEventListener("click", () => {
     const spec = workbench.current().spec;
     if (!spec || workbench.current().error) return;
     if (spec.stage === "review") $("#studio-review-changes").click();
     else if (spec.stage === "build") showView("sessions");
+    else if (spec.stage === "verify") workbench.reviewEvidence();
     else workbench.selectSpec(spec.id);
   });
   $("#studio-inspect-work").addEventListener("click", () => {
