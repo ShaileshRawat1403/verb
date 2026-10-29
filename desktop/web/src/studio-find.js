@@ -37,7 +37,14 @@ export function replaceMatches(text, matches, replacement) {
   return result;
 }
 
-export function initEditorFind({ $, editor, getKey, onChange }) {
+export function initEditorFind({
+  $,
+  editor,
+  getKey,
+  onChange,
+  focusEditor = () => editor.focus({ preventScroll: true }),
+  selectRange,
+}) {
   const panel = $("#studio-find-panel"),
     toggle = $("#studio-find-toggle"),
     query = $("#studio-find-query"),
@@ -92,12 +99,15 @@ export function initEditorFind({ $, editor, getKey, onChange }) {
   function select(index, focus = false) {
     if (!matches.length) return;
     const match = matches[(index + matches.length) % matches.length];
-    if (focus) editor.focus({ preventScroll: true });
-    editor.setSelectionRange(match.start, match.end);
-    // Scroll only inside the textarea; leave the surrounding Studio layout stable.
-    const line = editor.value.slice(0, match.start).split("\n").length - 1;
-    const height = parseFloat(getComputedStyle(editor).lineHeight) || 24;
-    editor.scrollTop = Math.max(0, line * height - editor.clientHeight / 2);
+    if (selectRange) selectRange(match.start, match.end, focus);
+    else {
+      if (focus) editor.focus({ preventScroll: true });
+      editor.setSelectionRange(match.start, match.end);
+      // Scroll only inside the textarea; leave the surrounding Studio layout stable.
+      const line = editor.value.slice(0, match.start).split("\n").length - 1;
+      const height = parseFloat(getComputedStyle(editor).lineHeight) || 24;
+      editor.scrollTop = Math.max(0, line * height - editor.clientHeight / 2);
+    }
     sync();
   }
   function navigate(direction, focus = false) {
@@ -128,7 +138,7 @@ export function initEditorFind({ $, editor, getKey, onChange }) {
   function close() {
     panel.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
-    editor.focus({ preventScroll: true });
+    focusEditor();
   }
   function replace(every) {
     sync();

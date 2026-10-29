@@ -9,8 +9,8 @@ Keep this release local until separately approved for promotion.
 
 Verb has durable PTYs, guarded text saves, single-file HTML previews, selective Git
 commit/recovery, Specs/evidence/review and partial conversation adapters. A local
-browser runtime exists with explicit limits. Studio's editor is still a textarea.
-Full language tooling/debugger/extensions are not connected. Real-provider conversation
+browser runtime exists with explicit limits. Studio now has a CodeMirror editing surface with a plain-text fallback.
+Project language servers, debugger and general IDE extensions are not connected. Real-provider conversation
 edge cases need live acceptance. Green unit tests do not establish workstation readiness.
 
 Do not repeat the completed code-server/Theia trial: see
@@ -56,3 +56,11 @@ The owner approved commit and distribution on 29 October. This slice is packaged
 as a local-installation VSIX. It adds no public server runtime or UI changes, so
 public service replacement or restart is unnecessary. Public IDE enablement remains
 a future release gate.
+
+## Studio editing release candidate
+
+The next public-facing slice adds code editing inside Studio while retaining the
+existing file/save/preview boundary. See [the editor contract](STUDIO_CODE_EDITOR.md)
+for behavior, dependencies, failure states and acceptance. This does not enable an
+IDE backend or claim the remaining workstation gates are complete. The owner has
+approved public Verb-only rollout after validation and a fresh idle check.

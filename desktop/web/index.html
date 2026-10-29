@@ -6,8 +6,8 @@
     <meta name="color-scheme" content="dark light" />
     <title>Verb — Project workbench</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="/app.css?v=flagship-20261008" />
-    <script src="/app.js?v=flagship-20261008" defer></script>
+    <link rel="stylesheet" href="/app.css?v=studio-code-20261029" />
+    <script src="/app.js?v=studio-code-20261029" defer></script>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -562,7 +562,7 @@
                       <p id="studio-find-note">Literal text · current file only · replacements stay in your unsaved draft. Enter finds next; Shift+Enter finds previous; Escape closes.</p>
                     </section>
                     <div class="studio-editor-location"><label class="studio-kicker" for="studio-editor-text">File contents · UTF-8 text editor</label><button id="studio-line-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="studio-line-panel" aria-keyshortcuts="Control+g" title="Go to line (Ctrl+G)">Go to line</button></div>
-                    <section id="studio-line-panel" class="studio-line-panel" aria-label="Go to line in this file" hidden><label for="studio-line-number">Line number</label><input id="studio-line-number" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-describedby="studio-line-note" /><button id="studio-line-go" class="text-button" type="button">Go</button><button id="studio-line-close" class="text-button" type="button" aria-label="Close go to line">Cancel</button><p id="studio-line-note" role="status"></p></section><textarea id="studio-editor-text" wrap="off" spellcheck="false" aria-describedby="studio-draft-state"></textarea><p id="studio-editor-position" class="studio-editor-position"></p>
+                    <section id="studio-line-panel" class="studio-line-panel" aria-label="Go to line in this file" hidden><label for="studio-line-number">Line number</label><input id="studio-line-number" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-describedby="studio-line-note" /><button id="studio-line-go" class="text-button" type="button">Go</button><button id="studio-line-close" class="text-button" type="button" aria-label="Close go to line">Cancel</button><p id="studio-line-note" role="status"></p></section><div class="studio-code-toolbar"><button id="studio-code-files" type="button" class="text-button">Change file</button><div role="group" aria-label="Editor mode"><button id="studio-code-mode" type="button" class="text-button" aria-pressed="true">Code</button><button id="studio-plain-mode" type="button" class="text-button" aria-pressed="false">Plain text</button></div><div id="studio-code-history" role="group" aria-label="Code edit history"><button id="studio-code-undo" type="button" class="text-button" aria-label="Undo edit" disabled>Undo</button><button id="studio-code-redo" type="button" class="text-button" aria-label="Redo edit" disabled>Redo</button></div><button id="studio-code-wrap" class="text-button" type="button" aria-pressed="false">Wrap lines</button><span id="studio-code-language"></span></div><div id="studio-code-editor"></div><p id="studio-code-note"></p><textarea id="studio-editor-text" wrap="off" spellcheck="false" aria-describedby="studio-draft-state"></textarea><p id="studio-editor-position" class="studio-editor-position"></p>
                   </section>
                   <section id="studio-app-panel" class="studio-app-panel" aria-label="Isolated application preview" hidden>
                     <div class="studio-app-toolbar"><div><strong>App preview</strong><span id="studio-app-caption"></span></div><div class="studio-app-actions"><button class="text-button" id="studio-refresh-app" type="button">Reload</button><button class="text-button" id="studio-stop-app" type="button">Close preview</button></div></div>

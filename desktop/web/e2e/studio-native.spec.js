@@ -87,6 +87,9 @@ test.beforeAll(async () => {
   writeFileSync(join(repo, "ready.html"), APP);
   writeFileSync(join(repo, "sample.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
   writeFileSync(join(repo, "disguised.png"), '<svg onload="alert(1)"></svg>');
+  writeFileSync(join(repo, "code.js"), 'const greeting = "Hello Verb";\n');
+  writeFileSync(join(repo, "settings.json"), '{"name":"Verb"}\n');
+  writeFileSync(join(repo, "script.py"), 'print("Hello Verb")\n');
   writeFileSync(join(repo, "conflict.txt"), "original");
   writeFileSync(join(repo, "typing.txt"), "original");
   writeFileSync(join(repo, ".gitignore"), ".env\n");
@@ -105,6 +108,9 @@ test.beforeAll(async () => {
       "typing.txt",
       ".gitignore",
       "hard-target.txt",
+      "code.js",
+      "settings.json",
+      "script.py",
     ],
     { env: nativeEnv },
   );
@@ -129,14 +135,20 @@ test.afterAll(() => {
   server?.kill();
   remote?.kill();
 });
+async function selectCanvasFile(page, path) {
+  const picker = page.getByLabel("Canvas file", { exact: true });
+  if (!await picker.isVisible()) await page.getByRole("button", { name: "Files", exact: true }).click();
+  await picker.selectOption(path);
+}
 async function openFile(page, path) {
   await page.goto(url);
   await page.getByRole("button", { name: "Studio", exact: true }).click();
-  await page.getByLabel("Canvas file", { exact: true }).selectOption(path);
+  await selectCanvasFile(page, path);
   await expect(
     page.getByRole("button", { name: "Edit file", exact: true }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await page.getByRole("button", { name: "Plain text", exact: true }).click();
   await expect(
     page.getByLabel("File contents · UTF-8 text editor", { exact: true }),
   ).toBeVisible();
@@ -521,14 +533,10 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
   await page.getByRole("button", { name: "Current work", exact: true }).click();
   await page.getByRole("button", { name: "Canvas", exact: true }).click();
   await expect(editor).toHaveValue(appDraft);
-  await page
-    .getByLabel("Canvas file", { exact: true })
-    .selectOption("conflict.txt");
+  await selectCanvasFile(page, "conflict.txt");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await editor.fill("a second unsaved file draft");
-  await page
-    .getByLabel("Canvas file", { exact: true })
-    .selectOption("app.html");
+  await selectCanvasFile(page, "app.html");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await expect(editor).toHaveValue(appDraft);
   await page.getByRole("button", { name: "Save file", exact: true }).click();
@@ -566,7 +574,7 @@ test("console tabs, image zoom and keyboard resize preserve editable drafts", as
   const divider = page.getByRole("separator", { name: "Resize work and preview" });
   await divider.focus(); await divider.press("ArrowRight");
   await expect(divider).toHaveAttribute("aria-valuenow", "48");
-  await page.getByLabel("Canvas file", { exact: true }).selectOption("sample.png");
+  await selectCanvasFile(page, "sample.png");
   await expect(page.locator("#studio-image-state")).toContainText("1 × 1");
   await expect(page.getByRole("button", { name: "Edit file", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Zoom image in", exact: true }).click();
@@ -577,19 +585,21 @@ test("console tabs, image zoom and keyboard resize preserve editable drafts", as
   expect(response.ok()).toBe(false);
   await page.getByRole("button", { name: "Close current preview", exact: true }).click();
   await expect(page.getByRole("tab", { name: /sample.png/ })).toHaveCount(0);
-  await page.getByLabel("Canvas file", { exact: true }).selectOption("app.html");
+  await selectCanvasFile(page, "app.html");
   await page.getByRole("tab", { name: /README.md/ }).click();
   await page.getByRole("tab", { name: /README.md/ }).press("ArrowRight");
   await expect(page.getByRole("tab", { name: /app.html/ })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
-  const editor = page.getByLabel("File contents · UTF-8 text editor", { exact: true });
+  const editor = page.getByRole("textbox", { name: "Code editor", exact: true });
   await expect(editor).toBeVisible(); await editor.fill("an unsaved tab draft");
+  await expect(page.locator("#studio-draft-state")).toContainText("Unsaved draft");
   await page.getByRole("button", { name: "Close current preview", exact: true }).click();
-  await expect(editor).toHaveValue("an unsaved tab draft");
+  await expect(editor).toContainText("an unsaved tab draft");
   await expect(page.locator("#studio-message")).toContainText("Your text is retained");
 });
 
 test("preview dock reviews real Git diffs and expands without losing the work thread", async ({ page }, testInfo) => {
+  writeFileSync(join(repo, "app.html"), APP.replace("<h1>Fieldnotes</h1>", "<h1>Fieldnotes review</h1>") + "\n<!-- pending review -->\n");
   await openFile(page, "app.html");
   await page.getByRole("button", { name: "Document", exact: true }).click();
   await page.getByRole("button", { name: "Show changes", exact: true }).click();
@@ -625,7 +635,7 @@ test("preview dock reviews real Git diffs and expands without losing the work th
   writeFileSync(join(repo, "walk-preview.png"), await page.locator("#studio-app-frame").screenshot());
   await page.getByRole("button", { name: "Refresh canvas", exact: true }).click();
   await expect(page.getByLabel("Canvas file", { exact: true }).locator('option[value="walk-preview.png"]')).toHaveCount(1);
-  await page.getByLabel("Canvas file", { exact: true }).selectOption("walk-preview.png");
+  await selectCanvasFile(page, "walk-preview.png");
   await expect(page.locator("#studio-image-state")).toContainText("KB");
   await expect(page.locator("#studio-preview-image")).toBeVisible();
   const imageBounds = await page.locator("#studio-preview-image").boundingBox();
@@ -800,10 +810,10 @@ test("file find fits a phone and undo cannot cross files", async ({ page }, test
   for (const button of await page.locator("#studio-find-panel button").all())
     expect(Math.round(await button.evaluate((el) => el.getBoundingClientRect().height) * 1000) / 1000).toBeGreaterThanOrEqual(44);
   await page.locator("#studio-find-panel").screenshot({ path: testInfo.outputPath("verb-find-phone.png") });
-  await page.locator("#studio-file").selectOption("conflict.txt");
+  await selectCanvasFile(page, "conflict.txt");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
-  await page.locator("#studio-file").selectOption("app.html");
+  await selectCanvasFile(page, "app.html");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await expect(editor).toHaveValue("two two");
   await editor.fill(readFileSync(join(repo, "app.html"), "utf8"));
@@ -971,12 +981,12 @@ test("go to line navigates the current draft without saving and tracks cursor po
   expect(await editor.evaluate(el => el.selectionStart)).toBe(draft.length);
   await expect(editor).toHaveValue(draft);
   expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe(disk);
-  await page.locator("#studio-file").selectOption("conflict.txt");
+  await selectCanvasFile(page, "conflict.txt");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await expect(page.locator("#studio-line-panel")).toBeHidden();
   await editor.fill("");
   await expect(page.locator("#studio-editor-position")).toHaveText("Line 1, column 1 · 1 line");
-  await page.locator("#studio-file").selectOption("typing.txt");
+  await selectCanvasFile(page, "typing.txt");
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   await expect(editor).toHaveValue(draft);
   await editor.fill(disk);
@@ -1055,4 +1065,140 @@ test("closing a preview while Reload is pending never reopens it", async ({ page
   await responded;
   await expect(page.locator("#studio-app-panel")).toBeHidden();
   await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
+});
+
+async function openCodeFile(page, path) {
+  await page.goto(url);
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await selectCanvasFile(page, path);
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  const code = page.getByRole("textbox", { name: "Code editor", exact: true });
+  await expect(code).toBeVisible();
+  await expect(page.getByRole("button", { name: "Code", exact: true })).toHaveAttribute("aria-pressed", "true");
+  return { code, text: page.locator("#studio-editor-text") };
+}
+
+test("Code editor highlights actual source, saves explicitly and preserves sandboxed app preview", async ({ page, request }) => {
+  const { code, text } = await openCodeFile(page, "app.html");
+  await expect(page.locator("#studio-code-language")).toHaveText("HTML");
+  await expect(page.locator("#studio-code-editor")).toHaveAttribute("data-engine", "CodeMirror 6");
+  const changed = APP.replace("Choose a slower Sunday.", "Edited in the Studio code editor.");
+  await code.fill(changed);
+  await expect(text).toHaveValue(changed);
+  await expect(page.locator("#studio-code-editor .cm-line span").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "App preview", exact: true })).toBeDisabled();
+  await code.press("ControlOrMeta+s");
+  await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
+  expect(readFileSync(join(repo, "app.html"), "utf8")).toBe(changed);
+  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  const frame = page.frameLocator("#studio-app-frame iframe");
+  await expect(frame.locator("body")).toContainText("Edited in the Studio code editor.");
+  await frame.locator("#count").click();
+  await expect(frame.locator("#count")).toContainText("1");
+  await expect(frame.locator("#parent-access")).toHaveText("parent blocked");
+  const bundle = await request.get(origin + "/app.js");
+  expect(await bundle.text()).toContain("Third-party code editor notices");
+});
+
+test("Code editor keeps undo histories separate and shares unsaved drafts with Plain text", async ({ page }) => {
+  const { code, text } = await openCodeFile(page, "code.js");
+  const original = readFileSync(join(repo, "code.js"), "utf8");
+  const draft = 'const greeting = "Still a draft";\n';
+  await code.fill(draft);
+  await expect(text).toHaveValue(draft);
+  await page.getByRole("button", { name: "Undo edit", exact: true }).click();
+  await expect(text).toHaveValue(original);
+  await page.getByRole("button", { name: "Redo edit", exact: true }).click();
+  await expect(text).toHaveValue(draft);
+  await selectCanvasFile(page, "script.py");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await expect(page.locator("#studio-code-language")).toHaveText("Python");
+  await expect(page.getByRole("button", { name: "Undo edit", exact: true })).toBeDisabled();
+  await code.fill('print("Another draft")\n');
+  await code.press("ControlOrMeta+z");
+  await expect(text).toHaveValue(readFileSync(join(repo, "script.py"), "utf8"));
+  await selectCanvasFile(page, "code.js");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await expect(text).toHaveValue(draft);
+  await page.getByRole("button", { name: "Plain text", exact: true }).click();
+  await expect(text).toBeVisible();
+  await text.fill('const greeting = "Plain mode draft";\n');
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await expect(code).toContainText("Plain mode draft");
+  expect(readFileSync(join(repo, "code.js"), "utf8")).toBe(original);
+});
+
+test("Code editor find, replacement undo, go to line and disk recovery use one draft", async ({ page }) => {
+  const { code, text } = await openCodeFile(page, "code.js");
+  const draft = "one one\n🙂 second\nlast";
+  await code.fill(draft);
+  await code.press("ControlOrMeta+f");
+  await page.getByRole("textbox", { name: "Find in this file", exact: true }).fill("one");
+  await page.getByRole("textbox", { name: "Replace with", exact: true }).fill("two");
+  await page.getByRole("button", { name: "Replace all", exact: true }).click();
+  await expect(text).toHaveValue("two two\n🙂 second\nlast");
+  await page.getByRole("button", { name: "Undo edit", exact: true }).click();
+  await expect(text).toHaveValue(draft);
+  await code.press("Escape");
+  await code.press("Control+g");
+  const line = page.getByRole("textbox", { name: "Line number", exact: true });
+  await line.fill("2"); await line.press("Enter");
+  await expect(code).toBeFocused();
+  await expect(page.locator("#studio-editor-position")).toContainText("Line 2, column 1");
+  await code.press("ArrowRight");
+  await expect(page.locator("#studio-editor-position")).toContainText("Line 2, column 2");
+  await page.getByRole("button", { name: "Load disk version", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Undo edit", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Restore previous draft", exact: true }).click();
+  await expect(text).toHaveValue(draft);
+});
+
+test("Code editor reports JSON syntax errors locally and keeps conflicts recoverable", async ({ page }) => {
+  const { code, text } = await openCodeFile(page, "settings.json");
+  await expect(page.locator("#studio-code-language")).toHaveText("JSON");
+  await code.fill('{"name": }');
+  await expect(page.locator("#studio-code-editor .cm-lint-marker-error")).toBeVisible();
+  const draft = '{"name":"My draft"}\n';
+  await code.fill(draft);
+  await expect(page.locator("#studio-code-editor .cm-lint-marker-error")).toHaveCount(0);
+  writeFileSync(join(repo, "settings.json"), '{"name":"External edit"}\n');
+  await page.getByRole("button", { name: "Save file", exact: true }).click();
+  await expect(page.locator("#studio-editor-conflict")).toBeVisible();
+  await expect(text).toHaveValue(draft);
+  expect(readFileSync(join(repo, "settings.json"), "utf8")).toContain("External edit");
+});
+
+test("Code editor fits a phone, permits keyboard escape and retains a draft during save", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { code, text } = await openCodeFile(page, "code.js");
+  const draft = 'const greeting = "Phone draft";\n';
+  await code.fill(draft); await expect(text).toHaveValue(draft);
+  await code.press("Tab");
+  await expect(code).not.toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  for (const button of await page.locator(".studio-code-toolbar button").all())
+    expect((await button.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  let release, reached;
+  const sent = new Promise(resolve => { reached = resolve; });
+  await page.route("**/api/studio/file", async route => {
+    if (route.request().method() !== "POST") return route.continue();
+    reached(); await new Promise(resolve => { release = resolve; }); await route.continue();
+  });
+  await page.getByRole("button", { name: "Save file", exact: true }).click(); await sent;
+  await code.fill('const greeting = "Newer unsaved edit";\n');
+  release();
+  await expect(page.locator("#studio-editor-status")).toContainText("newer edits remain unsaved");
+  await expect(text).toHaveValue('const greeting = "Newer unsaved edit";\n');
+  expect(readFileSync(join(repo, "code.js"), "utf8")).toBe(draft);
+  await page.locator("#studio-edit-panel").screenshot({ path: testInfo.outputPath("studio-code-phone.png") });
+});
+
+test("Code editor offers HTML completion without starting an agent", async ({ page }) => {
+  const { code } = await openCodeFile(page, "app.html");
+  await code.fill("<but");
+  await code.press("Control+Space");
+  await expect(page.locator("#studio-code-editor .cm-tooltip-autocomplete")).toBeVisible();
+  await expect(page.locator("#studio-code-editor .cm-tooltip-autocomplete")).toContainText("button");
+  await code.press("Escape");
+  await expect(page.locator("#studio-code-editor .cm-tooltip-autocomplete")).toBeHidden();
 });

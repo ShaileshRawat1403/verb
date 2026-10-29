@@ -4,6 +4,14 @@ This document defines how Verb is positioned, explained, and communicated across
 
 ---
 
+## Current product direction — 29 October 2026
+
+Verb is becoming a primary development workstation that welcomes non-developers.
+Studio, capable development tools and durable terminals share project identity,
+evidence, recovery and human control. The control-layer principles below continue
+to apply; they do not prohibit an editor or full IDE capabilities. See
+[the workstation release gates](PRIMARY_WORKSTATION_RELEASE.md).
+
 ## 1. The claim
 
 > **Verb is the control layer around coding agents. The agents generate. Verb owns the environment
@@ -48,7 +56,7 @@ and being the wrong thing badly is worse than being a narrower thing well.
 | :--- | :--- |
 | A coding agent | It contains no model and writes no code. It runs the agents you already use. |
 | A model provider | The assistant is optional and replaceable. The context it answers from is the product. |
-| An IDE | There is no editor, no build system and no project model. There is a terminal, and evidence about it. |
+| A finished general-purpose IDE | Studio has guarded code editing, previews and change review. Complete project language tooling, debugging and IDE execution integration remain release gates. |
 | A mobile terminal emulator | A terminal gives you a shell. Verb gives you session identity, recovery, command boundaries and an archive of the world. Termux is a dependency of Verb, not a competitor to it. |
 | A hosted dev environment | Nothing is executed on someone else's machine. The runtime, the credentials and the record are on the device. |
 

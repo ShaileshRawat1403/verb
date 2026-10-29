@@ -1,5 +1,10 @@
 // Navigation uses only the current textarea draft; it never reads or writes files.
-export function initEditorNavigation({ $, editor }) {
+export function initEditorNavigation({
+  $,
+  editor,
+  focusEditor = () => editor.focus({ preventScroll: true }),
+  selectRange,
+}) {
   const toggle = $("#studio-line-toggle"),
     panel = $("#studio-line-panel"),
     input = $("#studio-line-number"),
@@ -32,7 +37,7 @@ export function initEditorNavigation({ $, editor }) {
     panel.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
     input.removeAttribute("aria-invalid");
-    if (focus) editor.focus({ preventScroll: true });
+    if (focus) focusEditor();
   }
   function show() {
     input.value = String(sync());
@@ -59,13 +64,16 @@ export function initEditorNavigation({ $, editor }) {
     }
     close();
     const offset = starts[line - 1];
-    editor.setSelectionRange(offset, offset);
-    const height = parseFloat(getComputedStyle(editor).lineHeight) || 24;
-    editor.scrollTop = Math.max(
-      0,
-      (line - 1) * height - editor.clientHeight / 2,
-    );
-    editor.scrollLeft = 0;
+    if (selectRange) selectRange(offset, offset, true);
+    else {
+      editor.setSelectionRange(offset, offset);
+      const height = parseFloat(getComputedStyle(editor).lineHeight) || 24;
+      editor.scrollTop = Math.max(
+        0,
+        (line - 1) * height - editor.clientHeight / 2,
+      );
+      editor.scrollLeft = 0;
+    }
     sync();
   }
   toggle.addEventListener("click", () => (panel.hidden ? show() : close()));

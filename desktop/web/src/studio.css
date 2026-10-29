@@ -1374,3 +1374,29 @@
 @media (max-width: 700px) { .studio-check-actions button { min-height: 44px; } }
 
 .studio-preview-loading { margin: 0; padding: 18px; color: var(--text-muted); font-size: 13px; line-height: 1.6; border-block: 1px solid var(--line); }
+
+/* The code surface shares the same explicit-save draft as the plain text fallback. */
+:root { --code-keyword: #d8b4fe; --code-string: #a3d9ae; --code-number: #f2c68a; --code-tag: #8bc8ef; --code-property: #c4c9e8; --code-selection: #354259; }
+:root[data-theme="light"] { --code-keyword: #7543a4; --code-string: #25683b; --code-number: #8b4e0a; --code-tag: #155f8b; --code-property: #444e83; --code-selection: #d5e2f3; }
+@media(prefers-color-scheme: light) { :root:not([data-theme]) { --code-keyword: #7543a4; --code-string: #25683b; --code-number: #8b4e0a; --code-tag: #155f8b; --code-property: #444e83; --code-selection: #d5e2f3; } }
+.studio-code-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; }
+.studio-code-toolbar [role="group"] { display: inline-flex; gap: 4px; }
+.studio-code-toolbar button[aria-pressed="true"] { background: var(--accent-bg); color: var(--text-strong); box-shadow: inset 0 0 0 1px var(--line-strong); }
+#studio-code-language { margin-left: auto; color: var(--text-muted); font: 12px var(--mono); }
+#studio-code-editor { height: 420px; min-width: 0; max-width: 100%; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 13px; }
+#studio-code-editor:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+#studio-code-editor[hidden], #studio-editor-text[hidden], #studio-code-history[hidden] { display: none; }
+#studio-code-note { font-size: 11px; color: var(--text-muted); margin: 10px 0; }
+#studio-code-editor .cm-foldGutter .cm-gutterElement { cursor: pointer; }
+#studio-code-editor .cm-tooltip-autocomplete > ul > li[aria-selected] { background: var(--accent-bg); color: var(--text); }
+@media(max-width: 640px) { #studio-code-editor { height: 360px; font-size: 16px; } .studio-code-toolbar button { min-height: 44px; } #studio-code-editor .cm-gutterElement { min-width: 22px; } }
+/* Editing starts with the file, not a second file browser. Files/Change file reopens it. */
+#view-studio[data-canvas-mode="edit"] .studio-file-picker { display: none; }
+@media (max-width: 640px) {
+  #view-studio[data-canvas-mode="edit"] .studio-heading { display: none; }
+  #view-studio[data-canvas-mode="edit"] .studio-work-tools,
+  #view-studio[data-canvas-mode="edit"] .studio-toolstrip { flex-wrap: nowrap; overflow-x: auto; min-width: 0; padding: 6px 0; }
+  #view-studio[data-canvas-mode="edit"] .studio-work-tools button,
+  #view-studio[data-canvas-mode="edit"] .studio-toolstrip button { flex: 0 0 auto; white-space: nowrap; }
+}
+@media (max-width: 640px) { .studio-edit-panel { scroll-margin-top: 80px; } }
