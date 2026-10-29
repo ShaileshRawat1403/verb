@@ -96,6 +96,12 @@ jobs:
         # the runner; the tests skip themselves rather than fail if a shell is missing.
         run: cargo test --all-targets
 
+      - name: IDE workspace adapter
+        run: |
+          cargo build --quiet
+          VERB_BIN="$PWD/target/debug/verb" node --test integrations/vscode/test/*.test.cjs
+          python3 integrations/vscode/package.py --check
+
       - name: Synthetic boundary tests
         # External terminal admission over HTTP against a stand-in execution boundary: delayed
         # admission, start timeout cleanup, refusal, stale receipts. Test builds only.

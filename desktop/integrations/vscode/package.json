@@ -1,0 +1,45 @@
+{
+  "name": "verb-workspace",
+  "displayName": "Verb Workspace (Local Preview)",
+  "description": "Inspect an explicitly connected local Verb workspace. Read-only integration preview.",
+  "publisher": "verb-local",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=18"
+  },
+  "main": "./extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "verb.connect",
+        "title": "Verb: Connect to Local Workspace"
+      },
+      {
+        "command": "verb.inspect",
+        "title": "Verb: Refresh Connection Details"
+      },
+      {
+        "command": "verb.openSnapshot",
+        "title": "Verb: Open Read-Only File Snapshot"
+      },
+      {
+        "command": "verb.disconnect",
+        "title": "Verb: Disconnect Workspace"
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  },
+  "license": "Apache-2.0"
+}
