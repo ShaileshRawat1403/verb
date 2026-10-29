@@ -296,6 +296,28 @@ pub(crate) fn save(project: &Path, request: SaveRequest) -> Result<Document, Str
     result
 }
 
+// A readiness message is a rendering signal, never evidence that the project's code is correct.
+// Keep the original doctype first and leave the saved file/revision untouched.
+fn preview_document(text: &str, ticket: &str) -> Vec<u8> {
+    let token = serde_json::to_string(ticket)
+        .unwrap()
+        .replace('<', "\\u003c");
+    let shim = format!("<script>addEventListener('DOMContentLoaded',()=>parent.postMessage({{type:'verb:preview-ready',ticket:{token}}},'*'),{{once:true}})</script>");
+    let trimmed = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let offset = if trimmed
+        .get(..9)
+        .is_some_and(|s| s.eq_ignore_ascii_case("<!doctype"))
+    {
+        trimmed
+            .find('>')
+            .map(|end| text.len() - trimmed.len() + end + 1)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    format!("{}{}{}", &text[..offset], shim, &text[offset..]).into_bytes()
+}
+
 struct Snapshot {
     html: Vec<u8>,
     expires: Instant,
@@ -317,10 +339,11 @@ impl Previews {
                     .to_owned(),
             );
         }
+        let html = preview_document(&doc.text, &ticket);
         self.entries.insert(
             ticket,
             Snapshot {
-                html: doc.text.into_bytes(),
+                html,
                 expires: Instant::now() + Duration::from_secs(120),
             },
         );
@@ -357,6 +380,19 @@ mod tests {
         fs::write(dir.join("index.html"), "<h1>Before</h1>").unwrap();
         dir
     }
+    #[test]
+    fn preview_readiness_preserves_doctype_and_escapes_the_message() {
+        let html = " \n<!DOCTYPE html><h1>Saved content</h1>";
+        let rendered =
+            String::from_utf8(super::preview_document(html, "ticket</script>test")).unwrap();
+        assert!(rendered.starts_with(" \n<!DOCTYPE html><script>"));
+        assert!(rendered.ends_with("<h1>Saved content</h1>"));
+        assert!(rendered.contains("DOMContentLoaded"));
+        assert!(rendered.contains("verb:preview-ready"));
+        assert!(rendered.contains("ticket\\u003c/script>test"));
+        assert_eq!(html, " \n<!DOCTYPE html><h1>Saved content</h1>");
+    }
+
     #[test]
     fn image_access_validates_signature_links_limit_and_reply_identity() {
         let dir = fixture();

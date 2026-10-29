@@ -3138,7 +3138,13 @@ fn send_reply(request: Request, reply: Reply) {
         && (request.body_length().is_some_and(|length| length > 0)
             || header(&request, "Transfer-Encoding").is_some());
     let mut response = Response::from_data(reply.body).with_status_code(StatusCode(reply.status));
-    let cache_control = reply.cache_control.unwrap_or("no-store");
+    // Saved sandbox snapshots must not acquire CDN-injected scripts or HTML rewrites.
+    // Keep no-store; no-transform is response-local and does not change Access/WAF policy.
+    let cache_control = if reply.sandbox_preview {
+        "no-store, no-transform"
+    } else {
+        reply.cache_control.unwrap_or("no-store")
+    };
     let csp = if reply.sandbox_preview {
         "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; frame-ancestors 'self'"
     } else if reply.studio_frames {

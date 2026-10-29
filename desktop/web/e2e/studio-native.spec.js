@@ -84,6 +84,7 @@ test.beforeAll(async () => {
     "# Native Studio\n\nAn isolated project.\n",
   );
   writeFileSync(join(repo, "app.html"), APP);
+  writeFileSync(join(repo, "ready.html"), APP);
   writeFileSync(join(repo, "sample.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
   writeFileSync(join(repo, "disguised.png"), '<svg onload="alert(1)"></svg>');
   writeFileSync(join(repo, "conflict.txt"), "original");
@@ -99,6 +100,7 @@ test.beforeAll(async () => {
       "add",
       "README.md",
       "app.html",
+      "ready.html",
       "conflict.txt",
       "typing.txt",
       ".gitignore",
@@ -390,6 +392,7 @@ test("preview tickets are scoped, single-use, iframe-only and carry HTTP sandbox
     "allow-same-origin",
   );
   expect(content.headers()["set-cookie"]).toBeUndefined();
+  expect(content.headers()["cache-control"]).toBe("no-store, no-transform");
   expect(
     (
       await request.get(`${origin}${info.url}`, {
@@ -998,4 +1001,58 @@ test("go to line remains reachable on phone and scrolls only inside a long draft
   expect(await editor.evaluate(el => el.scrollTop)).toBeGreaterThan(0);
   expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe(disk);
   await editor.fill(disk);
+});
+
+
+test("preview reports stalled loading, rejects unrelated readiness and recovers on Reload", async ({ page }) => {
+  await openFile(page, "ready.html");
+  const pending = [];
+  await page.route("**/studio-preview/*", route => { pending.push(route); });
+  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  const loading = page.locator("#studio-app-loading");
+  await expect(loading).toHaveText("Loading saved preview…");
+  await expect(page.locator("#studio-app-frame")).toHaveAttribute("aria-busy", "true");
+  const ticket = (await page.locator("#studio-app-frame iframe").getAttribute("src")).split("/").pop();
+  await page.evaluate(ticket => window.dispatchEvent(new MessageEvent("message", { source: window, data: { type: "verb:preview-ready", ticket } })), ticket);
+  await expect(loading).toBeVisible();
+  await expect(loading).toContainText("has not confirmed loading", { timeout: 16000 });
+  const old = pending[0];
+  await old.continue();
+  await expect(loading).toBeHidden();
+  await expect(page.locator("#studio-editor-status")).toContainText("Preview document loaded");
+  const frame = page.frameLocator("#studio-app-frame iframe");
+  await expect(frame.locator("h1")).toBeVisible();
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await expect(loading).toHaveText("Loading saved preview…");
+  await expect.poll(() => pending.length).toBe(2);
+  await pending[1].continue();
+  await expect(loading).toBeHidden();
+  await expect(page.locator("#studio-app-frame")).not.toHaveAttribute("aria-busy");
+  await page.getByRole("button", { name: "Close preview", exact: true }).click();
+  await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
+  await expect(loading).toBeHidden();
+});
+
+test("closing a preview while Reload is pending never reopens it", async ({ page }) => {
+  await openFile(page, "ready.html");
+  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  await expect(page.locator("#studio-app-panel")).toBeVisible();
+  await expect(page.locator("#studio-editor-status")).toContainText("Preview document loaded");
+  let release;
+  const hold = new Promise(resolve => { release = resolve; });
+  await page.route("**/api/studio/preview", async route => {
+    const response = await route.fetch();
+    await hold;
+    await route.fulfill({ response });
+  });
+  const sent = page.waitForRequest(r => r.url().endsWith("/api/studio/preview") && r.method() === "POST");
+  const responded = page.waitForResponse(r => r.url().endsWith("/api/studio/preview") && r.request().method() === "POST");
+  await page.getByRole("button", { name: "Reload", exact: true }).click();
+  await sent;
+  await expect(page.locator("#studio-editor-status")).toContainText("Preparing isolated preview");
+  await page.getByRole("button", { name: "Close preview", exact: true }).click();
+  release();
+  await responded;
+  await expect(page.locator("#studio-app-panel")).toBeHidden();
+  await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
 });

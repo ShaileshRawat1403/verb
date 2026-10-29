@@ -8,6 +8,23 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     mode = "document",
     request = 0;
   const drafts = new Map();
+  let activePreview = null;
+  function stopPreview() {
+    if (activePreview) clearTimeout(activePreview.timer);
+    activePreview = null;
+    $("#studio-app-frame").replaceChildren();
+    $("#studio-app-frame").removeAttribute("aria-busy");
+    $("#studio-app-loading").hidden = true;
+  }
+  window.addEventListener("message", (event) => {
+    const active = activePreview;
+    if (!active || mode !== "app" || event.source !== active.frame.contentWindow ||
+        event.data?.type !== "verb:preview-ready" || event.data?.ticket !== active.ticket) return;
+    clearTimeout(active.timer);
+    $("#studio-app-loading").hidden = true;
+    $("#studio-app-frame").removeAttribute("aria-busy");
+    status("Preview document loaded. Inline scripts run in the sandbox; external assets and API connections are blocked.");
+  });
   const editor = $("#studio-editor-text");
   const status = (text) => {
     $("#studio-editor-status").textContent = text;
@@ -23,8 +40,9 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     },
   });
   function setMode(next) {
+    if (next !== "app") ++request;
     if (mode === "app" && next !== "app")
-      $("#studio-app-frame").replaceChildren();
+      stopPreview();
     mode = next;
     if (next !== "edit") navigation.reset();
     $("#studio-edit-panel").hidden = next !== "edit";
@@ -214,13 +232,24 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
         "allow",
         "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'; payment 'none'",
       );
+      stopPreview();
+      const active = { frame, ticket: result.url.split("/").pop(), timer: null };
+      activePreview = active;
+      $("#studio-app-loading").hidden = false;
+      $("#studio-app-loading").textContent = "Loading saved preview…";
+      $("#studio-app-frame").setAttribute("aria-busy", "true");
       frame.src = result.url;
       $("#studio-app-frame").replaceChildren(frame);
+      active.timer = setTimeout(() => {
+        if (activePreview !== active) return;
+        $("#studio-app-loading").textContent = "Preview has not confirmed loading. Keep this tab open, or choose Reload for a fresh preview. Your file is saved.";
+        status("Preview loading is not confirmed. Reload creates a fresh saved snapshot; closing the preview stops it.");
+      }, 12000);
       $("#studio-app-caption").textContent =
         `saved snapshot ${doc.revision.slice(0, 8)} · refresh restarts the app`;
       setMode("app");
       status(
-        "Isolated HTML app preview. Inline scripts run; external assets and API connections are blocked.",
+        "Loading the saved file in an isolated preview…",
       );
     } catch (error) {
       if (generation === request) status(error.message);
