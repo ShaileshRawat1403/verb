@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { createServer as httpServer } from "node:http";
 import { resolve, join } from "node:path";
+import { tmpdir } from "node:os";
 const TOKEN = "companion-fixture-owner-000000000000000";
 let host, peer, base, site, target, session, view;
 const freePort = () =>
@@ -42,7 +43,7 @@ async function action(op, extra = {}) {
 }
 test.describe.configure({ mode: "serial" });
 test.beforeAll(async () => {
-  const root = mkdtempSync("/private/tmp/verb-companion-e2e-"),
+  const root = mkdtempSync(join(tmpdir(), "verb-companion-e2e-")),
     repo = join(root, "project"),
     home = join(root, "home");
   mkdirSync(repo);
