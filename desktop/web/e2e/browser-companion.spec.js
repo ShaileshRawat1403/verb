@@ -312,3 +312,48 @@ test("Studio pairs, discovers the Mac location and revokes a running browser", a
     )
     .toBe(0);
 });
+
+test("Studio recovers when the companion is revoked outside this tab", async ({
+  page,
+}) => {
+  const pairing = (await owner("/api/browser/pairing", { op: "pair" })).body;
+  peer = spawn(
+    process.execPath,
+    [
+      resolve("runtime/browser-companion.mjs"),
+      "--server",
+      base,
+      "--chromium",
+      chromium.executablePath(),
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  peer.stdin.end(pairing.code + "\n");
+  await expect
+    .poll(async () => (await owner("/api/browser/pairing")).body.connected, {
+      timeout: 15000,
+    })
+    .toBe(true);
+  await page.goto(base + "/#" + TOKEN);
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await page.getByRole("button", { name: "Browser", exact: true }).click();
+  const start = page.getByRole("button", {
+    name: "Start browser",
+    exact: true,
+  });
+  await start.click();
+  await expect(page.locator("#studio-browser-stage img")).toBeVisible({
+    timeout: 20000,
+  });
+  await owner("/api/browser/pairing", { op: "revoke" });
+  await expect(page.locator("#studio-browser-stage img")).toHaveCount(0, {
+    timeout: 15000,
+  });
+  await expect(start).toBeDisabled();
+  await expect(page.locator("#studio-browser-pair-status")).toHaveText(
+    "No Mac companion connected.",
+  );
+  await expect
+    .poll(() => peer.exitCode ?? peer.signalCode, { timeout: 10000 })
+    .not.toBeNull();
+});

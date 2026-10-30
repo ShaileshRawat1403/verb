@@ -32,7 +32,8 @@ The browser key cannot authenticate to project, terminal or other general Verb A
 
 The key expires after eight hours, is invalidated by a lost heartbeat (35 seconds), and is revoked
 on Disconnect. Pairing and jobs are memory-only; host restart revokes them. Reconnection requires
-fresh pairing. The runner opens no local listening port. Remote origins require HTTPS with normal
+fresh pairing. No browser control or CDP listener is exposed. The worker uses an authenticated
+loopback egress proxy for website access. Remote origins require HTTPS with normal
 certificate validation; redirects are refused, and insecure TLS overrides are rejected.
 
 Cloudflare Access is retained. For an Access-protected host, first run the official
@@ -48,7 +49,8 @@ References: [Cloudflare CLI authentication](https://developers.cloudflare.com/cl
 
 ## Use
 
-Install the repository's pinned web dependencies and provide a compatible installed Chromium binary.
+Use a maintained Node.js 22 or 24 release, install the repository's pinned web dependencies and
+provide a compatible installed Chromium binary.
 From the Verb checkout on the Mac:
 
 ```sh

@@ -120,7 +120,13 @@ export function initStudioBrowser({ $, api, beforeOpen }) {
     } catch (error) {
       if (request === serial) {
         announce(error.message);
-        if ([401, 403, 409].includes(error.status)) { view = null; $('#studio-browser-text').textContent = ''; }
+        if ([401, 403, 409].includes(error.status)) {
+          view = null; $('#studio-browser-text').textContent = '';
+          if ([401, 403].includes(error.status)) {
+            availability = false;
+            void pairingStatus();
+          }
+        }
         else recoverStatus = true; // Read status before another snapshot; never replay the failed action.
       }
       return false;

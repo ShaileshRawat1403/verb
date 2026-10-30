@@ -1,4 +1,4 @@
-// Outbound browser-only companion. No listener, personal profile, project or terminal access.
+// Outbound browser-only companion. No control listener, personal profile, project or terminal access.
 import { spawn, execFile } from "node:child_process";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
