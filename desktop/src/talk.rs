@@ -602,25 +602,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("verb-talk-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let _ = std::fs::remove_file(dir.join("args"));
-        let script = dir.join("agy");
         let args_file = dir.join("args");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{}'\necho '---' >> '{}'\nsleep 0.3\n\
-                 echo '{{\"event\":\"init\",\"conversation_id\":\"conv-9\"}}'\n\
-                 echo '{{\"event\":\"result\",\"result\":{{\"conversation_id\":\"conv-9\",\"status\":\"SUCCESS\",\"response\":\"done\"}}}}'\n",
-                args_file.display(),
-                args_file.display()
-            ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Keep the executable immutable. Creating it during parallel tests can race another
+        // process spawn on Linux: an inherited writer briefly makes exec return ETXTBSY.
+        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/talk-agent.sh");
         let talks = Talks::default();
         talks.create("t1".into(), Some("001".into()));
         let program = script.to_string_lossy().to_string();
-        talks.send("t1", &dir, "first", &program).unwrap();
+        talks
+            .send("t1", &dir, "first", &program)
+            .unwrap_or_else(|error| {
+                panic!("{error}: {:?}", talks.view("t1"));
+            });
         // The stand-in takes 0.3 s, so a message sent now arrives mid-turn (a fast runner once
         // finished the turn first and ran "too soon" as a real second turn).
         assert!(
