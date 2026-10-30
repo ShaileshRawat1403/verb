@@ -520,6 +520,11 @@
 
           <section id="view-studio" class="view" aria-label="Studio canvas workspace" data-focus="canvas">
             <div class="studio-focus" role="group" aria-label="Studio focus"><button id="studio-focus-canvas" class="text-button" type="button" aria-controls="studio-canvas-panel" aria-pressed="true">Canvas</button><button id="studio-focus-work" class="text-button" type="button" aria-controls="studio-work-panel" aria-pressed="false">Current work</button></div>
+            <div class="studio-pane-controls" role="group" aria-label="Studio panels">
+              <button id="studio-toggle-work" class="text-button" type="button" aria-controls="studio-work-panel" aria-expanded="true">Hide current work</button>
+              <button id="studio-toggle-canvas" class="text-button" type="button" aria-controls="studio-canvas-panel" aria-expanded="true">Hide preview</button>
+              <button id="studio-reset-layout" class="text-button" type="button">Reset Studio layout</button>
+            </div>
             <div class="studio-layout">
               <aside class="studio-thread" id="studio-work-panel" aria-label="Current work thread">
                 <header class="studio-thread-head"><label class="studio-kicker" for="studio-thread">Current work</label><select id="studio-thread"><option value="">Reading work…</option></select></header>

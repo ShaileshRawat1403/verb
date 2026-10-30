@@ -60,8 +60,8 @@
 .studio-open .page-content {
   padding: 0;
 }
-.studio-open.navigation-collapsed {
-  grid-template-columns: 64px minmax(0, 1fr);
+#app.studio-open.navigation-collapsed {
+  grid-template-columns: minmax(0, 1fr);
 }
 #view-studio {
   padding: 0;
@@ -1406,3 +1406,16 @@
 #studio-browser-pair-code { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-0); color: var(--text); font: 13px var(--mono); }
 #studio-browser-pairing label { display: block; margin-bottom: 8px; }
 #studio-browser-pairing .studio-browser-tools { padding-inline: 0; }
+
+/* Pane controls live outside the panes, so restoring never depends on hidden content. */
+.studio-pane-controls { display: flex; align-items: center; gap: 6px; padding: 6px 16px; border-bottom: 1px solid var(--line); background: var(--bg-0); }
+.studio-pane-controls button { min-height: 32px; padding: 5px 10px; font-size: 12px; }
+.studio-pane-controls button:last-child { margin-left: auto; }
+@media (min-width: 821px) {
+  #view-studio .studio-layout { height: calc(100dvh - 110px); min-height: 0; }
+  #view-studio[data-work-expanded="true"] .studio-layout { grid-template-columns: minmax(0, 1fr); }
+  #view-studio[data-work-expanded="true"] #studio-canvas-panel,
+  #view-studio[data-work-expanded="true"] #studio-pane-divider { display: none; }
+  #view-studio[data-work-expanded="true"] #studio-work-panel { grid-column: 1; }
+}
+@media (max-width: 820px) { .studio-pane-controls { display: none; } }

@@ -95,6 +95,7 @@ export function initStudio({
   bridge.connect();
 
   function focusSurface(name, { focus = false } = {}) {
+    dock.reveal(name);
     state.focus = name;
     root.dataset.focus = name;
     for (const panel of ["canvas", "work"]) {

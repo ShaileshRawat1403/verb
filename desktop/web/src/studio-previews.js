@@ -145,20 +145,51 @@ export function initStudioPreviews({
       splitter.onpointermove = null;
     };
   });
-  function expand(expanded) {
-    root.dataset.previewExpanded = String(expanded);
-    $("#studio-expand-preview").setAttribute("aria-pressed", String(expanded));
-    $("#studio-expand-preview").textContent = expanded
+  function paneLayout(workHidden, canvasHidden) {
+    // Always retain one surface and its external restore controls. Never unmount drafts or apps.
+    root.dataset.previewExpanded = String(workHidden);
+    root.dataset.workExpanded = String(canvasHidden);
+    for (const [id, hidden, label] of [
+      ["work", workHidden, "current work"],
+      ["canvas", canvasHidden, "preview"],
+    ]) {
+      const button = $(`#studio-toggle-${id}`);
+      button.setAttribute("aria-expanded", String(!hidden));
+      button.textContent = `${hidden ? "Show" : "Hide"} ${label}`;
+    }
+    $("#studio-expand-preview").setAttribute(
+      "aria-pressed",
+      String(workHidden),
+    );
+    $("#studio-expand-preview").textContent = workHidden
       ? "Restore split"
       : "Expand preview";
+  }
+  function expand(expanded) {
+    paneLayout(expanded, false);
   }
   $("#studio-expand-preview").addEventListener("click", () =>
     expand(root.dataset.previewExpanded !== "true"),
   );
+  $("#studio-toggle-work").addEventListener("click", () =>
+    paneLayout(root.dataset.previewExpanded !== "true", false),
+  );
+  $("#studio-toggle-canvas").addEventListener("click", () =>
+    paneLayout(false, root.dataset.workExpanded !== "true"),
+  );
+  $("#studio-reset-layout").addEventListener("click", () => {
+    split(46);
+    paneLayout(false, false);
+  });
   root.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && root.dataset.previewExpanded === "true") {
-      expand(false);
-      $("#studio-expand-preview").focus();
+    // Escape inside a dialog/editor belongs to that control. Restore only from the layout controls.
+    if (
+      event.key === "Escape" &&
+      (event.target.closest(".studio-pane-controls") ||
+        event.target === $("#studio-expand-preview"))
+    ) {
+      paneLayout(false, false);
+      $("#studio-toggle-work").focus();
     }
   });
   function showChanges(show) {
@@ -299,6 +330,13 @@ export function initStudioPreviews({
           $("#studio-image-state").textContent =
             `Image unavailable: ${error.message}`;
       }
+    },
+    reveal(surface) {
+      if (
+        (surface === "canvas" && root.dataset.workExpanded === "true") ||
+        (surface === "work" && root.dataset.previewExpanded === "true")
+      )
+        paneLayout(false, false);
     },
     isImage,
   };

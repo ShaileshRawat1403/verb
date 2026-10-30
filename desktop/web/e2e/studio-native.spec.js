@@ -1202,3 +1202,80 @@ test("Code editor offers HTML completion without starting an agent", async ({ pa
   await code.press("Escape");
   await expect(page.locator("#studio-code-editor .cm-tooltip-autocomplete")).toBeHidden();
 });
+
+
+test("Studio pane collapse retains editor drafts and app state, and every pane can be restored", async ({
+  page,
+}, testInfo) => {
+  writeFileSync(join(repo, "app.html"), APP);
+  await openFile(page, "app.html");
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  const editor = page.getByRole("textbox", {
+    name: "Code editor",
+    exact: true,
+  });
+  await editor.fill("retained unsaved pane draft");
+  await page.getByRole("button", { name: "Hide preview", exact: true }).click();
+  await expect(page.locator("#studio-canvas-panel")).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Show preview", exact: true }),
+  ).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator("#studio-work-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Show preview", exact: true }).click();
+  await expect(editor).toContainText("retained unsaved pane draft");
+  await page
+    .getByRole("button", { name: "Hide current work", exact: true })
+    .click();
+  await expect(page.locator("#studio-work-panel")).not.toBeVisible();
+  await expect(editor).toBeVisible();
+  await page
+    .getByRole("button", { name: "Show current work", exact: true })
+    .press("Escape");
+  await expect(page.locator("#studio-work-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Hide preview", exact: true }).click();
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page.locator("#studio-canvas-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await page.getByRole("button", { name: "Code", exact: true }).click();
+  await expect(editor).toContainText("retained unsaved pane draft");
+  await page
+    .getByRole("button", { name: "Load disk version", exact: true })
+    .click();
+  await expect(page.locator("#studio-draft-state")).toContainText(
+    "Saved on disk",
+  );
+  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  const frame = page.frameLocator("#studio-app-frame iframe");
+  await expect(
+    frame.getByRole("button", { name: "Book a walk · 0", exact: true }),
+  ).toBeVisible();
+  await frame
+    .getByRole("button", { name: "Book a walk · 0", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Hide preview", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Hide navigation", exact: true })
+    .click();
+  expect(
+    (await page.locator(".main-content").boundingBox()).width,
+  ).toBeGreaterThan(1400);
+  await page
+    .getByRole("button", { name: "Reset Studio layout", exact: true })
+    .click();
+  await expect(
+    frame.getByRole("button", { name: "Book a walk · 1", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#studio-work-panel")).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("studio-restored-panels.png"),
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole("group", { name: "Studio panels", exact: true }),
+  ).not.toBeVisible();
+  await page.getByRole("button", { name: "Current work", exact: true }).click();
+  await expect(page.locator("#studio-work-panel")).toBeVisible();
+  await page.getByRole("button", { name: "Canvas", exact: true }).click();
+  await expect(page.locator("#studio-canvas-panel")).toBeVisible();
+});
