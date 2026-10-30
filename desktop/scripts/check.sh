@@ -19,6 +19,9 @@ npm run build --prefix web >/dev/null
 git diff --exit-code --quiet -- web/dist || { echo "web/dist changed: commit the rebuilt bundle"; exit 1; }
 step "browser tests (SHELL unset, as on CI and Node 1)"
 cargo build --quiet
+step "IDE workspace adapter"
+VERB_BIN="$PWD/target/debug/verb" node --test integrations/vscode/test/*.test.cjs
+python3 integrations/vscode/package.py --check
 step "fresh-state native release contract"
 python3 scripts/test-release.py --binary target/debug/verb --version "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 (cd web && env -u SHELL VERB_BIN="$PWD/../target/debug/verb" npx playwright test)

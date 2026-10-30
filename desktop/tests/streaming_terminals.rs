@@ -514,7 +514,9 @@ fn backpressure_pauses_pty_reader_and_resumes_on_client_ack() {
 
     // 2. Connect WebSocket and attach
     let mut ws = server.connect_ws();
-    set_timeout(&ws, Duration::from_millis(600));
+    // A loaded CI host may take longer to produce the first PTY frame.
+    // Only probe for a pause after a meaningful amount of output arrived.
+    set_timeout(&ws, Duration::from_secs(5));
 
     ws.send(Message::Text(
         json!({"type": "attach", "id": id, "rows": 24, "cols": 80}).to_string(),
@@ -524,8 +526,10 @@ fn backpressure_pauses_pty_reader_and_resumes_on_client_ack() {
     let mut total_bytes_received = 0usize;
     let mut frames_received = 0usize;
 
-    // Read until the stream pauses due to backpressure (no ACK sent)
+    let deadline = Instant::now() + Duration::from_secs(10);
+    // Read until the stream pauses due to backpressure (no ACK sent).
     loop {
+        assert!(Instant::now() < deadline, "Stream never paused without ACK");
         match ws.read() {
             Ok(Message::Binary(bin)) => {
                 if bin.len() > 1 && (bin[0] as usize) < bin.len() {
@@ -533,13 +537,25 @@ fn backpressure_pauses_pty_reader_and_resumes_on_client_ack() {
                     let payload = &bin[1 + id_len..];
                     total_bytes_received += payload.len();
                     frames_received += 1;
+                    assert!(
+                        total_bytes_received <= 256 * 1024,
+                        "Stream exceeded twice the high water mark without ACK"
+                    );
+                    if total_bytes_received >= 64 * 1024 {
+                        set_timeout(&ws, Duration::from_millis(600));
+                    }
                 }
             }
             Ok(_) => {}
-            Err(_) => {
-                // Read timed out because PTY reader paused when unacked >= 128KB!
+            Err(tungstenite::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
                 break;
             }
+            Err(error) => panic!("Stream failed before backpressure could be verified: {error}"),
         }
     }
 

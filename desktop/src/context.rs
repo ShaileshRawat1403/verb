@@ -127,7 +127,20 @@ fn event_timestamp(line: &str) -> Option<u128> {
         .or_else(|| json_number(line, "timestamp"))
 }
 
-fn parse_iso8601_utc(value: &str) -> Option<u128> {
+/// `2026-10-27T10:00:00Z`, or with a fraction of a second as agents write it
+/// (`2026-10-27T10:00:00.123Z`). Anything else is `None`, never a guess.
+pub(crate) fn parse_iso8601_utc(value: &str) -> Option<u128> {
+    if value.len() > 20 && value.as_bytes().get(19) == Some(&b'.') && value.ends_with('Z') {
+        let fraction = &value[20..value.len() - 1];
+        if fraction.is_empty()
+            || fraction.len() > 9
+            || !fraction.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let millis: u128 = format!("{fraction:0<3}")[..3].parse().ok()?;
+        return parse_iso8601_utc(&format!("{}Z", &value[..19])).map(|base| base + millis);
+    }
     let bytes = value.as_bytes();
     if bytes.len() != 20
         || bytes[4] != b'-'

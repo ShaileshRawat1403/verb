@@ -35,7 +35,8 @@ pub struct Hosted {
     /// The agent's own record, once it has begun one. Shared with the CLI proxy, which observes
     /// the same way from its own loop.
     watch: AgentWatch,
-    chat_adapter: Option<Box<dyn crate::agent_chat::AgentChatAdapter>>,
+    /// The agent's conversation as Verb can show and continue it: `crate::conversation`.
+    conversation: Option<crate::conversation::Engine>,
     pub(crate) sink: Option<std::sync::Arc<crate::stream::TerminalStreamSink>>,
     /// Set only after the process and durable session have both been closed out.
     closed: bool,
@@ -147,11 +148,15 @@ impl Hosted {
         // An unavailable optional bridge never prevents the agent from starting. `verb mobile
         // offer ID` will report the missing endpoint if this host could not create it.
         let mobile_server = LocalServer::bind(&session.id, mobile.clone(), process.pid).ok();
-        let chat_adapter = crate::agent_chat::create_adapter(
+        // Each process start is one execution attempt, numbered from the session's own event log.
+        let conversation = crate::conversation::Engine::for_agent(
             session.agent.as_ref().map(|agent| agent.label()),
             project,
-            process.pid,
+            &session.id,
+            crate::process_starts(&session),
             session.resume_identity.as_deref(),
+            process.pid,
+            crate::conversation::Sources::for_project(project),
         );
         Ok(Self {
             session,
@@ -170,7 +175,7 @@ impl Hosted {
             exit_code: None,
             pending: Vec::new(),
             watch,
-            chat_adapter,
+            conversation,
             closed: false,
         })
     }
@@ -188,11 +193,7 @@ impl Hosted {
     pub fn poll(&mut self) -> Result<(Option<i32>, bool), String> {
         self.mobile.expire_idle(std::time::Instant::now())?;
         self.mobile.deliver_phone_input(&mut self.master)?;
-        if let Some(adapter) = &mut self.chat_adapter {
-            let screen = self.parser.screen().contents();
-            let update = adapter.poll_chat(&screen);
-            let _ = self.mobile.update_chat(update);
-        }
+        self.poll_conversation()?;
         if self.mobile.needs_initial_screen()? {
             self.mobile
                 .publish_screen(self.parser.screen().contents().into_bytes())?;
@@ -233,6 +234,205 @@ impl Hosted {
             changed |= self.exit_code != previous;
         }
         Ok((self.exit_code, changed))
+    }
+
+    /// Advances the conversation, types any phone chat messages that pass its checks, and
+    /// republishes the phone's view when something changed.
+    fn poll_conversation(&mut self) -> Result<(), String> {
+        for request in self.mobile.take_chat()? {
+            // The phone was told only "queued". A refusal writes nothing, so it is recorded as a
+            // message that was not sent, with its reason, for the phone to show.
+            if let Err(refusal) = self.chat_send_with_lease(
+                &request.id,
+                &request.text,
+                crate::conversation::Origin::Phone,
+                Some(request.generation),
+            ) {
+                if let Some(engine) = &mut self.conversation {
+                    engine.record_refusal(
+                        &request.id,
+                        crate::conversation::Origin::Phone,
+                        &refusal,
+                    );
+                }
+            }
+        }
+        let running = self.exit_code.is_none();
+        let watched = self.watch.conversation_id();
+        let Some(engine) = &mut self.conversation else {
+            return Ok(());
+        };
+        let screen = self.parser.screen().contents();
+        let changed = engine.poll(&screen, watched.as_deref(), running);
+        if changed || self.mobile.needs_initial_screen()? {
+            self.publish_conversation()?;
+        }
+        Ok(())
+    }
+
+    fn publish_conversation(&self) -> Result<(), String> {
+        let Some(engine) = &self.conversation else {
+            return Ok(());
+        };
+        if !self.mobile.wants_screen()? {
+            return Ok(());
+        }
+        let mut limit = 60;
+        let (view, conversation) = loop {
+            let view = engine.view(limit);
+            let value = serde_json::to_value(&view).map_err(|e| e.to_string())?;
+            if limit == 0 || value.to_string().len() <= crate::mobile::MAX_PHONE_CONVERSATION {
+                break (view, value);
+            }
+            limit /= 2;
+        };
+        use crate::conversation::Readiness;
+        let agent_state = match view.readiness.state {
+            Readiness::Ready => "waiting",
+            Readiness::Working => "working",
+            Readiness::Approval => "awaiting_approval",
+            _ => "uncertain",
+        };
+        let messages = view
+            .items
+            .iter()
+            .filter(|i| matches!(i.item.kind, "you" | "agent"))
+            .map(|i| crate::mobile::ChatMessageDto {
+                id: i
+                    .item
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("seq-{}", i.seq)),
+                sender: if i.item.kind == "you" {
+                    "user"
+                } else {
+                    "agent"
+                }
+                .to_owned(),
+                text: i.item.text.clone().unwrap_or_default(),
+                // 0 means "no usable time": never the time Verb read it.
+                timestamp: i
+                    .item
+                    .at
+                    .as_deref()
+                    .and_then(crate::context::parse_iso8601_utc)
+                    .and_then(|ms| u64::try_from(ms).ok())
+                    .unwrap_or(0),
+                at: i.item.at.clone(),
+            })
+            .collect();
+        self.mobile.update_chat(crate::mobile::ChatUpdate {
+            agent: view.agent.unwrap_or("agent").to_owned(),
+            agent_state: agent_state.to_owned(),
+            can_send_prompt: view.can_send,
+            messages,
+            conversation,
+            stream_generation: view.stream.generation,
+        })
+    }
+
+    /// Sends a chat message: a separate channel from raw keystrokes, gated by readiness, written
+    /// under the input lease of the side it came from, and recorded once per message id.
+    pub fn chat_send(
+        &mut self,
+        id: &str,
+        text: &str,
+        origin: crate::conversation::Origin,
+    ) -> Result<(), crate::conversation::Refusal> {
+        self.chat_send_with_lease(id, text, origin, None)
+    }
+
+    fn chat_send_with_lease(
+        &mut self,
+        id: &str,
+        text: &str,
+        origin: crate::conversation::Origin,
+        lease: Option<u64>,
+    ) -> Result<(), crate::conversation::Refusal> {
+        let generation = lease.or_else(|| self.mobile.chat_generation().ok());
+        let running = self.exit_code.is_none();
+        let watched = self.watch.conversation_id();
+        let screen = self.parser.screen().contents();
+        let bracketed = self.parser.screen().bracketed_paste();
+        let Some(engine) = &mut self.conversation else {
+            return Err(crate::conversation::Refusal {
+                code: "unsupported",
+                reason: "This terminal has no agent conversation. Use the terminal.".to_owned(),
+            });
+        };
+        let Some(bytes) = engine.prepare_send(
+            id,
+            text,
+            origin,
+            crate::conversation::SendContext {
+                screen: &screen,
+                conversation: watched.as_deref(),
+                running,
+                bracketed_paste: bracketed,
+            },
+        )?
+        else {
+            return Ok(());
+        };
+        let written = match origin {
+            crate::conversation::Origin::Desktop => {
+                self.mobile.write_desktop_chat(&mut self.master, &bytes)
+            }
+            crate::conversation::Origin::Phone => self.mobile.write_phone_chat(
+                &mut self.master,
+                &bytes,
+                generation.unwrap_or(u64::MAX),
+            ),
+        };
+        engine.finish_send(id, written);
+        let _ = self.publish_conversation();
+        Ok(())
+    }
+
+    pub fn chat_check(&mut self, id: &str) -> Result<(), String> {
+        let running = self.exit_code.is_none();
+        let watched = self.watch.conversation_id();
+        let screen = self.parser.screen().contents();
+        let engine = self
+            .conversation
+            .as_mut()
+            .ok_or("This terminal has no agent conversation.")?;
+        engine.check(id, &screen, watched.as_deref(), running)?;
+        let _ = self.publish_conversation();
+        Ok(())
+    }
+
+    pub fn chat_discard(&mut self, id: &str) -> Result<(), String> {
+        let engine = self
+            .conversation
+            .as_mut()
+            .ok_or("This terminal has no agent conversation.")?;
+        engine.discard(id)?;
+        let _ = self.publish_conversation();
+        Ok(())
+    }
+
+    /// Applies a stream setting the moment it changes, rather than at the next settings check.
+    pub fn apply_stream(&mut self, settings: crate::transcript::Settings) {
+        if let Some(engine) = &mut self.conversation {
+            engine.apply_settings(settings);
+        }
+        let _ = self.publish_conversation();
+    }
+
+    /// The conversation view for the browser, with what the paired phone has acknowledged.
+    pub fn conversation_view(&self, max_items: usize) -> Option<serde_json::Value> {
+        let engine = self.conversation.as_ref()?;
+        let mut value = serde_json::to_value(engine.view(max_items)).ok()?;
+        if let Ok(ack) = self.mobile.phone_ack() {
+            value["phone"] = serde_json::json!({
+                "paired": ack.paired,
+                "connected": ack.connected,
+                "ackedGeneration": ack.applied.map(|(generation, _)| generation),
+                "ackedAt": ack.applied.map(|(_, at)| at),
+            });
+        }
+        Some(value)
     }
 
     /// A process can exit before its reader thread has forwarded the final PTY bytes. The web

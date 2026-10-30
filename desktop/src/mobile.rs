@@ -23,6 +23,8 @@ const OFFER_LIFETIME: Duration = Duration::from_secs(120);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_PAIR_ATTEMPTS: u8 = 5;
 const MAX_SCREEN_BYTES: usize = 256 * 1024;
+/// The conversation view the host publishes to the phone is cut to fit this.
+pub(crate) const MAX_PHONE_CONVERSATION: usize = 256 * 1024;
 const MAX_INPUT_CHUNK: usize = 4 * 1024;
 const MAX_QUEUED_INPUT: usize = 64 * 1024;
 const MAX_REQUEST_BYTES: usize = 32 * 1024;
@@ -124,7 +126,67 @@ fn classify(stream: &UnixStream, hosted: Option<i32>) -> Caller {
     }
 }
 
-use crate::agent_chat::{ChatMessageDto, ChatStateUpdate};
+/// One conversation message in the shape the first phone release reads. `timestamp` is 0 when
+/// the agent's log gave no usable time: never the time it was read. `at` is the agent's own text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ChatMessageDto {
+    pub id: String,
+    pub sender: String,
+    pub text: String,
+    pub timestamp: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
+}
+
+/// What the host's conversation engine publishes to the phone on each change.
+#[derive(Clone, Debug)]
+pub(crate) struct ChatUpdate {
+    pub agent: String,
+    /// The first phone release's words: `waiting`, `working`, `awaiting_approval`, `uncertain`.
+    pub agent_state: String,
+    pub can_send_prompt: bool,
+    pub messages: Vec<ChatMessageDto>,
+    /// The engine's full, bounded view for phone releases that read it.
+    pub conversation: serde_json::Value,
+    pub stream_generation: u64,
+}
+
+/// A chat message from the phone, waiting for the host to check readiness and type it.
+pub(crate) struct ChatRequest {
+    pub generation: u64,
+    pub id: String,
+    pub text: String,
+}
+
+#[derive(Debug)]
+pub(crate) struct ChatWriteError {
+    pub started: bool,
+    pub reason: String,
+}
+impl ChatWriteError {
+    fn refused(reason: String) -> Self {
+        Self {
+            started: false,
+            reason,
+        }
+    }
+}
+fn chat_write(writer: &mut impl Write, bytes: &[u8]) -> Result<(), ChatWriteError> {
+    writer.write_all(bytes).map_err(|e| ChatWriteError {
+        started: true,
+        reason: e.to_string(),
+    })
+}
+
+pub(crate) struct PhoneAck {
+    pub applied: Option<(u64, u128)>,
+    pub connected: bool,
+    pub paired: bool,
+}
+
+const MAX_QUEUED_CHAT: usize = 4;
+const MAX_CHAT_TEXT: usize = crate::conversation::MAX_MESSAGE;
 
 #[derive(Clone)]
 pub(crate) struct LiveBridge(Arc<Mutex<BridgeState>>);
@@ -147,6 +209,11 @@ struct BridgeState {
     agent_state: String,
     can_send_prompt: bool,
     messages: Vec<ChatMessageDto>,
+    conversation: Option<serde_json::Value>,
+    stream_generation: u64,
+    queued_chat: VecDeque<ChatRequest>,
+    /// The newest stream generation the phone has said it applied, and when (Verb's clock).
+    phone_ack: Option<(u64, u128)>,
 }
 
 struct Offer {
@@ -179,6 +246,9 @@ pub(crate) struct ScreenSnapshot {
     pub agent_state: String,
     pub can_send_prompt: bool,
     pub messages: Vec<ChatMessageDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<serde_json::Value>,
+    pub stream_generation: u64,
 }
 
 impl LiveBridge {
@@ -198,9 +268,14 @@ impl LiveBridge {
             screen_revision: 0,
             screen_available: true,
             agent: None,
-            agent_state: "waiting".to_owned(),
-            can_send_prompt: true,
+            // Nothing is known yet, so chat is closed until the host says otherwise.
+            agent_state: "uncertain".to_owned(),
+            can_send_prompt: false,
             messages: Vec::new(),
+            conversation: None,
+            stream_generation: 0,
+            queued_chat: VecDeque::new(),
+            phone_ack: None,
         })))
     }
 
@@ -387,25 +462,39 @@ impl LiveBridge {
         Ok(())
     }
 
-    pub(crate) fn update_chat(&self, update: ChatStateUpdate) -> Result<(), String> {
+    /// Replaces what the phone is shown. An update from an older stream generation is dropped: a
+    /// read that began before the stream was turned off can never refill the phone's view.
+    pub(crate) fn update_chat(&self, update: ChatUpdate) -> Result<(), String> {
         let mut state = self.lock()?;
-        if state.ended {
+        if state.ended || update.stream_generation < state.stream_generation {
             return Ok(());
         }
         state.agent = Some(update.agent);
         state.agent_state = update.agent_state;
         state.can_send_prompt = update.can_send_prompt;
         state.messages = update.messages;
+        state.conversation = Some(update.conversation);
+        state.stream_generation = update.stream_generation;
         Ok(())
     }
 
-    pub(crate) fn snapshot(&self, device_secret: &str) -> Result<ScreenSnapshot, String> {
+    /// `ack`: the stream generation the phone says it has applied, if it says one.
+    pub(crate) fn snapshot(
+        &self,
+        device_secret: &str,
+        ack: Option<u64>,
+    ) -> Result<ScreenSnapshot, String> {
         let mut state = self.lock()?;
         state.ensure_device(device_secret)?;
         if !state.connected {
             return Err("phone is disconnected".to_owned());
         }
         state.last_contact = Some(Instant::now());
+        if let Some(generation) = ack.filter(|g| *g <= state.stream_generation) {
+            if state.phone_ack.is_none_or(|(seen, _)| generation > seen) {
+                state.phone_ack = Some((generation, crate::now_millis()));
+            }
+        }
         Ok(ScreenSnapshot {
             session_id: state.session_id.clone(),
             revision: state.screen_revision,
@@ -415,7 +504,96 @@ impl LiveBridge {
             agent_state: state.agent_state.clone(),
             can_send_prompt: state.can_send_prompt,
             messages: state.messages.clone(),
+            conversation: state.conversation.clone(),
+            stream_generation: state.stream_generation,
         })
+    }
+
+    /// The phone's last acknowledged stream generation and when, plus whether one is connected.
+    pub(crate) fn phone_ack(&self) -> Result<PhoneAck, String> {
+        let state = self.lock()?;
+        Ok(PhoneAck {
+            applied: state.phone_ack,
+            connected: state.connected,
+            paired: state.paired_digest.is_some(),
+        })
+    }
+
+    /// A chat message from the phone. It needs the input lease, like any typing, and is refused
+    /// unless the host last reported the agent ready. The host checks readiness again before
+    /// typing it: this is only the first gate.
+    pub(crate) fn submit_chat(
+        &self,
+        device_secret: &str,
+        id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        let mut state = self.lock()?;
+        state.ensure_device(device_secret)?;
+        if !state.connected || state.controller != Controller::Phone {
+            return Err("take control on the phone before sending a message".to_owned());
+        }
+        if !state.can_send_prompt {
+            return Err("the agent is not ready for a message; use the terminal".to_owned());
+        }
+        if id.is_empty() || id.len() > 64 || text.is_empty() || text.len() > MAX_CHAT_TEXT {
+            return Err("phone message must have an id and 1–8000 bytes of text".to_owned());
+        }
+        if state.queued_chat.len() >= MAX_QUEUED_CHAT {
+            return Err("phone messages are queued already; wait for the session".to_owned());
+        }
+        state.last_contact = Some(Instant::now());
+        let generation = state.generation;
+        state.queued_chat.push_back(ChatRequest {
+            generation,
+            id: id.to_owned(),
+            text: text.to_owned(),
+        });
+        Ok(())
+    }
+
+    /// Called only by the PTY host.
+    pub(crate) fn take_chat(&self) -> Result<Vec<ChatRequest>, String> {
+        let mut state = self.lock()?;
+        Ok(state.queued_chat.drain(..).collect())
+    }
+
+    pub(crate) fn write_desktop_chat(
+        &self,
+        writer: &mut impl Write,
+        bytes: &[u8],
+    ) -> Result<(), ChatWriteError> {
+        let state = self.lock().map_err(ChatWriteError::refused)?;
+        if state.ended || state.controller != Controller::Desktop {
+            return Err(ChatWriteError::refused(
+                "Phone controls input; take control back first.".to_owned(),
+            ));
+        }
+        chat_write(writer, bytes)
+    }
+
+    pub(crate) fn chat_generation(&self) -> Result<u64, String> {
+        Ok(self.lock()?.generation)
+    }
+
+    /// Types a phone chat message, under the same lock and lease as phone keystrokes.
+    pub(crate) fn write_phone_chat(
+        &self,
+        writer: &mut impl Write,
+        bytes: &[u8],
+        generation: u64,
+    ) -> Result<(), ChatWriteError> {
+        let state = self.lock().map_err(ChatWriteError::refused)?;
+        if state.ended
+            || !state.connected
+            || state.controller != Controller::Phone
+            || state.generation != generation
+        {
+            return Err(ChatWriteError::refused(
+                "The phone's input lease changed.".to_owned(),
+            ));
+        }
+        chat_write(writer, bytes)
     }
 
     pub(crate) fn control_status(&self) -> Result<(Controller, bool), String> {
@@ -505,6 +683,7 @@ impl BridgeState {
     }
 
     fn clear_input(&mut self) {
+        self.queued_chat.clear();
         self.queued_input.clear();
         self.queued_bytes = 0;
     }
@@ -534,6 +713,12 @@ struct Request {
     secret: Option<String>,
     #[serde(default)]
     bytes: Option<Vec<u8>>,
+    #[serde(default)]
+    message_id: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    ack: Option<u64>,
 }
 
 impl LocalServer {
@@ -739,8 +924,18 @@ fn process_request(
             bridge.submit_input(secret()?, request.bytes.as_deref().unwrap_or(&[]))?;
             Ok(serde_json::json!({"status":"queued"}))
         }
-        "snapshot" => Ok(serde_json::to_value(bridge.snapshot(secret()?)?)
-            .map_err(|error| format!("could not encode phone screen: {error}"))?),
+        "chat" => {
+            bridge.submit_chat(
+                secret()?,
+                request.message_id.as_deref().unwrap_or_default(),
+                request.text.as_deref().unwrap_or_default(),
+            )?;
+            Ok(serde_json::json!({"status":"queued"}))
+        }
+        "snapshot" => Ok(
+            serde_json::to_value(bridge.snapshot(secret()?, request.ack)?)
+                .map_err(|error| format!("could not encode phone screen: {error}"))?,
+        ),
         _ => Err("unknown phone bridge operation".to_owned()),
     }
 }
@@ -763,7 +958,7 @@ fn request_path(path: &Path, request: &[u8]) -> Result<serde_json::Value, String
         .map_err(|error| format!("could not send phone request: {error}"))?;
     let mut response = Vec::new();
     BufReader::new(stream)
-        .take((MAX_SCREEN_BYTES * 5) as u64)
+        .take((MAX_SCREEN_BYTES * 5 + MAX_PHONE_CONVERSATION * 2) as u64)
         .read_to_end(&mut response)
         .map_err(|error| format!("could not read phone response: {error}"))?;
     if !response.ends_with(b"\n") {
@@ -839,6 +1034,34 @@ mod tests {
     }
 
     #[test]
+    fn partial_chat_write_is_uncertain_and_lease_refusal_writes_nothing() {
+        struct PartialWriter(bool);
+        impl Write for PartialWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.0 {
+                    return Err(std::io::ErrorKind::BrokenPipe.into());
+                }
+                self.0 = true;
+                Ok(bytes.len().min(2))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let bridge = LiveBridge::new("partial-test".to_owned());
+        let error = bridge
+            .write_desktop_chat(&mut PartialWriter(false), b"hello")
+            .unwrap_err();
+        assert!(error.started);
+        let mut output = Vec::new();
+        let error = bridge
+            .write_phone_chat(&mut output, b"hello", 0)
+            .unwrap_err();
+        assert!(!error.started);
+        assert!(output.is_empty());
+    }
+
+    #[test]
     fn a_paired_phone_can_reconnect_without_creating_or_resuming_a_session() {
         let now = Instant::now();
         let bridge = LiveBridge::new("session-one".to_owned());
@@ -846,15 +1069,18 @@ mod tests {
         assert_eq!(offer.len(), 32);
         let phone = bridge.pair(&offer, now).unwrap();
         bridge.publish_screen(b"screen one".to_vec()).unwrap();
-        let first = bridge.snapshot(&phone).unwrap();
+        let first = bridge.snapshot(&phone, None).unwrap();
         assert_eq!(first.session_id, "session-one");
         assert_eq!(first.bytes.unwrap(), b"screen one");
         assert_eq!(first.revision, 1);
         assert_eq!(first.controller, Controller::Desktop);
         bridge.disconnect(&phone).unwrap();
-        assert!(bridge.snapshot(&phone).is_err());
+        assert!(bridge.snapshot(&phone, None).is_err());
         bridge.reconnect(&phone).unwrap();
-        assert_eq!(bridge.snapshot(&phone).unwrap().session_id, "session-one");
+        assert_eq!(
+            bridge.snapshot(&phone, None).unwrap().session_id,
+            "session-one"
+        );
         bridge.end().unwrap();
         assert!(bridge.reconnect(&phone).is_err());
     }
@@ -896,7 +1122,7 @@ mod tests {
         let offer = bridge.offer(now).unwrap();
         let phone = bridge.pair(&offer, now).unwrap();
         bridge.revoke().unwrap();
-        assert!(bridge.snapshot(&phone).is_err());
+        assert!(bridge.snapshot(&phone, None).is_err());
         assert!(bridge.reconnect(&phone).is_err());
     }
 
@@ -918,9 +1144,12 @@ mod tests {
             .write_desktop(&mut pty_input, b"desktop works")
             .unwrap();
         assert_eq!(pty_input, b"desktop works");
-        assert!(bridge.snapshot(&phone).is_err());
+        assert!(bridge.snapshot(&phone, None).is_err());
         bridge.reconnect(&phone).unwrap();
-        assert_eq!(bridge.snapshot(&phone).unwrap().session_id, "still-running");
+        assert_eq!(
+            bridge.snapshot(&phone, None).unwrap().session_id,
+            "still-running"
+        );
     }
 
     #[test]
@@ -932,7 +1161,7 @@ mod tests {
         bridge
             .publish_screen(vec![b'x'; MAX_SCREEN_BYTES + 1])
             .unwrap();
-        assert!(bridge.snapshot(&phone).unwrap().bytes.is_none());
+        assert!(bridge.snapshot(&phone, None).unwrap().bytes.is_none());
         bridge.take_control(&phone).unwrap();
         assert!(bridge
             .submit_input(&phone, &vec![b'x'; MAX_INPUT_CHUNK + 1])

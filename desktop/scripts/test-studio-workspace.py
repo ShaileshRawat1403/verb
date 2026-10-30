@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Real guest adapter contract, using disposable Git fixtures and the fixed embedded source."""
-import base64
 import hashlib
 import json
 import os
@@ -10,9 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import zlib
 
-SOURCE = Path(__file__).with_name("studio-workspace.wire").read_text()
+SOURCE = Path(__file__).with_name("studio-workspace.py").read_bytes()
+BOOTSTRAP = f"import sys;exec(compile(sys.stdin.buffer.read({len(SOURCE)}),'<verb-studio-adapter>','exec'))"
 
 
 class StudioWorkspace(unittest.TestCase):
@@ -26,8 +25,8 @@ class StudioWorkspace(unittest.TestCase):
         (self.root / "app.html").write_text("<h1>Before</h1>")
 
     def call(self, request):
-        result = subprocess.run([sys.executable, "-I", "-S", "-c", SOURCE, "fixture-revision"],
-                                input=json.dumps(request).encode(), stdout=subprocess.PIPE,
+        result = subprocess.run([sys.executable, "-I", "-S", "-c", BOOTSTRAP, "fixture-revision"],
+                                input=SOURCE + json.dumps(request).encode(), stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, cwd=self.root, timeout=20, check=True)
         reply = json.loads(result.stdout)
         self.assertEqual(reply["protocol"], 1)
@@ -38,13 +37,9 @@ class StudioWorkspace(unittest.TestCase):
         return self.call({"action": "save", "request": {"workspaceId": "fixture", "path": path,
                          "expectedRevision": revision, "text": text}})
 
-    def test_embedded_wire_is_exact_source_and_fits_boundary_argument(self):
-        prefix = "import base64,zlib;exec(zlib.decompress(base64.b64decode("
-        self.assertTrue(SOURCE.startswith(prefix) and SOURCE.endswith(")))"))
-        packed = json.loads(SOURCE[len(prefix):-3])
-        self.assertEqual(zlib.decompress(base64.b64decode(packed)),
-                         Path(__file__).with_name("studio-workspace.py").read_bytes())
-        self.assertLess(len(SOURCE.encode()), 4096)
+    def test_trusted_source_prefix_is_separate_from_json(self):
+        self.assertLess(len(BOOTSTRAP), 200)
+        self.assertIn("error", self.call({"action":"read","path":"x; print(123)"}))
 
     def test_save_large_unicode_preserves_mode_and_conflicts(self):
         path = self.root / "app.html"
@@ -73,6 +68,18 @@ class StudioWorkspace(unittest.TestCase):
         read = self.call({"action": "read", "path": "readonly"})["file"]
         self.assertIn("error", self.save("readonly", read["revision"], "changed"))
         self.assertEqual((self.root / "readonly").read_text(), "readable")
+
+    def test_image_magic_bounds_links_and_revision(self):
+        raw = b"\x89PNG\r\n\x1a\n" + b"fixture"
+        (self.root / "picture.png").write_bytes(raw)
+        result = self.call({"action":"image", "path":"picture.png"})["image"]
+        self.assertEqual(result["mime"], "image/png")
+        self.assertEqual(result["revision"], hashlib.sha256(raw).hexdigest())
+        os.symlink("picture.png", self.root / "linked.png")
+        (self.root / "not-image.png").write_text('<svg onload="alert(1)"/>')
+        (self.root / "too-big.png").write_bytes(raw + b"x" * (2 * 1024 * 1024))
+        for path in ("linked.png", "not-image.png", "too-big.png", "private.txt", "../escape.png"):
+            self.assertIn("error", self.call({"action":"image", "path":path}), path)
 
     def test_capabilities_schema_hooks_and_limits(self):
         marker = self.root / "hook-ran"

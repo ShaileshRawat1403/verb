@@ -1,44 +1,49 @@
 //! The agent stream: what an agent session said and did, read from the agent's own log, **only when
 //! the person has turned it on for this project**.
 //!
-//! This is the one place Verb reads an agent record's *content*. `observe` and `meter` read structure
+//! This is the canonical parser for an agent record's *content*. `observe` and `meter` read structure
 //! and numbers only, by construction, and they stay that way: everything else in Verb keeps working
 //! without this module ever running. The stream exists because a person reviewing work wants the
 //! conversation itself -- their request, the agent's answer, the files it read and the commands it
 //! ran -- and the agent already writes all of it down on this machine.
 //!
-//! The rules, each enforced here rather than left to the caller:
+//! The parser and conversation engine jointly enforce these rules:
 //!
 //! - **Off by default, per project.** `load(store).enabled` is false until the person turns it on, and
-//!   `for_session` is only called after checking it.
-//! - **Read on demand, never stored.** Each request reads the tail of the log and returns; nothing is
-//!   cached, written to disk, logged, or added to an audit trail.
-//! - **Local only.** The result goes to the browser that asked, over Verb's own authenticated API.
-//!   It is never handed to a model or sent anywhere else.
+//!   the conversation engine checks it before reading.
+//! - **Transient only.** The opted-in engine follows the log into a bounded in-memory view, cleared
+//!   when the stream is off. Agent content is never written to Verb disk storage or audit logs.
+//! - **Authenticated clients only.** Results go through Verb's authenticated browser/paired-phone
+//!   transports. Verb never hands them to a model.
 //! - **Redacted.** Keys, tokens, private keys and `password=`-style values are replaced before the
 //!   text leaves this module.
 //! - **Bounded.** At most the last `TAIL_BYTES` of a log and the last `MAX_ITEMS` items; long text is
 //!   cut with a marker.
 
-use crate::observe::{Record, RecordTail};
+use crate::observe::Record;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const TAIL_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_ITEMS: usize = 300;
+pub(crate) const TAIL_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_ITEMS: usize = 300;
 const MAX_TEXT: usize = 6_000;
 const MAX_TARGET: usize = 200;
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+/// The project's stream switch. `generation` changes every time `enabled` does, so a read that
+/// began under an earlier setting can be recognised and dropped instead of refilling a view the
+/// person has just cleared.
+#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Settings {
     pub enabled: bool,
+    #[serde(default)]
+    pub generation: u64,
 }
 
+/// An unreadable or half-written file reads as "off": content is never shown on a guess.
 pub(crate) fn load(store: &Path) -> Settings {
     fs::read_to_string(store.join("stream.json"))
         .ok()
@@ -49,11 +54,22 @@ pub(crate) fn load(store: &Path) -> Settings {
 pub(crate) fn save(store: &Path, settings: &Settings) -> Result<(), String> {
     fs::create_dir_all(store).map_err(|e| e.to_string())?;
     let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(store.join("stream.json"), raw).map_err(|e| e.to_string())
+    crate::fsutil::atomic_write(&store.join("stream.json"), raw.as_bytes())
+}
+
+/// Turns the stream on or off, starting a new generation when the setting actually changes.
+pub(crate) fn set_enabled(store: &Path, enabled: bool) -> Result<Settings, String> {
+    let mut settings = load(store);
+    if settings.enabled != enabled {
+        settings.enabled = enabled;
+        settings.generation = settings.generation.saturating_add(1);
+        save(store, &settings)?;
+    }
+    Ok(settings)
 }
 
 /// One thing in the stream, in the order it happened.
-#[derive(Serialize, Debug, PartialEq, Default)]
+#[derive(Serialize, Debug, PartialEq, Default, Clone)]
 pub(crate) struct Item {
     /// `you`, `agent` or `step`.
     pub kind: &'static str,
@@ -67,14 +83,137 @@ pub(crate) struct Item {
     pub target: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub failed: bool,
+    /// The agent's own timestamp for this line, exactly as written. Absent when the log gave none;
+    /// never filled in with the time it was read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    /// The agent's own id for the line this came from (Claude's `uuid`). Codex gives none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// The conversation the line names (Claude's `sessionId`), when it names one.
+    #[serde(skip)]
+    pub conversation: Option<String>,
+    /// Byte offset in the log where the line this came from begins.
+    #[serde(skip)]
+    pub offset: u64,
+    /// Private, complete message identity; never returned to a client or persisted.
+    #[serde(skip)]
+    pub fingerprint: Option<[u8; 32]>,
 }
 
-#[derive(Serialize, Debug, Default)]
-pub(crate) struct Stream {
-    pub items: Vec<Item>,
-    pub note: Option<&'static str>,
+/// A bounded run of items with stable sequence numbers, so a step can be marked failed by a later
+/// line even after earlier items have been dropped from the front.
+#[derive(Debug, Default)]
+pub(crate) struct ItemLog {
+    items: VecDeque<Item>,
+    first: u64,
+    max: usize,
+    /// Items were dropped from the front to stay within the bound.
+    pub omitted: bool,
+}
+
+impl ItemLog {
+    pub(crate) fn bounded(max: usize) -> Self {
+        Self {
+            max,
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self, item: Item) -> u64 {
+        let seq = self.first + self.items.len() as u64;
+        self.items.push_back(item);
+        while self.items.len() > self.max {
+            self.items.pop_front();
+            self.first += 1;
+            self.omitted = true;
+        }
+        seq
+    }
+
+    fn get_mut(&mut self, seq: u64) -> Option<&mut Item> {
+        let index = seq.checked_sub(self.first)?;
+        self.items.get_mut(usize::try_from(index).ok()?)
+    }
+
+    /// Each item with its sequence number, oldest first.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (u64, &Item)> {
+        self.items
+            .iter()
+            .enumerate()
+            .map(|(i, item)| (self.first + i as u64, item))
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    #[cfg(test)]
+    fn into_vec(self) -> Vec<Item> {
+        self.items.into()
+    }
+}
+
+/// Turns an agent's log lines into items, one complete line at a time. It keeps only what a later
+/// line needs to refer back to: which item each tool call became.
+#[derive(Debug)]
+pub(crate) struct Parser {
+    record: Record,
+    steps: HashMap<String, u64>,
+    pub turn_complete: Option<bool>,
+}
+
+impl Parser {
+    pub(crate) fn new(record: Record) -> Self {
+        Self {
+            record,
+            steps: HashMap::new(),
+            turn_complete: None,
+        }
+    }
+
+    /// Reads one complete line. `start` is the log offset where it begins.
+    pub(crate) fn line(&mut self, line: &str, start: u64, project: &Path, log: &mut ItemLog) {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+        if self.record == Record::Claude
+            && v["isSidechain"].as_bool() != Some(true)
+            && v["isMeta"].as_bool() != Some(true)
+        {
+            match v["type"].as_str() {
+                Some("user") => self.turn_complete = Some(false),
+                Some("assistant") => {
+                    self.turn_complete = Some(matches!(
+                        v["message"]["stop_reason"].as_str(),
+                        Some("end_turn" | "stop_sequence")
+                    ))
+                }
+                Some("system") if v["subtype"].as_str() == Some("turn_duration") => {
+                    self.turn_complete = Some(true);
+                }
+                _ => {}
+            }
+        }
+        match self.record {
+            Record::Claude => claude_line(&v, start, project, log, &mut self.steps),
+            Record::Codex => codex_line(&v, start, project, log, &mut self.steps),
+        }
+        if self.steps.len() > MAX_ITEMS * 4 {
+            let first = log.first;
+            self.steps.retain(|_, seq| *seq >= first);
+        }
+    }
+}
+
+#[cfg(test)]
+fn parse_all(record: Record, lines: &[&str], project: &Path) -> Vec<Item> {
+    let mut log = ItemLog::bounded(usize::MAX);
+    let mut parser = Parser::new(record);
+    for line in lines {
+        parser.line(line, 0, project, &mut log);
+    }
+    log.into_vec()
 }
 
 // ------------------------------------------------------------------------------------- redaction
@@ -246,6 +385,16 @@ fn clean(text: &str, max: usize) -> String {
     redact(&cut(text, max))
 }
 
+/// Complete trimmed text identity, before display redaction/truncation. Private and in-memory.
+pub(crate) fn message_fingerprint(text: &str) -> [u8; 32] {
+    Sha256::digest(text.trim().as_bytes()).into()
+}
+
+/// Redacted display text; never use it as delivery proof.
+pub(crate) fn as_shown(text: &str) -> String {
+    clean(text, MAX_TEXT)
+}
+
 /// A path inside the project is shown relative to it.
 fn relative(path: &str, project: &Path) -> String {
     let root = project.to_string_lossy();
@@ -274,95 +423,102 @@ fn is_wrapper(text: &str) -> bool {
 // ------------------------------------------------------------------------------------- Claude
 
 /// Claude Code's `~/.claude/projects/<project>/<session>.jsonl`.
+#[cfg(test)]
 pub(crate) fn claude_items(lines: &[&str], project: &Path) -> Vec<Item> {
-    let mut items = Vec::new();
-    let mut steps: HashMap<String, usize> = HashMap::new();
-    for line in lines {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
-            continue;
-        }
-        let at = v["timestamp"].as_str().map(str::to_owned);
-        let content = &v["message"]["content"];
-        match v["type"].as_str() {
-            Some("user") => {
-                if let Some(text) = content.as_str() {
-                    if !is_wrapper(text) {
-                        items.push(Item {
-                            kind: "you",
-                            text: Some(clean(text, MAX_TEXT)),
-                            at,
-                            ..Item::default()
-                        });
-                    }
-                    continue;
-                }
-                let mut said = Vec::new();
-                for block in content.as_array().into_iter().flatten() {
-                    match block["type"].as_str() {
-                        Some("text") => {
-                            if let Some(t) = block["text"].as_str().filter(|t| !is_wrapper(t)) {
-                                said.push(t.to_owned());
-                            }
-                        }
-                        Some("tool_result") if block["is_error"].as_bool() == Some(true) => {
-                            if let Some(&i) =
-                                block["tool_use_id"].as_str().and_then(|id| steps.get(id))
-                            {
-                                items[i].failed = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if !said.is_empty() {
-                    items.push(Item {
+    parse_all(Record::Claude, lines, project)
+}
+
+fn claude_line(
+    v: &Value,
+    start: u64,
+    project: &Path,
+    log: &mut ItemLog,
+    steps: &mut HashMap<String, u64>,
+) {
+    if v["isSidechain"].as_bool() == Some(true) || v["isMeta"].as_bool() == Some(true) {
+        return;
+    }
+    let base = Item {
+        at: v["timestamp"].as_str().map(str::to_owned),
+        id: v["uuid"].as_str().map(str::to_owned),
+        conversation: v["sessionId"].as_str().map(str::to_owned),
+        offset: start,
+        ..Item::default()
+    };
+    let content = &v["message"]["content"];
+    match v["type"].as_str() {
+        Some("user") => {
+            if let Some(text) = content.as_str() {
+                if !is_wrapper(text) {
+                    log.push(Item {
                         kind: "you",
-                        text: Some(clean(&said.join("\n\n"), MAX_TEXT)),
-                        at,
-                        ..Item::default()
+                        text: Some(clean(text, MAX_TEXT)),
+                        fingerprint: Some(message_fingerprint(text)),
+                        ..base
                     });
                 }
+                return;
             }
-            Some("assistant") => {
-                for block in content.as_array().into_iter().flatten() {
-                    match block["type"].as_str() {
-                        Some("text") => {
-                            if let Some(t) = block["text"].as_str().filter(|t| !t.trim().is_empty())
-                            {
-                                items.push(Item {
-                                    kind: "agent",
-                                    text: Some(clean(t, MAX_TEXT)),
-                                    at: at.clone(),
-                                    ..Item::default()
-                                });
-                            }
+            let mut said = Vec::new();
+            for block in content.as_array().into_iter().flatten() {
+                match block["type"].as_str() {
+                    Some("text") => {
+                        if let Some(t) = block["text"].as_str().filter(|t| !is_wrapper(t)) {
+                            said.push(t.to_owned());
                         }
-                        Some("tool_use") => {
-                            let name = block["name"].as_str().unwrap_or("Tool");
-                            let input = &block["input"];
-                            let target = claude_target(name, input, project);
-                            if let Some(id) = block["id"].as_str() {
-                                steps.insert(id.to_owned(), items.len());
-                            }
-                            items.push(Item {
-                                kind: "step",
-                                tool: Some(name.to_owned()),
-                                target: target.map(|t| clean(&t, MAX_TARGET)),
-                                at: at.clone(),
-                                ..Item::default()
-                            });
-                        }
-                        _ => {}
                     }
+                    Some("tool_result") if block["is_error"].as_bool() == Some(true) => {
+                        if let Some(item) = block["tool_use_id"]
+                            .as_str()
+                            .and_then(|id| steps.get(id).copied())
+                            .and_then(|seq| log.get_mut(seq))
+                        {
+                            item.failed = true;
+                        }
+                    }
+                    _ => {}
                 }
             }
-            _ => {}
+            if !said.is_empty() {
+                log.push(Item {
+                    kind: "you",
+                    text: Some(clean(&said.join("\n\n"), MAX_TEXT)),
+                    fingerprint: Some(message_fingerprint(&said.join("\n\n"))),
+                    ..base
+                });
+            }
         }
+        Some("assistant") => {
+            for block in content.as_array().into_iter().flatten() {
+                match block["type"].as_str() {
+                    Some("text") => {
+                        if let Some(t) = block["text"].as_str().filter(|t| !t.trim().is_empty()) {
+                            log.push(Item {
+                                kind: "agent",
+                                text: Some(clean(t, MAX_TEXT)),
+                                ..base.clone()
+                            });
+                        }
+                    }
+                    Some("tool_use") => {
+                        let name = block["name"].as_str().unwrap_or("Tool");
+                        let target = claude_target(name, &block["input"], project);
+                        let seq = log.push(Item {
+                            kind: "step",
+                            tool: Some(name.to_owned()),
+                            target: target.map(|t| clean(&t, MAX_TARGET)),
+                            ..base.clone()
+                        });
+                        if let Some(id) = block["id"].as_str() {
+                            steps.insert(id.to_owned(), seq);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
     }
-    items
 }
 
 fn claude_target(name: &str, input: &Value, project: &Path) -> Option<String> {
@@ -382,68 +538,75 @@ fn claude_target(name: &str, input: &Value, project: &Path) -> Option<String> {
 // -------------------------------------------------------------------------------------- Codex
 
 /// Codex's `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
+#[cfg(test)]
 pub(crate) fn codex_items(lines: &[&str], project: &Path) -> Vec<Item> {
-    let mut items = Vec::new();
-    let mut steps: HashMap<String, usize> = HashMap::new();
-    for line in lines {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if v["type"].as_str() != Some("response_item") {
-            continue;
-        }
-        let at = v["timestamp"].as_str().map(str::to_owned);
-        let p = &v["payload"];
-        match p["type"].as_str() {
-            Some("message") => {
-                let role = p["role"].as_str();
-                let kind = match role {
-                    Some("user") => "you",
-                    Some("assistant") => "agent",
-                    _ => continue,
-                };
-                let text: Vec<&str> = p["content"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|c| c["text"].as_str())
-                    .filter(|t| !is_wrapper(t))
-                    .collect();
-                if !text.is_empty() {
-                    items.push(Item {
-                        kind,
-                        text: Some(clean(&text.join("\n\n"), MAX_TEXT)),
-                        at,
-                        ..Item::default()
-                    });
-                }
-            }
-            Some("function_call") | Some("custom_tool_call") => {
-                let name = p["name"].as_str().unwrap_or("tool");
-                let (tool, target) = codex_step(name, p, project);
-                if let Some(id) = p["call_id"].as_str() {
-                    steps.insert(id.to_owned(), items.len());
-                }
-                items.push(Item {
-                    kind: "step",
-                    tool: Some(tool),
-                    target: target.map(|t| clean(&t, MAX_TARGET)),
-                    at,
-                    ..Item::default()
+    parse_all(Record::Codex, lines, project)
+}
+
+fn codex_line(
+    v: &Value,
+    start: u64,
+    project: &Path,
+    log: &mut ItemLog,
+    steps: &mut HashMap<String, u64>,
+) {
+    if v["type"].as_str() != Some("response_item") {
+        return;
+    }
+    let base = Item {
+        at: v["timestamp"].as_str().map(str::to_owned),
+        offset: start,
+        ..Item::default()
+    };
+    let p = &v["payload"];
+    match p["type"].as_str() {
+        Some("message") => {
+            let kind = match p["role"].as_str() {
+                Some("user") => "you",
+                Some("assistant") => "agent",
+                _ => return,
+            };
+            let text: Vec<&str> = p["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["text"].as_str())
+                .filter(|t| !is_wrapper(t))
+                .collect();
+            if !text.is_empty() {
+                log.push(Item {
+                    kind,
+                    text: Some(clean(&text.join("\n\n"), MAX_TEXT)),
+                    ..base
                 });
             }
-            Some("function_call_output") | Some("custom_tool_call_output") => {
-                if let (Some(&i), Some(code)) = (
-                    p["call_id"].as_str().and_then(|id| steps.get(id)),
-                    exit_code(&p["output"]),
-                ) {
-                    items[i].failed = code != 0;
-                }
-            }
-            _ => {}
         }
+        Some("function_call") | Some("custom_tool_call") => {
+            let name = p["name"].as_str().unwrap_or("tool");
+            let (tool, target) = codex_step(name, p, project);
+            let seq = log.push(Item {
+                kind: "step",
+                tool: Some(tool),
+                target: target.map(|t| clean(&t, MAX_TARGET)),
+                ..base
+            });
+            if let Some(id) = p["call_id"].as_str() {
+                steps.insert(id.to_owned(), seq);
+            }
+        }
+        Some("function_call_output") | Some("custom_tool_call_output") => {
+            if let (Some(item), Some(code)) = (
+                p["call_id"]
+                    .as_str()
+                    .and_then(|id| steps.get(id).copied())
+                    .and_then(|seq| log.get_mut(seq)),
+                exit_code(&p["output"]),
+            ) {
+                item.failed = code != 0;
+            }
+        }
+        _ => {}
     }
-    items
 }
 
 fn codex_step(name: &str, p: &Value, project: &Path) -> (String, Option<String>) {
@@ -548,66 +711,6 @@ fn exit_code(output: &Value) -> Option<i64> {
         }
     }
     None
-}
-
-// ------------------------------------------------------------------------------------ reading
-
-fn tail_lines(path: &Path) -> Option<String> {
-    let mut file = fs::File::open(path).ok()?;
-    let len = file.metadata().ok()?.len();
-    let start = len.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
-    // Starting mid-file means the first line is a fragment.
-    Some(if start > 0 {
-        text.split_once('\n')
-            .map(|(_, rest)| rest.to_owned())
-            .unwrap_or_default()
-    } else {
-        text
-    })
-}
-
-/// The stream of one agent session. Call only after checking `load(store).enabled`.
-pub(crate) fn for_session(
-    record: Record,
-    home: &Path,
-    project: &Path,
-    created_at_ms: u128,
-    conversation_id: Option<&str>,
-) -> Stream {
-    let found = match conversation_id {
-        Some(id) => RecordTail::find_existing(record, home, project, id),
-        None => {
-            let since = UNIX_EPOCH
-                + Duration::from_millis(created_at_ms as u64)
-                    .saturating_sub(Duration::from_secs(5));
-            RecordTail::find(record, home, project, since.min(SystemTime::now()))
-        }
-    };
-    let Some(tail) = found else {
-        return Stream {
-            items: Vec::new(),
-            note: Some("The agent has not started its session log yet."),
-        };
-    };
-    let Some(text) = tail_lines(tail.path()) else {
-        return Stream {
-            items: Vec::new(),
-            note: Some("The agent's session log could not be read."),
-        };
-    };
-    let lines: Vec<&str> = text.lines().collect();
-    let mut items = match record {
-        Record::Claude => claude_items(&lines, project),
-        Record::Codex => codex_items(&lines, project),
-    };
-    if items.len() > MAX_ITEMS {
-        items.drain(..items.len() - MAX_ITEMS);
-    }
-    Stream { items, note: None }
 }
 
 #[cfg(test)]
@@ -726,9 +829,112 @@ mod tests {
     fn settings_default_to_off() {
         let dir = std::env::temp_dir().join(format!("verb-stream-{}", std::process::id()));
         assert!(!load(&dir).enabled);
-        save(&dir, &Settings { enabled: true }).unwrap();
+        save(
+            &dir,
+            &Settings {
+                enabled: true,
+                generation: 0,
+            },
+        )
+        .unwrap();
         assert!(load(&dir).enabled);
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn every_change_of_the_switch_starts_a_new_generation() {
+        let dir = std::env::temp_dir().join(format!("verb-stream-gen-{}", crate::new_id()));
+        assert_eq!(set_enabled(&dir, true).unwrap().generation, 1);
+        // Asking for what is already true is not a change.
+        assert_eq!(set_enabled(&dir, true).unwrap().generation, 1);
+        let off = set_enabled(&dir, false).unwrap();
+        assert_eq!((off.enabled, off.generation), (false, 2));
+        assert_eq!(load(&dir), off);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_generations_still_reads() {
+        let dir = std::env::temp_dir().join(format!("verb-stream-old-{}", crate::new_id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("stream.json"), r#"{"enabled": true}"#).unwrap();
+        assert_eq!(
+            load(&dir),
+            Settings {
+                enabled: true,
+                generation: 0
+            }
+        );
+        // A half-written file is "off", never a guess.
+        fs::write(dir.join("stream.json"), r#"{"enab"#).unwrap();
+        assert!(!load(&dir).enabled);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn claude_items_keep_the_agents_own_ids_and_never_invent_a_time() {
+        let p = Path::new("/p");
+        let lines = [
+            r#"{"type":"user","uuid":"u-1","sessionId":"conv-1","timestamp":"2026-10-27T10:00:00.000Z","message":{"content":"first"}}"#,
+            r#"{"type":"user","uuid":"u-2","sessionId":"conv-1","message":{"content":"no time here"}}"#,
+        ];
+        let items = claude_items(&lines, p);
+        assert_eq!(items[0].id.as_deref(), Some("u-1"));
+        assert_eq!(items[0].conversation.as_deref(), Some("conv-1"));
+        assert_eq!(items[0].at.as_deref(), Some("2026-10-27T10:00:00.000Z"));
+        assert_eq!(items[1].at, None, "an absent time stays absent");
+        let json = serde_json::to_string(&items[1]).unwrap();
+        assert!(!json.contains("\"at\""), "{json}");
+        assert!(!json.contains("conversation") && !json.contains("offset"));
+    }
+
+    #[test]
+    fn a_failure_reported_by_a_later_line_reaches_its_step_across_reads() {
+        let p = Path::new("/p");
+        let mut log = ItemLog::bounded(MAX_ITEMS);
+        let mut parser = Parser::new(Record::Claude);
+        parser.line(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"npm test"}}]}}"#,
+            100,
+            p,
+            &mut log,
+        );
+        // The result arrives in a later read, as it does while an agent is working.
+        parser.line(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":true}]}}"#,
+            200,
+            p,
+            &mut log,
+        );
+        let (_, step) = log.iter().next().unwrap();
+        assert!(step.failed);
+        assert_eq!(step.offset, 100);
+    }
+
+    #[test]
+    fn the_bound_drops_old_items_without_misdirecting_later_failures() {
+        let p = Path::new("/p");
+        let mut log = ItemLog::bounded(2);
+        let mut parser = Parser::new(Record::Claude);
+        let tool = |id: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"{id}","name":"Read","input":{{"file_path":"/p/{id}"}}}}]}}}}"#
+            )
+        };
+        for id in ["a", "b", "c"] {
+            parser.line(&tool(id), 0, p, &mut log);
+        }
+        assert!(log.omitted);
+        // "a" has left the window: its failure must not land on whatever now sits first.
+        parser.line(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","is_error":true}]}}"#,
+            0,
+            p,
+            &mut log,
+        );
+        assert!(log.iter().all(|(_, item)| !item.failed));
+        let seqs: Vec<u64> = log.iter().map(|(seq, _)| seq).collect();
+        assert_eq!(seqs, vec![1, 2]);
     }
 }
 
@@ -752,7 +958,24 @@ mod real_logs_probe {
         ] {
             // Run by hand against real logs: PROBE_CLAUDE=<file> PROBE_CODEX=<file>. Prints counts only.
             let Ok(path) = path else { continue };
-            let text = super::tail_lines(std::path::Path::new(&path)).unwrap();
+            use std::io::{Read, Seek, SeekFrom};
+            let mut file = std::fs::File::open(path).unwrap();
+            let start = file
+                .metadata()
+                .unwrap()
+                .len()
+                .saturating_sub(super::TAIL_BYTES);
+            file.seek(SeekFrom::Start(start)).unwrap();
+            let mut bytes = Vec::new();
+            file.take(super::TAIL_BYTES)
+                .read_to_end(&mut bytes)
+                .unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            let text = if start > 0 {
+                raw.split_once('\n').map_or("", |(_, rest)| rest)
+            } else {
+                &raw
+            };
             let lines: Vec<&str> = text.lines().collect();
             let items = match record {
                 crate::observe::Record::Claude => super::claude_items(&lines, &home),

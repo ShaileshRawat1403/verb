@@ -186,7 +186,7 @@ export function initWorkbench(deps) {
     const attentionHtml = attention.length ? attention.map(spec => {
       const item = views.get(spec.id).attention[0];
       const canOpen = item.sessionId && deps.ui.state?.sessions?.some(s => s.id === item.sessionId && s.hostedHere && s.terminal?.running);
-      return `<button type="button" class="spec-attention-item" data-spec-id="${escapeHtml(spec.id)}"${canOpen ? ` data-focus-session="${escapeHtml(item.sessionId)}"` : ""}><strong>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</strong><span>${escapeHtml(item.reason)}</span><small>${canOpen ? "Open session" : "Open spec"} · ${escapeHtml(item.source)}</small></button>`;
+      return `<button type="button" class="spec-attention-item" data-spec-id="${escapeHtml(spec.id)}"${canOpen ? ` data-focus-session="${escapeHtml(item.sessionId)}"` : ""}><strong>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</strong><span>${escapeHtml(item.reason)}</span><small>${canOpen ? "Open session" : "Open task"} · ${escapeHtml(item.source === "spec stage" ? "Based on chosen stage" : item.source)}</small></button>`;
     }).join("") : `<p class="muted">${error ? "Attention observations are unavailable." : !state.specsLoaded ? "Reading attention requests…" : state.specs.some(s => !views.get(s.id).observed) ? "Some observations are unavailable. Open a spec for details." : "No current requests for your attention."}</p>`;
     if (attentionHtml !== attentionSignature) {
       attentionSignature = attentionHtml;
@@ -199,13 +199,13 @@ export function initWorkbench(deps) {
     const card = spec => {
       const view = views.get(spec.id);
       const fact = (label, value) => `<span class="work-card-fact"><b>${label}</b><span>${escapeHtml(value)}</span></span>`;
-      return `<article draggable="${state.specView === "board"}" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage">${STAGE_GUIDE[spec.stage].label}</span>${view.attention.length ? `<strong class="work-card-attention">Needs you · ${escapeHtml(view.attention[0].reason)}</strong>` : ""}${fact("Execution", view.execution)}${fact("Evidence", view.cardVerification)}${fact("Delivery", view.delivery)}<span class="work-card-note">${escapeHtml(view.cardReview)}</span></button></article>`;
+      return `<article draggable="${state.specView === "board"}" class="spec-work-card${spec.id === state.selectedId ? " selected" : ""}"><button type="button" class="work-card-open" data-spec-id="${escapeHtml(spec.id)}"${spec.id === state.selectedId ? ' aria-current="true"' : ""}><span class="work-card-heading"><span class="work-card-title">${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</span><span class="work-card-stage" title="Chosen workflow stage">${STAGE_GUIDE[spec.stage].label}</span></span><span class="work-card-observations">${fact("Execution", view.execution)}${fact("Evidence", view.cardVerification)}${fact("Delivery", view.delivery)}</span><span class="work-card-footer">${view.attention.length ? `<strong class="work-card-attention">Needs you · ${escapeHtml(view.attention[0].reason)}</strong>` : ""}<span class="work-card-note">${escapeHtml(view.cardReview)}</span></span></button></article>`;
     };
     const html = !visible.length
       ? `<p class="spec-work-empty">${error ? "The work list is unavailable. Refresh observations to retry." : !state.specsLoaded ? "Reading specs…" : state.specs.length ? "No specs match these filters. Clear filters to see all work." : "No specs yet. Create a spec to describe what you want to build."}</p>`
       : state.specView === "board"
         ? STAGES.filter(stage => state.stageFilter === "all" || stage === state.stageFilter).map(stage => `<section class="spec-board-column" data-board-stage="${stage}" aria-label="${STAGE_GUIDE[stage].label}"><h2><span>${STAGE_GUIDE[stage].label}</span><span class="spec-stage-count" aria-label="${visible.filter(s => s.stage === stage).length} specs">${visible.filter(s => s.stage === stage).length}</span></h2>${visible.filter(s => s.stage === stage).map(card).join("") || '<p class="muted">No work here</p>'}</section>`).join("")
-        : visible.map(card).join("");
+        : `<div class="work-list-columns" aria-hidden="true"><span>Work</span><span class="work-list-observation-columns"><span>Execution</span><span>Evidence</span><span>Delivery</span></span></div>` + visible.map(card).join("");
     $("#spec-work-items").dataset.mode = state.specView;
     $("#spec-work-items").dataset.stageFilter = state.stageFilter;
     $("#spec-work-items").tabIndex = state.specView === "board" ? 0 : -1;
@@ -569,16 +569,63 @@ export function initWorkbench(deps) {
     }
   }
 
-  function openCommit() {
+  let commitReview = null, commitGeneration = 0, commitRunning = false, commitSpec = null, commitDiffGeneration = 0;
+  function updateCommitSelection() {
+    const count = $("#commit-files").querySelectorAll("input:checked").length;
+    $("#commit-selection-count").textContent = `${count} of ${commitReview?.files.length || 0} files selected`;
+    $("#commit-dialog-submit").disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || count === 0;
+    $("#commit-dialog-submit").textContent = commitRunning ? (commitReview?.recovery ? "Repairing…" : "Committing…") : "Commit";
+    for (const input of $("#commit-files").querySelectorAll("input"))
+      input.disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || Boolean(commitReview.unsupported?.[input.dataset.commitPath]);
+    for (const id of ["commit-select-all", "commit-select-none", "commit-message"])
+      $("#" + id).disabled = commitRunning || !commitReview || Boolean(commitReview.blocked);
+    const recovering = Boolean(commitReview?.recovery);
+    $("#commit-record").disabled = commitRunning || !commitSpec || Boolean(commitReview?.blocked);
+    $("#commit-record").closest("label").hidden = recovering;
+    $("#commit-message").hidden = recovering;
+    $("label[for='commit-message']").hidden = recovering;
+    $("#commit-dialog-submit").hidden = recovering;
+    $(".commit-selection-actions").hidden = recovering;
+    $("#commit-files").hidden = recovering;
+    $("#commit-dialog-title").textContent = recovering ? "Review interrupted commit" : "Save these changes to history";
+    $("#commit-dialog-sub").textContent = recovering
+      ? "Repair reconciles Git state only. It does not run the commit again, upload work or deploy anything."
+      : "A commit records a snapshot in this project's local Git history. It does not upload your work or create a backup on another server.";
+    for (const button of $("#commit-dialog").querySelectorAll("[data-close]")) button.disabled = commitRunning;
+  }
+  for (const [id, checked] of [["all", true], ["none", false]]) $("#commit-select-" + id).addEventListener("click", () => {
+    if (!commitReview || commitReview.blocked || commitRunning) return;
+    for (const input of $("#commit-files").querySelectorAll("input:not(:disabled)")) input.checked = checked;
+    updateCommitSelection();
+  });
+  $("#commit-dialog").addEventListener("cancel", event => { if (commitRunning) event.preventDefault(); });
+  $("#commit-files").addEventListener("change", updateCommitSelection);
+  $("#commit-files").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-commit-diff]");
+    if (!button) return;
+    const generation = commitGeneration, diffGeneration = ++commitDiffGeneration;
+    $("#commit-diff-panel").hidden = false;
+    $("#commit-diff-title").textContent = button.dataset.commitDiff;
+    $("#commit-diff-text").textContent = "Reading changes…";
+    try {
+      const result = await api("GET", `/api/git/diff?path=${encodeURIComponent(button.dataset.commitDiff)}`);
+      if (generation !== commitGeneration || diffGeneration !== commitDiffGeneration) return;
+      $("#commit-diff-text").textContent = result.reason || result.hunks?.map(h => `${h.header}\n${h.lines.map(l => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`).join("\n")}`).join("\n") || "No text diff available; inspect binary files in Studio.";
+    } catch (error) { if (generation === commitGeneration && diffGeneration === commitDiffGeneration) $("#commit-diff-text").textContent = error.message; }
+  });
+  async function openCommit() {
+    if (commitRunning) return;
     const spec = selected();
+    commitSpec = spec;
     const changes = state.git?.changes ?? [];
-    $("#commit-files").innerHTML = changes.length
-      ? changes
-          .map((c) => `<li><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></li>`)
-          .join("")
-      : `<li class="muted">${!state.git || state.git.error ? "Changes unavailable. Close this dialog and refresh Git status before committing." : "No changes to commit."}</li>`;
-    $("#commit-scope").textContent = "Includes all changed files in this project, including new files and work outside the selected spec. New files matched by Git's ignore rules are excluded. Files changed before you submit are included too.";
-    $("#commit-dialog-submit").disabled = !state.git || Boolean(state.git.error) || changes.length === 0;
+    const generation = ++commitGeneration;
+    commitReview = null;
+    $("#commit-files").replaceChildren();
+    $("#commit-diff-panel").hidden = true;
+    $("#commit-repair").hidden = true;
+    $("#commit-repair").textContent = "Repair interrupted Git operation";
+    $("#commit-scope").textContent = "Reading a fresh snapshot. No files are staged by opening this review.";
+    updateCommitSelection();
     // A suggestion from what changed, selected so typing replaces it; the prefix stays.
     const prefix = commitPrefix(spec);
     $("#commit-message").value = suggestCommitMessage(spec, changes);
@@ -590,12 +637,24 @@ export function initWorkbench(deps) {
     $("#commit-record").checked = Boolean(spec);
     $("#commit-record").disabled = !spec;
     $("#commit-record-label").textContent = spec
-      ? `Record this commit in spec ${spec.id}'s audit trail`
+      ? `Include spec ${spec.id}'s file and record this commit in its audit trail`
       : "Select a spec to record this commit in its audit trail";
     showDialog("commit-dialog");
     const box = $("#commit-message");
     box.focus();
     box.setSelectionRange(prefix.length, box.value.length);
+    try {
+      const review = await api("GET", "/api/git/commit-review");
+      if (generation !== commitGeneration || !$("#commit-dialog").open) return;
+      commitReview = review;
+      $("#commit-repair").hidden = !review.recovery?.canRepair;
+      $("#commit-repair").disabled = false;
+      $("#commit-files").innerHTML = review.files.map(path => `<li><label class="commit-file-choice"><input type="checkbox" data-commit-path="${escapeHtml(path)}" ${review.unsupported?.[path] ? "" : "checked"} ${review.blocked || review.unsupported?.[path] ? "disabled" : ""} /><code>${escapeHtml(path)}</code>${review.unsupported?.[path] ? `<small>${escapeHtml(review.unsupported[path])}</small>` : ""}</label><button type="button" class="text-button" data-commit-diff="${escapeHtml(path)}">View diff</button></li>`).join("");
+      $("#commit-scope").textContent = review.blocked || "Only selected files enter this commit; they may include work outside the selected spec. Unselected files stay as they are. Any change since this snapshot requires a new review. Existing staged work is never taken over.";
+      updateCommitSelection();
+    } catch (error) {
+      if (generation === commitGeneration) $("#commit-scope").textContent = `Commit review unavailable: ${error.message}`;
+    }
   }
 
   let transferReview = null;
@@ -805,11 +864,38 @@ export function initWorkbench(deps) {
     }
   });
 
+  $("#commit-repair").addEventListener("click", async () => {
+    const recovery = commitReview?.recovery;
+    if (!recovery?.canRepair || commitRunning) return;
+    commitRunning = true;
+    $("#commit-repair").disabled = true;
+    $("#commit-repair").textContent = "Repairing…";
+    updateCommitSelection();
+    try {
+      const result = await api("POST", "/api/git/commit-recovery", { version: recovery.version });
+      closeDialog("commit-dialog");
+      toast(result.message);
+      await Promise.all([refreshGit(), refreshSpecs()]);
+    } catch (error) {
+      $("#commit-scope").textContent = `Repair not confirmed: ${error.message}. Reopen review before trying again.`;
+      commitReview = { ...commitReview, recovery: { ...recovery, canRepair: false } };
+    } finally {
+      commitRunning = false;
+      updateCommitSelection();
+    }
+  });
+
   $("#commit-dialog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const spec = selected();
+    const spec = commitSpec;
+    if (commitRunning || !commitReview || commitReview.blocked) return;
+    const paths = [...$("#commit-files").querySelectorAll("input:checked")].map(input => input.dataset.commitPath);
+    if (!paths.length) return;
+    commitRunning = true;
+    updateCommitSelection();
     try {
       const result = await api("POST", "/api/git/commit", {
+        selection: { version: commitReview.version, paths },
         message: $("#commit-message").value,
         specId: $("#commit-record").checked && spec ? spec.id : null,
       });
@@ -818,6 +904,12 @@ export function initWorkbench(deps) {
       await Promise.all([refreshGit(), refreshSpecs()]);
     } catch (error) {
       toast(error.message, "error");
+      $("#commit-scope").textContent = `Commit not confirmed: ${error.message} Close and reopen this review before trying again. Check Git history if the connection was interrupted; do not resend blindly.`;
+      commitReview = null;
+      refreshGit();
+    } finally {
+      commitRunning = false;
+      updateCommitSelection();
     }
   });
 
@@ -1114,6 +1206,17 @@ export function initWorkbench(deps) {
 
   return {
     selectSpec,
+    runCheck: () => lifecycle.openCheck(),
+    reviewEvidence() {
+      const spec = selected();
+      if (!spec) return;
+      if (!lifecycle.showVerification()) {
+        toast("Evidence for this work is not ready. Wait for the current action, then try again.", "error");
+        return;
+      }
+      selectSpec(spec.id);
+      $("#sdlc-workflow").scrollIntoView({ block: "start" });
+    },
     switchBranch,
     openHandoff,
     openNewSpec,

@@ -630,6 +630,12 @@ struct WebHost {
     studio_previews: Arc<std::sync::Mutex<crate::studio::Previews>>,
     /// Who is making the request being handled: the owner, or a named access token.
     access: crate::tokens::Access,
+    stream_clients: HashMap<String, StreamClient>,
+    browser: Arc<std::sync::Mutex<crate::browser::Browser>>,
+    browser_relay: crate::browser_relay::Relay,
+    connections: crate::connections::Connections,
+    browser_cancel: Arc<AtomicBool>,
+    browser_identity: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// `verb check` runs Git and several `--version` probes, which can take seconds. The web host has one
@@ -645,6 +651,48 @@ struct ChecksCache {
 const CHECKS_FRESH: Duration = Duration::from_secs(20);
 
 impl WebHost {
+    fn record_stream_ack(&mut self, id: &str, label: Option<&str>, generation: u64) {
+        let Some(id) = stream_client_id(id) else {
+            return;
+        };
+        let now = crate::now_millis();
+        let entry = self
+            .stream_clients
+            .entry(id.to_owned())
+            .or_insert_with(|| StreamClient {
+                id: id.to_owned(),
+                label: String::new(),
+                acked_generation: 0,
+                acked_at: now,
+                seen_at: now,
+            });
+        entry.label = stream_client_label(label);
+        entry.seen_at = now;
+        if generation >= entry.acked_generation {
+            entry.acked_generation = generation;
+            entry.acked_at = now;
+        }
+        while self.stream_clients.len() > MAX_STREAM_CLIENTS {
+            let oldest = self
+                .stream_clients
+                .values()
+                .min_by_key(|client| client.seen_at)
+                .map(|client| client.id.clone());
+            match oldest {
+                Some(oldest) => self.stream_clients.remove(&oldest),
+                None => break,
+            };
+        }
+    }
+
+    /// The switch, its generation, and every browser that has acknowledged a generation. A browser
+    /// behind the current generation has not confirmed that it cleared.
+    fn stream_status(&self, settings: &crate::transcript::Settings) -> Value {
+        let mut clients: Vec<&StreamClient> = self.stream_clients.values().collect();
+        clients.sort_by_key(|client| std::cmp::Reverse(client.seen_at));
+        json!({"enabled": settings.enabled, "generation": settings.generation, "clients": clients})
+    }
+
     fn checks(&self) -> Value {
         let mut cache = self
             .checks
@@ -703,6 +751,62 @@ struct TalkMessage {
 #[derive(Deserialize)]
 struct StreamRequest {
     enabled: bool,
+    #[serde(default, rename = "clientId")]
+    client_id: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StreamAckRequest {
+    #[serde(rename = "clientId")]
+    client_id: String,
+    #[serde(default)]
+    label: Option<String>,
+    generation: u64,
+}
+
+#[derive(Deserialize)]
+struct ChatRequest {
+    #[serde(rename = "messageId")]
+    message_id: String,
+    text: String,
+}
+
+/// A browser that has shown this project's conversation, and the newest stream generation it
+/// has said it applied. Memory only; a restart forgets every client.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StreamClient {
+    id: String,
+    label: String,
+    acked_generation: u64,
+    acked_at: u128,
+    /// The last time this browser said anything, cleared or not.
+    seen_at: u128,
+}
+
+const MAX_STREAM_CLIENTS: usize = 16;
+
+fn stream_client_id(id: &str) -> Option<&str> {
+    (8..=64).contains(&id.len()).then_some(id).filter(|id| {
+        id.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    })
+}
+
+fn stream_client_label(label: Option<&str>) -> String {
+    let label: String = label
+        .unwrap_or("A browser")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(40)
+        .collect();
+    if label.trim().is_empty() {
+        "A browser".to_owned()
+    } else {
+        label
+    }
 }
 
 #[derive(Deserialize)]
@@ -788,6 +892,7 @@ struct SpecAgentRequest {
 #[serde(deny_unknown_fields)]
 struct CommitRequest {
     message: String,
+    selection: crate::git_commit::Request,
     #[serde(default, rename = "specId")]
     spec_id: Option<String>,
 }
@@ -954,6 +1059,12 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         state_generation: Arc::new(AtomicU64::new(0)),
         talks: crate::talk::Talks::default(),
         studio_previews: Arc::default(),
+        stream_clients: HashMap::new(),
+        browser: Arc::default(),
+        browser_relay: Default::default(),
+        connections: Default::default(),
+        browser_cancel: Arc::default(),
+        browser_identity: Arc::default(),
         access: crate::tokens::Access::owner(),
     };
     if let Some(jwks) = load_initial_jwks() {
@@ -1029,7 +1140,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn secure_token() -> Result<String, String> {
+pub(crate) fn secure_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     File::open("/dev/urandom")
         .and_then(|mut random| random.read_exact(&mut bytes))
@@ -1563,7 +1674,15 @@ impl WebHost {
         let has_valid_session = self.has_valid_session(request);
         let mut session_cookie = None;
 
-        if cf_authenticated && !has_valid_session {
+        // Companion polling is stateless browser delegation. Do not mint an unused
+        // owner session on every Access-authenticated poll from a client without cookies.
+        let companion_request = request.url().split('?').next().is_some_and(|path| {
+            matches!(
+                path,
+                "/api/browser/companion" | "/api/browser/companion/claim"
+            )
+        });
+        if cf_authenticated && !has_valid_session && !companion_request {
             if let Ok(new_token) = secure_token() {
                 self.sessions.insert(
                     new_token.clone(),
@@ -1613,6 +1732,37 @@ impl WebHost {
                 return reply;
             }
         }
+        // A paired companion has browser-only authority, never a general Verb access token.
+        if matches!(
+            path,
+            "/api/browser/companion" | "/api/browser/companion/claim"
+        ) {
+            if request.method() != &Method::Post {
+                return Reply::error(405, "Use POST.");
+            }
+            if self.cf_access_iss.is_some() && !cf_authenticated && !has_valid_session {
+                return Reply::error(403, "Cloudflare Access sign-in required.");
+            }
+            let key = header(request, "X-Verb-Browser-Key").map(str::to_owned);
+            let claiming = path.ends_with("/claim");
+            if !claiming && !self.browser_relay.accepts_key(key.as_deref()) {
+                return Reply::error(403, "Browser companion disconnected.");
+            }
+            let input = match read_json_limit::<Value>(
+                request,
+                if claiming { 3500 } else { 3 * 1024 * 1024 },
+            ) {
+                Ok(v) => v,
+                Err(_) => return Reply::error(400, "Invalid companion request."),
+            };
+            if claiming && input["op"] != "claim" {
+                return Reply::error(400, "Pairing claim required.");
+            }
+            return match self.browser_relay.peer(key.as_deref(), input) {
+                Ok(v) => Reply::json(200, v),
+                Err(e) => Reply::error(403, e),
+            };
+        }
         if !path.starts_with("/api/") {
             return Reply::error(404, "not found");
         }
@@ -1655,6 +1805,133 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if path == "/api/connections" {
+            if !self.access.allows(crate::tokens::Scope::Owner) {
+                return Ok(Reply::error(403, "Only the owner can manage connections."));
+            }
+            if method == &Method::Get {
+                return Ok(Reply::json(200, self.connections.status()?));
+            }
+            if method != &Method::Post {
+                return Ok(Reply::error(405, "Use GET or POST."));
+            }
+            let input: Value = read_json(request)?;
+            if mcp_contains_verb_credential(&input, &self.token, &self.sessions) {
+                return Ok(Reply::error(400, "This request contains a Verb credential. Remove it before sharing with a service."));
+            }
+            let connections = self.connections.clone();
+            let origin = self
+                .allowed_origin
+                .clone()
+                .unwrap_or_else(|| self.origin.clone());
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                serde_json::to_vec(&connections.command(input, &origin)?)
+                    .map_err(|_| "Connection response unavailable.".to_owned())
+            }));
+            return Ok(reply);
+        }
+        if path == "/api/browser/pairing" {
+            if !self.access.allows(crate::tokens::Scope::Owner) {
+                return Ok(Reply::error(403, "Only the owner can pair a browser."));
+            }
+            if method == &Method::Get {
+                return Ok(Reply::json(200, self.browser_relay.status()));
+            }
+            if method != &Method::Post {
+                return Ok(Reply::error(405, "Use GET or POST."));
+            }
+            let input: Value = read_json(request)?;
+            if input["op"] == "pair"
+                && self
+                    .browser_identity
+                    .lock()
+                    .map_err(|_| "Browser identity unavailable")?
+                    .is_some()
+            {
+                return Ok(Reply::error(
+                    409,
+                    "Stop the local browser before pairing a companion.",
+                ));
+            }
+            return match self
+                .browser_relay
+                .pairing(input["op"].as_str().unwrap_or(""))
+            {
+                Ok(v) => Ok(Reply::json(200, v)),
+                Err(e) => Ok(Reply::error(409, e)),
+            };
+        }
+        if path == "/api/browser" {
+            let companion = self.browser_relay.status()["connected"] == true;
+            if self.access.allows(crate::tokens::Scope::Owner) && companion {
+                if method == &Method::Get {
+                    return Ok(Reply::json(
+                        200,
+                        json!({"available":true,"location":"Paired Mac companion","reason":"Browser runs on your paired Mac. Localhost means that Mac, not the phone."}),
+                    ));
+                }
+                if method != &Method::Post {
+                    return Ok(Reply::error(405, "Use GET or POST."));
+                }
+                let input: Value = read_json(request)?;
+                let relay = self.browser_relay.clone();
+                let mut reply = Reply::json(200, Value::Null);
+                reply.deferred = Some(Box::new(move || {
+                    serde_json::to_vec(&relay.command(input)?).map_err(|e| e.to_string())
+                }));
+                return Ok(reply);
+            }
+            // Local execution remains unavailable on external and boundary hosts.
+            if !self.access.allows(crate::tokens::Scope::Owner) || !self.studio_native() {
+                return Ok(Reply::error(
+                    403,
+                    "Connect your Mac browser to open websites here.",
+                ));
+            }
+            let configured = crate::browser::Browser::configured();
+            if method == &Method::Get {
+                return Ok(Reply::json(
+                    200,
+                    json!({"available":configured,"location":"This Verb host", "reason": if configured { "Start a fresh, isolated browser session." } else { "A browser runtime has not been configured on this host." }}),
+                ));
+            }
+            if method != &Method::Post {
+                return Ok(Reply::error(405, "Use GET or POST."));
+            }
+            let input: Value = read_json(request)?;
+            let stopping = input["op"] == "stop";
+            if stopping {
+                let identity = self
+                    .browser_identity
+                    .lock()
+                    .map_err(|_| "Browser identity unavailable.")?;
+                if identity.is_some() && input["session"].as_str() != identity.as_deref() {
+                    return Ok(Reply::error(
+                        409,
+                        "Browser session changed. Reopen it before stopping it.",
+                    ));
+                }
+                self.browser_cancel.store(true, Ordering::SeqCst);
+            }
+            let cancel = self.browser_cancel.clone();
+            let identity = self.browser_identity.clone();
+            let browser = self.browser.clone();
+            let origin = self.origin.clone();
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                let mut browser = if stopping {
+                    browser.lock().map_err(|_| "Browser lock is unavailable.")?
+                } else {
+                    browser.try_lock().map_err(|_| {
+                        "Browser is busy. Wait for the current action; it was not queued."
+                    })?
+                };
+                let view = browser.command(&origin, input, &cancel, &identity)?;
+                serde_json::to_vec(&view).map_err(|e| e.to_string())
+            }));
+            return Ok(reply);
+        }
         if method == &Method::Get && path == "/api/studio/workspace" {
             let native = self.studio_native();
             let boundary = crate::studio_bridge::configured();
@@ -1677,13 +1954,32 @@ impl WebHost {
             }));
         }
 
-        if path == "/api/studio/file" || path == "/api/studio/preview" {
+        if matches!(
+            path,
+            "/api/studio/file" | "/api/studio/preview" | "/api/studio/image"
+        ) {
             if !self.studio_connected() {
                 return Ok(Reply::error(403, "Studio editing and app preview are not connected through this execution boundary"));
             }
             let project = self.project.clone();
             let id = self.project_id.clone();
             let boundary = crate::studio_bridge::configured();
+            if method == &Method::Get && path == "/api/studio/image" {
+                let wanted = url
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("path=")))
+                    .map(crate::shell::percent_decode)
+                    .ok_or("which image?")?;
+                return Ok(self.off_loop(false, move || {
+                    let image = if boundary {
+                        crate::studio_bridge::image(&project, &wanted)?
+                    } else {
+                        crate::studio::image(&project, &wanted)?
+                    };
+                    Ok(json!({"workspaceId":id,"image":image}))
+                }));
+            }
             if method == &Method::Get && path == "/api/studio/file" {
                 let wanted = url
                     .split('?')
@@ -1857,10 +2153,28 @@ impl WebHost {
             let mut settings = crate::transcript::load(&store);
             if method == &Method::Post {
                 let input: StreamRequest = read_json(request)?;
-                settings.enabled = input.enabled;
-                crate::transcript::save(&store, &settings)?;
+                settings = crate::transcript::set_enabled(&store, input.enabled)?;
+                // Every hosted terminal clears or rereads now, not at its next settings check.
+                for terminal in self.terminals.lock().unwrap().values_mut() {
+                    if let Some(hosted) = terminal.hosted.as_mut() {
+                        hosted.apply_stream(settings.clone());
+                    }
+                }
+                // The browser that turned it off cleared itself before asking.
+                if let Some(id) = input.client_id.as_deref() {
+                    self.record_stream_ack(id, input.label.as_deref(), settings.generation);
+                }
             }
-            return Ok(Reply::json(200, json!({"enabled": settings.enabled})));
+            return Ok(Reply::json(200, self.stream_status(&settings)));
+        }
+        if path == "/api/stream/ack" && method == &Method::Post {
+            let input: StreamAckRequest = read_json(request)?;
+            let settings = crate::transcript::load(&self.identity.store);
+            if input.generation > settings.generation {
+                return Err("that stream generation does not exist yet".to_owned());
+            }
+            self.record_stream_ack(&input.client_id, input.label.as_deref(), input.generation);
+            return Ok(Reply::json(200, self.stream_status(&settings)));
         }
         if path == "/api/observer" && (method == &Method::Get || method == &Method::Post) {
             let store = self.identity.store.clone();
@@ -2108,15 +2422,29 @@ impl WebHost {
             }));
             return Ok(reply);
         }
+        if method == &Method::Get && path == "/api/git/commit-review" {
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || {
+                Ok(json!(crate::git_commit::review(&project)?))
+            }));
+        }
+        if method == &Method::Post && path == "/api/git/commit-recovery" {
+            let input: crate::git_commit::RecoveryRequest = read_json(request)?;
+            let project = self.project.clone();
+            return Ok(self.off_loop(true, move || {
+                Ok(json!({ "message": crate::git_commit::repair(&project, &input)? }))
+            }));
+        }
         if method == &Method::Post && path == "/api/git/commit" {
             let input: CommitRequest = read_json(request)?;
             let (project, actor) = (self.project.clone(), self.actor());
             return Ok(self.off_loop(true, move || {
-                let sha = crate::specs::commit(
+                let sha = crate::specs::commit_selected(
                     &project,
                     &input.message,
                     input.spec_id.as_deref(),
                     &actor,
+                    &input.selection,
                 )?;
                 Ok(json!({"sha": sha, "message": format!("Committed {sha}")}))
             }));
@@ -2383,49 +2711,85 @@ impl WebHost {
                 let inbox = workbench::inbox_snapshot(&self.project, id)?;
                 Ok(Reply::json(200, json!(inbox)))
             }
-            ["api", "terminals", id, "stream"] if method == &Method::Get => {
-                // Content from the agent's own log, and only with the project's opt-in: see
-                // `crate::transcript` for the rules. Nothing here is stored or sent elsewhere.
-                if !crate::transcript::load(&self.identity.store).enabled {
-                    return Ok(Reply::json(200, json!({"enabled": false, "items": []})));
-                }
-                let (record, created, conversation) = {
-                    let terminals = self.terminals.lock().unwrap();
-                    let terminal = terminals.get(*id).ok_or("terminal is not hosted here")?;
-                    let session = &terminal
-                        .hosted
-                        .as_ref()
-                        .ok_or("terminal is not hosted here")?
-                        .session;
-                    let record = match session.agent.as_ref() {
-                        Some(crate::Agent::Claude) => crate::observe::Record::Claude,
-                        Some(crate::Agent::Codex) => crate::observe::Record::Codex,
-                        _ => {
-                            return Ok(Reply::json(
-                                200,
-                                json!({"enabled": true, "items": [], "note": "Verb can read the stream of Claude Code and Codex sessions."}),
-                            ))
-                        }
-                    };
-                    (record, session.created_at, session.resume_identity.clone())
+            // The conversation, as `crate::conversation` reads it: content only with the
+            // project's stream on, and never from a generation older than the current setting.
+            ["api", "terminals", id, "conversation"] if method == &Method::Get => {
+                let fresh = crate::transcript::load(&self.identity.store);
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let Some(hosted) = terminal.hosted.as_mut() else {
+                    return Ok(Reply::json(
+                        200,
+                        json!({"available": false, "running": false, "stream": fresh,
+                            "reason": "The agent's process has ended, so Verb no longer follows its conversation here."}),
+                    ));
                 };
-                let project = self.project.clone();
-                let mut reply = Reply::json(200, Value::Null);
-                reply.deferred = Some(Box::new(move || {
-                    let home = crate::isolation::agent_home().unwrap_or_default();
-                    let stream = crate::transcript::for_session(
-                        record,
-                        &home,
-                        &project,
-                        created,
-                        conversation.as_deref(),
-                    );
-                    serde_json::to_vec(
-                        &json!({"enabled": true, "items": stream.items, "note": stream.note}),
-                    )
-                    .map_err(|e| e.to_string())
-                }));
-                Ok(reply)
+                let mut view = hosted
+                    .conversation_view(crate::transcript::MAX_ITEMS)
+                    .ok_or("This terminal has no agent conversation.")?;
+                if view["stream"]["generation"].as_u64() != Some(fresh.generation) {
+                    hosted.apply_stream(fresh);
+                    view = hosted
+                        .conversation_view(crate::transcript::MAX_ITEMS)
+                        .ok_or("This terminal has no agent conversation.")?;
+                }
+                view["available"] = json!(true);
+                view["running"] = json!(true);
+                Ok(Reply::json(200, view))
+            }
+            // A chat message: never raw keystrokes, never sent twice for one id, and refused unless
+            // the agent is ready on evidence. Terminal input keeps its own route, ungated.
+            ["api", "terminals", id, "chat"] if method == &Method::Post => {
+                let input: ChatRequest = read_json(request)?;
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
+                match hosted.chat_send(
+                    &input.message_id,
+                    &input.text,
+                    crate::conversation::Origin::Desktop,
+                ) {
+                    Ok(()) => Ok(Reply::json(
+                        200,
+                        hosted
+                            .conversation_view(crate::transcript::MAX_ITEMS)
+                            .unwrap_or(Value::Null),
+                    )),
+                    Err(refusal) => Ok(Reply::json(
+                        409,
+                        json!({"error": refusal.reason, "code": refusal.code}),
+                    )),
+                }
+            }
+            ["api", "terminals", id, "chat", message, action @ ("check" | "discard")]
+                if method == &Method::Post =>
+            {
+                let mut terminals = self.terminals.lock().unwrap();
+                let terminal = terminals
+                    .get_mut(*id)
+                    .ok_or("terminal is not hosted here")?;
+                let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
+                let outcome = if *action == "check" {
+                    hosted.chat_check(message)
+                } else {
+                    hosted.chat_discard(message)
+                };
+                match outcome {
+                    Ok(()) => Ok(Reply::json(
+                        200,
+                        hosted
+                            .conversation_view(crate::transcript::MAX_ITEMS)
+                            .unwrap_or(Value::Null),
+                    )),
+                    Err(error) => Ok(Reply::json(
+                        404,
+                        json!({"error": error, "code": "unknown_message"}),
+                    )),
+                }
             }
             ["api", "terminals", id, "output"] if method == &Method::Get => {
                 let after = url
@@ -2887,8 +3251,19 @@ fn deployment_info() -> Value {
 }
 
 fn send_reply(request: Request, reply: Reply) {
+    // Early authentication/capacity failures deliberately do not drain bodies. Closing
+    // before releasing the reader prevents a keep-alive parser from adopting those bytes.
+    let retire_connection = reply.status >= 400
+        && (request.body_length().is_some_and(|length| length > 0)
+            || header(&request, "Transfer-Encoding").is_some());
     let mut response = Response::from_data(reply.body).with_status_code(StatusCode(reply.status));
-    let cache_control = reply.cache_control.unwrap_or("no-store");
+    // Saved sandbox snapshots must not acquire CDN-injected scripts or HTML rewrites.
+    // Keep no-store; no-transform is response-local and does not change Access/WAF policy.
+    let cache_control = if reply.sandbox_preview {
+        "no-store, no-transform"
+    } else {
+        reply.cache_control.unwrap_or("no-store")
+    };
     let csp = if reply.sandbox_preview {
         "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; frame-ancestors 'self'"
     } else if reply.studio_frames {
@@ -2922,7 +3297,11 @@ fn send_reply(request: Request, reply: Reply) {
             response.add_header(header);
         }
     }
-    let _ = request.respond(response);
+    if retire_connection {
+        let _ = request.respond_and_close(response);
+    } else {
+        let _ = request.respond(response);
+    }
 }
 
 fn header<'a>(request: &'a Request, name: &'static str) -> Option<&'a str> {
@@ -2947,6 +3326,59 @@ impl Read for DeadlineReader<'_> {
         }
         self.inner.read(buffer)
     }
+}
+
+fn mcp_contains_verb_credential(
+    input: &Value,
+    owner: &str,
+    sessions: &HashMap<String, Instant>,
+) -> bool {
+    let secret = |text: &str| {
+        (!owner.is_empty() && (text == owner || owner.len() >= 16 && text.contains(owner)))
+            || text
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+                .any(|part| {
+                    sessions.contains_key(part) || part.starts_with("verb_at_") && part.len() >= 40
+                })
+    };
+    let mut pending = vec![input];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::String(text) if secret(text) => return true,
+            Value::Array(values) => pending.extend(values),
+            Value::Object(values) => {
+                if values.keys().any(|key| secret(key)) {
+                    return true;
+                }
+                pending.extend(values.values());
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+#[test]
+fn mcp_requests_do_not_share_verb_owner_access_or_browser_credentials() {
+    let owner = "owner-fixture-secret-0000000000000000";
+    let sessions = HashMap::from([(
+        "browser-session-secret".to_owned(),
+        Instant::now() + Duration::from_secs(60),
+    )]);
+    for request in [
+        json!({"credential":owner}),
+        json!({"arguments":{"question":format!("Pasted credential: {owner}")}}),
+        json!({"arguments":{"value":"Cookie: verb_session=browser-session-secret"}}),
+        json!({"arguments":{"credential":"verb_at_fixture_00000000000000000000000000000000"}}),
+    ] {
+        assert!(mcp_contains_verb_credential(&request, owner, &sessions));
+    }
+    assert!(!mcp_contains_verb_credential(
+        &json!({"arguments":{"question":"Explain the verb_at_ prefix","token":"a-service-specific-credential"}}),
+        owner,
+        &sessions
+    ));
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, String> {

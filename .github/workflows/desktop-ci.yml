@@ -96,6 +96,12 @@ jobs:
         # the runner; the tests skip themselves rather than fail if a shell is missing.
         run: cargo test --all-targets
 
+      - name: IDE workspace adapter
+        run: |
+          cargo build --quiet
+          VERB_BIN="$PWD/target/debug/verb" node --test integrations/vscode/test/*.test.cjs
+          python3 integrations/vscode/package.py --check
+
       - name: Synthetic boundary tests
         # External terminal admission over HTTP against a stand-in execution boundary: delayed
         # admission, start timeout cleanup, refusal, stale receipts. Test builds only.
@@ -115,8 +121,27 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: |
           npx --prefix web playwright install --with-deps chromium
+          # Ubuntu's restricted userns policy needs an executable-scoped allowance for
+          # the downloaded browser. Keep Chromium's sandbox enabled; do not change sysctls.
+          # https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions
+          if [ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ] && [ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" = 1 ]; then
+            browser=$(node -e 'console.log(require("./web/node_modules/playwright-core").chromium.executablePath())')
+            case "$browser" in
+              "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux*/chrome) ;;
+              *) echo "Unexpected CI browser location" >&2; exit 1 ;;
+            esac
+            printf 'abi <abi/4.0>,\ninclude <tunables/global>\nprofile verb-ci-chromium "%s" flags=(unconfined) {\n  userns,\n}\n' "$browser" > "$RUNNER_TEMP/verb-ci-chromium.apparmor"
+            sudo apparmor_parser -r "$RUNNER_TEMP/verb-ci-chromium.apparmor"
+          fi
           # The synthetic boundary build (previous step) drives the stalled-cleanup browser test only.
           VERB_BIN="$PWD/target/debug/verb" VERB_SYNTHETIC_BIN="$PWD/target/synthetic/debug/verb" npm run e2e --prefix web
+
+      - name: Remove scoped CI browser profile
+        if: always() && startsWith(matrix.os, 'ubuntu')
+        run: |
+          if [ -f "$RUNNER_TEMP/verb-ci-chromium.apparmor" ]; then
+            sudo apparmor_parser -R "$RUNNER_TEMP/verb-ci-chromium.apparmor"
+          fi
 
       - name: Upload browser test report
         if: failure() && startsWith(matrix.os, 'ubuntu')

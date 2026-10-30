@@ -41,6 +41,83 @@ pub(crate) struct SaveRequest {
     pub text: String,
 }
 
+pub(crate) const MAX_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+#[derive(Deserialize, Serialize)]
+pub(crate) struct Image {
+    pub path: String,
+    pub mime: String,
+    pub data: String,
+    pub revision: String,
+    pub bytes: usize,
+}
+fn image_mime(raw: &[u8]) -> Option<&'static str> {
+    if raw.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if raw.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if raw.starts_with(b"GIF87a") || raw.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if raw.starts_with(b"RIFF") && raw.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+pub(crate) fn validate_image(image: &Image, path: &str) -> Result<(), String> {
+    use base64::Engine;
+    if image.path != path
+        || image.bytes > MAX_IMAGE_BYTES
+        || image.data.len() > MAX_IMAGE_BYTES.div_ceil(3) * 4
+    {
+        return Err("Invalid image identity or size".into());
+    }
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(&image.data)
+        .map_err(|_| "Invalid image encoding")?;
+    if raw.len() != image.bytes
+        || image_mime(&raw) != Some(image.mime.as_str())
+        || format!("{:x}", Sha256::digest(&raw)) != image.revision
+    {
+        return Err("Image content or revision mismatch".into());
+    }
+    Ok(())
+}
+pub(crate) fn image(project: &Path, path: &str) -> Result<Image, String> {
+    use base64::Engine;
+    let (directory, leaf) = location(project, path)?;
+    let mut file = open_at(&directory, &leaf, libc::O_RDONLY | libc::O_NONBLOCK)?;
+    let before = file.metadata().map_err(|e| e.to_string())?;
+    if !before.is_file() || before.nlink() != 1 || before.len() > MAX_IMAGE_BYTES as u64 {
+        return Err("Images must be regular files without links, up to 2 MB".into());
+    }
+    let mut raw = Vec::new();
+    (&mut file)
+        .take((MAX_IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut raw)
+        .map_err(|e| e.to_string())?;
+    let after = file.metadata().map_err(|e| e.to_string())?;
+    if raw.len() > MAX_IMAGE_BYTES
+        || raw.len() as u64 != before.len()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+        || after.nlink() != 1
+    {
+        return Err(format!("{CONFLICT}Image changed while reading; reopen it"));
+    }
+    let mime = image_mime(&raw).ok_or(
+        "Preview supports PNG, JPEG, GIF and WebP; active formats such as SVG are not executed",
+    )?;
+    Ok(Image {
+        path: path.into(),
+        mime: mime.into(),
+        data: base64::engine::general_purpose::STANDARD.encode(&raw),
+        revision: format!("{:x}", Sha256::digest(&raw)),
+        bytes: raw.len(),
+    })
+}
+
 fn error() -> String {
     std::io::Error::last_os_error().to_string()
 }
@@ -219,6 +296,28 @@ pub(crate) fn save(project: &Path, request: SaveRequest) -> Result<Document, Str
     result
 }
 
+// A readiness message is a rendering signal, never evidence that the project's code is correct.
+// Keep the original doctype first and leave the saved file/revision untouched.
+fn preview_document(text: &str, ticket: &str) -> Vec<u8> {
+    let token = serde_json::to_string(ticket)
+        .unwrap()
+        .replace('<', "\\u003c");
+    let shim = format!("<script>addEventListener('DOMContentLoaded',()=>parent.postMessage({{type:'verb:preview-ready',ticket:{token}}},'*'),{{once:true}})</script>");
+    let trimmed = text.trim_start_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let offset = if trimmed
+        .get(..9)
+        .is_some_and(|s| s.eq_ignore_ascii_case("<!doctype"))
+    {
+        trimmed
+            .find('>')
+            .map(|end| text.len() - trimmed.len() + end + 1)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    format!("{}{}{}", &text[..offset], shim, &text[offset..]).into_bytes()
+}
+
 struct Snapshot {
     html: Vec<u8>,
     expires: Instant,
@@ -240,10 +339,11 @@ impl Previews {
                     .to_owned(),
             );
         }
+        let html = preview_document(&doc.text, &ticket);
         self.entries.insert(
             ticket,
             Snapshot {
-                html: doc.text.into_bytes(),
+                html,
                 expires: Instant::now() + Duration::from_secs(120),
             },
         );
@@ -279,6 +379,36 @@ mod tests {
         }
         fs::write(dir.join("index.html"), "<h1>Before</h1>").unwrap();
         dir
+    }
+    #[test]
+    fn preview_readiness_preserves_doctype_and_escapes_the_message() {
+        let html = " \n<!DOCTYPE html><h1>Saved content</h1>";
+        let rendered =
+            String::from_utf8(super::preview_document(html, "ticket</script>test")).unwrap();
+        assert!(rendered.starts_with(" \n<!DOCTYPE html><script>"));
+        assert!(rendered.ends_with("<h1>Saved content</h1>"));
+        assert!(rendered.contains("DOMContentLoaded"));
+        assert!(rendered.contains("verb:preview-ready"));
+        assert!(rendered.contains("ticket\\u003c/script>test"));
+        assert_eq!(html, " \n<!DOCTYPE html><h1>Saved content</h1>");
+    }
+
+    #[test]
+    fn image_access_validates_signature_links_limit_and_reply_identity() {
+        let dir = fixture();
+        fs::write(dir.join("picture.png"), b"\x89PNG\r\n\x1a\nfixture").unwrap();
+        let mut picture = image(&dir, "picture.png").unwrap();
+        validate_image(&picture, "picture.png").unwrap();
+        assert!(validate_image(&picture, "another.png").is_err());
+        picture.revision = "wrong".into();
+        assert!(validate_image(&picture, "picture.png").is_err());
+        std::os::unix::fs::symlink("picture.png", dir.join("linked.png")).unwrap();
+        assert!(image(&dir, "linked.png").is_err());
+        fs::write(dir.join("fake.png"), b"<svg onload='alert(1)'/>").unwrap();
+        assert!(image(&dir, "fake.png").is_err());
+        fs::write(dir.join("large.png"), vec![0; MAX_IMAGE_BYTES + 1]).unwrap();
+        assert!(image(&dir, "large.png").is_err());
+        fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn save_is_revision_checked_and_preserves_mode() {

@@ -479,6 +479,22 @@ impl Request {
         res
     }
 
+    /// Reply without draining a rejected body, then retire this TCP connection before
+    /// releasing its body reader to the next parser. Keeps body bytes out of request lines.
+    pub fn respond_and_close<R>(mut self, mut response: Response<R>) -> Result<(), IoError>
+    where R: Read,
+    {
+        response.force_connection_close();
+        let result = self.respond_impl(response);
+        if let Some(stream) = self.tcp_stream.as_ref() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+        if let Some(sender) = self.notify_when_responded.take() {
+            let _ = sender.send(());
+        }
+        result
+    }
+
     fn respond_impl<R>(&mut self, response: Response<R>) -> Result<(), IoError>
     where
         R: Read,

@@ -1,3 +1,6 @@
+import { initStudioCode } from "./studio-code.js";
+import { initEditorFind } from "./studio-find.js";
+import { initEditorNavigation } from "./studio-navigation.js";
 // Local text editing is an adapter, not a replacement for the full IDE foundation.
 // File drafts live in this tab only. No writes, app code, or server commands run on entry.
 export function initStudioEditor({ $, api, onMode, onSaved }) {
@@ -6,16 +9,60 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     mode = "document",
     request = 0;
   const drafts = new Map();
+  let activePreview = null;
+  function stopPreview() {
+    if (activePreview) clearTimeout(activePreview.timer);
+    activePreview = null;
+    $("#studio-app-frame").replaceChildren();
+    $("#studio-app-frame").removeAttribute("aria-busy");
+    $("#studio-app-loading").hidden = true;
+  }
+  window.addEventListener("message", (event) => {
+    const active = activePreview;
+    if (
+      !active ||
+      mode !== "app" ||
+      event.source !== active.frame.contentWindow ||
+      event.data?.type !== "verb:preview-ready" ||
+      event.data?.ticket !== active.ticket
+    )
+      return;
+    clearTimeout(active.timer);
+    $("#studio-app-loading").hidden = true;
+    $("#studio-app-frame").removeAttribute("aria-busy");
+    status(
+      "Preview document loaded. Inline scripts run in the sandbox; external assets and API connections are blocked.",
+    );
+  });
   const editor = $("#studio-editor-text");
   const status = (text) => {
     $("#studio-editor-status").textContent = text;
   };
   const dirty = (draft) => draft && draft.text !== draft.base.text;
   const current = () => drafts.get(path);
+  const code = initStudioCode({ $, textarea: editor });
+  const navigation = initEditorNavigation({
+    $,
+    editor,
+    focusEditor: () => code.focus(),
+    selectRange: (...args) => code.selectRange(...args),
+  });
+  const find = initEditorFind({
+    $,
+    editor,
+    getKey: () => path,
+    focusEditor: () => code.focus(),
+    selectRange: (...args) => code.selectRange(...args),
+    onChange() {
+      if (current()) current().text = editor.value;
+      update();
+    },
+  });
   function setMode(next) {
-    if (mode === "app" && next !== "app")
-      $("#studio-app-frame").replaceChildren();
+    if (next !== "app") ++request;
+    if (mode === "app" && next !== "app") stopPreview();
     mode = next;
+    if (next !== "edit") navigation.reset();
     $("#studio-edit-panel").hidden = next !== "edit";
     $("#studio-app-panel").hidden = next !== "app";
     $("#studio-document").hidden = next !== "document";
@@ -35,8 +82,14 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     update();
   }
   function update() {
+    if (mode === "edit" && current()) code.open(path, current().text);
+    find.sync();
+    navigation.sync();
     const draft = current();
-    $("#studio-edit-file").disabled = !capability?.editing.available || !path;
+    $("#studio-edit-file").disabled =
+      !capability?.editing.available ||
+      !path ||
+      /\.(png|jpe?g|gif|webp)$/i.test(path);
     $("#studio-preview-app").disabled =
       !capability?.preview.available ||
       !/\.html?$/i.test(path || "") ||
@@ -64,6 +117,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
           "Five drafts are open. Save a draft before editing another file.",
         );
       drafts.delete(disposable[0]);
+      code.forget(disposable[0]);
     }
     const draft = { base: doc, text: doc.text, saving: false, recovery: null };
     drafts.set(doc.path, draft);
@@ -92,7 +146,9 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       $("#studio-editor-conflict").hidden = true;
       setMode("edit");
       status("Explicit saves only. Saving does not commit or publish.");
-      editor.focus({ preventScroll: true });
+      code.focus();
+      if (matchMedia("(max-width: 640px)").matches)
+        $("#studio-edit-panel").scrollIntoView({ block: "start" });
     } catch (error) {
       if (generation === request) status(error.message);
     }
@@ -155,6 +211,8 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       const next = remember(doc);
       next.recovery = recovery;
       editor.value = next.text;
+      code.reset();
+      find.resetUndo();
       $("#studio-editor-conflict").hidden = true;
       status(
         recovery != null
@@ -197,14 +255,30 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
         "allow",
         "camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'; payment 'none'",
       );
+      stopPreview();
+      const active = {
+        frame,
+        ticket: result.url.split("/").pop(),
+        timer: null,
+      };
+      activePreview = active;
+      $("#studio-app-loading").hidden = false;
+      $("#studio-app-loading").textContent = "Loading saved preview…";
+      $("#studio-app-frame").setAttribute("aria-busy", "true");
       frame.src = result.url;
       $("#studio-app-frame").replaceChildren(frame);
+      active.timer = setTimeout(() => {
+        if (activePreview !== active) return;
+        $("#studio-app-loading").textContent =
+          "Preview has not confirmed loading. Keep this tab open, or choose Reload for a fresh preview. Your file is saved.";
+        status(
+          "Preview loading is not confirmed. Reload creates a fresh saved snapshot; closing the preview stops it.",
+        );
+      }, 12000);
       $("#studio-app-caption").textContent =
-        `${wanted} · saved snapshot ${doc.revision.slice(0, 8)} · refresh restarts the app`;
+        `saved snapshot ${doc.revision.slice(0, 8)} · refresh restarts the app`;
       setMode("app");
-      status(
-        "Isolated HTML app preview. Inline scripts run; external assets and API connections are blocked.",
-      );
+      status("Loading the saved file in an isolated preview…");
     } catch (error) {
       if (generation === request) status(error.message);
     }
@@ -214,7 +288,11 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     update();
   });
   editor.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    if (
+      !event.isComposing &&
+      (event.metaKey || event.ctrlKey) &&
+      event.key.toLowerCase() === "s"
+    ) {
       event.preventDefault();
       save();
     }
@@ -239,10 +317,23 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       await navigator.clipboard.writeText(current().text);
       status("Draft copied.");
     } catch {
-      editor.focus();
-      editor.select();
+      code.selectRange(0, editor.value.length, true);
       status("Select the editor text and copy it with your keyboard.");
     }
+  });
+  $(".studio-viewport-group").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-preview-width]");
+    if (!button) return;
+    const width = button.dataset.previewWidth;
+    $("#studio-app-frame").dataset.viewport = width;
+    for (const option of $(".studio-viewport-group").querySelectorAll("button"))
+      option.setAttribute("aria-pressed", String(option === button));
+    $("#studio-viewport-label").textContent =
+      width === "phone"
+        ? "Phone · 390 px"
+        : width === "tablet"
+          ? "Tablet · 768 px"
+          : "Fits available space";
   });
   $("#studio-preview-app").addEventListener("click", preview);
   $("#studio-refresh-app").addEventListener("click", preview);
@@ -261,6 +352,10 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   });
   return {
     mode: () => mode,
+    hasUnsaved: (wanted) => {
+      const d = drafts.get(wanted);
+      return Boolean(d && (dirty(d) || d.saving || d.recovery != null));
+    },
     select(wanted) {
       ++request;
       path = wanted;
@@ -277,7 +372,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
           throw new Error("Unsupported workspace bridge version");
         capability = result;
         $("#studio-bridge-note").textContent = result.editing.available
-          ? `${result.transport === "monitored-v1" ? "Project boundary" : "Native-local"}: UTF-8 text edits up to 200 KB, explicit saves and self-contained HTML previews. Full IDE tooling is not connected yet.`
+          ? `${result.transport === "monitored-v1" ? "Project boundary" : "Native-local"}: UTF-8 text edits up to 200 KB, explicit saves and self-contained HTML previews. Code editing, syntax and local suggestions; project language servers and debugging are not connected yet.`
           : result.reason;
       } catch {
         $("#studio-bridge-note").textContent =

@@ -35,6 +35,76 @@ const action = (page, name) => page.locator("#sdlc-content").getByRole("button",
 async function save(page) { await page.locator("#sdlc-submit").click(); await expect(page.locator("#sdlc-dialog")).not.toBeVisible({ timeout: 30_000 }); }
 async function flow(request) { const response = await request.get(`${origin}/api/specs/${spec.id}/sdlc`, { headers }); expect(response.ok()).toBeTruthy(); return response.json(); }
 
+test("Studio reviews a real project check before execution and keeps evidence acceptance separate", async ({ page, request }, testInfo) => {
+  const created = await request.post(`${origin}/api/specs`, { headers, data: {
+    title: "Studio guided check", problem: "Run a test without memorising commands", criteria: ["The expected answer is returned"],
+  } });
+  expect(created.ok()).toBeTruthy();
+  const chosen = await created.json();
+  let runs = 0;
+  page.on("request", r => {
+    if (r.method() === "POST" && r.url().endsWith(`/api/specs/${chosen.id}/sdlc`) && r.postDataJSON()?.action === "run") runs++;
+  });
+  await page.goto(url);
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await page.locator("#studio-thread").selectOption(chosen.id);
+  await expect(page.locator("#studio-checks")).toBeVisible();
+  await page.getByRole("button", { name: "Run project check", exact: true }).click();
+  await expect(page.locator("#sdlc-dialog")).toBeVisible();
+  expect(runs).toBe(0);
+  await expect(page.locator("#sdlc-check-source")).toContainText(git("rev-parse", "--short=10", "HEAD"));
+  await expect(page.locator("#sdlc-check-command")).toHaveText("cargo test --offline");
+  await page.locator("#sdlc-check").selectOption("node");
+  await expect(page.locator("#sdlc-check-command")).toHaveText("npm --offline test");
+  await expect(page.locator("#sdlc-check-description")).toContainText("pretest and posttest");
+  await page.locator("#sdlc-check").selectOption("python");
+  await expect(page.locator("#sdlc-check-command")).toContainText("suite.countTestCases() == 0");
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#sdlc-dialog")).toBeHidden();
+  await expect(page.locator("#view-studio")).toBeVisible();
+  await expect(page.locator("#studio-checks")).toBeVisible();
+  expect(runs).toBe(0);
+  await page.getByRole("button", { name: "Run project check", exact: true }).click();
+  await page.locator("#sdlc-check").selectOption("python");
+  let releaseResponse;
+  const held = new Promise(resolve => { releaseResponse = resolve; });
+  await page.route(`**/api/specs/${chosen.id}/sdlc`, async route => {
+    if (route.request().method() !== "POST") return route.continue();
+    const response = await route.fetch();
+    await held;
+    await route.fulfill({ response });
+  });
+  await page.locator("#sdlc-submit").click();
+  try {
+    await expect(page.locator("#sdlc-dialog-status")).toContainText("Check running");
+    await expect(page.locator("#sdlc-submit")).toBeDisabled();
+  } finally { releaseResponse(); }
+  await expect(page.locator("#sdlc-dialog")).toBeHidden({ timeout: 30_000 });
+  expect(runs).toBe(1);
+  await expect(page.locator("#view-studio")).toBeVisible();
+  await page.getByRole("button", { name: "Review evidence", exact: true }).click();
+  await expect(page.locator("#sdlc-content")).toContainText("Evidence for each promise");
+  await expect(page.locator(".sdlc-result")).toHaveText("Not accepted · passed · current");
+  const response = await request.get(`${origin}/api/specs/${chosen.id}/sdlc`, { headers });
+  const result = await response.json();
+  expect(result.criteria[0].evidence.source).toBe("observed");
+  expect(result.criteria[0].evidence.exitCode).toBe(0);
+  expect(result.criteria[0].evidence.binding.commit).toBe(git("rev-parse", "HEAD"));
+  expect(JSON.stringify(result)).not.toContain("NO_RAW_LOG_SDLC_MARKER");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await page.locator("#studio-focus-work").click();
+  await expect(page.locator("#studio-checks")).toBeVisible();
+  for (const button of await page.locator(".studio-check-actions button").all())
+    expect(Math.round((await button.boundingBox()).height * 1000) / 1000).toBeGreaterThanOrEqual(44);
+  await page.getByRole("button", { name: "Run project check", exact: true }).click();
+  expect(runs).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  await page.locator("#sdlc-dialog").screenshot({ path: testInfo.outputPath("studio-guided-check-phone.png") });
+  await page.keyboard.press("Escape");
+  // Leave the original workflow test on its own Spec rather than this independent fixture.
+});
+
 test("complete evidence, acceptance, review and delivery workflow retains provenance and becomes stale after code changes", async ({ page, request }) => {
   test.setTimeout(120_000);
   await page.goto(url); await page.keyboard.press("Alt+Digit1");

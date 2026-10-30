@@ -19,7 +19,7 @@ Claude / Codex / OpenCode / future agents
 
 Verb runs on Android first, and that is a claim about difficulty rather than a claim about phones. The phone is the most hostile host an agent can be given: the OS kills long-running processes without asking, an uninstall destroys everything the app owns, and there is no second window to check state in. A control layer that keeps sessions, credentials and evidence intact there is credible anywhere, which is why the desktop host implements the same contract rather than a looser one. That it also lets people build software without a laptop is a real consequence, and not the reason the product exists.
 
-Verb is terminal-first, but designed for human hands. It is not an IDE, not a coding agent, and not a model provider. See [`docs/PRODUCT_VISION.md`](docs/PRODUCT_VISION.md) for why that boundary is the point, and [`docs/POSITIONING.md`](docs/POSITIONING.md) for what Verb is deliberately not.
+Verb is becoming a primary development workspace for developers and people building without a developer background. Studio brings code editing, previews, agent conversations and change review alongside durable terminals. Project language servers, debugging and complete IDE integration remain release gates. Bring your own agent and model provider; Verb owns the workspace, evidence and human controls. See the [workstation release plan](docs/PRIMARY_WORKSTATION_RELEASE.md) and [Studio editor contract](docs/STUDIO_CODE_EDITOR.md) for current capabilities and limits.
 
 > **Release status:** Verb is available as a public Android developer preview. Desktop and Android
 > automated gates pass. The terminal-first Android workspace, Working World export *and* restore,
@@ -66,6 +66,11 @@ Verb is terminal-first, but designed for human hands. It is not an IDE, not a co
   What it cannot receive: command text, terminal output, file contents, transcripts, credentials,
   absolute paths, or even a branch name. A model provider is optional and replaceable; the context
   is the product.
+
+* **Project MCP connections (desktop).** Connect remote HTTPS services, inspect tools and resources,
+  review each request once, and bring results into a Studio draft. Simple tools have named inputs;
+  advanced JSON remains available. Connections are owner-only and credentials stay in memory.
+  OAuth sign-in and local stdio servers remain follow-up work. See the [MCP contract](docs/MCP_CONNECTIONS_CONTRACT.md).
 
 * **Reasons for care, observed rather than guessed (desktop).** `verb check` reports an unfinished
   rebase or merge, conflicts, a detached HEAD, a diverged upstream, and a runtime the project

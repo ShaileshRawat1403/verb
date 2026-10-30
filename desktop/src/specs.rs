@@ -276,12 +276,12 @@ fn audit_line(actor: &str, action: &str) -> String {
 /// from workers (Git-backed changes, start records after admission), and an unserialized pair could
 /// each append to the same old contents and lose a line. Held only from the read to the atomic
 /// write, never across Git or the execution boundary, so the loop never waits behind a stall.
-fn writing() -> std::sync::MutexGuard<'static, ()> {
+pub(crate) fn writing() -> std::sync::MutexGuard<'static, ()> {
     static WRITES: std::sync::Mutex<()> = std::sync::Mutex::new(());
     WRITES.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
-fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
     crate::fsutil::atomic_write(path, contents.as_bytes())?;
     #[cfg(unix)]
     {
@@ -705,6 +705,7 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
 
 /// Commits every change in the working tree. When `spec_id` is given, the commit is recorded in
 /// that spec's audit trail first, so the record and the code land in the same commit.
+#[cfg(test)]
 pub(crate) fn commit(
     project: &Path,
     message: &str,
@@ -924,6 +925,31 @@ pub(crate) fn handoff(
     }
     write_atomic(&path, &append_audit(&next, &audit_line(actor, &action)))?;
     Ok(entry)
+}
+
+pub(crate) fn commit_selected(
+    project: &Path,
+    message: &str,
+    spec_id: Option<&str>,
+    actor: &str,
+    selection: &crate::git_commit::Request,
+) -> Result<String, String> {
+    let _writing = writing();
+    let audit = if let Some(id) = spec_id.filter(|id| !id.is_empty()) {
+        let (path, _) = find(project, id)?;
+        let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let after = append_audit(
+            &raw,
+            &audit_line(
+                actor,
+                &format!("committed: {}", message.lines().next().unwrap_or(message)),
+            ),
+        );
+        Some((path, raw, after))
+    } else {
+        None
+    };
+    crate::git_commit::commit(project, message, selection, audit)
 }
 
 #[cfg(test)]

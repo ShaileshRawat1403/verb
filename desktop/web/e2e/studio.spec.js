@@ -201,6 +201,10 @@ test("phone Studio switches surfaces and preserves direction through navigation"
   await page.emulateMedia({ reducedMotion: "reduce" });
   await openStudio(page);
   await page.getByRole("button", { name: "Current work", exact: true }).click();
+  await expect(page.locator("#studio-thread option").first()).not.toHaveText("Reading work…");
+  if (await page.locator("#studio-intent-form").isHidden())
+    await page.getByRole("button", { name: "Define another change", exact: true }).click();
+
   await expect(page.locator("#studio-canvas-panel")).toBeHidden();
   await page
     .getByLabel("Describe a new change", { exact: true })
@@ -208,7 +212,8 @@ test("phone Studio switches surfaces and preserves direction through navigation"
   await page.getByRole("button", { name: "Canvas", exact: true }).click();
   await expect(page.locator("#studio-work-panel")).toBeHidden();
   await page.getByRole("button", { name: "Files", exact: true }).click();
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await expect(page.locator("#view-studio")).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Find a canvas file", exact: true })).toBeFocused();
   await page.getByRole("button", { name: "Current work", exact: true }).click();
   await expect(page.locator("#studio-intent")).toHaveValue(
     "Keep my direction while I inspect files",
@@ -333,3 +338,47 @@ test("selected document text attaches as reviewable context and survives cancell
     `Context from README.md:\n${selection}`,
   );
 });
+
+for (const width of [1440, 900, 390]) {
+  test(`Studio fills the window when navigation is collapsed at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(url);
+    const restore = page.getByRole("button", {
+      name: "Show navigation",
+      exact: true,
+    });
+    if (await restore.isVisible()) await restore.click();
+    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    await expect(page.locator("#studio-document h1")).toHaveText("Fieldnotes");
+    await page
+      .getByRole("button", { name: "Hide navigation", exact: true })
+      .click();
+    const main = await page.locator(".main-content").boundingBox();
+    expect(main.width).toBeGreaterThan(width - 20);
+    const canvas = await page.locator("#studio-canvas-panel").boundingBox();
+    expect(canvas.width).toBeGreaterThan(300);
+    expect(canvas.x + canvas.width).toBeLessThanOrEqual(width + 1);
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Show navigation", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("button", { name: "Show navigation", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Hide navigation", exact: true })
+      .click();
+    expect(
+      (await page.locator(".main-content").boundingBox()).width,
+    ).toBeGreaterThan(width - 20);
+    await page
+      .getByRole("button", { name: "Show navigation", exact: true })
+      .click();
+    expect(
+      (await page.locator("#studio-canvas-panel").boundingBox()).width,
+    ).toBeGreaterThan(250);
+  });
+}

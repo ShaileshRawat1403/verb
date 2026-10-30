@@ -203,3 +203,50 @@ test("desktop board preserves stage order, scrolls by keyboard and remembers foc
   await expect(page.locator("#spec-work-items article")).toHaveCount(1);
   await page.screenshot({ path: test.info().outputPath("stage-focused-board.png") });
 });
+
+test("overview controls and compact facts remain readable in both themes and layouts", async ({ page, request }) => {
+  for (const [title, stage] of [["Clarify the welcome screen", "plan"], ["Keep the draft when switching files", "build"], ["Check the phone reading flow", "verify"], ["Review the wording before release", "ship"]]) {
+    const response = await request.post(`${origin}/api/specs`, { headers, data: { title, criteria: ["A person can check the result"] } });
+    expect(response.ok()).toBeTruthy();
+    const spec = await response.json();
+    const moved = await request.post(`${origin}/api/specs/${spec.id}/stage`, { headers, data: { stage, expectedRevision: spec.revision, note: "Visual fixture stage only; no execution, verification or release claimed." } });
+    expect(moved.ok()).toBeTruthy();
+  }
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(url); await page.keyboard.press("Alt+Digit1");
+    const clear = page.getByRole("button", { name: "Clear filters", exact: true });
+    if (await clear.isEnabled()) await clear.click();
+    for (const theme of ["dark", "light"]) {
+      for (let n = 0; n < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== theme; n++)
+        await page.getByRole("button", { name: "Change theme", exact: true }).click();
+      await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", theme);
+      await page.getByRole("button", { name: "List", exact: true }).click();
+      await expect(page.locator("#spec-work-items article")).toHaveCount(6);
+      await expect(page.locator("#spec-work-items .work-card-fact")).toHaveCount(18);
+      if (width === 390) await expect(page.locator(".sidebar-specs")).toBeHidden();
+      const firstCard = page.locator("#spec-work-items article").first();
+      expect((await firstCard.boundingBox()).height).toBeLessThan(width === 1440 ? 220 : 320);
+      const samples = await page.locator('.work-card-note, .work-card-fact b, .spec-view-switch [aria-pressed="true"], .spec-overview-heading > button').evaluateAll(nodes => {
+        const lum = color => {
+          const c = color.match(/[\d.]+/g).slice(0,3).map(Number).map(x=>x/255).map(x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4);
+          return .2126*c[0]+.7152*c[1]+.0722*c[2];
+        };
+        return nodes.map(node=>{
+          let parent=node,bg;
+          while(parent){bg=getComputedStyle(parent).backgroundColor;if(bg!=="rgba(0, 0, 0, 0)"&&bg!=="transparent")break;parent=parent.parentElement;}
+          const a=lum(getComputedStyle(node).color),b=lum(bg);
+          return {ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05),text:node.textContent};
+        });
+      });
+      samples.forEach(sample=>expect(sample.ratio,`${theme}: ${sample.text}`).toBeGreaterThanOrEqual(4.5));
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await page.screenshot({path:test.info().outputPath(`work-list-${theme}-${width}.png`)});
+      await page.getByRole("button", { name: "Board", exact: true }).click();
+      await expect(page.locator("#spec-work-items article")).toHaveCount(6);
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      await page.screenshot({path:test.info().outputPath(`work-board-${theme}-${width}.png`)});
+    }
+  }
+});
