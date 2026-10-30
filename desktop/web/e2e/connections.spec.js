@@ -216,7 +216,7 @@ test("connections are owner-only and refuse private endpoints and Verb credentia
 
 test("a person connects, reviews a call, inspects the result and attaches a Studio draft", async ({
   browser,
-}) => {
+}, testInfo) => {
   context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(base + "/#" + TOKEN);
@@ -279,7 +279,7 @@ test("a person connects, reviews a call, inspects the result and attaches a Stud
   expect(calls).toBe(1);
   expect(lastText).toBe("Exactly what I approved");
   await page.screenshot({
-    path: "/private/tmp/verb-mcp-desktop-20261030.png",
+    path: testInfo.outputPath("mcp-desktop.png"),
     fullPage: true,
   });
   await page
@@ -355,7 +355,7 @@ test("resource selection reads the official SDK resource without invoking a tool
 
 test("phone review remains usable and disconnect clears visible results", async ({
   browser,
-}) => {
+}, testInfo) => {
   const phone = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });
@@ -386,11 +386,11 @@ test("phone review remains usable and disconnect clears visible results", async 
     "Phone request",
   );
   await page.screenshot({
-    path: "/private/tmp/verb-mcp-phone-20261030.png",
+    path: testInfo.outputPath("mcp-phone.png"),
     fullPage: true,
   });
   await page.screenshot({
-    path: "/private/tmp/verb-mcp-phone-viewport-20261030.png",
+    path: testInfo.outputPath("mcp-phone-viewport.png"),
   });
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect(page.locator("#connection-result-wrap")).toBeHidden();
