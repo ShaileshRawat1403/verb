@@ -21,6 +21,8 @@ import "./conversation.css";
 import { initStudio } from "./studio-ui.js";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
+import "./connections.css";
+import { initConnections } from "./connections-ui.js";
 import { initHost } from "./host-ui.js";
 import { initAsk } from "./ask-ui.js";
 import { initObserver } from "./observer-ui.js";
@@ -55,6 +57,7 @@ if (location.hash && token) {
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
 let studio = null;
+let connections = null;
 // The Project view (project-ui.js): file tree, preview and context hub.
 let project = null;
 // The Host view (host-ui.js): read-only machine health.
@@ -322,7 +325,7 @@ function showView(view) {
   });
   // Overview, Tasks and Shared notes live under "More"; show the group open when one is in use.
   // On phones "More" is a menu: close it once a choice is made.
-  if (["overview", "tasks", "memory"].includes(view)) $("#nav-more").open = !matchMedia("(max-width: 640px)").matches;
+  if (["overview", "tasks", "memory", "connections"].includes(view)) $("#nav-more").open = !matchMedia("(max-width: 640px)").matches;
   $("#breadcrumb-view").textContent =
     view === "memory" ? "Shared notes" : view.charAt(0).toUpperCase() + view.slice(1);
   if (view === "overview") refreshChecks();
@@ -331,6 +334,7 @@ function showView(view) {
   project?.onShowView(view);
   host?.onShowView(view);
   studio?.onShowView(view);
+  connections?.onShowView(view);
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -2299,6 +2303,7 @@ async function bootstrap() {
     theme,
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
+  connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
   extras.onWorkbenchChange = () => studio.render();
   extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });

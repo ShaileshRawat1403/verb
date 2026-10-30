@@ -67,6 +67,11 @@ Verb is becoming a primary development workspace for developers and people build
   absolute paths, or even a branch name. A model provider is optional and replaceable; the context
   is the product.
 
+* **Project MCP connections (desktop).** Connect remote HTTPS services, inspect tools and resources,
+  review each request once, and bring results into a Studio draft. Simple tools have named inputs;
+  advanced JSON remains available. Connections are owner-only and credentials stay in memory.
+  OAuth sign-in and local stdio servers remain follow-up work. See the [MCP contract](docs/MCP_CONNECTIONS_CONTRACT.md).
+
 * **Reasons for care, observed rather than guessed (desktop).** `verb check` reports an unfinished
   rebase or merge, conflicts, a detached HEAD, a diverged upstream, and a runtime the project
   declares (`.nvmrc`, `pyproject.toml`, `rust-toolchain.toml`, `go.mod`, …) that is missing or the

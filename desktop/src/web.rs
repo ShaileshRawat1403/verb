@@ -633,6 +633,7 @@ struct WebHost {
     stream_clients: HashMap<String, StreamClient>,
     browser: Arc<std::sync::Mutex<crate::browser::Browser>>,
     browser_relay: crate::browser_relay::Relay,
+    connections: crate::connections::Connections,
     browser_cancel: Arc<AtomicBool>,
     browser_identity: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -1061,6 +1062,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         stream_clients: HashMap::new(),
         browser: Arc::default(),
         browser_relay: Default::default(),
+        connections: Default::default(),
         browser_cancel: Arc::default(),
         browser_identity: Arc::default(),
         access: crate::tokens::Access::owner(),
@@ -1803,6 +1805,32 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if path == "/api/connections" {
+            if !self.access.allows(crate::tokens::Scope::Owner) {
+                return Ok(Reply::error(403, "Only the owner can manage connections."));
+            }
+            if method == &Method::Get {
+                return Ok(Reply::json(200, self.connections.status()?));
+            }
+            if method != &Method::Post {
+                return Ok(Reply::error(405, "Use GET or POST."));
+            }
+            let input: Value = read_json(request)?;
+            if mcp_contains_verb_credential(&input, &self.token, &self.sessions) {
+                return Ok(Reply::error(400, "This request contains a Verb credential. Remove it before sharing with a service."));
+            }
+            let connections = self.connections.clone();
+            let origin = self
+                .allowed_origin
+                .clone()
+                .unwrap_or_else(|| self.origin.clone());
+            let mut reply = Reply::json(200, Value::Null);
+            reply.deferred = Some(Box::new(move || {
+                serde_json::to_vec(&connections.command(input, &origin)?)
+                    .map_err(|_| "Connection response unavailable.".to_owned())
+            }));
+            return Ok(reply);
+        }
         if path == "/api/browser/pairing" {
             if !self.access.allows(crate::tokens::Scope::Owner) {
                 return Ok(Reply::error(403, "Only the owner can pair a browser."));
@@ -3298,6 +3326,59 @@ impl Read for DeadlineReader<'_> {
         }
         self.inner.read(buffer)
     }
+}
+
+fn mcp_contains_verb_credential(
+    input: &Value,
+    owner: &str,
+    sessions: &HashMap<String, Instant>,
+) -> bool {
+    let secret = |text: &str| {
+        (!owner.is_empty() && (text == owner || owner.len() >= 16 && text.contains(owner)))
+            || text
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-')
+                .any(|part| {
+                    sessions.contains_key(part) || part.starts_with("verb_at_") && part.len() >= 40
+                })
+    };
+    let mut pending = vec![input];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::String(text) if secret(text) => return true,
+            Value::Array(values) => pending.extend(values),
+            Value::Object(values) => {
+                if values.keys().any(|key| secret(key)) {
+                    return true;
+                }
+                pending.extend(values.values());
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+#[test]
+fn mcp_requests_do_not_share_verb_owner_access_or_browser_credentials() {
+    let owner = "owner-fixture-secret-0000000000000000";
+    let sessions = HashMap::from([(
+        "browser-session-secret".to_owned(),
+        Instant::now() + Duration::from_secs(60),
+    )]);
+    for request in [
+        json!({"credential":owner}),
+        json!({"arguments":{"question":format!("Pasted credential: {owner}")}}),
+        json!({"arguments":{"value":"Cookie: verb_session=browser-session-secret"}}),
+        json!({"arguments":{"credential":"verb_at_fixture_00000000000000000000000000000000"}}),
+    ] {
+        assert!(mcp_contains_verb_credential(&request, owner, &sessions));
+    }
+    assert!(!mcp_contains_verb_credential(
+        &json!({"arguments":{"question":"Explain the verb_at_ prefix","token":"a-service-specific-credential"}}),
+        owner,
+        &sessions
+    ));
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(request: &mut Request) -> Result<T, String> {

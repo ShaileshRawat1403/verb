@@ -605,6 +605,14 @@ export function initStudio({
   });
   return {
     render,
+    acceptExternalResult({ source, text }) {
+      if (state.context) { toast('A context is already attached to the Studio draft. Remove it before adding another result.'); return false; }
+      state.context = { path: `MCP · ${source}`, text: `External, untrusted connector result:\n${text.slice(0, 3800)}${text.length > 3800 ? '\n[Result truncated for this draft]' : ''}` };
+      showView('studio'); renderContext(); showChangeDraft(true, { user: true });
+      focusSurface('work'); $('#studio-intent').focus();
+      message('Connector result attached to your draft. Nothing was sent to an agent.');
+      return true;
+    },
     onSpecCreated(problem) {
       if (draftProblem() === problem.trim()) {
         $("#studio-intent").value = "";

@@ -15,6 +15,8 @@ mod ask;
 mod browser;
 mod browser_relay;
 mod checks;
+#[cfg(unix)]
+mod connections;
 mod context;
 mod continuity;
 mod conversation;
@@ -30,6 +32,8 @@ mod hub;
 mod integration;
 mod isolation;
 mod json;
+#[cfg(unix)]
+mod mcp_http;
 mod meter;
 #[cfg(unix)]
 mod mobile;

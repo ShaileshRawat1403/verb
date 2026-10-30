@@ -109,7 +109,7 @@
             ><span class="nav-count host-dot" id="nav-host-alert" hidden>!</span>
           </button>
           <details class="nav-more" id="nav-more">
-            <summary class="nav-item nav-more-toggle" title="Overview, tasks and shared notes"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></span><span>More</span></summary>
+            <summary class="nav-item nav-more-toggle" title="Overview, tasks, shared notes and connections"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></span><span>More</span></summary>
             <div class="nav-more-items">
             <button
             class="nav-item"
@@ -174,6 +174,7 @@
                 /></svg></span
             ><span>Shared notes</span>
           </button>
+            <button class="nav-item" type="button" data-view="connections" aria-label="Connections" title="Project connections"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v4m6-4v4M7 7h10v3a5 5 0 0 1-10 0V7Zm5 8v6"/></svg></span><span>Connections</span></button>
             </div>
           </details>
           
@@ -650,6 +651,30 @@
                 </div>
               </section>
             </div>
+          </section>
+
+          <section id="view-connections" class="view">
+            <div class="page-heading compact-heading"><div><span class="section-kicker">PROJECT UTILITIES</span><h1>Connections</h1><p class="connections-intro">Bring tools and reference material into this project. You choose what to run and what to share with an agent.</p></div></div>
+            <p id="connections-runtime" class="muted">Checking this workspace…</p>
+            <p id="connections-status" role="status" aria-live="polite"></p>
+            <div class="connections-layout"><aside aria-label="Project connections"><div id="connections-list"></div>
+              <details id="connection-add"><summary>Connect a service</summary><form id="connection-form" autocomplete="off">
+                <label>Connection name<input id="connection-name" required maxlength="60" placeholder="Documentation, issues, CI…"></label>
+                <label>MCP endpoint<input id="connection-url" type="url" required placeholder="https://service.example/mcp"></label>
+                <label>Service access token (optional)<input id="connection-credential" type="password" autocomplete="new-password" maxlength="4096"></label>
+                <p class="muted">Remote HTTPS servers only. Credentials and connections stay in memory for this Verb host; reconnect after a restart. OAuth sign-in and local command servers are not supported in this first version.</p>
+                <button id="connection-connect" class="primary-button" type="submit">Connect and inspect</button>
+              </form></details>
+              <details><summary>Using an agent’s existing connections?</summary><p class="muted">Claude, Codex and other CLI agents manage their own MCP settings. These connections are managed by Verb; no agent credentials or configuration are imported.</p></details>
+            </aside><div id="connection-detail" hidden>
+              <h2 id="connection-title"></h2><p id="connection-server" class="muted"></p><div class="connection-actions"><button id="connection-refresh" type="button" class="secondary-button">Refresh catalog</button><button id="connection-disconnect" type="button" class="text-button">Disconnect</button></div>
+              <label>Tool or resource<select id="connection-item"></select></label><p id="connection-description" class="muted"></p>
+              <details><summary>Input format</summary><pre id="connection-schema"></pre></details>
+              <div id="connection-arguments-wrap"><div id="connection-input-fields"></div><label class="connection-json-choice"><input id="connection-use-json" type="checkbox">Edit inputs as JSON</label><label id="connection-json-wrap">Arguments (JSON)<textarea id="connection-arguments" spellcheck="false">{}</textarea></label></div>
+              <button id="connection-review-call" type="button" class="secondary-button">Review request</button>
+              <section id="connection-review" aria-label="Review connector request" hidden><h3>Review before running</h3><p>Check the destination and input. A tool can change remote data even if its description says “read-only”. This approval is for this request only and expires in 90 seconds.</p><pre id="connection-review-text"></pre><div class="connection-actions"><button id="connection-run" type="button" class="primary-button" disabled>Approve and run once</button><button id="connection-discard-review" type="button" class="text-button">Discard review</button></div></section>
+              <section id="connection-result-wrap" aria-label="Connector result" hidden><h3>Service result</h3><p class="muted">External, untrusted content. Adding it to Studio creates a draft; it sends nothing to an agent.</p><pre id="connection-result" tabindex="0"></pre><details><summary>Raw service data</summary><pre id="connection-result-data"></pre></details><div class="connection-actions"><button id="connection-use" type="button" class="secondary-button">Use in Studio draft</button><button id="connection-copy" type="button" class="text-button">Copy result</button></div></section>
+            </div></div>
           </section>
 
           <section id="view-host" class="view">

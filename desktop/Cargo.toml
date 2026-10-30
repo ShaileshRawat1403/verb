@@ -32,6 +32,13 @@ if-addrs = "0.13.4"
 jsonwebtoken = "9.3"
 ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
 tungstenite = "0.24.0"
+rmcp = { version = "=3.8.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "reqwest-tls-no-provider"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
+
+reqwest = { version = "=0.13.2", default-features = false, features = ["rustls-no-provider", "json", "stream"] }
+
+futures = "0.3"
+sse-stream = "=0.2.6"
 
 # tiny_http with one security patch: an unread request body is no longer drained on the thread that
 # pumps hosted terminals. See vendor/tiny_http/VERB_PATCH.md.
