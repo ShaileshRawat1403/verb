@@ -182,18 +182,7 @@ impl Browser {
                 view["session"] = json!(*identity
                     .lock()
                     .map_err(|_| "Browser identity is unavailable.")?);
-                for key in ["text", "error"] {
-                    if let Some(text) = view[key].as_str() {
-                        view[key] = json!(crate::transcript::redact(text));
-                    }
-                }
-                if let Some(errors) = view["errors"].as_array_mut() {
-                    for error in errors {
-                        if let Some(text) = error.as_str() {
-                            *error = json!(crate::transcript::redact(text));
-                        }
-                    }
-                }
+                redact_view(&mut view);
                 if op == "stop" {
                     self.worker = None;
                 }
@@ -205,6 +194,21 @@ impl Browser {
                     .lock()
                     .map_err(|_| "Browser identity is unavailable.")? = None;
                 Err(error)
+            }
+        }
+    }
+}
+
+pub(crate) fn redact_view(view: &mut Value) {
+    for key in ["text", "error", "navigationError"] {
+        if let Some(text) = view[key].as_str() {
+            view[key] = json!(crate::transcript::redact(text));
+        }
+    }
+    if let Some(errors) = view["errors"].as_array_mut() {
+        for error in errors {
+            if let Some(text) = error.as_str() {
+                *error = json!(crate::transcript::redact(text));
             }
         }
     }

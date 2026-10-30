@@ -632,6 +632,7 @@ struct WebHost {
     access: crate::tokens::Access,
     stream_clients: HashMap<String, StreamClient>,
     browser: Arc<std::sync::Mutex<crate::browser::Browser>>,
+    browser_relay: crate::browser_relay::Relay,
     browser_cancel: Arc<AtomicBool>,
     browser_identity: Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -1059,6 +1060,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         studio_previews: Arc::default(),
         stream_clients: HashMap::new(),
         browser: Arc::default(),
+        browser_relay: Default::default(),
         browser_cancel: Arc::default(),
         browser_identity: Arc::default(),
         access: crate::tokens::Access::owner(),
@@ -1136,7 +1138,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn secure_token() -> Result<String, String> {
+pub(crate) fn secure_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     File::open("/dev/urandom")
         .and_then(|mut random| random.read_exact(&mut bytes))
@@ -1670,7 +1672,15 @@ impl WebHost {
         let has_valid_session = self.has_valid_session(request);
         let mut session_cookie = None;
 
-        if cf_authenticated && !has_valid_session {
+        // Companion polling is stateless browser delegation. Do not mint an unused
+        // owner session on every Access-authenticated poll from a client without cookies.
+        let companion_request = request.url().split('?').next().is_some_and(|path| {
+            matches!(
+                path,
+                "/api/browser/companion" | "/api/browser/companion/claim"
+            )
+        });
+        if cf_authenticated && !has_valid_session && !companion_request {
             if let Ok(new_token) = secure_token() {
                 self.sessions.insert(
                     new_token.clone(),
@@ -1720,6 +1730,37 @@ impl WebHost {
                 return reply;
             }
         }
+        // A paired companion has browser-only authority, never a general Verb access token.
+        if matches!(
+            path,
+            "/api/browser/companion" | "/api/browser/companion/claim"
+        ) {
+            if request.method() != &Method::Post {
+                return Reply::error(405, "Use POST.");
+            }
+            if self.cf_access_iss.is_some() && !cf_authenticated && !has_valid_session {
+                return Reply::error(403, "Cloudflare Access sign-in required.");
+            }
+            let key = header(request, "X-Verb-Browser-Key").map(str::to_owned);
+            let claiming = path.ends_with("/claim");
+            if !claiming && !self.browser_relay.accepts_key(key.as_deref()) {
+                return Reply::error(403, "Browser companion disconnected.");
+            }
+            let input = match read_json_limit::<Value>(
+                request,
+                if claiming { 3500 } else { 3 * 1024 * 1024 },
+            ) {
+                Ok(v) => v,
+                Err(_) => return Reply::error(400, "Invalid companion request."),
+            };
+            if claiming && input["op"] != "claim" {
+                return Reply::error(400, "Pairing claim required.");
+            }
+            return match self.browser_relay.peer(key.as_deref(), input) {
+                Ok(v) => Reply::json(200, v),
+                Err(e) => Reply::error(403, e),
+            };
+        }
         if !path.starts_with("/api/") {
             return Reply::error(404, "not found");
         }
@@ -1762,12 +1803,62 @@ impl WebHost {
         path: &str,
         request: &mut Request,
     ) -> Result<Reply, String> {
+        if path == "/api/browser/pairing" {
+            if !self.access.allows(crate::tokens::Scope::Owner) {
+                return Ok(Reply::error(403, "Only the owner can pair a browser."));
+            }
+            if method == &Method::Get {
+                return Ok(Reply::json(200, self.browser_relay.status()));
+            }
+            if method != &Method::Post {
+                return Ok(Reply::error(405, "Use GET or POST."));
+            }
+            let input: Value = read_json(request)?;
+            if input["op"] == "pair"
+                && self
+                    .browser_identity
+                    .lock()
+                    .map_err(|_| "Browser identity unavailable")?
+                    .is_some()
+            {
+                return Ok(Reply::error(
+                    409,
+                    "Stop the local browser before pairing a companion.",
+                ));
+            }
+            return match self
+                .browser_relay
+                .pairing(input["op"].as_str().unwrap_or(""))
+            {
+                Ok(v) => Ok(Reply::json(200, v)),
+                Err(e) => Ok(Reply::error(409, e)),
+            };
+        }
         if path == "/api/browser" {
-            // Initial browser runtime is owner-only, native-local, and explicitly configured.
+            let companion = self.browser_relay.status()["connected"] == true;
+            if self.access.allows(crate::tokens::Scope::Owner) && companion {
+                if method == &Method::Get {
+                    return Ok(Reply::json(
+                        200,
+                        json!({"available":true,"location":"Paired Mac companion","reason":"Browser runs on your paired Mac. Localhost means that Mac, not the phone."}),
+                    ));
+                }
+                if method != &Method::Post {
+                    return Ok(Reply::error(405, "Use GET or POST."));
+                }
+                let input: Value = read_json(request)?;
+                let relay = self.browser_relay.clone();
+                let mut reply = Reply::json(200, Value::Null);
+                reply.deferred = Some(Box::new(move || {
+                    serde_json::to_vec(&relay.command(input)?).map_err(|e| e.to_string())
+                }));
+                return Ok(reply);
+            }
+            // Local execution remains unavailable on external and boundary hosts.
             if !self.access.allows(crate::tokens::Scope::Owner) || !self.studio_native() {
                 return Ok(Reply::error(
                     403,
-                    "Browser runtime needs the owner on a native-local host.",
+                    "Connect your Mac browser to open websites here.",
                 ));
             }
             let configured = crate::browser::Browser::configured();

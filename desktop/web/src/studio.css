@@ -1400,3 +1400,9 @@
   #view-studio[data-canvas-mode="edit"] .studio-toolstrip button { flex: 0 0 auto; white-space: nowrap; }
 }
 @media (max-width: 640px) { .studio-edit-panel { scroll-margin-top: 80px; } }
+
+/* Browser pairing is a deliberate owner action; the short-lived secret stays out of URLs. */
+#studio-browser-pairing summary { cursor: pointer; min-height: 28px; }
+#studio-browser-pair-code { box-sizing: border-box; width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--bg-0); color: var(--text); font: 13px var(--mono); }
+#studio-browser-pairing label { display: block; margin-bottom: 8px; }
+#studio-browser-pairing .studio-browser-tools { padding-inline: 0; }

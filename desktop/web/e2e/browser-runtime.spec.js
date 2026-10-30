@@ -28,6 +28,7 @@ test.beforeAll(async()=>{
  writeFileSync(join(repo,'README.md'),'# Browser workspace\n');execFileSync('git',['-C',repo,'add','.']);execFileSync('git',['-C',repo,'commit','-qm','initial']);
  second=httpServer((req,res)=>{hits++;res.end('<h1>Other site</h1>');});other=await listen(second);
  target=httpServer((req,res)=>{
+  if(req.url==='/reset'){res.writeHead(200,{'Content-Type':'text/html','Content-Length':'99999'});res.write('<h1>Partial page</h1>');setTimeout(()=>res.socket?.destroy(),30);return;}
   if(req.url==='/redirect'){res.writeHead(302,{Location:other+'/landing'});res.end();return;}
   if(req.url==='/slow'){setTimeout(()=>{if(!res.destroyed)res.end('<h1>Slow</h1>');},12000).unref();return;}
   res.writeHead(200,{'Content-Type':'text/html','X-Frame-Options':'DENY','Content-Security-Policy':"frame-ancestors 'none'"});
@@ -85,11 +86,25 @@ test('a worker crash clears the session and explicitly starting again creates a 
  const view=await action('start');
  const pids=execFileSync('pgrep',['-P',String(host.pid)],{encoding:'utf8'}).trim().split(/\s+/).map(Number);
  expect(pids).toHaveLength(1);
- process.kill(pids[0],'SIGKILL');
- await new Promise(r=>setTimeout(r,300));
- const lost=await call({op:'status'});expect(lost.status).not.toBe(200);
- const fresh=await action('start');expect(fresh.session).not.toBe(view.session);
- await action('stop',fresh);
+ const owned=new Map();
+ const fingerprint=pid=>{try{return execFileSync('ps',['-p',String(pid),'-o','lstart=','-o','comm='],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim();}catch{return null;}};
+ function recordChildren(pid){let ids=[];try{ids=execFileSync('pgrep',['-P',String(pid)],{encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim().split(/\s+/).filter(Boolean).map(Number);}catch{}for(const id of ids){const mark=fingerprint(id);if(mark)owned.set(id,mark);recordChildren(id);}}
+ recordChildren(pids[0]);
+ try {
+  process.kill(pids[0],'SIGKILL');
+  await new Promise(r=>setTimeout(r,300));
+  const lost=await call({op:'status'});expect(lost.status).not.toBe(200);
+  const fresh=await action('start');expect(fresh.session).not.toBe(view.session);
+  await action('stop',fresh);
+ } finally {
+  // SIGKILL deliberately bypasses runtime cleanup. Dispose only recorded fixture descendants,
+  // retaining a start-time/executable fingerprint so a reused PID is never signalled.
+  for(const [id,mark] of owned)if(fingerprint(id)===mark){try{process.kill(id,'SIGTERM');}catch{}}
+  await new Promise(r=>setTimeout(r,300));
+  for(const [id,mark] of owned)if(fingerprint(id)===mark){try{process.kill(id,'SIGKILL');}catch{}}
+  await expect.poll(()=>[...owned].filter(([id,mark])=>fingerprint(id)===mark).length,{timeout:7000}).toBe(0);
+ }
+
 });
 
 test('bounded browser resource and cleanup sample',async()=>{
@@ -117,7 +132,7 @@ test('Studio browser shows pixels, page text, responsive view and teardown witho
  await expect(page.locator('#studio-show-document')).toHaveAttribute('aria-pressed','false');
  await expect(page.locator('#studio-show-browser')).toHaveAttribute('aria-pressed','true');
  await expect(page.locator('#studio-browser-status')).toHaveText('Ready to start. No browser is running.');
- await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect(page.locator('#studio-browser-stage img')).toBeVisible();
+ await page.getByRole('button',{name:'Start browser',exact:true}).click();await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});
  await page.getByRole('textbox',{name:'Website address',exact:true}).fill(site);await page.getByRole('button',{name:'Allow site & open',exact:true}).click();
  await expect(page.locator('#studio-browser-current-url')).toHaveText(site+'/');await expect(page.locator('#studio-browser-tabs')).toContainText('Browser fixture');
  let refusedCapture=false;
@@ -129,7 +144,7 @@ test('Studio browser shows pixels, page text, responsive view and teardown witho
  });
  await page.waitForResponse(response=>response.url().endsWith('/api/browser') && response.status()===500);
  await expect(page.getByRole('button',{name:'Stop browser',exact:true})).toBeVisible();
- await expect(page.locator('#studio-browser-stage img')).toBeVisible();
+ await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});
  await page.waitForResponse(response=>response.url().endsWith('/api/browser') && response.request().method()==='POST' && response.request().postDataJSON()?.op==='status');
  await expect(page.locator('#studio-browser-tabs')).toContainText('Browser fixture');
  await page.unroute('**/api/browser');
@@ -165,5 +180,136 @@ test('Studio browser shows pixels, page text, responsive view and teardown witho
  await page.screenshot({path:test.info().outputPath('verb-browser-desktop.png'),fullPage:false});
  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Canvas',exact:true}).click();await page.locator('#studio-browser-stage').scrollIntoViewIfNeeded();
  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.screenshot({path:test.info().outputPath('verb-browser-phone.png'),fullPage:false});
- await page.getByRole('button',{name:'Stop browser',exact:true}).click();await expect(page.locator('#studio-browser-stage img')).toHaveCount(0);
+ await page.getByRole('button',{name:'Stop browser',exact:true}).click();await expect(page.locator('#studio-browser-status')).toContainText('Browser stopped.');await expect(page.locator('#studio-browser-stage img')).toHaveCount(0);
+});
+
+
+test('failed navigation is explicit, errors stay with their tab and successful navigation clears them',async()=>{
+ let view=await action('start');
+ view=await action('open',view,{url:site+'/redirect',allow:true});
+ expect(view.navigationError).toBeTruthy();expect(view.errors.length).toBeGreaterThan(0);
+ const failedTab=view.active;
+ view=await action('new',view);expect(view.navigationError).toBeNull();expect(view.errors).toEqual([]);
+ view=await action('tab',view,{tab:failedTab});expect(view.navigationError).toBeTruthy();
+ view=await action('open',view,{url:site,allow:true});expect(view.navigationError).toBeNull();
+ view=await action('click',view,{x:60,y:170});
+ view=await action('type',view,{text:'replace this'});
+ view=await action('key',view,{key:'ControlOrMeta+A'});view=await action('key',view,{key:'Backspace'});
+ view=await action('type',view,{text:'replacement'});view=await action('inspect',view);
+ expect(view.text).toContain('replacement');expect(view.text).not.toContain('replace this');
+ await action('stop',view);
+});
+
+test('address drafts survive refresh and tab switches clear old inspection and synchronize viewport',async({page})=>{
+ await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.getByRole('button',{name:'Start browser',exact:true}).click();
+ const address=page.getByRole('textbox',{name:'Website address',exact:true});
+ await address.fill(site);await page.getByRole('button',{name:'Allow site & open',exact:true}).click();
+ await expect(page.locator('#studio-browser-current-url')).toHaveText(site+'/');
+ await page.getByRole('button',{name:'Inspect page',exact:true}).click();
+ await expect(page.locator('#studio-browser-text')).toContainText('Real browser fixture');
+ await address.fill(site+'/not-yet-opened');
+ await page.locator('#studio-browser-status').click();
+ await page.waitForResponse(r=>r.url().endsWith('/api/browser') && r.request().method()==='POST' && r.request().postDataJSON()?.op==='capture');
+ await expect(address).toHaveValue(site+'/not-yet-opened');
+ await page.getByLabel('Browser viewport',{exact:true}).selectOption('390');
+ await expect(page.getByLabel('Browser viewport',{exact:true})).toHaveValue('390');
+ await expect(page.getByRole('button',{name:'New tab',exact:true})).toBeEnabled();
+ await page.getByRole('button',{name:'New tab',exact:true}).click();
+ await expect(page.locator('#studio-browser-text')).toBeEmpty();
+ await expect(page.getByLabel('Browser viewport',{exact:true})).toHaveValue('1100');
+ await page.getByRole('button',{name:'Stop browser',exact:true}).click();await expect(page.locator('#studio-browser-status')).toContainText('Browser stopped.');
+});
+
+test('closing during browser startup stops only the returned runtime',async({page})=>{
+ let release, started;
+ const held=new Promise(resolve=>{release=resolve;});
+ const ready=new Promise(resolve=>{started=resolve;});
+ await page.route('**/api/browser',async route=>{
+  if(route.request().method()==='POST' && route.request().postDataJSON()?.op==='start'){
+   const response=await route.fetch();started();await held;await route.fulfill({response});return;
+  }
+  await route.continue();
+ });
+ await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.getByRole('button',{name:'Start browser',exact:true}).click();await ready;
+ await page.getByRole('button',{name:'Browser',exact:true}).click();release();
+ await expect.poll(async()=> (await call({op:'status'})).body.running).toBe(false);
+});
+
+test('unavailable browser cannot be started and delayed availability cannot overwrite a newer view',async({page})=>{
+ let reads=0, release;
+ const held=new Promise(resolve=>{release=resolve;});
+ await page.route('**/api/browser',async route=>{
+  if(route.request().method()==='GET'){
+   reads++;
+   if(reads===1){await held;await route.fulfill({json:{available:true,reason:'Stale available result'}});return;}
+   await route.fulfill({status:403,json:{error:'Browser runtime needs the owner on a native-local host.'}});return;
+  }
+  await route.continue();
+ });
+ await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeDisabled();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await expect(page.locator('#studio-browser-status')).toContainText('native-local host');release();
+ await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeDisabled();
+ await expect(page.locator('#studio-browser-stage')).toContainText('App preview');
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+});
+
+
+test('one deliberate action waits for an in-flight screenshot and is never duplicated',async({page})=>{
+ await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.getByRole('button',{name:'Start browser',exact:true}).click();
+ await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});
+ let release, captured, hold=true, newTabs=0;
+ const held=new Promise(resolve=>{release=resolve;});const ready=new Promise(resolve=>{captured=resolve;});
+ await page.route('**/api/browser',async route=>{
+  const data=route.request().method()==='POST'?route.request().postDataJSON():{};
+  if(data.op==='capture' && hold){hold=false;const response=await route.fetch();captured();await held;await route.fulfill({response});return;}
+  if(data.op==='new')newTabs++;
+  await route.continue();
+ });
+ await ready;
+ await page.getByRole('button',{name:'New tab',exact:true}).click();
+ await expect(page.locator('#studio-browser-status')).toContainText('your action will follow');
+ expect(newTabs).toBe(0);release();
+ await expect(page.locator('#studio-browser-tabs button')).toHaveCount(2);expect(newTabs).toBe(1);
+ await page.getByRole('button',{name:'Stop browser',exact:true}).click();await expect(page.locator('#studio-browser-status')).toContainText('Browser stopped.');
+});
+
+
+test('stopping during a held refresh cancels waiting input instead of replaying it',async({page})=>{
+ await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.getByRole('button',{name:'Start browser',exact:true}).click();
+ await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});
+ let release, captured, hold=true, newTabs=0;
+ const held=new Promise(resolve=>{release=resolve;});const ready=new Promise(resolve=>{captured=resolve;});
+ await page.route('**/api/browser',async route=>{
+  const data=route.request().method()==='POST'?route.request().postDataJSON():{};
+  if(data.op==='capture' && hold){hold=false;const response=await route.fetch();captured();await held;await route.fulfill({response});return;}
+  if(data.op==='new')newTabs++;
+  await route.continue();
+ });
+ await ready;await page.getByRole('button',{name:'New tab',exact:true}).click();
+ await expect(page.locator('#studio-browser-status')).toContainText('your action will follow');
+ await page.getByRole('button',{name:'Stop browser',exact:true}).click();await expect(page.locator('#studio-browser-status')).toContainText('Browser stopped.');
+ await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeVisible();release();
+ await expect(page.locator('#studio-browser-stage img')).toHaveCount(0);expect(newTabs).toBe(0);
+});
+
+
+test('an upstream connection reset fails the page without killing the browser session',async()=>{
+ let view=await action('start');const sameSession=view.session;
+ view=await action('open',view,{url:site+'/reset',allow:true});
+ expect(view.running).toBe(true);expect(view.session).toBe(sameSession);expect(view.navigationError).toBeTruthy();
+ view=await action('open',view,{url:site,allow:true});
+ view=await action('inspect',view);expect(view.text).toContain('Real browser fixture');expect(view.session).toBe(sameSession);
+ await action('stop',view);
 });

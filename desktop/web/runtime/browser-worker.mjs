@@ -4,24 +4,35 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { createServer, request as httpRequest } from 'node:http';
 import { connect } from 'node:net';
+import { browserOrigin } from './browser-origin.mjs';
 
 const forbidden = new URL(process.argv[2]).origin;
 let proxy = null, proxySockets = new Set();
 let browser, context, pages = new Map(), active, controller = null, generation = 0;
-let grants = new Set(), blocked = new Set(), errors = [], revision = 0;
+let grants = new Set(), blocked = new Set(), revision = 0;
+const pageState = new WeakMap();
+function stateFor(page) {
+  if (!pageState.has(page)) pageState.set(page, { errors: [], navigationError: null });
+  return pageState.get(page);
+}
 const text = (value, max = 2000) => String(value ?? '').slice(0, max);
-const originOf = (value) => {
-  const url = new URL(value);
-  if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password)
-    throw new Error('Use an HTTP or HTTPS address without embedded credentials.');
-  // The browser session must never become a client of Verb itself (including loopback aliases).
-  const own = new URL(forbidden);
-  if (url.origin === forbidden || url.port === own.port) throw new Error('Verb itself cannot be opened in this browser session.');
-  return url.origin;
-};
-function failure(error) {
-  errors.push(text(error?.message ?? error, 500));
-  errors = errors.slice(-12);
+const originOf = (value) => browserOrigin(value, forbidden);
+function failure(error, page = pages.get(active)) {
+  if (!page) return;
+  const state = stateFor(page);
+  state.errors.push(text(error?.message ?? error, 500));
+  state.errors = state.errors.slice(-12);
+}
+async function navigate(page, action) {
+  const state = stateFor(page);
+  state.navigationError = null; state.errors = [];
+  try {
+    const response = await action();
+    if (response && response.status() >= 400) throw new Error(`HTTP ${response.status()} from the page or its access boundary`);
+  } catch (error) {
+    state.navigationError = text(error?.message ?? error, 500);
+    failure(error, page);
+  }
 }
 // The proxy checks destinations before connecting. Route hooks alone do not cover every redirect.
 async function startProxy() {
@@ -44,15 +55,22 @@ async function startProxy() {
     const headers = { ...request.headers, host: url.host };
     delete headers['proxy-authorization']; delete headers['proxy-connection']; headers.connection = 'close';
     const upstream = httpRequest(url, { method: request.method, headers, timeout: 15000 }, (result) => {
+      result.on('error', () => response.destroy());
       response.writeHead(result.statusCode, result.headers); result.pipe(response);
     });
     upstream.on('timeout', () => upstream.destroy());
     upstream.on('error', () => { if (response.destroyed) return; if (!response.headersSent) response.writeHead(502); response.end(); });
+    response.on('error', () => upstream.destroy());
     response.on('close', () => upstream.destroy());
     request.on('aborted', () => upstream.destroy());
     request.pipe(upstream);
   });
-  proxy.on('connection', (socket) => { proxySockets.add(socket); socket.on('close', () => proxySockets.delete(socket)); });
+  proxy.on('connection', (socket) => {
+    proxySockets.add(socket);
+    // Reset/aborted browser connections are request failures, never worker failures.
+    socket.on('error', () => socket.destroy());
+    socket.on('close', () => proxySockets.delete(socket));
+  });
   proxy.on('connect', (request, socket, head) => {
     if (request.headers['proxy-authorization'] !== authorization) {
       socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="Verb browser"\r\n\r\n'); return;
@@ -62,7 +80,7 @@ async function startProxy() {
     const upstream = connect(Number(url.port || 443), url.hostname.replace(/^\[|\]$/g, ''));
     proxySockets.add(upstream); upstream.on('close', () => proxySockets.delete(upstream));
     upstream.setTimeout(30000, () => upstream.destroy());
-    upstream.once('connect', () => { socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); if (head.length) upstream.write(head); socket.pipe(upstream); upstream.pipe(socket); });
+    upstream.once('connect', () => { if (socket.destroyed) { upstream.destroy(); return; } socket.write('HTTP/1.1 200 Connection Established\r\n\r\n'); if (head.length) upstream.write(head); socket.pipe(upstream); upstream.pipe(socket); });
     upstream.on('error', () => socket.destroy()); socket.on('error', () => upstream.destroy()); socket.on('close', () => upstream.destroy());
   });
   await new Promise((ok, fail) => { proxy.once('error', fail); proxy.listen(0, '127.0.0.1', ok); });
@@ -75,15 +93,16 @@ async function addPage() {
   page.setDefaultTimeout(4000);
   page.setDefaultNavigationTimeout(10000);
   const id = randomUUID(); pages.set(id, page); active = id;
-  page.on('pageerror', failure);
-  page.on('console', (m) => { if (m.type() === 'error') failure(m.text()); });
-  page.on('dialog', (d) => { failure('A page dialog was dismissed.'); void d.dismiss(); });
-  page.on('popup', (p) => { failure('A popup was blocked. Open its address explicitly.'); void p.close(); });
-  page.on('download', (d) => { failure('Downloads are disabled in this first browser slice.'); void d.cancel(); });
+  page.on('pageerror', (error) => failure(error, page));
+  page.on('console', (m) => { if (m.type() === 'error') failure(m.text(), page); });
+  page.on('dialog', (d) => { failure('A page dialog was dismissed.', page); void d.dismiss(); });
+  page.on('popup', (p) => { failure('A popup was blocked. Open its address explicitly.', page); void p.close(); });
+  page.on('download', (d) => { failure('Downloads are disabled in this first browser slice.', page); void d.cancel(); });
   return page;
 }
 async function start(client) {
   if (browser) return;
+  sessionId = randomUUID();
   const proxyConfig = await startProxy();
   browser = await chromium.launch({ executablePath: process.env.VERB_BROWSER_EXECUTABLE,
     proxy: proxyConfig, args: ['--proxy-bypass-list=<-loopback>', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
@@ -117,7 +136,7 @@ async function start(client) {
 }
 async function stop() {
   const old = browser; browser = null; context = null; active = null;
-  pages.clear(); controller = null; generation += 1; grants.clear(); blocked.clear(); errors = [];
+  pages.clear(); controller = null; generation += 1; grants.clear(); blocked.clear();
   await old?.close();
   for (const socket of proxySockets) socket.destroy();
   proxySockets.clear();
@@ -137,10 +156,11 @@ async function view(capture = false) {
     image = png.toString('base64');
   }
   return { running: Boolean(browser?.isConnected()), controller, generation, session: sessionId,
-    revision: ++revision, active, tabs, grants: [...grants], blocked: [...blocked], errors,
+    revision: ++revision, active, tabs, grants: [...grants], blocked: [...blocked],
+    errors: page ? stateFor(page).errors : [], navigationError: page ? stateFor(page).navigationError : null,
     viewport: page?.viewportSize(), image };
 }
-const sessionId = randomUUID();
+let sessionId = randomUUID();
 async function handle(input) {
   if (!input || typeof input.client !== 'string' || !/^[a-zA-Z0-9_-]{8,64}$/.test(input.client))
     throw new Error('A browser client identity is required.');
@@ -163,7 +183,7 @@ async function handle(input) {
         if (grants.size >= 32) throw new Error('Site limit reached. Stop and start a fresh session.');
         grants.add(origin); blocked.delete(origin);
       }
-      await page.goto(input.url, { waitUntil: 'domcontentloaded' }).catch(failure);
+      await navigate(page, () => page.goto(input.url, { waitUntil: 'domcontentloaded' }));
       break;
     }
     case 'grant': {
@@ -171,9 +191,9 @@ async function handle(input) {
       if (grants.size >= 32) throw new Error('Site limit reached.');
       grants.add(origin); blocked.delete(origin); break;
     }
-    case 'back': await page.goBack({ waitUntil: 'domcontentloaded' }).catch(failure); break;
-    case 'forward': await page.goForward({ waitUntil: 'domcontentloaded' }).catch(failure); break;
-    case 'reload': await page.reload({ waitUntil: 'domcontentloaded' }).catch(failure); break;
+    case 'back': await navigate(page, () => page.goBack({ waitUntil: 'domcontentloaded' })); break;
+    case 'forward': await navigate(page, () => page.goForward({ waitUntil: 'domcontentloaded' })); break;
+    case 'reload': await navigate(page, () => page.reload({ waitUntil: 'domcontentloaded' })); break;
     case 'tab': if (!pages.has(input.tab)) throw new Error('Tab no longer exists.'); active = input.tab; break;
     case 'new': await addPage(); break;
     case 'close': await page.close(); pages.delete(active); active = pages.keys().next().value;
@@ -193,7 +213,7 @@ async function handle(input) {
       if (typeof input.text !== 'string' || input.text.length > 2000) throw new Error('Text is too long.');
       await page.keyboard.insertText(input.text); break;
     case 'key':
-      if (!['Enter', 'Tab', 'Shift+Tab', 'Escape', 'Backspace', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Space'].includes(input.key))
+      if (!['Enter', 'Tab', 'Shift+Tab', 'Escape', 'Backspace', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Space', 'Home', 'End', 'Delete', 'ControlOrMeta+A'].includes(input.key))
         throw new Error('Unsupported key.');
       await page.keyboard.press(input.key); break;
     case 'scroll':
@@ -208,8 +228,8 @@ async function handle(input) {
   return view(true);
 }
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
-let stopping = false;
-async function shutdown() { if (stopping) return; stopping = true; await stop().catch(() => {}); }
+let shutdownTask;
+function shutdown() { return shutdownTask ??= stop().catch(() => {}); }
 process.on('SIGTERM', () => { void shutdown().finally(() => process.exit(0)); });
 process.on('SIGINT', () => { void shutdown().finally(() => process.exit(0)); });
 try {

@@ -144,3 +144,33 @@ Evidence: `/private/tmp/verb-browser-worker-rea-ux-20261028.json`; summary:
 `ev_9c32c17aa063597474c5268a2739ec6f8a67a8286b14808f86c479b86ea7bc70`.
 Directory digest: `fa164773056333fb3f94967689e2a4bf9077d59f708eec02e6d642ff4324986a`.
 Runtime tests still verify unapproved redirects are blocked before connecting.
+
+## 30 October: renewed REA study and companion decision
+
+At the user's request, REA 6.8.0 reanalyzed the two previously copied Codex browser modules
+`hidden-browser-use-webview-host-a49029186764.js` and
+`browser-background-switches-IQUsnzYP.js`. Neither app, browser profiles, cookies nor conversations
+were opened or instrumented. Evidence: `/private/tmp/verb-browser-rea-recheck-20261030.json`;
+summary: `/private/tmp/verb-browser-rea-recheck-summary-20261030.json`.
+
+Two JavaScript files parsed, zero parse failures, 27,717 AST nodes visited and 63 findings. Coverage
+is partial: the main bundle was deliberately not reanalyzed; 829 semantic unknowns remain. Static
+observations of browser tab/conversation identities and presented versus hidden mounts support
+separating runtime ownership from its visible surface. They do not establish all reachable behavior
+or provide a redistributable Codex browser component. No proprietary implementation was copied into
+Verb. Claude Desktop was not installed in the original inventory; its current public browser
+[documentation](https://support.claude.com/en/articles/16607400-use-the-built-in-browser-in-claude-cowork)
+confirms that its desktop runtime must remain online for browser use through web/mobile.
+
+The user selected a Mac companion connected to public Verb. Verb's independent implementation uses
+an outbound, browser-only relay, one-use owner pairing and the existing isolated Chromium worker.
+It does not expose CDP, import a personal profile, or run Chromium on the phone. See the companion
+contract for credentials, expiry, disconnects and remaining compatibility limits.
+
+REA also inspected a pre-format snapshot of Verb's four browser modules (worker, URL policy,
+companion runner and Studio controller) as inert source. Four files parsed, zero parse failures,
+5,857 AST nodes visited and 41 findings; semantic coverage remains unknown with 1,539 unknowns.
+Evidence: `/private/tmp/verb-browser-rea-companion-final-evidence-20261030.json`; summary:
+`/private/tmp/verb-browser-rea-companion-final-summary-20261030.json`. These observations guided
+manual lifecycle review; real Chromium/Rust tests establish the behavioral acceptance. REA is not
+a security certification. Final formatting and pipe-error handling were reviewed separately.

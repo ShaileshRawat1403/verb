@@ -1,6 +1,6 @@
-# Local browser runtime — first implementation
+# Native browser runtime and Mac companion
 
-28 October 2026. Local development only. Restart of preview 4873 and a local commit are approved; no public deployment is authorized.
+Native implementation: 28 October 2026. Companion update: 30 October 2026. Local worker execution remains restricted to native-local hosts. External hosts can use the separately paired companion described below. Deployment acceptance is recorded separately.
 
 ## Product behavior
 
@@ -142,3 +142,27 @@ list is populated only by browser-context page request events (including redirec
 Chromium background connections remain denied at the proxy without becoming page permission requests.
 The fresh-redirect denial and exact pending-origin list are checked by the real Chromium suite. See
 UX_WALKTHROUGH_2026-10-28.md for manual verification and current test evidence.
+
+## 30 October: companion path and reliability fixes
+
+The owner may explicitly pair a separate Mac runtime using the contract in
+`BROWSER_COMPANION_CONTRACT.md`. This permits rendered browsing through an external Verb host
+without launching Chromium in its execution boundary. The local execution restriction above still
+applies to the local worker. Saved HTML previews retain their independent sandbox and permissions.
+
+Address drafts survive background captures. Navigation exceptions and HTTP errors are displayed as
+failures, and errors belong to the originating tab. Switching pages clears stale inspected text and
+synchronizes viewport controls. One deliberate action can wait for an in-flight screenshot before
+its first send; it is cancelled if that refresh fails or the browser session/control changes. Other
+busy actions remain refused, never retried. Stop cancels waiting input. Closing while Start is in
+flight stops only the session returned by that Start. A delayed availability response cannot enable
+Start in a newer, unavailable view. Explicit Select all, Backspace and Previous field controls help
+with editing remote inputs. Each fresh browser start rotates its session identity.
+
+A real socket-reset regression was found during repeated acceptance: unauthenticated/aborted
+Chromium proxy connections and upstream response streams could emit an unhandled `ECONNRESET`,
+ending the worker. Those socket/stream errors now terminate their request, not the process. A
+fixture deliberately cuts a response and verifies an explicit navigation failure followed by a
+successful page open in the same browser session. The forced-SIGKILL test explicitly cleans only
+its recorded, fingerprint-verified descendants; this is fixture teardown, not a claim that arbitrary
+worker SIGKILL automatically cleans up every browser process.

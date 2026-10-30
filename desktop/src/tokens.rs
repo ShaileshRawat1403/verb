@@ -298,7 +298,7 @@ fn verify_in(store: &Path, presented: &str) -> Option<Access> {
 /// token management and phone sharing need the owner.
 pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
-    let owner_only = path == "/api/browser"
+    let owner_only = matches!(path, "/api/browser" | "/api/browser/pairing")
         || path.starts_with("/api/tokens")
         || (method != "GET" && (path == "/api/stream" || path == "/api/observer"))
         || matches!(parts.as_slice(), ["api", "terminals", _, "phone", ..]);
@@ -460,6 +460,8 @@ mod tests {
 
         assert_eq!(required_scope("GET", "/api/browser"), Scope::Owner);
         assert_eq!(required_scope("POST", "/api/browser"), Scope::Owner);
+        assert_eq!(required_scope("GET", "/api/browser/pairing"), Scope::Owner);
+        assert_eq!(required_scope("POST", "/api/browser/pairing"), Scope::Owner);
         assert_eq!(required_scope("GET", "/api/specs"), Scope::Read);
         assert_eq!(required_scope("GET", "/api/specs/001"), Scope::Read);
         assert_eq!(required_scope("POST", "/api/ask"), Scope::Read);
