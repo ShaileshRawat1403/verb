@@ -1,4 +1,4 @@
-// Only a rejected, read-only file-list request may retry. Never accept a write callback.
+// Only a rejected, read-only request may retry. Never accept a write callback.
 export async function readWithBusyRetry(api, path, { wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {

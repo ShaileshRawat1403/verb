@@ -34,6 +34,9 @@ const TERMINAL_START_TIMEOUT: &str =
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
+const MAX_BACKGROUND_READS: usize = 6;
+// Let the project-read layer finish its 20-second budget and report its own result.
+const BACKGROUND_READ_TIMEOUT: Duration = Duration::from_secs(25);
 const TERMINAL_CLEANUP_UNCONFIRMED: &str =
     "The terminal ended, but the execution boundary has not \
     confirmed its cleanup yet. Its slot stays reserved until it does.";
@@ -607,6 +610,7 @@ impl OwnerName {
 
 struct WebHost {
     background_requests: Arc<AtomicUsize>,
+    background_reads: Arc<AtomicUsize>,
     terminal_connections: Arc<AtomicUsize>,
     project: PathBuf,
     project_id: String,
@@ -1054,6 +1058,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         identity,
         deployment: deployment_info(),
         background_requests: Arc::default(),
+        background_reads: Arc::default(),
         terminal_connections: Arc::default(),
         state_cache: Arc::default(),
         state_generation: Arc::new(AtomicU64::new(0)),
@@ -1561,11 +1566,20 @@ impl WebHost {
             let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         }
         let mut reply = self.dispatch(&mut request);
-        let permit = if let Some(permit) = reply.permit.take() {
-            Some(permit)
-        } else if reply.deferred.is_some() || reply.state_job.is_some() {
-            let Some(permit) =
-                RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
+        let work = reply.deferred.take().or_else(|| {
+            reply.state_job.take().map(|job| {
+                let work: DeferredWork = Box::new(move || job.run());
+                work
+            })
+        });
+        let Some(work) = work else {
+            send_reply(request, reply);
+            return;
+        };
+        // Launches, writes and cleanup retain their own outcome and admission contracts.
+        let is_read = request.method() == &Method::Get && reply.permit.is_none();
+        let read_permit = if is_read {
+            let Some(permit) = RequestPermit::acquire(&self.background_reads, MAX_BACKGROUND_READS)
             else {
                 send_reply(request, Reply::error(503, HOST_BUSY));
                 return;
@@ -1574,30 +1588,25 @@ impl WebHost {
         } else {
             None
         };
-        if let Some(work) = reply.deferred.take() {
-            std::thread::spawn(move || {
-                let _permit = permit;
-                match work() {
-                    Ok(body) => reply.body = body,
-                    Err(error) => (reply.status, reply.body) = deferred_error(&error),
-                }
-                send_reply(request, reply);
-            });
+        let permit = reply
+            .permit
+            .take()
+            .or_else(|| RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS));
+        let Some(permit) = permit else {
+            send_reply(request, Reply::error(503, HOST_BUSY));
             return;
-        }
-        if let Some(job) = reply.state_job.take() {
-            // Only secondary state work leaves the PTY loop. Authentication remains in dispatch.
-            std::thread::spawn(move || {
-                let _permit = permit;
-                match job.run() {
-                    Ok(body) => reply.body = body,
-                    Err(error) => (reply.status, reply.body) = deferred_error(&error),
-                }
-                send_reply(request, reply);
-            });
-        } else {
+        };
+        let deadline = Instant::now() + BACKGROUND_READ_TIMEOUT;
+        std::thread::spawn(move || {
+            let permits = Arc::new((permit, read_permit));
+            let reply = if is_read {
+                bounded_read_reply(work, reply, Arc::clone(&permits), deadline)
+            } else {
+                finish_deferred(reply, work())
+            };
             send_reply(request, reply);
-        }
+            drop(permits);
+        });
     }
 
     fn studio_native(&self) -> bool {
@@ -3250,6 +3259,40 @@ fn deployment_info() -> Value {
     json!({"name": name, "mode": if remote { "REMOTE" } else { "LOCAL" }})
 }
 
+fn finish_deferred(mut reply: Reply, result: Result<Vec<u8>, String>) -> Reply {
+    match result {
+        Ok(body) => reply.body = body,
+        Err(error) => (reply.status, reply.body) = deferred_error(&error),
+    }
+    reply
+}
+
+fn bounded_read_reply(
+    work: DeferredWork,
+    reply: Reply,
+    permits: Arc<(RequestPermit, Option<RequestPermit>)>,
+    deadline: Instant,
+) -> Reply {
+    use std::sync::mpsc::{sync_channel, RecvTimeoutError};
+
+    let (send, receive) = sync_channel(1);
+    // A timed-out caller does not release the slot of a worker still blocked in the OS.
+    std::thread::spawn(move || {
+        let _ = send.send(work());
+        drop(permits);
+    });
+    match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(result) => finish_deferred(reply, result),
+        Err(RecvTimeoutError::Timeout) => Reply::json(
+            504,
+            json!({"error": "desktop background read timed out", "code": "read_timeout"}),
+        ),
+        Err(RecvTimeoutError::Disconnected) => {
+            Reply::error(500, "desktop background worker failed")
+        }
+    }
+}
+
 fn send_reply(request: Request, reply: Reply) {
     // Early authentication/capacity failures deliberately do not drain bodies. Closing
     // before releasing the reader prevents a keep-alive parser from adopting those bytes.
@@ -3412,6 +3455,43 @@ fn read_json_limit<T: for<'de> Deserialize<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stalled_reads_time_out_and_preserve_interactive_capacity() {
+        let total = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let mut release = Vec::new();
+        for _ in 0..MAX_BACKGROUND_READS {
+            let permit = RequestPermit::acquire(&total, MAX_BACKGROUND_REQUESTS).unwrap();
+            let read = RequestPermit::acquire(&reads, MAX_BACKGROUND_READS).unwrap();
+            let (send, receive) = std::sync::mpsc::channel();
+            release.push(send);
+            let reply = bounded_read_reply(
+                Box::new(move || {
+                    receive.recv().unwrap();
+                    Ok(Vec::new())
+                }),
+                Reply::json(200, Value::Null),
+                Arc::new((permit, Some(read))),
+                Instant::now() + Duration::from_millis(5),
+            );
+            assert_eq!(reply.status, 504);
+        }
+        assert!(RequestPermit::acquire(&reads, MAX_BACKGROUND_READS).is_none());
+        let interactive: Vec<_> = (MAX_BACKGROUND_READS..MAX_BACKGROUND_REQUESTS)
+            .map(|_| RequestPermit::acquire(&total, MAX_BACKGROUND_REQUESTS).unwrap())
+            .collect();
+        assert!(RequestPermit::acquire(&total, MAX_BACKGROUND_REQUESTS).is_none());
+        for sender in release {
+            sender.send(()).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while reads.load(Ordering::Acquire) != 0 {
+            assert!(Instant::now() < deadline, "read permits did not recover");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(interactive);
+    }
 
     #[test]
     fn request_capacity_is_bounded_and_recovers_when_work_finishes() {
