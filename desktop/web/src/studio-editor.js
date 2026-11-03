@@ -1,3 +1,4 @@
+import { readWithBusyRetry } from "./read-retry.js";
 import { initStudioCode } from "./studio-code.js";
 import { initEditorFind } from "./studio-find.js";
 import { initEditorNavigation } from "./studio-navigation.js";
@@ -367,7 +368,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     },
     async connect() {
       try {
-        const result = await api("GET", "/api/studio/workspace");
+        const result = await readWithBusyRetry(api, "/api/studio/workspace");
         if (result.schemaVersion !== 1)
           throw new Error("Unsupported workspace bridge version");
         capability = result;

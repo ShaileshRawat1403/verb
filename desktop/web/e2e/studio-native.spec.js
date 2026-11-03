@@ -796,8 +796,17 @@ test("find and replace stays in the draft, supports undo and explicit save", asy
 });
 
 test("file find fits a phone and undo cannot cross files", async ({ page }, testInfo) => {
+  let workspaceReads = 0;
+  await page.route("**/api/studio/workspace", async (route) => {
+    if (++workspaceReads === 1) {
+      await route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } });
+    } else {
+      await route.continue();
+    }
+  });
   await page.setViewportSize({ width: 390, height: 844 });
   await openFile(page, "app.html");
+  expect(workspaceReads).toBeGreaterThanOrEqual(2);
   const editor = page.locator("#studio-editor-text");
   await editor.fill("one one");
   await page.getByRole("button", { name: "Find & replace", exact: true }).click();

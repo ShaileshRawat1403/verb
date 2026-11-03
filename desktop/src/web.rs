@@ -35,7 +35,8 @@ const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
 const MAX_BACKGROUND_READS: usize = 6;
-const BACKGROUND_READ_TIMEOUT: Duration = Duration::from_secs(20);
+// Let the project-read layer finish its 20-second budget and report its own result.
+const BACKGROUND_READ_TIMEOUT: Duration = Duration::from_secs(25);
 const TERMINAL_CLEANUP_UNCONFIRMED: &str =
     "The terminal ended, but the execution boundary has not \
     confirmed its cleanup yet. Its slot stays reserved until it does.";
