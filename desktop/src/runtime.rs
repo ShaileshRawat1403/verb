@@ -26,10 +26,8 @@
 //! (`RUSTUP_AUTO_INSTALL=0`, `GOTOOLCHAIN=local`) so a pin is reported as missing, not fetched.
 
 use std::fs;
-use std::io::Read;
 use std::path::Path;
-use std::process::Stdio;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// How long one `--version` may take before Verb stops waiting and reports it as failed.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -519,42 +517,18 @@ fn probe(runtime: Runtime, project: &Path) -> Probe {
 /// `Err` when the program does not exist; `Ok(None)` when it ran but failed or timed out.
 fn run_bounded(program: &str, args: &[&str], directory: &Path) -> Result<Option<String>, ()> {
     let program = crate::exec::trusted_program(program, directory).ok_or(())?;
-    let mut child = crate::isolation::command(&program, directory, "")
-        .map_err(|_| ())?
+    let mut command = crate::isolation::command(&program, directory, "").map_err(|_| ())?;
+    command
         .args(args)
         .current_dir(directory)
-        // A pinned but uninstalled toolchain must be reported as such, not downloaded.
         .env("RUSTUP_AUTO_INSTALL", "0")
-        .env("GOTOOLCHAIN", "local")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|_| ())?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut text = String::new();
-                if let Some(mut stdout) = child.stdout.take() {
-                    let _ = stdout.read_to_string(&mut text);
-                }
-                // Python 2 and some managers print the version on stderr.
-                if let Some(mut stderr) = child.stderr.take() {
-                    let _ = stderr.read_to_string(&mut text);
-                }
-                return Ok(status.success().then_some(text));
-            }
-            Ok(None) if started.elapsed() < PROBE_TIMEOUT => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Ok(None);
-            }
-        }
-    }
+        .env("GOTOOLCHAIN", "local");
+    let Ok(output) = crate::exec::probe_output(&mut command, PROBE_TIMEOUT) else {
+        return Ok(None);
+    };
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok(output.status.success().then_some(text))
 }
 
 /// The first dotted number in a `--version` line: `v20.11.1`, `Python 3.12.1`,

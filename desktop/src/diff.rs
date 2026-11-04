@@ -110,15 +110,13 @@ fn hunk_starts(rest: &str) -> (u32, u32) {
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    crate::exec::git_text(
-        crate::exec::git(project)
-            .ok_or("could not prepare read-only git")?
-            .arg("-C")
-            .arg(project)
+    let mut command = crate::exec::git(project).ok_or("could not prepare read-only git")?;
+    crate::exec::git_text(crate::exec::read_output(
+        command
+            .env("GIT_LITERAL_PATHSPECS", "1")
             .args(["-c", "core.quotepath=off"])
-            .args(args)
-            .output(),
-    )
+            .args(args),
+    ))
 }
 
 fn has_head(project: &Path) -> bool {

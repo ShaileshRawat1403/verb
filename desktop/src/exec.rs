@@ -52,6 +52,14 @@ pub(crate) fn read_output_before(
     )
 }
 
+/// Small host and runtime probes have shorter deadlines than Git reads.
+pub(crate) fn probe_output(
+    command: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<std::process::Output> {
+    bounded::output(command, timeout, 128 * 1024)
+}
+
 /// Explicit user operations may contact a remote, but must still release their worker.
 pub(crate) fn git_operation_output(command: &mut Command) -> std::io::Result<std::process::Output> {
     bounded::output(command, Duration::from_secs(60), 1024 * 1024)
