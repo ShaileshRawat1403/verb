@@ -15,6 +15,9 @@ it true. Automated, emulator and physical-device results remain separate.
 
 ## Automated verification
 
+- [ ] For the release commit, run `cargo audit --file desktop/Cargo.lock --deny unsound --deny yanked`
+  against the current RustSec database. Record the result and any remaining informational warnings.
+
 - [x] Desktop format, clippy with warnings denied, all-target tests and release build pass in CI
   (PR #4, run 32732143051).
 - [x] Both Android flavors pass unit tests, lint and debug assembly in CI
