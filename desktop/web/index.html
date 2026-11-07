@@ -420,6 +420,11 @@
                         <option value="agy">Antigravity</option>
                         <option value="opencode">OpenCode</option>
                       </select>
+                      <select id="spec-agent-role" aria-label="Assignment role">
+                        <option value="implement">Implement</option>
+                        <option value="review">Review</option>
+                        <option value="investigate">Investigate</option>
+                      </select>
                       <button class="primary-button" type="button" data-action="spec-agent">
                         Start agent on this spec
                       </button>
@@ -734,7 +739,13 @@
                   <input id="session-search" class="list-search" type="search" placeholder="Find a session by agent, state or ID" aria-label="Find a session" autocomplete="off" />
                   <span class="count-chip" id="session-count">0</span>
                 </div>
-                <div id="session-list" class="session-list"></div>
+                <div id="session-list" class="session-list">
+                  <details id="session-idle" class="session-idle" open hidden>
+                    <summary>No active sessions</summary>
+                    <p>Open a new session, or check History for previous work.</p>
+                  </details>
+                  <div id="session-list-results"></div>
+                </div>
               </div>
               <div class="terminal-area">
                 <div class="terminal-toolbar">
@@ -949,7 +960,7 @@
               class="agent-icon terminal"
               >&gt;_</span
             ><strong>Terminal</strong
-            ><small>Plain shell in this project</small></label
+            ><small>Plain shell in this project. Choose an agent below for a named session.</small></label
           ><label
             ><input type="radio" name="agent" value="claude" /><span
               class="agent-icon claude"
@@ -978,6 +989,7 @@
             ><strong>Other CLI</strong><small>Checking availability…</small></label
           >
         </div>
+        <p id="codex-remote-signin" class="proof-hint" hidden>For first-time sign-in on a remote host, choose “Sign in with Device Code” in the Codex terminal.</p>
         <div id="custom-command-fields" class="custom-fields" hidden>
           <label class="field-label" for="custom-command">Executable</label
           ><input
@@ -1206,13 +1218,13 @@
       </form>
     </dialog>
 
-    <dialog id="handoff-dialog" class="modal">
+    <dialog id="handoff-dialog" class="modal" aria-labelledby="handoff-title">
       <form id="handoff-dialog-form" class="modal-content">
         <div class="modal-heading">
           <div>
             <span class="section-kicker">HAND OFF</span>
             <h2 id="handoff-title">Pass this spec to another agent</h2>
-            <p>Verb writes a handoff note into the spec, records it in the audit trail, and starts the next agent reading that note first.</p>
+            <p>Verb records the approved assignment on this spec. Claude, Codex, Gemini and Antigravity receive it as their opening prompt. OpenCode and plain shells open for manual follow-up.</p>
           </div>
           <button class="modal-close" type="button" data-close="handoff-dialog" aria-label="Close">×</button>
         </div>
@@ -1226,10 +1238,31 @@
             <option value="shell">A terminal (you)</option>
           </select>
         </div>
-        <p class="proof-hint">The note includes open acceptance criteria, recent <code>spec:</code> commits, uncommitted files and the branch. Add anything they can't see:</p>
-        <label class="field-label" for="handoff-note">Your note <span>(optional)</span></label
+        <p class="proof-hint">Spec revision <code id="handoff-revision"></code></p>
+        <label class="field-label" for="handoff-role">Assignment role</label>
+        <select id="handoff-role">
+          <option value="review">Review</option>
+          <option value="implement">Implement</option>
+          <option value="investigate">Investigate</option>
+        </select>
+        <label class="field-label" for="handoff-scope">Approved scope and acceptance criteria</label>
+        <textarea id="handoff-scope" rows="2" maxlength="600" required></textarea>
+        <label class="field-label" for="handoff-checks">Checks to run (optional)</label>
+        <textarea id="handoff-checks" rows="2" maxlength="600"></textarea>
+        <p class="proof-hint">Verb sends this assignment, the spec ID and its revision. The scope limits the assignment, while the checkout determines which files the agent can access.</p>
+        <label class="field-label" for="handoff-outcome">Reported outcome (optional)</label>
+        <textarea id="handoff-outcome" rows="2" maxlength="400"></textarea>
+        <label class="field-label" for="handoff-files">Reported changed files (optional)</label>
+        <input id="handoff-files" type="text" maxlength="400" />
+        <label class="field-label" for="handoff-results">Reported check results (optional)</label>
+        <textarea id="handoff-results" rows="2" maxlength="400"></textarea>
+        <p class="proof-hint">Reported results are passed to the next agent for review.</p>
+        <label class="field-label" for="handoff-note">Approved next steps <span>(optional)</span></label
         ><textarea id="handoff-note" rows="3" maxlength="2000" placeholder="Login works; the email test is flaky on CI. Don't touch the session store."></textarea>
+        <label id="handoff-isolated-option" hidden><input type="checkbox" id="handoff-isolated" /> Start in a separate checkout from the current commit. Uncommitted edits stay in the original checkout.</label>
         <p class="proof-hint">The previous agent keeps running. End it yourself when you're ready.</p>
+        <p id="handoff-error" class="warning-box" role="alert" hidden></p>
+        <button class="secondary-button" type="button" id="handoff-review-current" hidden>Load current revision</button>
         <div class="modal-footer">
           <button class="secondary-button" type="button" data-close="handoff-dialog">Cancel</button
           ><button class="primary-button" type="submit" id="handoff-submit">Hand off</button>

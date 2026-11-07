@@ -21,6 +21,7 @@ import { agentDisplayName } from "./view.js";
 import { icon } from "./icons.js";
 import { gitRemoteDescription } from "./project-git.js";
 import { specPresentation, filterSpecs } from "./spec-summary.js";
+import { agentAvailability, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { initSdlc } from "./sdlc-ui.js";
 
 const SHORTCUTS = [
@@ -81,7 +82,7 @@ export function initWorkbench(deps) {
   // ------------------------------------------------------------------------------- data
 
   let specsRequest = 0;
-  async function refreshSpecs() {
+  async function refreshSpecs(attempt = 0) {
     const request = ++specsRequest;
     try {
       const result = await api("GET", "/api/specs");
@@ -94,6 +95,14 @@ export function initWorkbench(deps) {
       render();
     } catch (error) {
       if (request !== specsRequest) return;
+      // Startup polls can briefly occupy the host's read workers. Preserve the last
+      // list and retry before showing an error for a transient admission refusal.
+      const busy = error.code === "capacity" || (error.status === 503 && !error.code);
+      if (busy && attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+        if (request === specsRequest) return refreshSpecs(attempt + 1);
+        return;
+      }
       state.specsError = error.message;
       renderOverview();
       toast(error.message, "error");
@@ -711,11 +720,11 @@ export function initWorkbench(deps) {
   }
 
   /** Starts an agent, or a plain terminal ("shell"), on the selected spec. Recorded server-side. */
-  async function startOnSpec(agent) {
+  async function startOnSpec(agent, role) {
     const spec = selected();
     if (!spec) return deps.launchQuickTerminal();
     try {
-      const result = await api("POST", `/api/specs/${spec.id}/agent`, { agent });
+      const result = await api("POST", `/api/specs/${spec.id}/agent`, { agent, role });
       deps.mountLaunchedSession({
         id: result.sessionId,
         agent,
@@ -747,23 +756,46 @@ export function initWorkbench(deps) {
   }
   // Every agent, Antigravity included, starts in its own terminal with the spec brief. Talk is an
   // optional, read-only conversation for Antigravity, offered beside it, never instead of it.
-  const startAgent = () => startOnSpec($("#spec-agent").value);
+  const startAgent = () => startOnSpec($("#spec-agent").value, $("#spec-agent-role").value);
   const syncTalkButton = () => {
     $("#spec-talk").hidden = $("#spec-agent").value !== "agy";
   };
   $("#spec-agent").addEventListener("change", syncTalkButton);
 
+  let reviewedHandoff;
+  let handoffSubmitting = false;
   function openHandoff() {
+    if (handoffSubmitting) return;
     const spec = selected();
     if (!spec) return;
     const from = lastAgent(spec);
     $("#handoff-from").textContent = from ? agentDisplayName(from) : "nobody yet";
     $("#handoff-title").textContent = `Hand off spec ${spec.id}`;
     const to = $("#handoff-to");
-    if (from && to.value === from) to.value = [...to.options].find((o) => o.value !== from).value;
-    $("#handoff-note").value = "";
+    const available = [...to.options].filter((option) => {
+      option.disabled = !agentAvailability(deps.ui.agentCapabilities, option.value).available;
+      option.textContent = option.dataset.label ??= option.textContent;
+      if (option.disabled) option.textContent += " · unavailable here";
+      return !option.disabled;
+    });
+    if (to.value === from || !available.some((option) => option.value === to.value)) {
+      to.value = (available.find((option) => option.value !== from) ?? available[0]).value;
+    }
+    reviewedHandoff = { id: spec.id, revision: spec.revision };
+    $("#handoff-revision").textContent = spec.revision.slice(0, 12);
+    $("#handoff-review-current").hidden = true;
+    $("#handoff-submit").disabled = false;
+    $("#handoff-error").hidden = true;
+    for (const field of ["note", "outcome", "files", "results"]) {
+      $(`#handoff-${field}`).value = "";
+    }
+    $("#handoff-scope").value = "";
+    $("#handoff-checks").value = "";
+    $("#handoff-role").value = "review";
+    $("#handoff-isolated").checked = false;
+    $("#handoff-isolated-option").hidden = !isolatedCheckoutAvailability(deps.ui.agentCapabilities).available;
     showDialog("handoff-dialog");
-    $("#handoff-note").focus();
+    $("#handoff-scope").focus();
   }
 
   async function switchBranch() {
@@ -1129,18 +1161,63 @@ export function initWorkbench(deps) {
     if (focus) deps.selectTerminal?.(focus.dataset.focusSession);
   });
 
+  $("#handoff-review-current").addEventListener("click", async () => {
+    const review = $("#handoff-review-current");
+    const errorBox = $("#handoff-error");
+    const previous = reviewedHandoff;
+    review.disabled = true;
+    try {
+      const current = await api("GET", `/api/specs/${previous.id}`);
+      if (!$("#handoff-dialog").open || reviewedHandoff !== previous) return;
+      replaceSpec(current);
+      const from = lastAgent(current);
+      $("#handoff-from").textContent = from ? agentDisplayName(from) : "nobody yet";
+      reviewedHandoff = { id: current.id, revision: current.revision };
+      $("#handoff-revision").textContent = current.revision.slice(0, 12);
+      errorBox.textContent = "Current revision loaded. Review your assignment before handing off.";
+      review.hidden = true;
+      $("#handoff-submit").disabled = false;
+    } catch (error) {
+      if (reviewedHandoff === previous) errorBox.textContent = error.message;
+    } finally {
+      review.disabled = false;
+    }
+  });
+
   $("#handoff-dialog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const spec = selected();
-    if (!spec) return;
+    if (handoffSubmitting || !$("#handoff-review-current").hidden || !spec || reviewedHandoff?.id !== spec.id) return;
+    handoffSubmitting = true;
+    const submit = $("#handoff-submit");
+    const errorBox = $("#handoff-error");
+    submit.disabled = true;
+    submit.textContent = "Handing off…";
+    errorBox.hidden = true;
     const to = $("#handoff-to").value;
     const from = lastAgent(spec);
     // Only say the previous agent is still running when one actually is.
     const fromLive = specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent === from);
     try {
-      const result = await api("POST", `/api/specs/${spec.id}/handoff`, { to, note: $("#handoff-note").value });
+      const isolated = $("#handoff-isolated").checked;
+      const result = await api("POST", `/api/specs/${spec.id}/handoff`, {
+        to,
+        note: $("#handoff-note").value,
+        isolated,
+        approved: {
+          revision: reviewedHandoff.revision,
+          role: $("#handoff-role").value,
+          scope: $("#handoff-scope").value,
+          checks: $("#handoff-checks").value,
+          result: {
+            outcome: $("#handoff-outcome").value,
+            files: $("#handoff-files").value,
+            checks: $("#handoff-results").value,
+          },
+        },
+      });
       closeDialog("handoff-dialog");
-      deps.mountLaunchedSession({ id: result.sessionId, agent: to, isolated: false, state: "live", hasTerminal: true, terminal: { running: true, replayAvailable: true }, hostedHere: true });
+      deps.mountLaunchedSession({ id: result.sessionId, agent: to, isolated, state: "live", hasTerminal: true, terminal: { running: true, replayAvailable: true }, hostedHere: true });
       if (result.warning) toast(result.warning, "error");
       else
         toast(
@@ -1148,7 +1225,20 @@ export function initWorkbench(deps) {
         );
       await Promise.all([refreshSpecs(), refreshGit()]);
     } catch (error) {
-      toast(error.message, "error");
+      if ($("#handoff-dialog").open) {
+        errorBox.textContent = error.message;
+        errorBox.hidden = false;
+        if (error.code === "stale_handoff") $("#handoff-review-current").hidden = false;
+      } else {
+        toast(error.message, "error");
+      }
+      // A stale draft has its own explicit refresh. Do not leave submission locked
+      // behind a competing list refresh while the user loads the new revision.
+      if (error.code !== "stale_handoff") void refreshSpecs();
+    } finally {
+      handoffSubmitting = false;
+      submit.disabled = !$("#handoff-review-current").hidden;
+      submit.textContent = "Hand off";
     }
   });
 

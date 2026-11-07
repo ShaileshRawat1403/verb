@@ -497,14 +497,57 @@ test("session board and handoff with a written note", async ({ page }) => {
   await page.locator('[data-action="handoff"]').click();
   await expect(page.locator("#handoff-from")).toHaveText("Terminal");
   await page.locator("#handoff-to").selectOption("shell");
+  await page.locator("#handoff-scope").fill("Inspect persistence in the existing checkout.");
+  await page.locator("#handoff-outcome").fill("Parser reproduced the issue.");
+  await page.locator("#handoff-files").fill("parser.rs");
+  await page.locator("#handoff-results").fill("Parser test failed with the reported error.");
   await page.locator("#handoff-note").fill("Validation is done; persistence is next.");
-  await page.locator("#handoff-submit").click();
+  const submit = page.locator("#handoff-submit");
+  let attempts = 0;
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  await page.route("**/api/specs/*/handoff", async (route) => {
+    attempts += 1;
+    if (attempts === 1) {
+      await hold;
+      await route.fulfill({ status: 400, json: { error: "Temporary launch failure" } });
+      return;
+    }
+    await route.continue();
+  });
+  await submit.click();
+  try {
+    await expect(submit).toBeDisabled();
+    await page.locator("#handoff-dialog-form").dispatchEvent("submit");
+  } finally {
+    release();
+  }
+  await expect(page.locator("#handoff-error")).toHaveText("Temporary launch failure");
+  await expect(page.locator("#handoff-note")).toHaveValue("Validation is done; persistence is next.");
+  await expect(submit).toBeEnabled();
+  expect(attempts).toBe(1);
+
+  const specPath = join(repo, "specs/001-let-people-sign-in-with-email.md");
+  const oldRevision = await page.locator("#handoff-revision").textContent();
+  writeFileSync(specPath, readFileSync(specPath, "utf8") + "\n<!-- concurrent revision -->\n");
+  await submit.click();
+  await expect(page.locator("#handoff-error")).toContainText("The spec changed");
+  await expect(submit).toBeDisabled();
+  await page.getByRole("button", { name: "Load current revision" }).click();
+  await expect(page.locator("#handoff-revision")).not.toHaveText(oldRevision);
+  await expect(page.locator("#handoff-note")).toHaveValue("Validation is done; persistence is next.");
+  await expect(page.locator("#handoff-scope")).toHaveValue("Inspect persistence in the existing checkout.");
+  await expect(submit).toBeEnabled();
+  await submit.click();
   await expect(page.locator("#handoff-dialog")).toBeHidden();
   await expect(page.locator("#spec-sessions .board-row.live")).toHaveCount(2, { timeout: 15_000 });
 
-  const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
+  const file = readFileSync(specPath, "utf8");
   expect(file).toContain("## Handoff notes");
   expect(file).toContain("shell → shell");
+  expect(file).toContain("- Reported outcome: Parser reproduced the issue.");
+  expect(file).toContain("- Reported changed files: parser.rs");
+  expect(file).toContain("- Reported check results (unverified): Parser test failed with the reported error.");
   expect(file).toContain("- Note from E2E Person: Validation is done; persistence is next.");
   expect(file).toContain("handed off from shell to shell — Validation is done; persistence is next.");
   expect(file.indexOf("## Handoff notes")).toBeLessThan(file.indexOf("## Audit trail"));

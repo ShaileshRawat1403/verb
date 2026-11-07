@@ -139,7 +139,10 @@ impl Host {
         fs::write(&client, CLIENT).unwrap();
         fs::set_permissions(&client, fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(root.join("boundary/log"), "").unwrap();
-        let mut child = Command::new(env!("CARGO_BIN_EXE_verb"))
+        // Cross-built tests can run against their sibling binary on the Linux target.
+        let binary = std::env::var_os("VERB_SYNTHETIC_TEST_BIN")
+            .unwrap_or_else(|| env!("CARGO_BIN_EXE_verb").into());
+        let mut child = Command::new(binary)
             .args(["web", "--port", "0"])
             .current_dir(root.join(PROJECT))
             .env("VERB_STATE_DIR", root.join("state"))
@@ -434,6 +437,51 @@ fn refusal_is_capacity_and_an_unconfirmed_exit_is_shown_without_a_start() {
     );
     assert_eq!(status, 201, "{body}");
     assert_eq!(host.starts_recorded(), 1);
+}
+
+#[test]
+fn approved_handoff_can_retry_the_same_revision_after_boundary_refusal() {
+    let host = Host::start("refuse");
+    let endpoint = format!("/api/specs/{}", host.spec());
+    let (_, original) = host.request("GET", &endpoint, None);
+    let submit = || {
+        host.request(
+            "POST",
+            &format!("{endpoint}/handoff"),
+            Some(json!({
+                "to": "shell", "note": "Only the fixture",
+                "approved": {
+                    "revision": original["revision"],
+                    "role": "review", "scope": "Check case.txt", "checks": ""
+                }
+            })),
+        )
+    };
+    assert_eq!(submit().0, 503);
+    assert_eq!(
+        host.request("GET", &endpoint, None).1["revision"],
+        original["revision"]
+    );
+
+    host.behave("fail");
+    let (status, failed) = submit();
+    assert_eq!(status, 201, "{failed}");
+    assert!(failed["warning"].is_string());
+    assert!(failed.get("note").is_none());
+    assert_eq!(
+        host.request("GET", &endpoint, None).1["revision"],
+        original["revision"]
+    );
+
+    host.behave("admit");
+    let (status, admitted) = submit();
+    assert_eq!(status, 201, "{admitted}");
+    assert!(admitted["note"]
+        .as_str()
+        .unwrap()
+        .contains("Only the fixture"));
+    assert_eq!(host.starts_recorded(), 1);
+    assert_eq!(submit().0, 409);
 }
 
 #[test]

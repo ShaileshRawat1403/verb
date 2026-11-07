@@ -140,7 +140,10 @@ test("phone layout keeps named controls usable without dragging or motion", asyn
 });
 
 test("a failed spec read exposes an error instead of a false empty project", async ({ page }) => {
-  await page.route("**/api/specs", route => route.fulfill({ status: 500, json: { error: "Could not read project specs" } }));
+  let reads = 0;
+  await page.route("**/api/specs", (route) => ++reads === 1
+    ? route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } })
+    : route.fulfill({ status: 500, json: { error: "Could not read project specs" } }));
   await page.goto(url); await page.keyboard.press("Alt+Digit1");
   await expect(page.locator("#spec-workbench-error")).toContainText("Could not read project specs");
   await expect(page.locator("#spec-work-items")).toContainText("work list is unavailable");

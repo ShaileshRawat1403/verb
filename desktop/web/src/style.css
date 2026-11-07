@@ -812,6 +812,19 @@ body {
   background: var(--danger-bg);
   color: var(--danger);
 }
+.session-idle summary {
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+}
+.session-idle p {
+  margin: 0;
+  padding: 0 10px 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .session-history {
   margin-top: 14px;
   border-top: 1px solid color-mix(in srgb, var(--overlay) 5%, transparent);

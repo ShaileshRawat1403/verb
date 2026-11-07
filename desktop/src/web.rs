@@ -7,12 +7,12 @@ use state::{terminal_status, StateCache, StateJob};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -142,9 +142,32 @@ fn await_admission(
 
 /// Work that must happen only after a launched terminal is confirmed started (for example the spec
 /// record of an agent start). It runs once, after admission, and never for a refused launch.
-type AfterAdmission = Box<dyn FnOnce() -> Result<(), String> + Send>;
+type AfterAdmission = Box<dyn FnOnce(&mut Value) -> Result<(), String> + Send>;
 
-/// The spec audit line for a confirmed agent start. A handoff's intent is recorded separately.
+// Prevent two browser tabs from launching successors for the same reviewed spec concurrently.
+// The reservation is released on refusal, timeout, or completion of the post-admission record.
+static PENDING_HANDOFFS: LazyLock<Mutex<HashSet<(PathBuf, String)>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+struct HandoffReservation((PathBuf, String));
+
+impl HandoffReservation {
+    fn acquire(project: &Path, spec: &str) -> Result<Self, String> {
+        let key = (project.to_owned(), spec.to_owned());
+        if !PENDING_HANDOFFS.lock().unwrap().insert(key.clone()) {
+            return Err("Another handoff is starting for this spec. Try again shortly.".into());
+        }
+        Ok(Self(key))
+    }
+}
+
+impl Drop for HandoffReservation {
+    fn drop(&mut self) {
+        PENDING_HANDOFFS.lock().unwrap().remove(&self.0);
+    }
+}
+
+/// The spec audit line for a confirmed agent start.
 fn spec_start_line(agent: &str, session: &str, continues_talk: bool) -> String {
     format!(
         "started {agent} on this spec (session {}){}",
@@ -161,7 +184,7 @@ fn spec_start_line(agent: &str, session: &str, continues_talk: bool) -> String {
 /// rather than failing the launch, so the running terminal stays tracked.
 fn after_admission(mut body: Value, after: Option<AfterAdmission>) -> Value {
     if let Some(after) = after {
-        if let Err(error) = after() {
+        if let Err(error) = after(&mut body) {
             body["warning"] = json!(format!(
                 "The terminal is running, but its spec record could not be written: {error}"
             ));
@@ -242,6 +265,14 @@ fn answer_launch(
 /// Status and body for slow work that failed. A full execution boundary is temporary congestion
 /// (503, `code: "capacity"`), never a Git or request failure; everything else stays 400.
 fn deferred_error(error: &str) -> (u16, Vec<u8>) {
+    if error == crate::specs::STALE_HANDOFF {
+        return (
+            409,
+            json!({"error": error, "code": "stale_handoff"})
+                .to_string()
+                .into_bytes(),
+        );
+    }
     if let Some(message) = error.strip_prefix(crate::studio::CONFLICT) {
         (
             409,
@@ -884,12 +915,16 @@ struct SpecHandoffRequest {
     to: String,
     #[serde(default)]
     note: String,
+    approved: Option<crate::specs::ApprovedHandoff>,
+    #[serde(default)]
+    isolated: bool,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SpecAgentRequest {
     agent: String,
+    role: Option<crate::specs::AssignmentRole>,
 }
 
 #[derive(Deserialize)]
@@ -2653,8 +2688,14 @@ impl WebHost {
                 let spec = view.spec_id.ok_or("this talk is not on a spec")?;
                 let launcher = self.launcher();
                 Ok(self.launch_reply(move || {
-                    let (session, record) =
-                        launcher.start_on_spec_with(&spec, "agy", Some(&conversation))?;
+                    let (session, record) = launcher.start_on_spec_with(
+                        &spec,
+                        "agy",
+                        Some(&conversation),
+                        None,
+                        None,
+                        false,
+                    )?;
                     Ok((session.clone(), json!({"sessionId": session}), Some(record)))
                 }))
             }
@@ -2662,7 +2703,14 @@ impl WebHost {
                 let input: SpecAgentRequest = read_json(request)?;
                 let (launcher, id) = (self.launcher(), id.to_string());
                 Ok(self.launch_reply(move || {
-                    let (session, record) = launcher.start_on_spec(&id, &input.agent)?;
+                    let (session, record) = launcher.start_on_spec_with(
+                        &id,
+                        &input.agent,
+                        None,
+                        None,
+                        input.role,
+                        false,
+                    )?;
                     Ok((session.clone(), json!({"sessionId": session}), Some(record)))
                 }))
             }
@@ -2674,18 +2722,67 @@ impl WebHost {
                 if !SPEC_AGENTS.contains(&input.to.as_str()) {
                     return Err("choose a supported agent".to_owned());
                 }
+                if let Some(approved) = &input.approved {
+                    if approved.scope.trim().is_empty()
+                        || approved.scope.len() > 600
+                        || approved.checks.len() > 600
+                    {
+                        return Err("Provide an approved scope and keep scope and checks under 600 bytes each".into());
+                    }
+                }
+                if input.isolated
+                    && (input.approved.is_none() || !project::isolated_checkouts_supported())
+                {
+                    return Err("This handoff cannot use an isolated checkout".into());
+                }
                 let (launcher, id) = (self.launcher(), id.to_string());
-                // The handoff note records intent when the request is accepted; the agent start is
-                // recorded separately, and only once its terminal is confirmed started.
                 Ok(self.launch_reply(move || {
-                    let note = crate::specs::handoff(
+                    if let Some(approved) = input.approved {
+                        let prompt =
+                            crate::specs::approved_handoff_prompt(&id, &input.note, &approved);
+                        if prompt.len() > 4096 {
+                            return Err("Shorten the approved handoff before submitting".into());
+                        }
+                        let reservation = HandoffReservation::acquire(&launcher.project, &id)?;
+                        let (session, _) = launcher.start_on_spec_with(
+                            &id,
+                            &input.to,
+                            None,
+                            Some((prompt, &approved.revision)),
+                            None,
+                            input.isolated,
+                        )?;
+                        let start = spec_start_line(&input.to, &session, false);
+                        // A refused or timed-out launch must leave the reviewed revision intact
+                        // so the user can retry. Record the handoff and admitted session together.
+                        let record: AfterAdmission = Box::new(move |body| {
+                            let _reservation = reservation;
+                            let note = crate::specs::handoff_inner(
+                                &launcher.project,
+                                &id,
+                                &input.to,
+                                &input.note,
+                                &launcher.actor,
+                                Some(&approved),
+                                Some(&start),
+                            )?;
+                            body["note"] = json!(note);
+                            Ok(())
+                        });
+                        return Ok((session.clone(), json!({"sessionId": session}), Some(record)));
+                    }
+                    // Older clients expect the inferred note to be part of the standard brief.
+                    let note = crate::specs::handoff_inner(
                         &launcher.project,
                         &id,
                         &input.to,
                         &input.note,
                         &launcher.actor,
+                        None,
+                        None,
                     )?;
-                    let (session, record) = launcher.start_on_spec(&id, &input.to)?;
+                    let (session, record) =
+                        launcher.start_on_spec_with(&id, &input.to, None, None, None, false)?;
                     let body = json!({"sessionId": session, "note": note});
                     Ok((session, body, Some(record)))
                 }))
@@ -3075,10 +3172,6 @@ impl Launcher {
     /// Starts an agent (or a shell) on a spec. The returned action records the start in the spec's
     /// audit trail (how the session board and Ask Verb know who worked on what); callers run it only
     /// after the terminal is confirmed started.
-    fn start_on_spec(&self, id: &str, agent: &str) -> Result<(String, AfterAdmission), String> {
-        self.start_on_spec_with(id, agent, None)
-    }
-
     /// `conversation`: continue an Antigravity talk in its terminal instead of starting afresh.
     /// Returns the launched session and the spec record of its start, which the caller runs only
     /// once the terminal is confirmed started: a refused or timed-out launch records nothing.
@@ -3087,30 +3180,54 @@ impl Launcher {
         id: &str,
         agent: &str,
         conversation: Option<&str>,
+        handoff: Option<(String, &str)>,
+        role: Option<crate::specs::AssignmentRole>,
+        isolated: bool,
     ) -> Result<(String, AfterAdmission), String> {
         let (path, spec) = crate::specs::find(&self.project, id)?;
+        if handoff
+            .as_ref()
+            .is_some_and(|(_, revision)| *revision != spec.revision)
+        {
+            return Err(crate::specs::STALE_HANDOFF.into());
+        }
         // Every agent whose CLI can take an opening prompt gets the spec brief: as the first
         // argument for Claude, Codex and Gemini, through `-i` (run it, then stay interactive) for
         // Antigravity. OpenCode has no such option, so it starts empty and the spec view says so.
+        let brief = || {
+            if let Some((prompt, _)) = handoff {
+                return prompt;
+            }
+            if let Some(role) = role {
+                return format!(
+                    "Read spec {} at {}. {} Follow its scope and acceptance criteria. \
+                     Do not commit, push, or switch branches. Return outcome, files, checks, and next steps.",
+                    spec.id,
+                    spec.file,
+                    role.instruction(),
+                );
+            }
+            crate::specs::agent_brief(&spec)
+        };
         let args = match agent {
-            "claude" | "codex" | "gemini" => vec![crate::specs::agent_brief(&spec)],
+            "claude" | "codex" | "gemini" => vec![brief()],
             "agy" => match conversation {
                 Some(c) => vec!["--conversation".to_owned(), c.to_owned()],
-                None => vec!["-i".to_owned(), crate::specs::agent_brief(&spec)],
+                None => vec!["-i".to_owned(), brief()],
             },
             "opencode" | "shell" => Vec::new(),
             _ => return Err("choose a supported agent".to_owned()),
         };
         let session = self.launch(LaunchRequest {
             agent: agent.to_owned(),
-            isolated: false,
+            isolated,
             command: None,
             args,
             resume_id: None,
         })?;
         let actor = self.actor.clone();
         let line = spec_start_line(agent, &session, conversation.is_some());
-        let record: AfterAdmission = Box::new(move || crate::specs::record(&path, &actor, &line));
+        let record: AfterAdmission = Box::new(move |_| crate::specs::record(&path, &actor, &line));
         Ok((session, record))
     }
 
@@ -3561,7 +3678,7 @@ mod tests {
     fn counted_record(fail: bool) -> (AfterAdmission, Arc<AtomicUsize>) {
         let writes = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&writes);
-        let record: AfterAdmission = Box::new(move || {
+        let record: AfterAdmission = Box::new(move |_| {
             seen.fetch_add(1, Ordering::SeqCst);
             if fail {
                 Err("spec file is read-only".to_owned())
