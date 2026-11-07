@@ -2,6 +2,7 @@
 // It never launches work on entry or owns another task store. App execution is explicit.
 import { renderMarkdown, specSessions, STAGE_GUIDE } from "./workbench.js";
 import { icon } from "./icons.js";
+import { initStudioPreviews } from "./studio-previews.js";
 import { initStudioEditor } from "./studio-editor.js";
 
 export function initStudio({
@@ -41,7 +42,7 @@ export function initStudio({
         setText(
           "#studio-document-meta",
           next === "edit"
-            ? "Native text editor · explicit save"
+            ? "File editor · explicit save"
             : "Isolated application preview · saved snapshot",
         );
     },
@@ -56,6 +57,26 @@ export function initStudio({
       }
     },
   });
+  const dock = initStudioPreviews({
+    $,
+    api,
+    openFile,
+    escapeHtml,
+    workspaceId: () => ui.state?.project?.id,
+    canClose: (path) => !bridge.hasUnsaved(path),
+    stopApp: () => bridge.document(),
+  });
+  // Keep one set of development actions reachable from both phone surfaces.
+  const tools = $(".studio-work-tools");
+  const toolsHome = document.createComment("Studio development tools");
+  tools.before(toolsHome);
+  const narrow = matchMedia("(max-width: 820px)");
+  function placeTools() {
+    if (narrow.matches) root.insertBefore(tools, $(".studio-layout"));
+    else toolsHome.after(tools);
+  }
+  narrow.addEventListener("change", placeTools);
+  placeTools();
   bridge.connect();
 
   function focusSurface(name, { focus = false } = {}) {
@@ -150,8 +171,10 @@ export function initStudio({
   }
 
   async function openFile(path) {
+    if (!dock.open(path)) return;
     const request = ++state.request;
     state.selected = path;
+    renderFileOptions();
     bridge.select(path);
     state.mode = "document";
     $("#studio-source").setAttribute("aria-pressed", "false");
@@ -162,7 +185,14 @@ export function initStudio({
     $("#studio-source").disabled = true;
     $("#studio-use-selection").disabled = true;
     if (!path) {
-      setText("#studio-document-meta", "Read-only project document");
+      setText("#studio-document-meta", "No preview selected");
+      $("#studio-document").textContent =
+        "Open a project file to preview it beside your work.";
+      return;
+    }
+    if (dock.isImage(path)) {
+      setText("#studio-document-meta", "Image preview · original file");
+      await dock.image(path, () => request === state.request);
       return;
     }
     try {
@@ -287,6 +317,16 @@ export function initStudio({
         .map(
           (s) =>
             `<button class="studio-link" type="button" data-studio-session="${escapeHtml(s.id)}">${icon("terminal")} Continue ${escapeHtml(s.agent)} <small>${escapeHtml(s.short)}</small></button>`,
+        )
+        .join(""),
+    );
+    paint(
+      "#studio-work-activity",
+      (spec?.audit || [])
+        .slice(-16)
+        .map(
+          (entry) =>
+            `<li><div><strong>${escapeHtml(entry.actor)}</strong><time>${escapeHtml(entry.at.replace("T", " ").slice(0, 16))}</time></div><p>${escapeHtml(entry.action)}</p></li>`,
         )
         .join(""),
     );

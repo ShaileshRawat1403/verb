@@ -28,7 +28,7 @@ pub(crate) fn studio_exchange(
     command: &mut Command,
     input: &[u8],
 ) -> std::io::Result<std::process::Output> {
-    bounded::exchange(command, Duration::from_secs(20), 2 * 1024 * 1024, input)
+    bounded::exchange(command, Duration::from_secs(20), 4 * 1024 * 1024, input)
 }
 
 /// Automatic reads only. Command construction may separately perform a bounded config probe.

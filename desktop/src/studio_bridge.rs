@@ -24,6 +24,7 @@ pub(crate) fn configured() -> bool {
 enum Operation {
     Capabilities,
     Read { path: String },
+    Image { path: String },
     Save { request: SaveRequest },
 }
 
@@ -31,11 +32,16 @@ fn exchange(project: &Path, operation: &Operation) -> Result<Value, String> {
     if !configured() {
         return Err("Studio boundary bridge is disabled".into());
     }
-    let input = serde_json::to_vec(operation).map_err(|e| e.to_string())?;
-    if input.len() > MAX_INPUT {
+    let json_input = serde_json::to_vec(operation).map_err(|e| e.to_string())?;
+    if json_input.len() > MAX_INPUT {
         return Err("Studio helper request exceeds limit".into());
     }
     let mut command = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")?;
+    let source = include_str!("../scripts/studio-workspace.py");
+    let bootstrap = format!(
+        "import sys;exec(compile(sys.stdin.buffer.read({}),'<verb-studio-adapter>','exec'))",
+        source.len()
+    );
     command.args([
         "--kill-after=1s",
         "15s",
@@ -43,9 +49,13 @@ fn exchange(project: &Path, operation: &Operation) -> Result<Value, String> {
         "-I",
         "-S",
         "-c",
-        include_str!("../scripts/studio-workspace.wire"),
+        &bootstrap,
         env!("VERB_BUILD_REVISION"),
     ]);
+    // The trusted embedded source occupies a fixed-length prefix. User JSON starts only after it.
+    let mut input = Vec::with_capacity(source.len() + json_input.len());
+    input.extend_from_slice(source.as_bytes());
+    input.extend_from_slice(&json_input);
     let output = crate::exec::studio_exchange(&mut command, &input).map_err(|_| {
         "Studio boundary exchange failed or timed out. A save may have completed; reload and compare before retrying.".to_owned()
     })?;
@@ -122,4 +132,12 @@ pub(crate) fn save(project: &Path, request: SaveRequest) -> Result<Document, Str
         );
     }
     Ok(doc)
+}
+
+pub(crate) fn image(project: &Path, path: &str) -> Result<crate::studio::Image, String> {
+    let reply = exchange(project, &Operation::Image { path: path.into() })?;
+    let image =
+        serde_json::from_value(reply["image"].clone()).map_err(|_| "Invalid image reply")?;
+    crate::studio::validate_image(&image, path)?;
+    Ok(image)
 }

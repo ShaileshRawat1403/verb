@@ -52,7 +52,6 @@ fn main() {
         "Cargo.lock",
         "build.rs",
         "scripts/studio-workspace.py",
-        "scripts/studio-workspace.wire",
     ] {
         println!("cargo:rerun-if-changed={path}");
     }

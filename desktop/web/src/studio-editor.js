@@ -36,7 +36,10 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   }
   function update() {
     const draft = current();
-    $("#studio-edit-file").disabled = !capability?.editing.available || !path;
+    $("#studio-edit-file").disabled =
+      !capability?.editing.available ||
+      !path ||
+      /\.(png|jpe?g|gif|webp)$/i.test(path);
     $("#studio-preview-app").disabled =
       !capability?.preview.available ||
       !/\.html?$/i.test(path || "") ||
@@ -200,7 +203,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       frame.src = result.url;
       $("#studio-app-frame").replaceChildren(frame);
       $("#studio-app-caption").textContent =
-        `${wanted} · saved snapshot ${doc.revision.slice(0, 8)} · refresh restarts the app`;
+        `saved snapshot ${doc.revision.slice(0, 8)} · refresh restarts the app`;
       setMode("app");
       status(
         "Isolated HTML app preview. Inline scripts run; external assets and API connections are blocked.",
@@ -261,6 +264,10 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   });
   return {
     mode: () => mode,
+    hasUnsaved: (wanted) => {
+      const d = drafts.get(wanted);
+      return Boolean(d && (dirty(d) || d.saving || d.recovery != null));
+    },
     select(wanted) {
       ++request;
       path = wanted;

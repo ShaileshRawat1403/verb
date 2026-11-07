@@ -1,7 +1,8 @@
 # Studio workspace bridge v1
 
-Status: native-local bridge and opt-in monitored-boundary adapter implemented, 26 October 2026.
-The boundary adapter is not enabled or accepted on the public service yet.
+Status: the text/HTML pilot at 3f813a6 was enabled publicly on 26 October 2026.
+The console, raster-image and transport iteration below is local only, 27 October.
+Public browser acceptance is recorded separately; these local changes are not deployed.
 This is the first working edit → saved app preview → Git review slice. It is not a
 complete IDE integration, a deployment mechanism, or an arbitrary dev-server proxy.
 
@@ -28,10 +29,11 @@ plus a valid external execution profile. It never opens or writes project files 
 UID995. The existing fixed boundary client admits a bounded pipes command running
 a fixed `python3 -I -S -c` adapter inside the registered project's environment.
 The adapter source (`desktop/scripts/studio-workspace.py`) is embedded in the host
-executable and passed as one literal argument; project text is never executable code.
-A fixed base64/zlib bootstrap keeps that argument below 4 KB for the installed client's
-transport limit. `studio-workspace.wire` is checked byte-for-byte against the readable
-source by the helper contract tests, which execute the actual wire representation.
+executable and delivered as a fixed-length stdin prefix; project text is never executable code.
+The command argument is now a short fixed bootstrap. The trusted embedded Python
+source occupies an exact byte-length prefix of stdin; JSON data follows that prefix.
+Only those trusted source bytes are compiled, so file contents/paths remain data.
+This removes the generated compressed wire artifact and its source-size ceiling.
 No controller, launcher, registry, policy, guest image or Node source changes are needed.
 No guest helper installation is required. Python uses only standard-library modules,
 with isolated mode and site loading disabled. Git visibility uses a fixed system Git
@@ -46,7 +48,7 @@ Missing/incompatible Python or malformed replies disable capabilities; operation
 errors never fall back to host filesystem access.
 
 JSON travels over bounded nonblocking stdin/stdout/stderr, not interpolated shell text
-or command-line file contents. The fixed adapter source is the only executable argument. A 15-second guest timeout and 20-second host deadline
+or command-line file contents. Only the small fixed bootstrap is a command argument. A 15-second guest timeout and 20-second host deadline
 bound exchanges. Saves are serialized by the host across helper processes. Every
 operation remains subject to the existing controller's admission and cleanup. Capacity
 is reported as temporary unavailability. Transport failure after a save has an unknown
@@ -61,6 +63,7 @@ No PocketFabric Node file or service is changed by this implementation.
 | --- | --- |
 | `GET /api/studio/workspace` | Schema version 1, trusted workspace ID, explicit editing/preview availability and limits/reason. Boundary discovery runs only the fixed read-only capability probe; no project code or edits. |
 | `GET /api/studio/file?path=…` | Connected-workspace visible UTF-8 file: path, text, byte count and SHA-256 content revision, with workspace ID. |
+| `GET /api/studio/image?path=…` | Read scope; visible regular PNG/JPEG/GIF/WebP up to 2 MB, with MIME signature, SHA-256 and path validation. SVG/HTML are not image payloads. |
 | `POST /api/studio/file` | Drive scope; workspace ID, path, expected revision, replacement text. Returns the confirmed saved snapshot. Saving neither commits nor publishes. |
 | `POST /api/studio/preview` | Drive scope; workspace ID, HTML path, expected saved revision. Returns a scoped one-use preview URL and exact revision. No arbitrary target URL or port. |
 | `GET /studio-preview/<ticket>` | Connected-workspace iframe navigation using an unguessable document capability; serves exactly the authorized immutable snapshot once. Cannot authorize another API or file. |
@@ -171,3 +174,15 @@ A UI-only release can leave `VERB_STUDIO_BOUNDARY` unset. Full Studio enablement
 A successful local or CI run does not authorize interruption of active user terminals.
 General dev-server proxies, external assets, WebSockets, LSP/debug/extensions remain
 outside this single-file Studio pilot and must not be advertised as delivered.
+
+## Console preview iteration (local, 27 October)
+
+The local console puts the existing work thread before a resizable preview dock.
+Up to eight file tabs can be opened; keyboard navigation and close actions preserve
+unsaved/recoverable editor drafts. Image preview includes fit, natural-size percentage
+zoom and download. Git changes and file diffs come from the existing observation APIs.
+Image replies are bounded by 2 MB raw/4 MB transport output and validated again after
+crossing the execution boundary. No new project registry or work lifecycle is added.
+The work thread renders the selected Spec's actual audit entries; it does not fabricate
+agent messages. Full conversational agent adapters remain a separate capability.
+These changes are local and must not be deployed without a new user instruction.

@@ -1677,13 +1677,32 @@ impl WebHost {
             }));
         }
 
-        if path == "/api/studio/file" || path == "/api/studio/preview" {
+        if matches!(
+            path,
+            "/api/studio/file" | "/api/studio/preview" | "/api/studio/image"
+        ) {
             if !self.studio_connected() {
                 return Ok(Reply::error(403, "Studio editing and app preview are not connected through this execution boundary"));
             }
             let project = self.project.clone();
             let id = self.project_id.clone();
             let boundary = crate::studio_bridge::configured();
+            if method == &Method::Get && path == "/api/studio/image" {
+                let wanted = url
+                    .split('?')
+                    .nth(1)
+                    .and_then(|q| q.split('&').find_map(|p| p.strip_prefix("path=")))
+                    .map(crate::shell::percent_decode)
+                    .ok_or("which image?")?;
+                return Ok(self.off_loop(false, move || {
+                    let image = if boundary {
+                        crate::studio_bridge::image(&project, &wanted)?
+                    } else {
+                        crate::studio::image(&project, &wanted)?
+                    };
+                    Ok(json!({"workspaceId":id,"image":image}))
+                }));
+            }
             if method == &Method::Get && path == "/api/studio/file" {
                 let wanted = url
                     .split('?')
