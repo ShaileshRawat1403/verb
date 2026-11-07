@@ -24,4 +24,9 @@ class DesktopPhoneViewModel : ViewModel() {
     var canSendPrompt by mutableStateOf(true)
     var messages by mutableStateOf<List<ChatMessage>>(emptyList())
     var showTerminalInspector by mutableStateOf(false)
+
+    override fun onCleared() {
+        client?.close()
+        super.onCleared()
+    }
 }

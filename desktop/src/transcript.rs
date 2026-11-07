@@ -10,7 +10,7 @@
 //! The rules, each enforced here rather than left to the caller:
 //!
 //! - **Off by default, per project.** `load(store).enabled` is false until the person turns it on, and
-//!   `for_session` is only called after checking it.
+//!   every content-delivery entry point rechecks it before reading an agent log.
 //! - **Read on demand, never stored.** Each request reads the tail of the log and returns; nothing is
 //!   cached, written to disk, logged, or added to an audit trail.
 //! - **Local only.** The result goes to the browser that asked, over Verb's own authenticated API.
@@ -69,6 +69,10 @@ pub(crate) struct Item {
     pub failed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+    #[serde(skip)]
+    pub id: Option<String>,
+    #[serde(skip)]
+    pub timestamp_ms: Option<u64>,
 }
 
 #[derive(Serialize, Debug, Default)]
@@ -285,6 +289,8 @@ pub(crate) fn claude_items(lines: &[&str], project: &Path) -> Vec<Item> {
             continue;
         }
         let at = v["timestamp"].as_str().map(str::to_owned);
+        let timestamp_ms = timestamp_millis(&v);
+        let id = v["uuid"].as_str().map(str::to_owned);
         let content = &v["message"]["content"];
         match v["type"].as_str() {
             Some("user") => {
@@ -294,6 +300,8 @@ pub(crate) fn claude_items(lines: &[&str], project: &Path) -> Vec<Item> {
                             kind: "you",
                             text: Some(clean(text, MAX_TEXT)),
                             at,
+                            id: id.clone(),
+                            timestamp_ms,
                             ..Item::default()
                         });
                     }
@@ -322,6 +330,8 @@ pub(crate) fn claude_items(lines: &[&str], project: &Path) -> Vec<Item> {
                         kind: "you",
                         text: Some(clean(&said.join("\n\n"), MAX_TEXT)),
                         at,
+                        id: id.clone(),
+                        timestamp_ms,
                         ..Item::default()
                     });
                 }
@@ -336,6 +346,8 @@ pub(crate) fn claude_items(lines: &[&str], project: &Path) -> Vec<Item> {
                                     kind: "agent",
                                     text: Some(clean(t, MAX_TEXT)),
                                     at: at.clone(),
+                                    id: id.clone(),
+                                    timestamp_ms,
                                     ..Item::default()
                                 });
                             }
@@ -550,16 +562,70 @@ fn exit_code(output: &Value) -> Option<i64> {
     None
 }
 
+/// Unknown or malformed agent timestamps remain unknown, never the time Verb read the file.
+pub(crate) fn timestamp_millis(value: &Value) -> Option<u64> {
+    value["timestampMs"]
+        .as_u64()
+        .or_else(|| value["timestamp"].as_u64())
+        .or_else(|| {
+            let time = time::OffsetDateTime::parse(
+                value["timestamp"].as_str()?,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .ok()?;
+            u64::try_from(time.unix_timestamp_nanos() / 1_000_000).ok()
+        })
+}
+
+/// Mobile uses the same bounded, redacted parser as the browser stream.
+pub(crate) fn claude_chat(
+    store: &Path,
+    path: &Path,
+    project: &Path,
+) -> Vec<crate::agent_chat::ChatMessageDto> {
+    if !load(store).enabled {
+        return Vec::new();
+    }
+    let Some(text) = tail_lines(path) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let mut messages: Vec<_> = claude_items(&lines, project)
+        .into_iter()
+        .filter(|item| matches!(item.kind, "you" | "agent"))
+        .enumerate()
+        .map(|(index, item)| crate::agent_chat::ChatMessageDto {
+            id: format!(
+                "{}-{index}",
+                item.id.unwrap_or_else(|| "message".to_owned())
+            ),
+            sender: if item.kind == "you" { "user" } else { "agent" }.to_owned(),
+            text: item.text.unwrap_or_default(),
+            timestamp: item.timestamp_ms.unwrap_or(0),
+        })
+        .collect();
+    if messages.len() > MAX_ITEMS {
+        messages.drain(..messages.len() - MAX_ITEMS);
+    }
+    messages
+}
+
 // ------------------------------------------------------------------------------------ reading
 
-fn tail_lines(path: &Path) -> Option<String> {
+pub(crate) fn tail_lines(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let start = len.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+    // Only complete JSONL records are visible. A later poll rereads a trailing fragment.
+    let end = bytes
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let text = String::from_utf8_lossy(&bytes[..end]).into_owned();
     // Starting mid-file means the first line is a fragment.
     Some(if start > 0 {
         text.split_once('\n')
@@ -570,14 +636,21 @@ fn tail_lines(path: &Path) -> Option<String> {
     })
 }
 
-/// The stream of one agent session. Call only after checking `load(store).enabled`.
+/// The stream of one agent session. Rechecks per-project opt-in at the content boundary.
 pub(crate) fn for_session(
+    store: &Path,
     record: Record,
     home: &Path,
     project: &Path,
     created_at_ms: u128,
     conversation_id: Option<&str>,
 ) -> Stream {
+    if !load(store).enabled {
+        return Stream {
+            items: Vec::new(),
+            note: Some("Agent streaming is disabled for this project."),
+        };
+    }
     let found = match conversation_id {
         Some(id) => RecordTail::find_existing(record, home, project, id),
         None => {
@@ -613,6 +686,52 @@ pub(crate) fn for_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamps_preserve_offsets_and_milliseconds_and_never_invent_a_time() {
+        for value in ["2026-08-22T08:00:00.123Z", "2026-08-22T13:30:00.123+05:30"] {
+            assert_eq!(
+                timestamp_millis(&serde_json::json!({"timestamp":value})),
+                Some(1787385600123)
+            );
+        }
+        assert_eq!(
+            timestamp_millis(&serde_json::json!({"timestampMs":42})),
+            Some(42)
+        );
+        for value in ["invalid", "2023-02-29T00:00:00Z"] {
+            assert_eq!(
+                timestamp_millis(&serde_json::json!({"timestamp":value})),
+                None
+            );
+        }
+        assert_eq!(timestamp_millis(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn a_partial_jsonl_record_is_retried_after_the_agent_finishes_writing() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join(format!("verb-torn-{}", crate::new_id()));
+        let raw = "{\"type\":\"user\",\"uuid\":\"u\",\"timestampMs\":42,\"message\":{\"content\":\"hello 🌍\"}}\r\n";
+        let cut = raw.find('🌍').unwrap() + 1;
+        let store = path.with_extension("store");
+        save(&store, &Settings { enabled: true }).unwrap();
+        fs::write(&path, &raw.as_bytes()[..cut]).unwrap();
+        assert!(claude_chat(&store, &path, Path::new("/project")).is_empty());
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&raw.as_bytes()[cut..])
+            .unwrap();
+        let messages = claude_chat(&store, &path, Path::new("/project"));
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "hello 🌍");
+        assert_eq!(messages[0].timestamp, 42);
+        assert_eq!(claude_chat(&store, &path, Path::new("/project")), messages);
+        fs::remove_file(path).unwrap();
+        fs::remove_dir_all(store).unwrap();
+    }
 
     #[test]
     fn credentials_are_redacted_and_ordinary_text_is_not() {

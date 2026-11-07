@@ -152,12 +152,12 @@ fn spec_source(spec: &specs::Spec) -> Source {
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
-    let out = crate::exec::git(project)?
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .output()
-        .ok()?;
+    let out = crate::exec::bounded_output(
+        crate::exec::git(project)?.arg("-C").arg(project).args(args),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    )
+    .ok()?;
     out.status
         .success()
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())

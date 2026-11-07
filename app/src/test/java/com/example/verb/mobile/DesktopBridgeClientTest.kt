@@ -20,7 +20,7 @@ import javax.net.ssl.SSLSocket
 
 @RunWith(RobolectricTestRunner::class)
 class DesktopBridgeClientTest {
-    private class TestDesktop(certificateHost: String, private val replies: List<String>) : AutoCloseable {
+    private class TestDesktop(certificateHost: String, private val replies: List<String>, private val persistent: Boolean = false) : AutoCloseable {
         val certificate = HeldCertificate.Builder()
             .commonName("Verb test desktop")
             .addSubjectAlternativeName(certificateHost)
@@ -43,16 +43,31 @@ class DesktopBridgeClientTest {
         }
         val port: Int = server.localPort
         val received = CopyOnWriteArrayList<JSONObject>()
+        val connectionCount = java.util.concurrent.atomic.AtomicInteger()
         private val worker = Thread {
             try {
-                repeat(maxOf(1, replies.size)) { index ->
+                if (persistent) {
                     (server.accept() as SSLSocket).use { socket ->
+                        connectionCount.incrementAndGet()
                         socket.soTimeout = 3000
-                        val line = socket.inputStream.bufferedReader().readLine()
-                        received.add(JSONObject(line))
-                        replies.getOrNull(index)?.let { reply ->
+                        val reader = socket.inputStream.bufferedReader()
+                        replies.forEach { reply ->
+                            received.add(JSONObject(reader.readLine()))
                             socket.outputStream.write((reply + "\n").toByteArray())
                             socket.outputStream.flush()
+                        }
+                    }
+                } else {
+                    repeat(maxOf(1, replies.size)) { index ->
+                        (server.accept() as SSLSocket).use { socket ->
+                            connectionCount.incrementAndGet()
+                            socket.soTimeout = 3000
+                            val line = socket.inputStream.bufferedReader().readLine()
+                            received.add(JSONObject(line))
+                            replies.getOrNull(index)?.let { reply ->
+                                socket.outputStream.write((reply + "\n").toByteArray())
+                                socket.outputStream.flush()
+                            }
                         }
                     }
                 }
@@ -87,6 +102,45 @@ class DesktopBridgeClientTest {
             assertEquals("a".repeat(32), desktop.received[0].getString("secret"))
             assertEquals("snapshot", desktop.received[1].getString("op"))
             assertEquals(token, desktop.received[1].getString("secret"))
+        }
+    }
+
+    @Test fun reusesPinnedTlsForLargeSnapshotsWhenTheHostSupportsIt() {
+        val text = "x".repeat(100_000)
+        val snapshot = JSONObject().put("version", 1).put("ok", true).put("keepAlive", true)
+            .put("result", JSONObject().put("sessionId", "chosen-session").put("revision", 2)
+                .put("controller", "desktop").put("messages", org.json.JSONArray().put(
+                    JSONObject().put("id", "m").put("sender", "agent").put("text", text))))
+        TestDesktop("127.0.0.1", listOf(
+            """{"version":1,"ok":true,"keepAlive":true,"result":{"deviceToken":"${"b".repeat(32)}"}}""",
+            snapshot.toString(),
+            """{"version":1,"ok":true,"keepAlive":false,"result":{}}"""
+        ), persistent = true).use { desktop ->
+            val client = DesktopBridgeClient(desktop.link())
+            try {
+                val token = client.pair()
+                val screen = client.snapshot(token)
+                assertEquals(text, screen.messages.single().text)
+                assertEquals(0L, screen.messages.single().timestamp)
+                client.disconnect(token)
+                assertEquals(1, desktop.connectionCount.get())
+                assertEquals(listOf("pair", "snapshot", "disconnect"), desktop.received.map { it.getString("op") })
+            } finally { client.close() }
+        }
+    }
+
+    @Test fun doesNotReplayInputWhenTheReplyIsLost() {
+        TestDesktop("127.0.0.1", listOf(
+            """{"version":1,"ok":true,"keepAlive":true,"result":{"deviceToken":"${"b".repeat(32)}"}}""",
+            "not a json reply"
+        ), persistent = true).use { desktop ->
+            val client = DesktopBridgeClient(desktop.link())
+            try {
+                val token = client.pair()
+                assertThrows(Exception::class.java) { client.input(token, "hello".toByteArray()) }
+                assertEquals(1, desktop.received.count { it.getString("op") == "input" })
+                assertEquals(1, desktop.connectionCount.get())
+            } finally { client.close() }
         }
     }
 

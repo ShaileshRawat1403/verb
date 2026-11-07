@@ -1,6 +1,5 @@
 //! Read-only Git presentation facts. Failed reads stay unknown, never an observed clean tree.
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum GitStatus {
@@ -53,13 +52,13 @@ enum ReadFailure {
     Unavailable,
 }
 fn read(args: &[&str], directory: &Path) -> Result<String, ReadFailure> {
-    let output = crate::exec::git(directory)
-        .ok_or(ReadFailure::Unavailable)?
-        .env("LC_ALL", "C")
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|_| ReadFailure::Unavailable)?;
+    let mut command = crate::exec::git(directory).ok_or(ReadFailure::Unavailable)?;
+    let output = crate::exec::bounded_output(
+        command.env("LC_ALL", "C").args(args),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    )
+    .map_err(|_| ReadFailure::Unavailable)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else if String::from_utf8_lossy(&output.stderr).contains("not a git repository") {
@@ -89,17 +88,18 @@ pub(crate) fn snapshot(project: &Path) -> GitSnapshot {
 }
 
 fn isolated_snapshot(project: &Path) -> Option<GitSnapshot> {
-    let output = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")
-        .ok()?
-        .args([
+    let mut command = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "").ok()?;
+    let output = crate::exec::bounded_output(
+        command.args([
             "--kill-after=1s",
             "10s",
             "/usr/local/bin/verb-recovery",
             "__git-snapshot",
-        ])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+        ]),
+        std::time::Duration::from_secs(12),
+        65536,
+    )
+    .ok()?;
     if !output.status.success() || output.stdout.len() > 65536 {
         return None;
     }

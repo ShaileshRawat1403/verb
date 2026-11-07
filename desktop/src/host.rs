@@ -232,49 +232,12 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 fn bounded_output(command: &mut Command) -> Option<String> {
-    use std::process::Stdio;
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let result = stdout
-            .take(128 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map(|_| bytes);
-        let _ = sender.send(result);
-    });
-    let deadline = Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        if let Some(status) = child.try_wait().ok()? {
-            let bytes = receiver
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .ok()?
-                .ok()?;
-            return (status.success() && bytes.len() <= 128 * 1024)
-                .then(|| String::from_utf8_lossy(&bytes).into_owned());
-        }
-        if Instant::now() >= deadline {
-            #[cfg(unix)]
-            {
-                let _ = crate::pty::signal_group(child.id() as i32, 9);
-            }
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let output =
+        crate::exec::bounded_output(command, std::time::Duration::from_secs(2), 128 * 1024).ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 fn recent_log(path: &Path) -> Option<String> {

@@ -234,7 +234,10 @@ impl ServerCertVerifier for PinnedDesktop {
     }
 }
 
-fn phone_request(port: u16, pin: &str, request: Value) -> Result<Value, String> {
+fn phone_connection(
+    port: u16,
+    pin: &str,
+) -> Result<BufReader<StreamOwned<ClientConnection, TcpStream>>, String> {
     let config = ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedDesktop(pin.to_owned())))
@@ -244,14 +247,27 @@ fn phone_request(port: u16, pin: &str, request: Value) -> Result<Value, String> 
     let tcp = TcpStream::connect(("127.0.0.1", port)).map_err(|error| error.to_string())?;
     tcp.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
     tcp.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
-    let mut stream = StreamOwned::new(conn, tcp);
-    writeln!(stream, "{request}").map_err(|error| error.to_string())?;
-    stream.flush().map_err(|error| error.to_string())?;
+    Ok(BufReader::new(StreamOwned::new(conn, tcp)))
+}
+
+fn phone_request_on(
+    stream: &mut BufReader<StreamOwned<ClientConnection, TcpStream>>,
+    request: Value,
+) -> Result<Value, String> {
+    writeln!(stream.get_mut(), "{request}").map_err(|error| error.to_string())?;
+    stream
+        .get_mut()
+        .flush()
+        .map_err(|error| error.to_string())?;
     let mut line = String::new();
-    BufReader::new(stream)
+    stream
         .read_line(&mut line)
         .map_err(|error| error.to_string())?;
     serde_json::from_str(&line).map_err(|error| error.to_string())
+}
+
+fn phone_request(port: u16, pin: &str, request: Value) -> Result<Value, String> {
+    phone_request_on(&mut phone_connection(port, pin)?, request)
 }
 
 #[test]
@@ -302,6 +318,25 @@ fn phone_controls_exact_live_web_terminal_over_pinned_tls_and_revocation() {
     let paired = phone_request(port, pin, json!({"version":1,"op":"pair","secret":code})).unwrap();
     assert_eq!(paired["ok"], true);
     let token = paired["result"]["deviceToken"].as_str().unwrap();
+    // Reuse one TLS session for consecutive snapshots; each request still checks its token.
+    let mut persistent = phone_connection(port, pin).unwrap();
+    for _ in 0..2 {
+        let reply = phone_request_on(
+            &mut persistent,
+            json!({"version":1,"op":"snapshot","secret":token}),
+        )
+        .unwrap();
+        assert_eq!(reply["ok"], true);
+        assert_eq!(reply["keepAlive"], true);
+    }
+    let denied = phone_request_on(
+        &mut persistent,
+        json!({"version":1,"op":"snapshot","secret":"not-the-token"}),
+    )
+    .unwrap();
+    assert_eq!(denied["ok"], false);
+    assert_eq!(denied["keepAlive"], false);
+    drop(persistent);
     assert!(phone_request(
         port,
         &"0".repeat(64),

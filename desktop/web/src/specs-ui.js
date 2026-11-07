@@ -452,8 +452,7 @@ export function initWorkbench(deps) {
     const changes = state.git?.changes ?? [];
     $("#commit-files").innerHTML = changes.length
       ? changes
-          .slice(0, 40)
-          .map((c) => `<li><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></li>`)
+          .map((c) => `<li><label class="check-row"><input type="checkbox" name="commit-path" value="${escapeHtml(c.path)}" /><span class="change-kind">${escapeHtml(changeLabel(c.code))}</span><code>${escapeHtml(c.path)}</code></label></li>`)
           .join("")
       : '<li class="muted">No changes to commit.</li>';
     // A suggestion from what changed, selected so typing replaces it; the prefix stays.
@@ -623,6 +622,7 @@ export function initWorkbench(deps) {
     try {
       const result = await api("POST", "/api/git/commit", {
         message: $("#commit-message").value,
+        paths: [...document.querySelectorAll('#commit-files input[name="commit-path"]:checked')].map((input) => input.value),
         specId: $("#commit-record").checked && spec ? spec.id : null,
       });
       closeDialog("commit-dialog");

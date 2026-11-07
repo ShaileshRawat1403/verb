@@ -25,6 +25,7 @@ const MAX_BUFFER: usize = 2 * 1024 * 1024;
 const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
+const BACKGROUND_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_TERMINAL_CONNECTIONS: usize = 32;
 struct RequestPermit(Arc<AtomicUsize>);
 impl RequestPermit {
@@ -510,6 +511,7 @@ struct SpecAgentRequest {
 #[serde(deny_unknown_fields)]
 struct CommitRequest {
     message: String,
+    paths: Vec<String>,
     #[serde(default, rename = "specId")]
     spec_id: Option<String>,
 }
@@ -1137,50 +1139,32 @@ impl WebHost {
             let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         }
         let mut reply = self.dispatch(&mut request);
-        let permit = if reply.deferred.is_some() || reply.state_job.is_some() {
-            let Some(permit) =
-                RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
-            else {
-                send_reply(
-                    request,
-                    Reply::error(503, "desktop host is busy; retry shortly"),
-                );
-                return;
-            };
-            Some(permit)
-        } else {
-            None
-        };
-        if let Some(work) = reply.deferred.take() {
-            std::thread::spawn(move || {
-                let _permit = permit;
-                match work() {
-                    Ok(body) => reply.body = body,
-                    Err(error) => {
-                        reply.status = 400;
-                        reply.body = json!({"error": error}).to_string().into_bytes();
-                    }
-                }
-                send_reply(request, reply);
-            });
-            return;
-        }
-        if let Some(job) = reply.state_job.take() {
-            // Only secondary state work leaves the PTY loop. Authentication remains in dispatch.
-            std::thread::spawn(move || {
-                let _permit = permit;
-                reply.body = match job.run() {
-                    Ok(body) => body,
-                    Err(error) => {
-                        reply.status = 400;
-                        json!({"error": error}).to_string().into_bytes()
-                    }
-                };
-                send_reply(request, reply);
-            });
-        } else {
+        let work = reply.deferred.take().or_else(|| {
+            reply.state_job.take().map(|job| {
+                let work: DeferredWork = Box::new(move || job.run());
+                work
+            })
+        });
+        let Some(work) = work else {
             send_reply(request, reply);
-        }
+            return;
+        };
+        let Some(permit) =
+            RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS)
+        else {
+            send_reply(
+                request,
+                Reply::error(503, "desktop host is busy; retry shortly"),
+            );
+            return;
+        };
+        let permit = Arc::new(permit);
+        let deadline = Instant::now() + BACKGROUND_RESPONSE_TIMEOUT;
+        std::thread::spawn(move || {
+            let reply = background_reply(work, reply, Arc::clone(&permit), deadline);
+            send_reply(request, reply);
+            drop(permit);
+        });
     }
 
     fn dispatch(&mut self, request: &mut Request) -> Reply {
@@ -1663,6 +1647,7 @@ impl WebHost {
                 &input.message,
                 input.spec_id.as_deref(),
                 &self.actor(),
+                &input.paths,
             )?;
             self.invalidate_state();
             return Ok(Reply::json(
@@ -1886,10 +1871,12 @@ impl WebHost {
                     (record, session.created_at, session.resume_identity.clone())
                 };
                 let project = self.project.clone();
+                let store = self.identity.store.clone();
                 let mut reply = Reply::json(200, Value::Null);
                 reply.deferred = Some(Box::new(move || {
                     let home = crate::isolation::agent_home().unwrap_or_default();
                     let stream = crate::transcript::for_session(
+                        &store,
                         record,
                         &home,
                         &project,
@@ -2283,6 +2270,35 @@ fn deployment_info() -> Value {
     json!({"name": name, "mode": if remote { "REMOTE" } else { "LOCAL" }})
 }
 
+fn background_reply(
+    work: DeferredWork,
+    mut reply: Reply,
+    permit: Arc<RequestPermit>,
+    deadline: Instant,
+) -> Reply {
+    use std::sync::mpsc::{sync_channel, RecvTimeoutError};
+
+    let (send, receive) = sync_channel(1);
+    // Keep the slot until the worker exits, even if its HTTP caller has already timed out.
+    // A blocked filesystem call cannot be safely cancelled from another Rust thread.
+    std::thread::spawn(move || {
+        let result = work();
+        let _ = send.send(result);
+        drop(permit);
+    });
+    match receive.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(Ok(body)) => {
+            reply.body = body;
+            reply
+        }
+        Ok(Err(error)) => Reply::error(400, &error),
+        Err(RecvTimeoutError::Timeout) => Reply::error(504, "desktop background request timed out"),
+        Err(RecvTimeoutError::Disconnected) => {
+            Reply::error(500, "desktop background worker failed")
+        }
+    }
+}
+
 fn send_reply(request: Request, reply: Reply) {
     let mut response = Response::from_data(reply.body).with_status_code(StatusCode(reply.status));
     let cache_control = reply.cache_control.unwrap_or("no-store");
@@ -2367,6 +2383,30 @@ mod tests {
         assert!(RequestPermit::acquire(&counter, 2).is_some());
         drop(second);
         assert_eq!(counter.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn background_response_times_out_without_releasing_a_running_worker_slot() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let permit = Arc::new(RequestPermit::acquire(&counter, 1).unwrap());
+        let (release, wait) = std::sync::mpsc::channel();
+        let reply = background_reply(
+            Box::new(move || {
+                wait.recv().unwrap();
+                Ok(vec![])
+            }),
+            Reply::json(200, Value::Null),
+            permit,
+            Instant::now() + Duration::from_millis(30),
+        );
+        assert_eq!(reply.status, 504);
+        assert!(RequestPermit::acquire(&counter, 1).is_none());
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while counter.load(Ordering::Acquire) != 0 {
+            assert!(Instant::now() < deadline, "worker slot did not recover");
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[test]

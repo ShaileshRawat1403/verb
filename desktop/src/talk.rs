@@ -306,6 +306,8 @@ fn clone_item(i: &Item) -> Item {
         target: i.target.clone(),
         failed: i.failed,
         at: i.at.clone(),
+        id: i.id.clone(),
+        timestamp_ms: i.timestamp_ms,
     }
 }
 

@@ -631,9 +631,12 @@ fn load_or_create_host_id() -> Result<String, String> {
 
 fn project_key(project: &Path) -> String {
     let output = crate::exec::git(project).ok_or(()).and_then(|mut git| {
-        git.args(["config", "--get", "remote.origin.url"])
-            .output()
-            .map_err(|_| ())
+        crate::exec::bounded_output(
+            git.args(["config", "--get", "remote.origin.url"]),
+            crate::exec::READ_TIMEOUT,
+            crate::exec::READ_LIMIT,
+        )
+        .map_err(|_| ())
     });
     let remote = output
         .ok()

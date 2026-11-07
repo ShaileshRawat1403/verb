@@ -13,7 +13,7 @@ use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -73,16 +73,27 @@ impl PhoneShare {
         let active = Arc::clone(&running);
         let owned_session = session_id.to_owned();
         let thread = thread::spawn(move || {
+            let mut connections: Vec<JoinHandle<()>> = Vec::new();
             while active.load(Ordering::Acquire) {
+                connections.retain(|worker| !worker.is_finished());
                 match listener.accept() {
-                    Ok((stream, _)) => {
-                        let _ = handle_connection(stream, &config, &owned_session);
+                    Ok((stream, _)) if connections.len() < 8 => {
+                        let config = Arc::clone(&config);
+                        let session = owned_session.clone();
+                        let running = Arc::clone(&active);
+                        connections.push(thread::spawn(move || {
+                            let _ = handle_connection(stream, &config, &session, &running);
+                        }));
                     }
+                    Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(30));
                     }
                     Err(_) => break,
                 }
+            }
+            for worker in connections {
+                let _ = worker.join();
             }
         });
         Ok(Self {
@@ -206,6 +217,7 @@ fn handle_connection(
     stream: TcpStream,
     config: &Arc<ServerConfig>,
     session_id: &str,
+    running: &AtomicBool,
 ) -> Result<(), String> {
     stream
         .set_nonblocking(false)
@@ -218,43 +230,45 @@ fn handle_connection(
         .map_err(|error| error.to_string())?;
     let connection = ServerConnection::new(Arc::clone(config))
         .map_err(|error| format!("phone TLS handshake failed: {error}"))?;
-    let mut tls = StreamOwned::new(connection, stream);
-    let reply = match read_line(&mut tls).and_then(|request| forward(session_id, &request)) {
-        Ok(result) => json!({"version":1,"ok":true,"result":result}),
-        Err(error) => json!({"version":1,"ok":false,"error":error}),
-    };
-    let bytes = serde_json::to_vec(&reply).map_err(|error| error.to_string())?;
-    if bytes.len() >= MAX_REPLY {
-        return Err("phone reply exceeded its limit".to_owned());
+    let mut tls = BufReader::new(StreamOwned::new(connection, stream));
+    while running.load(Ordering::Acquire) {
+        let request = read_line(&mut tls)?;
+        let disconnect = request["op"].as_str() == Some("disconnect");
+        let reply = match forward(session_id, &request) {
+            Ok(result) => json!({"version":1,"ok":true,"keepAlive":!disconnect,"result":result}),
+            Err(error) => json!({"version":1,"ok":false,"keepAlive":false,"error":error}),
+        };
+        let bytes = serde_json::to_vec(&reply).map_err(|error| error.to_string())?;
+        if bytes.len() >= MAX_REPLY {
+            return Err("phone reply exceeded its limit".to_owned());
+        }
+        tls.get_mut()
+            .write_all(&bytes)
+            .map_err(|error| error.to_string())?;
+        tls.get_mut()
+            .write_all(b"\n")
+            .map_err(|error| error.to_string())?;
+        tls.get_mut().flush().map_err(|error| error.to_string())?;
+        if reply["keepAlive"] != true {
+            break;
+        }
     }
-    tls.write_all(&bytes).map_err(|error| error.to_string())?;
-    tls.write_all(b"\n").map_err(|error| error.to_string())?;
-    tls.flush().map_err(|error| error.to_string())?;
     Ok(())
 }
 
-fn read_line(stream: &mut impl Read) -> Result<Value, String> {
+fn read_line(stream: &mut impl BufRead) -> Result<Value, String> {
     let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 1024];
-    loop {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| format!("could not read phone request: {error}"))?;
-        if count == 0 {
-            return Err("phone request ended early".to_owned());
-        }
-        bytes.extend_from_slice(&buffer[..count]);
-        if bytes.len() > MAX_REQUEST {
-            return Err("phone request is too large".to_owned());
-        }
-        if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
-            if end + 1 != bytes.len() {
-                return Err("send one phone request per connection".to_owned());
-            }
-            return serde_json::from_slice(&bytes[..end])
-                .map_err(|error| format!("invalid phone request: {error}"));
-        }
+    stream
+        .take((MAX_REQUEST + 1) as u64)
+        .read_until(b'\n', &mut bytes)
+        .map_err(|error| format!("could not read phone request: {error}"))?;
+    if bytes.len() > MAX_REQUEST {
+        return Err("phone request is too large".to_owned());
     }
+    if bytes.last() != Some(&b'\n') {
+        return Err("phone request ended early".to_owned());
+    }
+    serde_json::from_slice(&bytes).map_err(|error| format!("invalid phone request: {error}"))
 }
 
 fn forward(session_id: &str, request: &Value) -> Result<Value, String> {
@@ -318,4 +332,20 @@ pub(crate) fn share_command(session_id: &str) -> Result<(), String> {
     }
     drop(share);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn persistent_frames_preserve_coalesced_requests_and_enforce_the_size_bound() {
+        let mut reader = BufReader::new(std::io::Cursor::new(
+            b"{\"op\":\"pair\"}\n{\"op\":\"snapshot\"}\n",
+        ));
+        assert_eq!(read_line(&mut reader).unwrap()["op"], "pair");
+        assert_eq!(read_line(&mut reader).unwrap()["op"], "snapshot");
+        assert!(read_line(&mut reader).is_err());
+        let mut oversized = BufReader::new(std::io::Cursor::new(vec![b'x'; MAX_REQUEST + 1]));
+        assert!(read_line(&mut oversized).unwrap_err().contains("too large"));
+    }
 }

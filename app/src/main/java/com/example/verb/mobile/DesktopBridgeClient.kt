@@ -4,6 +4,7 @@ import com.example.verb.model.ChatMessage
 import com.example.verb.model.ChatSender
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.net.Socket
 import java.net.URI
 import java.net.URLDecoder
@@ -60,7 +61,7 @@ data class DesktopScreen(
     val messages: List<ChatMessage> = emptyList()
 )
 
-/** One bounded JSON request per pinned TLS connection. No trust-all fallback or plaintext port. */
+/** Bounded JSON frames over a reusable pinned TLS connection, with one-shot server compatibility. */
 class DesktopBridgeClient(private val link: DesktopPairingLink) {
     private val trustManager = object : X509TrustManager {
         override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
@@ -86,6 +87,40 @@ class DesktopBridgeClient(private val link: DesktopPairingLink) {
         init(null, arrayOf(trustManager), null)
     }
 
+    private var connection: SSLSocket? = null
+    private var input: BufferedInputStream? = null
+    private var lastReplyAt = 0L
+
+    @Synchronized
+    fun close() {
+        runCatching { connection?.close() }
+        connection = null
+        input = null
+    }
+
+    private fun connect(): SSLSocket {
+        // The host expires idle connections after three seconds. Start fresh before that boundary.
+        if (System.nanoTime() - lastReplyAt >= 2_000_000_000L) close()
+        connection?.let { return it }
+        val base = Socket()
+        try {
+            base.connect(java.net.InetSocketAddress(link.host, link.port), 3000)
+            base.soTimeout = 3000
+            val socket = context.socketFactory.createSocket(base, link.host, link.port, true) as SSLSocket
+            connection = socket
+            socket.soTimeout = 3000
+            socket.sslParameters = socket.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
+            socket.startHandshake()
+            input = BufferedInputStream(socket.inputStream)
+            return socket
+        } catch (error: Exception) {
+            close()
+            runCatching { base.close() }
+            throw error
+        }
+    }
+
+    @Synchronized
     private fun request(op: String, secret: String, bytes: ByteArray? = null): JSONObject {
         val payload = JSONObject().put("version", 1).put("op", op).put("secret", secret)
         if (bytes != null) {
@@ -94,31 +129,30 @@ class DesktopBridgeClient(private val link: DesktopPairingLink) {
         }
         val raw = (payload.toString() + "\n").toByteArray(StandardCharsets.UTF_8)
         require(raw.size <= 32 * 1024) { "Request is too long." }
-        Socket().use { base ->
-            base.connect(java.net.InetSocketAddress(link.host, link.port), 3000)
-            base.soTimeout = 3000
-            val socket = context.socketFactory.createSocket(base, link.host, link.port, true) as SSLSocket
-            socket.use {
-                it.soTimeout = 3000
-                it.sslParameters = it.sslParameters.apply { endpointIdentificationAlgorithm = "HTTPS" }
-                it.startHandshake()
-                it.outputStream.write(raw)
-                it.outputStream.flush()
-                val response = java.io.ByteArrayOutputStream()
-                while (response.size() <= 2 * 1024 * 1024) {
-                    val next = it.inputStream.read()
-                    require(next >= 0) { "Desktop closed the connection." }
-                    if (next == 10) break
-                    response.write(next)
-                }
-                require(response.size() <= 2 * 1024 * 1024) { "Desktop reply is too large." }
-                val envelope = JSONObject(response.toString("UTF-8"))
-                require(envelope.optInt("version") == 1) { "Unsupported desktop protocol." }
-                if (!envelope.optBoolean("ok")) {
-                    throw IllegalStateException(envelope.optString("error", "Desktop rejected this request."))
-                }
-                return envelope.getJSONObject("result")
+        try {
+            val socket = connect()
+            socket.outputStream.write(raw)
+            socket.outputStream.flush()
+            val response = java.io.ByteArrayOutputStream()
+            val reader = checkNotNull(input)
+            while (response.size() <= 2 * 1024 * 1024) {
+                val next = reader.read()
+                require(next >= 0) { "Desktop closed the connection." }
+                if (next == 10) break
+                response.write(next)
             }
+            require(response.size() <= 2 * 1024 * 1024) { "Desktop reply is too large." }
+            val envelope = JSONObject(response.toString("UTF-8"))
+            require(envelope.optInt("version") == 1) { "Unsupported desktop protocol." }
+            require(envelope.optBoolean("ok")) { envelope.optString("error", "Desktop rejected this request.") }
+            val result = envelope.getJSONObject("result")
+            lastReplyAt = System.nanoTime()
+            if (!envelope.optBoolean("keepAlive") || op == "disconnect") close()
+            return result
+        } catch (error: Exception) {
+            close()
+            // Never replay input/take/pair: a lost reply does not prove the host did not apply it.
+            throw error
         }
     }
 
@@ -145,7 +179,7 @@ class DesktopBridgeClient(private val link: DesktopPairingLink) {
                         id = item.optString("id", java.util.UUID.randomUUID().toString()),
                         sender = sender,
                         text = item.optString("text", ""),
-                        timestamp = item.optLong("timestamp", System.currentTimeMillis())
+                        timestamp = item.optLong("timestamp", 0L)
                     )
                 )
             }

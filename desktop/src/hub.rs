@@ -74,13 +74,13 @@ pub(crate) struct Hub {
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::exec::git(project)
-        .ok_or("could not prepare git")?
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+    let mut command = crate::exec::git(project).ok_or("could not prepare git")?;
+    let out = crate::exec::bounded_output(
+        command.arg("-C").arg(project).args(args),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    )
+    .map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {

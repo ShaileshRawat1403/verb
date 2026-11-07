@@ -106,7 +106,11 @@ pub(crate) fn observe(project: &Path) -> Reading {
     let Some(mut command) = crate::exec::git(project) else {
         return Reading::Unavailable;
     };
-    let Ok(output) = command.args(["rev-parse", "--absolute-git-dir"]).output() else {
+    let Ok(output) = crate::exec::bounded_output(
+        command.args(["rev-parse", "--absolute-git-dir"]),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    ) else {
         return Reading::Unavailable;
     };
     if !output.status.success() {
@@ -120,10 +124,31 @@ pub(crate) fn observe(project: &Path) -> Reading {
     let git_dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     let operation = operation_in(&git_dir);
     // The index's unmerged entries, not a full status: no untracked-file scan on a hot path.
-    let unmerged = git(project, &["ls-files", "--unmerged", "-z"])
-        .map(|entries| count_unmerged(&entries))
-        .unwrap_or(0);
-    let head = git(project, &["symbolic-ref", "-q", "HEAD"]);
+    let Some(entries) = git(project, &["ls-files", "--unmerged", "-z"]) else {
+        return Reading::Unavailable;
+    };
+    let unmerged = count_unmerged(&entries);
+    let Some(mut head_command) = crate::exec::git(project) else {
+        return Reading::Unavailable;
+    };
+    let Ok(head_output) = crate::exec::bounded_output(
+        head_command.args(["symbolic-ref", "-q", "HEAD"]),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    ) else {
+        return Reading::Unavailable;
+    };
+    let head = if head_output.status.success() {
+        Some(
+            String::from_utf8_lossy(&head_output.stdout)
+                .trim()
+                .to_owned(),
+        )
+    } else if head_output.status.code() == Some(1) {
+        None // symbolic-ref's documented detached-HEAD result, distinct from a failed probe.
+    } else {
+        return Reading::Unavailable;
+    };
     let detached = head.is_none();
     let upstream = match head.as_deref() {
         Some(reference) => git(
@@ -300,7 +325,12 @@ impl RepoState {
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
-    let output = crate::exec::git(project)?.args(args).output().ok()?;
+    let output = crate::exec::bounded_output(
+        crate::exec::git(project)?.args(args),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    )
+    .ok()?;
     output
         .status
         .success()
@@ -341,6 +371,16 @@ mod tests {
         run(&root, &["add", "."]);
         run(&root, &["commit", "-q", "-m", "one"]);
         Some(root)
+    }
+
+    #[test]
+    fn unreadable_index_is_unknown_instead_of_zero_conflicts() {
+        let Some(root) = repo() else {
+            return;
+        };
+        fs::write(root.join(".git/index"), "broken index").unwrap();
+        assert!(matches!(observe(&root), Reading::Unavailable));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

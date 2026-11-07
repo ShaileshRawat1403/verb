@@ -1,7 +1,7 @@
 // The spec-driven workbench, driven like a person would: through the browser, against the real host.
 import { test, expect } from "@playwright/test";
 import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createServer } from "node:net";
@@ -246,16 +246,24 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
   await expect(card.locator(".diff-line.add").first()).toBeVisible();
   await expect(card.locator(".diff-line.del")).toHaveCount(0);
 
+  // Unselected scratch work must not be swept into the spec commit.
+  writeFileSync(join(repo, "scratch.log"), "unrelated local work\n");
+  await page.getByRole("button", { name: "Refresh Git status", exact: true }).click();
+  await expect(page.locator("#spec-changes-list")).toContainText("scratch.log");
   // Commit from the dialog; the audit line lands in the same commit.
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-message")).toHaveValue(/^spec:001 /);
   await page.locator("#commit-message").fill("spec:001 add the sign-in spec");
+  await page.locator('#commit-files input[value="specs/001-let-people-sign-in-with-email.md"]').check();
+  await expect(page.locator('#commit-files input[value="scratch.log"]')).not.toBeChecked();
   await page.getByRole("button", { name: "Commit", exact: true }).click();
-  await expect(page.locator("#git-status")).toHaveText("All changes saved");
+  await expect(page.locator("#commit-dialog")).not.toBeVisible();
   expect(git("log", "-1", "--format=%s").trim()).toBe("spec:001 add the sign-in spec");
   const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
   expect(file).toContain("committed: spec:001 add the sign-in spec");
-  expect(git("status", "--porcelain").trim()).toBe("");
+  expect(git("show", "--format=", "--name-only", "HEAD").trim()).toBe("specs/001-let-people-sign-in-with-email.md");
+  expect(git("status", "--porcelain").trim()).toBe("?? scratch.log");
+  unlinkSync(join(repo, "scratch.log"));
 
   expect(errors).toEqual([]);
 });

@@ -50,6 +50,8 @@ pub(crate) struct Spec {
 pub(crate) struct Change {
     pub code: String,
     pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
     /// Lines added and removed against the last commit; absent for binary files.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<u32>,
@@ -549,13 +551,39 @@ pub(crate) fn set_criterion(
 // ------------------------------------------------------------------------------------------- Git
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = crate::exec::user_git(project)
-        .ok_or("could not prepare isolated git")?
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+    let read_only = matches!(
+        args.first(),
+        Some(
+            &("status"
+                | "log"
+                | "diff"
+                | "rev-parse"
+                | "show"
+                | "ls-files"
+                | "for-each-ref"
+                | "symbolic-ref")
+        )
+    );
+    let mut command = if read_only {
+        crate::exec::git(project)
+    } else {
+        crate::exec::user_git(project)
+    }
+    .ok_or("could not prepare isolated git")?;
+    let out = crate::exec::bounded_output(
+        command
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .arg("-C")
+            .arg(project)
+            .args(args),
+        if read_only {
+            crate::exec::READ_TIMEOUT
+        } else {
+            std::time::Duration::from_secs(10)
+        },
+        crate::exec::READ_LIMIT,
+    )
+    .map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -564,7 +592,10 @@ fn git(project: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
-    let status = git(project, &["status", "--porcelain=v1", "--branch", "-uall"])?;
+    let status = git(
+        project,
+        &["status", "--porcelain=v1", "--branch", "-z", "-uall"],
+    )?;
     let mut summary = GitSummary {
         branch: None,
         upstream: None,
@@ -573,7 +604,8 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
         changes: Vec::new(),
         recent: Vec::new(),
     };
-    for line in status.lines() {
+    let mut records = status.split('\0').filter(|line| !line.is_empty());
+    while let Some(line) = records.next() {
         if let Some(head) = line.strip_prefix("## ") {
             let (names, counts) = head.split_once(" [").unwrap_or((head, ""));
             let (branch, upstream) = names.split_once("...").unwrap_or((names, ""));
@@ -590,6 +622,11 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
             summary.changes.push(Change {
                 code: line[..2].trim().to_owned(),
                 path: line[3..].to_owned(),
+                previous_path: if line[..2].contains(['R', 'C']) {
+                    records.next().map(str::to_owned)
+                } else {
+                    None
+                },
                 added: None,
                 removed: None,
             });
@@ -621,20 +658,41 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
     Ok(summary)
 }
 
-/// Commits every change in the working tree. When `spec_id` is given, the commit is recorded in
+/// Commits only explicitly selected files. Unrelated staged changes stay in the index.
+/// When `spec_id` is given, the commit is recorded in
 /// that spec's audit trail first, so the record and the code land in the same commit.
 pub(crate) fn commit(
     project: &Path,
     message: &str,
     spec_id: Option<&str>,
     actor: &str,
+    paths: &[String],
 ) -> Result<String, String> {
     let message = message.trim();
     if message.is_empty() {
         return Err("describe what this commit changes".to_owned());
     }
-    if git(project, &["status", "--porcelain"])?.trim().is_empty() {
-        return Err("nothing to commit: there are no changes".to_owned());
+    if paths.is_empty() {
+        return Err("select at least one changed file to commit".to_owned());
+    }
+    let changes = git_summary(project)?.changes;
+    let mut selected = Vec::new();
+    let mut rename_sources = Vec::new();
+    for path in paths {
+        let change = changes
+            .iter()
+            .find(|change| &change.path == path)
+            .ok_or("selected file is no longer changed; refresh and review the selection")?;
+        if Path::new(path)
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err("select files inside this project".to_owned());
+        }
+        selected.push(path.clone());
+        if let Some(old) = &change.previous_path {
+            rename_sources.push(old.clone());
+        }
     }
     let subject = message.lines().next().unwrap_or(message);
     if let Some(id) = spec_id.filter(|id| !id.is_empty()) {
@@ -644,9 +702,24 @@ pub(crate) fn commit(
             &path,
             &append_audit(&raw, &audit_line(actor, &format!("committed: {subject}"))),
         )?;
+        selected.push(
+            path.strip_prefix(project)
+                .map_err(|_| "spec is outside the project")?
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
-    git(project, &["add", "--all"])?;
-    git(project, &["commit", "--quiet", "-m", message])?;
+    selected.sort();
+    selected.dedup();
+    let mut add = vec!["add", "--all", "--"];
+    add.extend(selected.iter().map(String::as_str));
+    git(project, &add)?;
+    selected.extend(rename_sources);
+    selected.sort();
+    selected.dedup();
+    let mut commit = vec!["commit", "--quiet", "--only", "-m", message, "--"];
+    commit.extend(selected.iter().map(String::as_str));
+    git(project, &commit)?;
     Ok(git(project, &["rev-parse", "--short", "HEAD"])?
         .trim()
         .to_owned())
@@ -844,6 +917,20 @@ pub(crate) fn handoff(
 mod tests {
     use super::*;
 
+    fn commit(
+        project: &Path,
+        message: &str,
+        spec_id: Option<&str>,
+        actor: &str,
+    ) -> Result<String, String> {
+        let paths: Vec<_> = git_summary(project)?
+            .changes
+            .into_iter()
+            .map(|change| change.path)
+            .collect();
+        super::commit(project, message, spec_id, actor, &paths)
+    }
+
     fn temp_repo() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -999,6 +1086,58 @@ mod tests {
         .0;
         assert_eq!(spec.audit.len(), 2);
         assert_eq!(spec.audit[1].actor, "A via test");
+    }
+
+    #[test]
+    fn selective_commit_preserves_unrelated_staged_and_untracked_work() {
+        let project = temp_repo();
+        fs::write(project.join("chosen.txt"), "yes").unwrap();
+        fs::write(project.join("unrelated.txt"), "keep staged").unwrap();
+        fs::write(project.join("scratch.log"), "never include").unwrap();
+        git(&project, &["add", "unrelated.txt"]).unwrap();
+        assert!(super::commit(&project, "empty selection", None, "A", &[]).is_err());
+        super::commit(
+            &project,
+            "chosen only",
+            None,
+            "A",
+            &["chosen.txt".to_owned()],
+        )
+        .unwrap();
+        assert_eq!(
+            git(&project, &["show", "--format=", "--name-only", "HEAD"])
+                .unwrap()
+                .trim(),
+            "chosen.txt"
+        );
+        assert_eq!(
+            git(&project, &["diff", "--cached", "--name-only"])
+                .unwrap()
+                .trim(),
+            "unrelated.txt"
+        );
+        assert!(git_summary(&project)
+            .unwrap()
+            .changes
+            .iter()
+            .any(|c| c.path == "scratch.log"));
+        fs::remove_dir_all(project).unwrap();
+    }
+
+    #[test]
+    fn selective_commit_handles_renames_and_literal_unusual_filenames() {
+        let project = temp_repo();
+        fs::write(project.join("old.txt"), "original").unwrap();
+        git(&project, &["add", "old.txt"]).unwrap();
+        git(&project, &["commit", "-qm", "initial file"]).unwrap();
+        let name = "new -> literal\nname.txt";
+        git(&project, &["mv", "old.txt", name]).unwrap();
+        let changes = git_summary(&project).unwrap().changes;
+        assert_eq!(changes[0].path, name);
+        assert_eq!(changes[0].previous_path.as_deref(), Some("old.txt"));
+        super::commit(&project, "rename", None, "A", &[name.to_owned()]).unwrap();
+        assert!(git_summary(&project).unwrap().changes.is_empty());
+        fs::remove_dir_all(project).unwrap();
     }
 
     #[test]

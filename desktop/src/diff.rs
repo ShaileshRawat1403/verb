@@ -9,6 +9,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
+#[cfg(test)]
 use std::process::Command;
 
 /// Larger diffs are refused rather than truncated mid-hunk.
@@ -109,13 +110,16 @@ fn hunk_starts(rest: &str) -> (u32, u32) {
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(project)
-        .args(["-c", "core.quotepath=off"])
-        .args(args)
-        .output()
-        .map_err(|e| format!("could not run git: {e}"))?;
+    let mut command = crate::exec::git(project).ok_or("could not prepare safe git")?;
+    let out = crate::exec::bounded_output(
+        command
+            .env("GIT_LITERAL_PATHSPECS", "1")
+            .args(["-c", "core.quotepath=off"])
+            .args(args),
+        crate::exec::READ_TIMEOUT,
+        crate::exec::READ_LIMIT,
+    )
+    .map_err(|e| format!("could not run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
@@ -215,9 +219,9 @@ pub(crate) fn file_diff(project: &Path, path: &str) -> Result<FileDiff, String> 
         return Ok(diff);
     }
 
-    // A rename is listed as "old -> new"; Git needs both paths to show it as one change.
-    let paths: Vec<&str> = match path.split_once(" -> ") {
-        Some((from, to)) => vec![from, to],
+    // NUL-delimited status supplies the rename source separately, preserving literal filenames.
+    let paths: Vec<&str> = match change.previous_path.as_deref() {
+        Some(from) => vec![from, path],
         None => vec![path],
     };
     let mut args = vec![

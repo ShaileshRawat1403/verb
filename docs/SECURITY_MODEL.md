@@ -1,6 +1,6 @@
 # Verb security model
 
-Status: 2026-10-11. What Verb protects, from whom, what is in place, and the containment decision
+Status: 2026-11-02. What Verb protects, from whom, what is in place, and the containment decision
 that is still open.
 
 ## What Verb is, from a security view
@@ -44,7 +44,9 @@ operating-system user Verb runs as. Everything below follows from that.
   or token files; containment is still required.
 - **Privacy defaults.** The agent stream (reading agent conversations) and the observer are off
   until the owner turns them on per project; the observer reports a possible secret by kind, never
-  by value. The file tree never lists or opens Git-ignored files.
+  by value. Mobile Claude chat uses the same opt-in, bounded reader and redaction as the browser
+  stream; disabling it clears the next mobile chat update. Unknown agent status never enables
+  chat prompt submission. The file tree never lists or opens Git-ignored files.
 - **No permission bypass.** Verb never starts an agent with flags that skip its permission prompts
   and never writes allow-rules into an agent's settings. When an agent asks, Verb shows "Needs you".
 - **Honest audit.** Stage moves, proofs (with evidence), commits, agent starts and handoffs are

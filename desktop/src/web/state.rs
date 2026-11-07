@@ -34,7 +34,10 @@ pub(super) struct StateJob {
 impl StateJob {
     pub(super) fn run(&self) -> Result<Vec<u8>, String> {
         // Concurrent state requests share work. The PTY thread only uses try_lock.
-        let mut cache = self.cache.lock().map_err(|_| "state cache unavailable")?;
+        let mut cache = self
+            .cache
+            .try_lock()
+            .map_err(|_| "workspace state refresh is busy; retry shortly")?;
         if let Some(cached) = cache.as_ref().filter(|cached| {
             cached.generation == self.generation
                 && cached.cached_at.elapsed() < Duration::from_millis(1500)
