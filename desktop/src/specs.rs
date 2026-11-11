@@ -251,7 +251,7 @@ pub(crate) fn find(project: &Path, id: &str) -> Result<(PathBuf, Spec), String> 
 
 // --------------------------------------------------------------------------------------- writing
 
-fn slug(title: &str) -> String {
+pub(crate) fn slug(title: &str) -> String {
     let mut out = String::new();
     for c in title.to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -270,7 +270,7 @@ fn slug(title: &str) -> String {
     }
 }
 
-fn audit_line(actor: &str, action: &str) -> String {
+pub(crate) fn audit_line(actor: &str, action: &str) -> String {
     let at = crate::iso8601(crate::now_millis());
     // One line per entry; the separators must not be forged by the content itself.
     let clean = |s: &str| s.replace(['\n', '\r'], " ").replace(" · ", " - ");
@@ -318,7 +318,7 @@ fn set_field(raw: &str, key: &str, value: &str) -> String {
     out
 }
 
-fn append_audit(raw: &str, line: &str) -> String {
+pub(crate) fn append_audit(raw: &str, line: &str) -> String {
     let mut out = raw.trim_end().to_owned();
     if !raw.lines().any(|l| l.trim_end() == AUDIT_HEADING) {
         out.push_str(&format!(
@@ -801,6 +801,73 @@ pub(crate) fn record(path: &Path, actor: &str, action: &str) -> Result<(), Strin
     let _writing = writing();
     let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
     write_atomic(path, &append_audit(&raw, &audit_line(actor, action)))
+}
+
+/// Adds a work item and its legacy links without changing criterion text or order.
+pub(crate) fn link_work_item(
+    project: &Path,
+    spec_id: &str,
+    expected_revision: &str,
+    work_item: &str,
+    rows: &[String],
+    actor: &str,
+    warnings: &[String],
+) -> Result<(), String> {
+    let _writing = writing();
+    let (path, spec) = find(project, spec_id)?;
+    if spec.revision != expected_revision {
+        return Err("The spec changed. Refresh before linking it.".into());
+    }
+    if spec
+        .work_item
+        .as_deref()
+        .is_some_and(|current| current != work_item)
+    {
+        return Err("The spec is already linked to another work item.".into());
+    }
+    let raw = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    if format!("{:x}", Sha256::digest(raw.as_bytes())) != expected_revision {
+        return Err("The spec changed. Refresh before linking it.".into());
+    }
+    let end = raw[4..]
+        .find("\n---\n")
+        .ok_or("Invalid spec front matter")?
+        + 5;
+    let raw = if spec.work_item.is_some() {
+        raw
+    } else {
+        format!("{}work-item: {work_item}\n{}", &raw[..end], &raw[end..])
+    };
+    let has_traceability = raw.lines().any(|line| line.trim_end() == "## Traceability");
+    let mut lines = raw.split_inclusive('\n').peekable();
+    let mut updated = String::new();
+    let mut replaced = false;
+    while let Some(line) = lines.next() {
+        if line.trim_end() == "## Traceability" {
+            if replaced {
+                return Err("The spec has duplicate Traceability sections.".into());
+            }
+            while lines.peek().is_some_and(|line| !line.starts_with("## ")) {
+                lines.next();
+            }
+            replaced = true;
+            updated.push_str(&format!("## Traceability\n\n{}\n\n", rows.join("\n")));
+        } else if line.trim_end() == AUDIT_HEADING && !has_traceability && !replaced {
+            replaced = true;
+            updated.push_str(&format!("## Traceability\n\n{}\n\n", rows.join("\n")));
+            updated.push_str(line);
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if !replaced {
+        updated.push_str(&format!("\n\n## Traceability\n\n{}\n", rows.join("\n")));
+    }
+    let mut action = format!("linked work item {work_item}");
+    if !warnings.is_empty() {
+        action.push_str(&format!(" (warning: {})", warnings.join(" | ")));
+    }
+    write_atomic(&path, &append_audit(&updated, &audit_line(actor, &action)))
 }
 
 /// The prompt given to an agent started on a spec: read it, work criterion by criterion, and stop

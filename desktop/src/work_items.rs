@@ -1,4 +1,4 @@
-//! Read-only work item documents and links. Warnings describe the current read.
+//! Work item documents, validation and owner-approved publication.
 
 use crate::specs::Spec;
 use serde::Serialize;
@@ -22,6 +22,8 @@ pub(crate) struct WorkItems {
 #[serde(rename_all = "camelCase")]
 struct WorkItem {
     id: String,
+    brd_revision: Option<String>,
+    prd_revision: Option<String>,
     size: Option<&'static str>,
     brd: Option<String>,
     prd: Option<String>,
@@ -102,6 +104,11 @@ fn read_document(dir: &Path, name: &str, warnings: &mut Vec<String>) -> Option<S
     }
 }
 
+fn document_body(raw: &str) -> &str {
+    raw.split_once("\n## Audit trail\n")
+        .map_or(raw, |(body, _)| body.trim_end())
+}
+
 fn valid_id(id: &str, prefix: char) -> bool {
     id.strip_prefix(prefix).is_some_and(|number| {
         !number.is_empty() && !number.starts_with('0') && number.bytes().all(|b| b.is_ascii_digit())
@@ -147,10 +154,20 @@ impl WorkItem {
         let mut warnings = Vec::new();
         let brd = read_document(dir, "brd.md", &mut warnings);
         let prd = read_document(dir, "prd.md", &mut warnings);
+        Self::validate(id, brd, prd, warnings)
+    }
+
+    fn validate(
+        id: String,
+        brd: Option<String>,
+        prd: Option<String>,
+        mut warnings: Vec<String>,
+    ) -> Self {
         let mut size = None;
         let mut goals = BTreeMap::new();
         let mut requirements = BTreeMap::new();
         if let Some(brd) = &brd {
+            let brd = document_body(brd);
             let header = brd.lines().take_while(|line| !line.starts_with("## "));
             let sizes: Vec<_> = header
                 .filter_map(|line| line.strip_prefix("Size: "))
@@ -199,6 +216,7 @@ impl WorkItem {
             warnings.push("Missing readable BRD".into());
         }
         if let Some(prd) = &prd {
+            let prd = document_body(prd);
             let mut count = 0;
             for (id, retired, fields) in records(prd, 'R') {
                 count += 1;
@@ -240,6 +258,8 @@ impl WorkItem {
         }
         Self {
             id,
+            brd_revision: brd.as_deref().map(revision),
+            prd_revision: prd.as_deref().map(revision),
             size,
             brd,
             prd,
@@ -406,4 +426,247 @@ pub(crate) fn read(project: &Path) -> Result<WorkItems, String> {
         unlinked_specs,
         warnings,
     })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Publish {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub document: Document,
+    pub content: String,
+    pub expected_revision: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Document {
+    Brd,
+    Prd,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Link {
+    pub work_item: String,
+    pub spec_id: String,
+    pub expected_revision: String,
+    pub criteria: BTreeMap<usize, Vec<String>>,
+}
+
+fn revision(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(raw.as_bytes()))
+}
+
+fn require_dir(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
+    if metadata.is_dir() {
+        Ok(())
+    } else {
+        Err("Expected a real work item directory".into())
+    }
+}
+
+fn allocate(root: &Path) -> Result<u32, String> {
+    let mut highest = 0;
+    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        if let Some(number) = entry.file_name().to_str().and_then(work_number) {
+            highest = highest.max(number);
+        }
+    }
+    let counter = root.join(".next-id");
+    let mut warnings = Vec::new();
+    let saved = read_document(root, ".next-id", &mut warnings);
+    if !warnings.is_empty() {
+        return Err("Cannot read work/.next-id".into());
+    }
+    let next = match saved {
+        Some(raw) => raw
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|number| *number > 0)
+            .ok_or("Invalid work/.next-id")?,
+        None => 1,
+    };
+    let number = next.max(
+        highest
+            .checked_add(1)
+            .ok_or("Work item numbers exhausted")?,
+    );
+    let following = number.checked_add(1).ok_or("Work item numbers exhausted")?;
+    crate::specs::write_atomic(&counter, &format!("{following}\n"))?;
+    Ok(number)
+}
+
+pub(crate) fn publish(
+    project: &Path,
+    input: Publish,
+    actor: &str,
+) -> Result<serde_json::Value, String> {
+    if input.content.trim().is_empty()
+        || input.content.contains('\0')
+        || input.content.len() as u64 > MAX_DOCUMENT_BYTES
+        || input
+            .content
+            .lines()
+            .any(|line| line.trim_end() == "## Audit trail")
+    {
+        return Err(
+            "Supply nonempty Markdown within 200 KiB, without the managed Audit trail section"
+                .into(),
+        );
+    }
+    let identity = crate::project::identity(project)?;
+    let _lock = crate::workbench::lock_project(&identity.store)?;
+    let root = project.join("work");
+    match fs::create_dir(&root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    require_dir(&root)?;
+    let creating = input.id.is_none();
+    let id = match input.id {
+        Some(id) if work_number(&id).is_some() => id,
+        Some(_) => return Err("Invalid work item ID".into()),
+        None => {
+            let title = input
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .ok_or("A title is required to create a work item")?;
+            if !matches!(input.document, Document::Brd) || input.expected_revision.is_some() {
+                return Err("Start a new work item by publishing its BRD".into());
+            }
+            format!("{:03}-{}", allocate(&root)?, crate::specs::slug(title))
+        }
+    };
+    let dir = root.join(&id);
+    let name = match input.document {
+        Document::Brd => "brd.md",
+        Document::Prd => "prd.md",
+    };
+    if !creating {
+        require_dir(&dir)?;
+    }
+    let mut item = WorkItem::read(id.clone(), &dir);
+    if matches!(input.document, Document::Prd) && item.brd.is_none() {
+        return Err("Publish a readable BRD before the PRD".into());
+    }
+    let mut warnings = Vec::new();
+    let previous = read_document(&dir, name, &mut warnings);
+    if !warnings.is_empty() {
+        return Err(format!("Cannot safely replace {name}"));
+    }
+    if previous.as_deref().map(revision) != input.expected_revision {
+        return Err(format!("{name} changed. Refresh before publishing."));
+    }
+    let audit = previous.as_deref().map_or("", |raw| {
+        raw.match_indices("## Audit trail")
+            .find(|(offset, _)| {
+                (*offset == 0 || raw.as_bytes()[offset - 1] == b'\n')
+                    && raw[*offset..].lines().next() == Some("## Audit trail")
+            })
+            .map_or("", |(offset, _)| &raw[offset..])
+    });
+    let mut raw = input.content.trim_end().to_owned();
+    if !audit.is_empty() {
+        raw.push_str("\n\n");
+        raw.push_str(audit);
+    }
+    // Validate the candidate in memory before publishing or appending its warning record.
+    match input.document {
+        Document::Brd => item.brd = Some(input.content.clone()),
+        Document::Prd => item.prd = Some(input.content.clone()),
+    }
+    item = WorkItem::validate(id.clone(), item.brd, item.prd, Vec::new());
+    let action = if item.warnings.is_empty() {
+        format!("published {name}")
+    } else {
+        format!("published {name} (warning: {})", item.warnings.join(" | "))
+    };
+    let raw = crate::specs::append_audit(&raw, &crate::specs::audit_line(actor, &action));
+    if raw.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err("Document and audit trail exceed 200 KiB".into());
+    }
+    if creating {
+        let staging = root.join(format!(".publish-{}", crate::new_id()));
+        fs::create_dir(&staging).map_err(|error| error.to_string())?;
+        let result = crate::specs::write_atomic(&staging.join(name), &raw)
+            .and_then(|()| fs::rename(&staging, &dir).map_err(|error| error.to_string()));
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&staging);
+        }
+        result?;
+        #[cfg(unix)]
+        fs::File::open(&root)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                format!("Could not sync the work directory after publishing: {error}")
+            })?;
+    } else {
+        crate::specs::write_atomic(&dir.join(name), &raw)?;
+    }
+    Ok(serde_json::json!({"id": id, "revision": revision(&raw), "warnings": item.warnings}))
+}
+
+pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<(), String> {
+    if work_number(&input.work_item).is_none() {
+        return Err("Invalid work item ID".into());
+    }
+    let identity = crate::project::identity(project)?;
+    let _lock = crate::workbench::lock_project(&identity.store)?;
+    let root = project.join("work");
+    require_dir(&root)?;
+    let dir = root.join(&input.work_item);
+    require_dir(&dir)?;
+    let item = WorkItem::read(input.work_item.clone(), &dir);
+    if item.brd.is_none() || item.prd.is_none() {
+        return Err("Publish the BRD and PRD before linking a spec".into());
+    }
+    let (_, spec) = crate::specs::find(project, &input.spec_id)?;
+    if spec.revision != input.expected_revision {
+        return Err("The spec changed. Refresh before linking it.".into());
+    }
+    if input.criteria.is_empty() {
+        return Err("Map at least one criterion to a requirement".into());
+    }
+    let mut rows = Vec::new();
+    let mut warnings = Vec::new();
+    for (number, requirements) in input.criteria {
+        let index = number.checked_sub(1).ok_or("Invalid criterion number")?;
+        let identity = crate::sdlc::criterion_key(&spec, index).ok_or("Unknown criterion")?;
+        if requirements.is_empty() {
+            return Err("Choose at least one requirement per mapped criterion".into());
+        }
+        for requirement in &requirements {
+            if !valid_id(requirement, 'R') {
+                return Err("Invalid requirement ID".into());
+            }
+            match item.requirements.get(requirement) {
+                Some(record) if record.retired => {
+                    warnings.push(format!("criterion {number} links to retired {requirement}"))
+                }
+                None => warnings.push(format!("criterion {number} links to missing {requirement}")),
+                _ => {}
+            }
+        }
+        rows.push(format!(
+            "- {number} · {identity} · {}",
+            requirements.join(", ")
+        ));
+    }
+    crate::specs::link_work_item(
+        project,
+        &input.spec_id,
+        &input.expected_revision,
+        &input.work_item,
+        &rows,
+        actor,
+        &warnings,
+    )
 }

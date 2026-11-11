@@ -2627,3 +2627,95 @@ fn work_item_reader_validates_links_and_preserves_legacy_spec_reads() {
         linked
     );
 }
+
+#[test]
+fn publishes_and_links_work_items_without_reusing_ids_or_changing_evidence_keys() {
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let request = |method: &str, path: &str, payload| {
+        let (status, body) = server.request(method, path, payload, true);
+        (status, serde_json::from_slice::<Value>(&body).unwrap())
+    };
+    let post = |path, payload| request("POST", path, Some(payload));
+    let brd = "Size: small\nProblem and audience: Owner needs a reader\nGoal: G1 · Read work\nSuccess and boundary: Read without publishing";
+    let create = || {
+        post(
+            "/api/work-items",
+            json!({
+                "title": "Sample work", "document": "brd", "content": brd
+            }),
+        )
+    };
+    let (status, first) = create();
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["id"], "001-sample-work");
+    fs::remove_dir_all(project.join("work/001-sample-work")).unwrap();
+    let (status, second) = create();
+    assert_eq!(status, 200, "{second}");
+    assert_eq!(second["id"], "002-sample-work");
+    let id = second["id"].as_str().unwrap();
+    assert_eq!(
+        fs::read_to_string(project.join("work/.next-id")).unwrap(),
+        "3\n"
+    );
+
+    let (status, prd) = post(
+        "/api/work-items",
+        json!({
+            "id": id, "document": "prd", "content": "- R1 · G1 · Read · Verify\n- R2 (retired) · G1 · Old rule · Old check"
+        }),
+    );
+    assert_eq!(status, 200, "{prd}");
+    let (status, updated) = post(
+        "/api/work-items",
+        json!({
+            "id": id, "document": "prd", "expectedRevision": prd["revision"],
+            "content": "- R1 · G1 · Read · Verify\n- R2 (retired) · G1 · Old rule · Old check\n- R3 · G9 · Missing goal · Verify"
+        }),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert!(updated["warnings"].to_string().contains("missing goal"));
+    let (_, stale) = post(
+        "/api/work-items",
+        json!({
+            "id": id, "document": "prd", "expectedRevision": prd["revision"], "content": "stale"
+        }),
+    );
+    assert!(stale["error"].as_str().unwrap().contains("changed"));
+    let raw = fs::read_to_string(project.join("work").join(id).join("prd.md")).unwrap();
+    assert_eq!(raw.matches("published prd.md").count(), 2);
+
+    fs::create_dir(project.join("specs")).unwrap();
+    let path = project.join("specs/004-legacy.md");
+    let criteria = "## Acceptance criteria\n\n- [x] Keep my text\n";
+    fs::write(&path, format!("---\nid: 004\ntitle: Legacy\nstage: plan\n---\n{criteria}\n## Audit trail\n\n- date · Owner · existing audit\n")).unwrap();
+    let (_, specs) = request("GET", "/api/specs", None);
+    let expected = &specs["specs"][0]["revision"];
+    let (status, linked) = post(
+        "/api/work-items/link",
+        json!({
+            "workItem": id, "specId": "004", "expectedRevision": expected, "criteria": {"1": ["R1", "R2"]}
+        }),
+    );
+    assert_eq!(status, 200, "{linked}");
+    let raw = fs::read_to_string(&path).unwrap();
+    assert!(raw.contains(criteria));
+    assert!(raw.contains("- date · Owner · existing audit"));
+    assert!(raw.contains("links to retired R2"));
+    let (_, items) = request("GET", "/api/work-items", None);
+    assert_eq!(items["items"][0]["specs"][0]["criteria"][0]["stale"], false);
+    assert_eq!(
+        items["items"][0]["specs"][0]["criteria"][0]["requirements"],
+        json!(["R1", "R2"])
+    );
+    std::thread::scope(|scope| {
+        let one = scope.spawn(create);
+        let two = scope.spawn(create);
+        let mut ids = [one.join().unwrap(), two.join().unwrap()].map(|(status, body)| {
+            assert_eq!(status, 200, "{body}");
+            body["id"].as_str().unwrap().to_owned()
+        });
+        ids.sort();
+        assert_eq!(ids, ["003-sample-work", "004-sample-work"]);
+    });
+}

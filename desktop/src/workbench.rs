@@ -1331,7 +1331,7 @@ pub(crate) fn memory_path(project: &Path) -> Result<PathBuf, String> {
     Ok(project_root(project)?.join("memory.md"))
 }
 
-fn lock_project(root: &Path) -> Result<File, String> {
+pub(crate) fn lock_project(root: &Path) -> Result<File, String> {
     fs::create_dir_all(root)
         .map_err(|error| format!("could not create project work store: {error}"))?;
     let lock = OpenOptions::new()

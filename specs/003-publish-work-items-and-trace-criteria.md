@@ -1,0 +1,58 @@
+---
+id: 003
+title: Publish work items and trace criteria
+stage: review
+branch: spec/003-publish-work-items-and-trace-criteria
+created: 2026-11-11
+---
+
+# 003 · Publish work items and trace criteria
+
+## Problem
+
+The reader can show work item documents and links. Owners need to publish documents and associate existing specs without disturbing evidence.
+
+## Who it is for
+
+Verb project owners and the later Bench publication interface.
+
+## Acceptance criteria
+
+Requirement IDs refer to the [Bench consolidation PRD](../work/bench-consolidation/prd.md).
+
+- [x] Reserve an ID under the project lock and publish complete Markdown without reusing reserved numbers. (R1, R2, R11)
+- [x] Reject stale document replacement and record validation warnings with the published document. (R2, R11)
+- [x] Link existing criteria using their existing identities and preserve criterion text and audit history. (R3, R10, R11)
+
+## Out of scope
+
+Context generation, terminal launch, layout and task association.
+
+## Publication contract
+
+The owner-only `POST /api/work-items` publishes one document at a time. An
+initial BRD takes a title, document kind and Markdown content. Later
+replacements take the work item ID and the current document revision returned
+by GET. Publishing a first PRD requires a readable BRD. Validation warnings
+are returned and appended to the managed audit section of the published file.
+
+Verb advances `work/.next-id` under the existing project lock before
+publishing the first BRD. Keep the counter with the work item documents.
+Restoring or removing it can discard reservation history. Failed publications
+may leave gaps.
+
+The owner-only `POST /api/work-items/link` takes the work item ID, spec ID,
+expected spec revision, and complete map of one-based criterion numbers to
+requirement IDs. The write retains criterion text and records the association
+and warnings in the spec audit.
+
+## Audit trail
+
+<!-- Written by Verb: one line per change, never edited. -->
+- 2026-11-11 · Shailesh Rawat via Codex · created spec "Publish work items and trace criteria"
+- 2026-11-11 · Shailesh Rawat via Codex · stage spec → plan
+- 2026-11-11 · Shailesh Rawat via Codex · stage plan → build
+- 2026-11-11 · Shailesh Rawat via Codex · stage build → verify
+- 2026-11-11 · Shailesh Rawat via Codex · HTTP regression verified concurrent ID allocation, stale publication refusal, retired-reference audit and unchanged legacy criterion identity
+- 2026-11-11 · Shailesh Rawat via Codex · formatting, Clippy, 465 Rust tests, 94 web tests and two existing browser smoke journeys passed. Five Rust tests were ignored.
+- 2026-11-11 · Shailesh Rawat via Codex · stage verify → review

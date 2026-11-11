@@ -302,7 +302,11 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
         path,
         "/api/browser" | "/api/browser/pairing" | "/api/connections"
     ) || path.starts_with("/api/tokens")
-        || (method != "GET" && (path == "/api/stream" || path == "/api/observer"))
+        || (method != "GET"
+            && matches!(
+                path,
+                "/api/stream" | "/api/observer" | "/api/work-items" | "/api/work-items/link"
+            ))
         || matches!(parts.as_slice(), ["api", "terminals", _, "phone", ..]);
     if owner_only {
         return Scope::Owner;

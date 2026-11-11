@@ -2403,6 +2403,22 @@ impl WebHost {
                 }),
             ));
         }
+        if method == &Method::Post && path == "/api/work-items" {
+            let input: crate::work_items::Publish = read_json(request)?;
+            let (project, actor) = (self.project.clone(), self.actor());
+            return Ok(self.off_loop(true, move || {
+                crate::work_items::publish(&project, input, &actor)
+            }));
+        }
+        if method == &Method::Post && path == "/api/work-items/link" {
+            let input: crate::work_items::Link = read_json(request)?;
+            let (project, actor) = (self.project.clone(), self.actor());
+            self.invalidate_state();
+            return Ok(self.off_loop(true, move || {
+                crate::work_items::link(&project, input, &actor)?;
+                Ok(json!({"linked": true}))
+            }));
+        }
         if method == &Method::Get && path == "/api/work-items" {
             let project = self.project.clone();
             return Ok(self.off_loop(false, move || Ok(json!(crate::work_items::read(&project)?))));
