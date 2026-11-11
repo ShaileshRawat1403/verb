@@ -758,21 +758,39 @@ export function initWorkbench(deps) {
   };
   $("#spec-agent").addEventListener("change", syncTalkButton);
 
+  let handoffPending = false;
+  function handoffError(message) {
+    $("#handoff-error").textContent = message;
+    $("#handoff-error").hidden = !message;
+  }
+
   function openHandoff({ reviewed = false } = {}) {
+    if (handoffPending) return;
     const spec = selected();
     if (!spec) return;
     state.handoffReview = reviewed ? { id: spec.id, revision: spec.revision } : null;
     $("#handoff-reviewed").hidden = !reviewed;
     $("#handoff-revision").textContent = reviewed ? spec.revision : "";
+    $("#handoff-refresh").hidden = true;
+    $("#handoff-spec-preview").hidden = true;
+    $("#handoff-submit").disabled = false;
+    handoffError("");
     const form = $("#handoff-dialog-form");
     form.elements.scope.required = reviewed;
     form.elements.scope.value = "";
     form.elements.checks.value = "";
+    for (const key of ["outcome", "files", "reportedChecks"]) form.elements[key].value = "";
     const from = lastAgent(spec);
     $("#handoff-from").textContent = from ? agentDisplayName(from) : "nobody yet";
     $("#handoff-title").textContent = `Hand off spec ${spec.id}`;
     const to = $("#handoff-to");
-    if (from && to.value === from) to.value = [...to.options].find((o) => o.value !== from).value;
+    for (const option of to.options) {
+      option.disabled = reviewed && (option.value === "shell" || deps.ui.installed?.[option.value] === false);
+    }
+    if (to.selectedOptions[0]?.disabled || (from && to.value === from)) {
+      to.value = [...to.options].find(option => !option.disabled && option.value !== from)?.value
+        ?? [...to.options].find(option => !option.disabled)?.value ?? "";
+    }
     $("#handoff-note").value = "";
     showDialog("handoff-dialog");
     $("#handoff-note").focus();
@@ -1142,14 +1160,43 @@ export function initWorkbench(deps) {
     if (focus) deps.selectTerminal?.(focus.dataset.focusSession);
   });
 
+  $("#handoff-dialog").addEventListener("cancel", event => {
+    if (handoffPending) event.preventDefault();
+  });
+  $("#handoff-refresh").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    const review = state.handoffReview;
+    if (!review || handoffPending) return;
+    button.disabled = true;
+    try {
+      const result = await readWithBusyRetry(api, `/api/specs/${review.id}`);
+      if (state.handoffReview !== review || !$("#handoff-dialog").open) return;
+      replaceSpec(result);
+      state.handoffReview = { id: result.id, revision: result.revision };
+      $("#handoff-revision").textContent = result.revision;
+      const preview = $("#handoff-spec-preview");
+      preview.querySelector("pre").textContent = result.body;
+      preview.hidden = false;
+      preview.open = true;
+      button.hidden = true;
+      handoffError("Review the refreshed spec, scope, and checks before handing off.");
+      $("#handoff-submit").disabled = false;
+    } catch (error) {
+      handoffError(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   $("#handoff-dialog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const spec = selected();
     if (!spec) return;
     const form = event.currentTarget;
     const submit = $("#handoff-submit");
-    if (submit.disabled) return;
+    if (handoffPending || submit.disabled) return;
     const to = $("#handoff-to").value;
+    if (!to) return handoffError("Choose an available agent.");
     const review = state.handoffReview;
     if (review && review.id !== spec.id) {
       toast("The selected spec changed. Review the handoff again.", "error");
@@ -1158,8 +1205,14 @@ export function initWorkbench(deps) {
     const approved = review ? {
       revision: review.revision, role: form.elements.role.value,
       scope: form.elements.scope.value, checks: form.elements.checks.value,
+      result: { outcome: form.elements.outcome.value, files: form.elements.files.value, checks: form.elements.reportedChecks.value },
     } : undefined;
+    handoffError("");
+    handoffPending = true;
+    let stale = false;
     submit.disabled = true;
+    const closeButtons = [...form.querySelectorAll("[data-close]")];
+    closeButtons.forEach(button => { button.disabled = true; });
     const from = lastAgent(spec);
     // Only say the previous agent is still running when one actually is.
     const fromLive = specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent === from);
@@ -1174,9 +1227,17 @@ export function initWorkbench(deps) {
         );
       await Promise.all([refreshSpecs(), refreshGit()]);
     } catch (error) {
-      toast(error.message, "error");
+      if (review) {
+        stale = error.code === "stale_handoff";
+        $("#handoff-refresh").hidden = !stale;
+        handoffError(error.message);
+      } else {
+        toast(error.message, "error");
+      }
     } finally {
-      submit.disabled = false;
+      handoffPending = false;
+      submit.disabled = stale;
+      closeButtons.forEach(button => { button.disabled = false; });
     }
   });
 
@@ -1237,6 +1298,9 @@ export function initWorkbench(deps) {
     refreshSpecs,
     startOnSpec,
     runCheck: () => lifecycle.openCheck(),
+    openProof: (action, index, evidenceId) => lifecycle.openProof(action, index, evidenceId),
+    openCommit,
+    openTransfer,
     reviewEvidence() {
       const spec = selected();
       if (!spec) return;

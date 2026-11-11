@@ -93,6 +93,7 @@ impl StateJob {
                 "specId": session.assignment.spec_id, "workItemId": session.assignment.work_item_id,
                 "role": session.assignment.role, "contextDelivery": session.assignment.deliveries.last(),
                 "planningAttention": session.assignment.planning_attention,
+                "planningHandled": session.assignment.planning_handled, "waitingHandled": session.assignment.waiting_handled,
                 "lastSeenAt": session.last_seen_at, "hostedHere": self.hosted.get(&session.id).copied().unwrap_or(false),
                 "hasTerminal": self.hosted.contains_key(&session.id),
                 "terminal": terminal_status(self.hosted.get(&session.id).copied()),

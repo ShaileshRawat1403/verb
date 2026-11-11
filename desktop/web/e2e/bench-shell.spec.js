@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -19,8 +19,13 @@ test.beforeAll(async () => {
   });
   cpSync("../../specs", join(project, "specs"), { recursive: true });
   execFileSync("git", ["init", "-q", project]);
+  writeFileSync(join(project, "package.json"), JSON.stringify({ scripts: { test: "node -e 'process.exit(1)'" } }));
+  for (const id of ["090", "091", "092", "093"]) {
+    writeFileSync(join(project, `specs/${id}-review.md`), `---\nid: ${id}\ntitle: Review sample ${id}\nstage: review\n---\n## Acceptance criteria\n- [x] A claim without proof\n- [ ] The check must pass\n`);
+  }
+  execFileSync("git", ["-C", project, "add", "."]);
   execFileSync("git", ["-C", project, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-    "commit", "--allow-empty", "-qm", "Start"]);
+    "commit", "-qm", "Start"]);
   const bin = join(fixture, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nprintf '\\033[?2004hAgent ready\\n'\nexec cat\n", { mode: 0o755 });
@@ -33,6 +38,10 @@ case "$draft" in
   *.brd.draft.md|*/brd.draft.md)
     printf '# Small planning example\n\nSize: small\n\nProblem: Show work planning\nG1: Trace the outcome\nDone when: The owner publishes\n' > "$draft"
     printf 'Review this scope change\n' > plan-fixture-change.txt
+    ;;
+  *)
+    printf '%s\n' "$prompt"
+    exec cat
     ;;
 esac
 `, { mode: 0o755 });
@@ -119,8 +128,8 @@ for (const width of [1440, 390]) {
 
       if (mobile) await navigation.click();
       const group = nav.locator('details[data-bench-group="001-bench-consolidation"]');
-      await group.locator("summary").click();
-      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+9/);
+      await group.locator("summary").click({ position: { x: 6, y: 8 } });
+      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+10/);
       await expect(nav.locator('[data-bench-group="unlinked"]')).not.toHaveAttribute("open", "");
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
@@ -269,7 +278,7 @@ test("Plan distinguishes a document with warnings from a missing document", asyn
     await route.fulfill({ json: data });
   });
   await page.goto(`${origin}/#${token}`);
-  await page.locator('[data-bench-group="001-bench-consolidation"] summary').click();
+  await page.locator('[data-bench-group="001-bench-consolidation"] summary').click({ position: { x: 6, y: 8 } });
   await page.locator('[data-bench-spec="006"]').click();
   const docs = page.locator(".bench-documents");
   await expect(docs.locator(":scope > li > div")).toHaveText(["Why (BRD)Warnings", "What (PRD)Missing"]);
@@ -324,11 +333,13 @@ for (const width of [1440, 390]) {
       await page.goto(`${origin}/#${token}`);
       const nav = page.locator("#bench-navigation");
       if (mobile) await page.locator("#bench-toggle-navigation").click();
-      await nav.locator('[data-bench-group="001-bench-consolidation"] summary').click();
+      await nav.locator('[data-bench-group="001-bench-consolidation"] summary').click({ position: { x: 6, y: 8 } });
       await nav.locator('[data-bench-spec="001"]').click();
       if (mobile) await page.keyboard.press("Escape");
       const selected = page.getByRole("button", { name: /Start a terminal for 001/ });
       await expect(selected).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Open a terminal in this project" })).toBeHidden();
+      await expect(page.locator(".terminal-empty").getByRole("button")).toHaveCount(1);
       await shot("spec-empty");
       const form = page.locator("#session-form");
       await selected.click();
@@ -429,14 +440,136 @@ for (const width of [1440, 390]) {
 
 for (const width of [1440, 390]) {
   for (const theme of ["light", "dark"]) {
+    test(`Review leads with proof and refuses stale handoff at ${width} in ${theme}`, async ({ page, request }) => {
+      test.setTimeout(120_000);
+      const mobile = width === 390;
+      const id = String(90 + (mobile ? 2 : 0) + (theme === "dark" ? 1 : 0)).padStart(3, "0");
+      const headers = { "X-Verb-Token": token };
+      const project = join(fixture, "Bench workspace");
+      const shot = name => process.env.VERB_SLICE4_SCREEN_DIR
+        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE4_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
+        : Promise.resolve();
+      await page.setViewportSize({ width, height: mobile ? 844 : 900 });
+      await page.emulateMedia({ colorScheme: theme });
+      const marked = await request.post(`${origin}/api/good/mark`, { headers });
+      expect(marked.ok()).toBe(true);
+      await page.goto(`${origin}/#${token}`);
+      const nav = page.locator("#bench-navigation");
+      if (mobile) await page.locator("#bench-toggle-navigation").click();
+      await nav.locator('[data-bench-group="unlinked"] summary').click();
+      await nav.locator(`[data-bench-spec="${id}"]`).click();
+      if (mobile) await page.keyboard.press("Escape");
+      await expect(page.locator(".terminal-empty").getByRole("button")).toHaveCount(1);
+      await expect(page.locator(".terminal-empty").getByRole("button")).toHaveText(new RegExp(`Start a terminal for ${id}`));
+      await shot("spec-empty");
+      if (mobile) await page.locator("#bench-toggle-right").click();
+      await page.getByRole("tab", { name: "Review", exact: true }).click();
+      const panel = page.locator("#bench-review");
+      await expect(panel.getByText("Unproven", { exact: true }).first()).toBeVisible();
+      await expect(panel.getByText("Marked complete in the spec. Proof still needed.")).toBeVisible();
+      await panel.getByRole("button", { name: "Run a check" }).click();
+      await page.locator("#sdlc-criterion").selectOption("1");
+      await page.locator("#sdlc-check").selectOption("node");
+      await shot("run-check");
+      await page.locator("#sdlc-submit").click();
+      await expect(panel.locator(".bench-failed-checks")).toContainText("Failed check", { timeout: 30_000 });
+      await expect(panel.getByText("All checks passed.")).toBeHidden();
+      await expect(panel.locator(".bench-proof-list > li").first()).toContainText("The check must pass");
+      await expect(panel.locator(".bench-proof-list > li").nth(1)).toContainText("Unproven");
+      await shot("review");
+
+      await panel.locator('.bench-proof-list [data-criterion="0"][data-bench-review-action="report"]').click();
+      await expect(page.locator("#sdlc-criterion")).toHaveValue("0");
+      await page.locator("#sdlc-target").fill("Local review fixture");
+      await page.locator("#sdlc-text").fill("Verified the first criterion manually.");
+      await shot("record-proof");
+      await page.locator("#sdlc-submit").click();
+      await expect(panel.getByText("Pass awaiting acceptance")).toBeVisible();
+      await panel.getByRole("button", { name: "Accept evidence" }).click();
+      await page.locator("#sdlc-text").fill("The manual check directly addresses the criterion.");
+      await page.locator("#sdlc-submit").click();
+      await expect(panel.getByText("Accepted proof")).toBeVisible();
+
+      const launched = await request.post(`${origin}/api/specs/${id}/agent`, { headers, data: { agent: "claude", role: "implement" } });
+      expect(launched.ok()).toBe(true);
+      const first = (await launched.json()).sessionId;
+      await panel.getByRole("button", { name: "Review handoff" }).click();
+      const form = page.locator("#handoff-dialog-form");
+      const oldRevision = await form.locator("#handoff-revision").textContent();
+      await form.locator("#handoff-to").selectOption("codex");
+      await form.getByLabel("Role").selectOption("review");
+      await form.getByLabel("Approved scope").fill("Inspect package.json and report why the check fails.");
+      await form.getByLabel("Approved checks").fill("npm test");
+      await shot("handoff");
+      const specPath = join(project, `specs/${id}-review.md`);
+      writeFileSync(specPath, readFileSync(specPath, "utf8") + "\n## Owner update\nReview the newly observed failure.\n");
+      let posts = 0;
+      let release;
+      const gate = new Promise(resolve => { release = resolve; });
+      await page.route(`**/api/specs/${id}/handoff`, async route => {
+        posts++;
+        if (posts === 1) await gate;
+        await route.continue();
+      });
+      const submit = form.getByRole("button", { name: "Hand off", exact: true });
+      await submit.click();
+      await expect(submit).toBeDisabled();
+      await form.evaluate(element => element.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+      release();
+      await expect(form.getByRole("alert")).toContainText(/revision|changed/i);
+      expect(posts).toBe(1);
+      await expect(submit).toBeDisabled();
+      await shot("stale-handoff");
+      await form.getByRole("button", { name: "Refresh spec revision" }).click();
+      await expect(form.locator("#handoff-revision")).not.toHaveText(oldRevision);
+      await expect(form.getByText("Review the newly observed failure.", { exact: false })).toBeVisible();
+      await expect(form.getByLabel("Approved scope")).toHaveValue(/Inspect package.json/);
+      await submit.click();
+      await expect(form).toBeHidden();
+      expect(posts).toBe(2);
+      await expect.poll(async () => {
+        const response = await request.get(`${origin}/api/workspace`, { headers });
+        return (await response.json()).sessions?.filter(session => session.specId === id).map(session => [session.id, session.role]);
+      }).toEqual(expect.arrayContaining([[first, "implement"], [expect.any(String), "review"]]));
+
+      if (mobile && !(await panel.isVisible())) {
+        await page.locator("#bench-toggle-right").click();
+        await page.getByRole("tab", { name: "Review", exact: true }).click();
+      }
+      const codePath = join(project, "package.json");
+      const original = readFileSync(codePath, "utf8");
+      try {
+        writeFileSync(codePath, original + "\n");
+        await panel.getByRole("button", { name: "View diff since mark" }).click();
+        await expect(page.locator("#bench-review-diff pre")).toContainText("package.json");
+        await shot("diff");
+        await page.locator("#bench-review-diff").getByRole("button", { name: "Close" }).click();
+        await panel.getByRole("button", { name: "Review commit" }).click();
+        await expect(page.locator("#commit-dialog")).toBeVisible();
+        await shot("commit");
+        await page.keyboard.press("Escape");
+        await panel.getByRole("button", { name: "Git transfer" }).click();
+        await expect(page.locator("#git-transfer-dialog")).toBeVisible();
+        await shot("git-transfer");
+      } finally {
+        writeFileSync(codePath, original);
+      }
+    });
+  }
+}
+
+for (const width of [1440, 390]) {
+  for (const theme of ["light", "dark"]) {
     test(`Plan traces work and publishes drafts at ${width} in ${theme}`, async ({ page, request }) => {
       const mobile = width === 390;
       test.setTimeout(90_000);
       await page.setViewportSize({ width, height: mobile ? 844 : 900 });
       await page.emulateMedia({ colorScheme: theme });
-      const shot = name => process.env.VERB_SLICE3_SCREEN_DIR
-        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE3_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
-        : Promise.resolve();
+      const shot = name => {
+        const changed = ["plan", "published-small-item", "needs-you", "handled"].includes(name);
+        const directory = (changed && process.env.VERB_SLICE4_SCREEN_DIR) || process.env.VERB_SLICE3_SCREEN_DIR;
+        return directory ? page.screenshot({ animations: "disabled", path: join(directory, `${name}-${width}-${theme}.png`) }) : Promise.resolve();
+      };
       const auth = { "X-Verb-Token": token };
       await page.goto(`${origin}/#${token}`);
       const nav = page.locator("#bench-navigation");
@@ -450,7 +583,7 @@ for (const width of [1440, 390]) {
       };
       await openNav();
       const group = nav.locator('[data-bench-group="001-bench-consolidation"]');
-      await group.locator("summary").click();
+      await group.locator("summary").click({ position: { x: 6, y: 8 } });
       await group.locator('[data-bench-spec="006"]').click();
       await expect(panel.getByText("How (Spec)")).toBeVisible();
       await expect(panel.getByText("R6", { exact: true }).first()).toBeVisible();
@@ -494,7 +627,7 @@ for (const width of [1440, 390]) {
       await expect(panel.getByText("No requirement linked")).toBeVisible();
       await shot("unlinked");
       await openNav();
-      await nav.getByRole("button", { name: "Draft a work item" }).click();
+      await nav.getByRole("button", { name: "New work item" }).click();
       const draft = page.locator("#bench-draft-form");
       await expect(draft.getByLabel("Agent").locator('option[value="codex"]')).toHaveCount(1);
       await draft.getByLabel("Agent").selectOption("codex");
@@ -514,8 +647,7 @@ for (const width of [1440, 390]) {
         const response = await request.get(`${origin}/api/work-items/${id}/draft/brd`, { headers: auth });
         return (await response.json()).content;
       }).toContain("G1: Trace the outcome");
-      await item.locator("summary").click();
-      await item.getByRole("button", { name: "Open work item" }).click();
+      await item.getByRole("button", { name: new RegExp(`${title} · Draft`, "i") }).click();
       await expect(panel.getByText("Draft", { exact: true })).toBeVisible();
       await shot("work-item-draft");
       await panel.getByRole("button", { name: "Review BRD draft" }).click();
@@ -526,14 +658,46 @@ for (const width of [1440, 390]) {
       await expect(review).toBeHidden();
       await expect(panel.getByText("Published", { exact: true })).toBeVisible();
       await expect(panel.getByRole("button", { name: "Draft PRD with agent" })).toBeVisible();
+      await expect(panel.getByRole("button", { name: "Draft BRD with agent" })).toBeHidden();
+      await panel.getByLabel("BRD actions").click();
+      await expect(panel.getByRole("button", { name: "Redraft with agent" })).toBeVisible();
       await shot("published-small-item");
 
       if (mobile) await page.keyboard.press("Escape");
       await openNav();
       await nav.getByRole("button", { name: /Needs you/ }).click();
       const needs = page.locator("#bench-needs-list");
-      await expect(needs.getByText("plan-fixture-change.txt").first()).toBeVisible({ timeout: 40_000 });
+      const attention = needs.locator("section").filter({ hasText: id });
+      await expect(attention.getByText("plan-fixture-change.txt")).toBeVisible({ timeout: 40_000 });
       await shot("needs-you");
+      await attention.getByRole("button", { name: "Open plan-fixture-change.txt" }).click();
+      await expect(page.locator("#preview-path")).toHaveText("plan-fixture-change.txt");
+      await openNav();
+      await nav.getByRole("button", { name: /Needs you/ }).click();
+      await attention.getByRole("button", { name: "Mark handled" }).click();
+      await expect(attention.getByText(/Handled by/)).toBeVisible();
+      await shot("handled");
+      await expect.poll(async () => {
+        const response = await request.get(`${origin}/api/state`, { headers: auth });
+        return (await response.json()).sessions?.find(session => session.workItemId === id && session.planningHandled)?.planningHandled;
+      }).toEqual({ actor: expect.any(String), at: expect.any(String) });
+      const project = join(fixture, "Bench workspace");
+      const redraft = await request.post(`${origin}/api/work-items/draft`, { headers: auth, data: { id, document: "brd", agent: "codex", brief: "Redraft the BRD." } });
+      expect(redraft.ok()).toBe(true);
+      const draftPath = join(project, "work", id, "brd.draft.md");
+      await expect.poll(() => readFileSync(draftPath, "utf8")).toContain("G1: Trace the outcome");
+      writeFileSync(draftPath, "# Small planning example\n\nSize: small\n\nProblem: Improve the plan\nG1: Trace the outcome\nDone when: The owner publishes\n");
+      await page.reload();
+      await openNav();
+      await nav.locator(`[data-bench-work="${id}"]`).click();
+      await panel.getByRole("button", { name: "Review BRD draft" }).click();
+      await expect(review.locator("#bench-draft-difference")).toContainText("- Problem: Show work planning");
+      await expect(review.locator("#bench-draft-difference")).toContainText("+ Problem: Improve the plan");
+      if (process.env.VERB_SLICE4_SCREEN_DIR)
+        await page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE4_SCREEN_DIR, `redraft-difference-${width}-${theme}.png`) });
+      await review.getByRole("button", { name: "Cancel" }).click();
+      expect(readFileSync(draftPath, "utf8")).toContain("Improve the plan");
+      rmSync(draftPath);
       rmSync(join(fixture, "Bench workspace", "plan-fixture-change.txt"), { force: true });
     });
   }

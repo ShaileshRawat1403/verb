@@ -139,6 +139,19 @@ export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDial
       if (!flow.criteria?.length) throw new Error("Add an acceptance criterion before running a check.");
       open("run");
     },
+    async openProof(action, index, evidenceId) {
+      if (running) throw new Error("A check or evidence action is already running.");
+      const chosen = current();
+      if (!chosen) throw new Error("Choose a spec first.");
+      await refresh(chosen, true);
+      if (current()?.id !== chosen.id || spec?.id !== chosen.id || !flow || flow.error)
+        throw new Error("Evidence context changed or could not be read. Refresh and try again.");
+      const criterion = flow.criteria.find(row => row.index === index);
+      if (!criterion || (action === "accept" && criterion.evidence?.id !== evidenceId))
+        throw new Error("The criterion or its evidence changed. Review the current record.");
+      open(action, evidenceId);
+      if (action === "report") $("#sdlc-criterion").value = String(index);
+    },
     showVerification() {
       if (spec?.id !== current()?.id) return false;
       panel = "verify"; render();

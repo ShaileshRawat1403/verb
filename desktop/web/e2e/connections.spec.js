@@ -1,6 +1,6 @@
 // UI → owner API → official Rust MCP client → official TypeScript SDK server.
 // The HTTP loopback exception is compiled only in the synthetic test binary, never releases.
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, useLegacyLayout } from "./legacy-layout.js";
 import {
   McpServer,
   WebStandardStreamableHTTPServerTransport,
@@ -218,6 +218,7 @@ test("a person connects, reviews a call, inspects the result and attaches a Stud
   browser,
 }, testInfo) => {
   context = await browser.newContext();
+  await useLegacyLayout(context);
   const page = await context.newPage();
   await page.goto(base + "/#" + TOKEN);
   await page.locator("#nav-more").evaluate((el) => (el.open = true));
@@ -359,6 +360,7 @@ test("phone review remains usable and disconnect clears visible results", async 
   const phone = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });
+  await useLegacyLayout(phone);
   const page = await phone.newPage();
   await page.goto(base + "/#" + TOKEN);
   await page.locator("#nav-more").evaluate((el) => (el.open = true));
@@ -413,6 +415,7 @@ test("in-flight inputs are locked and disconnect cannot restore a late result", 
   expect(connected.status).toBe(200);
   id = connected.body.id;
   const local = await browser.newContext();
+  await useLegacyLayout(local);
   const page = await local.newPage();
   await page.goto(base + "/#" + TOKEN);
   await page.locator("#nav-more").evaluate((el) => (el.open = true));
@@ -455,6 +458,7 @@ test("lost replies show unknown delivery without automatically repeating the cal
   expect(connected.status).toBe(200);
   id = connected.body.id;
   const local = await browser.newContext();
+  await useLegacyLayout(local);
   const page = await local.newPage();
   await page.goto(base + "/#" + TOKEN);
   await page.locator("#nav-more").evaluate((el) => (el.open = true));
@@ -495,6 +499,7 @@ test("revoking from another device clears this view and releases its busy state"
   expect(connected.status).toBe(200);
   id = connected.body.id;
   const local = await browser.newContext();
+  await useLegacyLayout(local);
   const page = await local.newPage();
   await page.goto(base + "/#" + TOKEN);
   await page.locator("#nav-more").evaluate((el) => (el.open = true));

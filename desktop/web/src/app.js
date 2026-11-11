@@ -746,6 +746,7 @@ function mountLaunchedSession(session) {
 
 function renderChecks(report) {
   $("#checks-list").innerHTML = checksHtml(report);
+  shell?.reviewChecks(report);
 }
 
 async function refreshChecks(silent = true, attempt = 0) {
@@ -766,7 +767,7 @@ async function refreshChecks(silent = true, attempt = 0) {
   }
 }
 
-async function activateSession(id) {
+async function activateSession(id, { resume = true } = {}) {
   const session = ui.state?.sessions.find((item) => item.id === id);
   if (!session) return;
   if (hasTerminalReplay(session)) {
@@ -775,7 +776,7 @@ async function activateSession(id) {
     selectTerminal(id);
     return;
   }
-  if (session.canResume) {
+  if (resume && session.canResume) {
     try {
       const result = await api("POST", "/api/terminals", {
         agent: "resume",
@@ -1396,6 +1397,16 @@ function renderTerminalTabs() {
       [...strip.querySelectorAll("[data-tab-terminal]")]
         .find((tab) => tab.dataset.tabTerminal === focused)
         ?.focus({ preventScroll: true });
+    }
+  }
+  if (bench && strip._revealedTerminal !== ui.focusedTerminal && strip.clientWidth) {
+    strip._revealedTerminal = ui.focusedTerminal;
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (active && matchMedia("(max-width: 760px)").matches) {
+      const bounds = strip.getBoundingClientRect();
+      const tab = active.getBoundingClientRect();
+      if (tab.right > bounds.right) strip.scrollLeft += Math.ceil(tab.right - bounds.right);
+      else if (tab.left < bounds.left) strip.scrollLeft -= Math.ceil(bounds.left - tab.left);
     }
   }
 }
@@ -2390,7 +2401,7 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile, showDialog, closeDialog, mountLaunchedSession, refreshState, toast, openLaunch: id => {
+  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
     updateLaunchForm();
     loadInstalledAgents();
     benchTerminals?.openLaunch(id);

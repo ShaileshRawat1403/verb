@@ -2134,6 +2134,10 @@ impl WebHost {
         if method == &Method::Get && path == "/api/checks" {
             return Ok(Reply::json(200, self.checks()));
         }
+        if method == &Method::Get && path == "/api/good/diff" {
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || crate::sdlc::good_diff(&project)));
+        }
         if method == &Method::Post && path == "/api/good/mark" {
             let (project, checks) = (self.project.clone(), Arc::clone(&self.checks));
             return Ok(self.off_loop(true, move || {
@@ -2987,6 +2991,52 @@ impl WebHost {
                     )),
                 }
             }
+            ["api", "terminals", id, "handled"] if method == &Method::Post => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "snake_case")]
+                enum Kind {
+                    Waiting,
+                    Planning,
+                }
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Input {
+                    kind: Kind,
+                }
+                let input: Input = read_json(request)?;
+                let launcher = self.launcher();
+                let id = id.to_string();
+                Ok(self.off_loop(true, move || {
+                    let _lock = crate::workbench::lock_project(&launcher.identity.store)?;
+                    let mut terminals = launcher.terminals.lock().unwrap();
+                    let hosted = terminals
+                        .get_mut(&id)
+                        .and_then(|terminal| terminal.hosted.as_mut());
+                    let mut record = match &hosted {
+                        Some(hosted) => hosted.session.clone(),
+                        None => launcher.session_record(&id)?,
+                    };
+                    let handled = match input.kind {
+                        Kind::Waiting if hosted.is_some() => &mut record.assignment.waiting_handled,
+                        Kind::Planning if record.assignment.planning_attention.is_some() => {
+                            &mut record.assignment.planning_handled
+                        }
+                        _ => return Err("That Needs you entry is no longer available".into()),
+                    };
+                    let receipt = handled
+                        .get_or_insert_with(|| crate::session_context::Handled {
+                            actor: launcher.actor.clone(),
+                            at: crate::iso8601(crate::now_millis()),
+                        })
+                        .clone();
+                    crate::save_session(&record)?;
+                    if let Some(hosted) = hosted {
+                        hosted.session = record;
+                    }
+                    launcher.generation.fetch_add(1, Ordering::SeqCst);
+                    Ok(json!(receipt))
+                }))
+            }
             ["api", "terminals", id, "binding"] if method == &Method::Post => {
                 #[derive(Deserialize)]
                 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -3523,6 +3573,9 @@ impl Launcher {
                 Some(c) => vec!["--conversation".to_owned(), c.to_owned()],
                 None => vec!["-i".to_owned(), brief()],
             },
+            "opencode" if !send_context && conversation.is_none() => {
+                vec!["--prompt".into(), brief()]
+            }
             "opencode" | "shell" => Vec::new(),
             _ => return Err("choose a supported agent".to_owned()),
         };

@@ -472,7 +472,9 @@ pub(crate) fn enrich_all(
                     }
                     let criteria: Vec<_> = flow["criteria"].as_array().into_iter().flatten().map(|row| {
                         json!({"index": row["index"], "accepted": row["accepted"], "freshness": row["freshness"],
-                            "result": row["result"], "recorded": !row["evidence"].is_null()})
+                            "result": row["result"], "recorded": !row["evidence"].is_null(),
+                            "evidenceId": row["evidence"]["id"], "label": row["evidence"]["label"],
+                            "source": row["evidence"]["source"]})
                     }).collect();
                     summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"], "criteria": criteria});
                 }
@@ -545,12 +547,45 @@ pub(crate) fn implementation_diff(project: &Path) -> Result<Value, String> {
         args.extend(excludes);
         (text_git(project, &args, deadline)?, "Latest commit only. Use a terminal for a wider comparison. Spec Markdown and environment files are omitted.".into())
     };
+    Ok(diff_result(&output, &scope))
+}
+
+pub(crate) fn good_diff(project: &Path) -> Result<Value, String> {
+    let mark = crate::good::load(project)?.ok_or("No last-known-good mark for this checkout.")?;
+    let head = mark
+        .head
+        .as_deref()
+        .ok_or("The last-known-good mark has no Git commit to compare.")?;
+    let scope = format!(
+        "Tracked changes against marked commit {}. Untracked files and environment files are omitted. The mark stores no uncommitted file contents.",
+        mark.short_head().unwrap_or(head),
+    );
+    let output = text_git(
+        project,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            head,
+            "--",
+            ".",
+            ":(exclude).env*",
+            ":(glob,exclude)**/.env*",
+        ],
+        Instant::now() + Duration::from_secs(15),
+    )?;
+    Ok(diff_result(&output, &scope))
+}
+
+fn diff_result(output: &str, scope: &str) -> Value {
     let truncated = output.len() > 200_000;
     let mut limit = output.len().min(200_000);
     while !output.is_char_boundary(limit) {
         limit -= 1;
     }
-    Ok(json!({"scope": scope, "diff": &output[..limit], "truncated": truncated}))
+    json!({"scope": scope, "diff": &output[..limit], "truncated": truncated})
 }
 
 pub(crate) fn warnings(flow: &Value, stage: &str) -> Vec<String> {

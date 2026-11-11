@@ -320,6 +320,7 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                     "terminals",
                     _,
                     "binding"
+                        | "handled"
                         | "delivered-context"
                         | "context-preview"
                         | "resend-context"
@@ -335,6 +336,7 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                 path,
                 "/api/state"
                     | "/api/workspace"
+                    | "/api/good/diff"
                     | "/api/specs"
                     | "/api/work-items"
                     | "/api/git"

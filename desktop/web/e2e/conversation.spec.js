@@ -141,8 +141,10 @@ test("one message id is typed at most once, and a second message cannot overtake
   await expect
     .poll(async () => (await call("GET", `/api/terminals/${session}/conversation`)).body.deliveries.find((d) => d.id === "m-dup-000000000001")?.state, { timeout: 15000 })
     .toBe("received");
-  const log = claudeLogs().map((f) => readFileSync(f, "utf8")).join("");
-  expect(log.split("count me once").length - 1).toBe(2); // the user turn and the agent's reply, once each
+  const log = () => claudeLogs().map(f => readFileSync(f, "utf8")).join("");
+  // The delivery can be received as soon as the user turn is logged. Wait for the reply too.
+  await expect.poll(log).toContain("Done. I noted: [slow] count me once");
+  expect(log().split("count me once").length - 1).toBe(2); // the user turn and the agent's reply, once each
 });
 
 test("a permission prompt closes chat and is answered only in the terminal", async ({ page }) => {

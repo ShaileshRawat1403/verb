@@ -1,8 +1,11 @@
 import { readWithBusyRetry } from "./read-retry.js";
 import { makeResizer } from "./resize.js";
 import { agentAvailability } from "./agent-availability.js";
+import { initBenchReview } from "./bench-review.js";
+import { documentDiff } from "./document-diff.js";
 
-export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, toast }) {
+export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
+  const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
   const app = $("#app");
   const panel = $("#bench-right-panel");
   const tree = $("#bench-work-tree");
@@ -55,6 +58,9 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     }
   };
 
+  const workTitle = item => item.brd?.match(/^#{1,6}[ 	]+(.+?)\s*#*\s*$/m)?.[1]?.replace(/\s+BRD$/i, "").trim()
+    || item.id.replace(/^\d+-/, "").replaceAll("-", " ").replace(/^./, letter => letter.toUpperCase());
+
   function render() {
     if (!enabled()) return;
     const { specs, error, loaded } = workbench.current();
@@ -68,8 +74,12 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       const current = selectedId === id ? ' aria-current="true"' : "";
       return `<li><button type="button" data-bench-spec="${escapeHtml(id)}"${current}><span>${escapeHtml(id)} · ${escapeHtml(spec.title)}</span><small>${escapeHtml(spec.stage)}</small></button></li>`;
     };
-    const group = (key, label, ids, item) =>
-      `<details data-bench-group="${escapeHtml(key)}"><summary>${escapeHtml(label)} <span class="nav-count">${ids.length}</span></summary><ul>${item ? `<li><button type="button" class="text-button" data-bench-work="${escapeHtml(key)}">Open work item</button></li>` : ""}${ids.map(row).join("")}</ul></details>`;
+    const group = (key, label, ids, item) => {
+      const name = item
+        ? `<button class="text-button" type="button" data-bench-work="${escapeHtml(key)}"${key === selectedWork ? ' aria-current="true"' : ""}>${escapeHtml(label)}</button>`
+        : escapeHtml(label);
+      return `<details data-bench-group="${escapeHtml(key)}"><summary>${name} <span class="nav-count">${ids.length}</span></summary><ul>${ids.map(row).join("")}</ul></details>`;
+    };
     let markup;
     if (workError || error) {
       markup = `<p role="alert">${escapeHtml(workError || error)}</p><button type="button" class="text-button" data-bench-retry>Retry</button>`;
@@ -79,25 +89,23 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       const grouped = new Map(workItems.items.map(item => [item.id, []]));
       const unlinked = [];
       for (const spec of specs) (grouped.get(spec.work_item) ?? unlinked).push(spec.id);
-      markup = workItems.items.map(item => {
-        const title = item.brd?.match(/^#{1,6}[ 	]+(.+?)\s*#*\s*$/m)?.[1]?.replace(/\s+BRD$/i, "").trim()
-          || item.id.replace(/^\d+-/, "").replaceAll("-", " ").replace(/^./, letter => letter.toUpperCase());
-        return group(item.id, item.draft ? `${title} · Draft` : title, grouped.get(item.id), item);
-      }).join("") + group("unlinked", "Unlinked", unlinked);
+      markup = workItems.items.map(item =>
+        group(item.id, workTitle(item) + (item.draft ? " · Draft" : ""), grouped.get(item.id), item)
+      ).join("") + group("unlinked", "Unlinked", unlinked);
     }
     if (markup !== lastTreeMarkup) {
       const expanded = new Set([...tree.querySelectorAll("details[open]")].map(group => group.dataset.benchGroup));
-      const focused = tree.contains(document.activeElement) ? document.activeElement.closest("[data-bench-spec]")?.dataset.benchSpec : null;
+      const focused = tree.contains(document.activeElement) ? document.activeElement.closest("[data-bench-spec], [data-bench-work]")?.dataset : null;
       tree.innerHTML = markup;
       lastTreeMarkup = markup;
       tree.querySelectorAll("details").forEach(group => { group.open = expanded.has(group.dataset.benchGroup); });
-      if (focused) [...tree.querySelectorAll("[data-bench-spec]")].find(button => button.dataset.benchSpec === focused)?.focus({ preventScroll: true });
+      if (focused?.benchSpec) tree.querySelector(`[data-bench-spec="${CSS.escape(focused.benchSpec)}"]`)?.focus({ preventScroll: true });
+      if (focused?.benchWork) tree.querySelector(`[data-bench-work="${CSS.escape(focused.benchWork)}"]`)?.focus({ preventScroll: true });
     }
     const spec = byId.get(selectedId);
     const item = workItems?.items.find(item => item.id === (selectedWork ?? spec?.work_item));
-    const startSelected = $("#bench-start-selected");
-    startSelected.hidden = !spec || openSessions(spec).length > 0;
-    startSelected.textContent = spec ? `Start a terminal for ${spec.id} · ${spec.title}` : "";
+    renderTerminalEmpty(spec);
+    reviewTab.render(spec ?? null);
     const plan = spec || item ? `<h2>${escapeHtml(spec ? `${spec.id} · ${spec.title}` : item.id)}</h2>
       ${item ? `<ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}</ul>` : '<p class="muted">No work item is linked.</p>'}
       ${spec ? specPlan(spec, item) : ""}`
@@ -110,6 +118,14 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       planBody.querySelectorAll("details").forEach(row => { row.open = expanded.has(row.dataset.criterion); });
     }
     renderNeeds();
+  }
+
+  function renderTerminalEmpty(spec) {
+    const start = $("#bench-start-selected");
+    if (!start) return;
+    start.hidden = !enabled() || !spec;
+    start.textContent = spec ? `Start a terminal for ${spec.id} · ${spec.title}` : "";
+    start.nextElementSibling.hidden = !start.hidden;
   }
 
   function specPlan(spec, item) {
@@ -154,23 +170,58 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     const actions = content == null ? title : `<button type="button" class="text-button" data-bench-document="${escapeHtml(`work/${item.id}/${kind}.md`)}">${title}</button>`;
     const draft = item[`${kind}Draft`];
     const name = kind.toUpperCase();
+    const draftButton = (text) => `<button type="button" class="text-button" data-bench-draft="${kind}" data-work="${escapeHtml(item.id)}">${text}</button>`;
+    const canDraft = kind === "brd" || item.brd != null;
+    const draftAction = !canDraft ? "" : content == null && !draft
+      ? draftButton(`Draft ${name} with agent`)
+      : `<details class="bench-document-menu"><summary aria-label="${name} actions" title="${name} actions">⋯</summary>${draftButton(content == null ? "Continue draft with agent" : "Redraft with agent")}</details>`;
     return `<li><div>${actions}<small title="${escapeHtml(warnings.join("\n"))}">${content == null ? draft ? "Draft" : "Missing" : warnings.length ? "Warnings" : "Published"}</small></div>
-      ${kind === "brd" || item.brd != null ? `<button type="button" class="text-button" data-bench-draft="${kind}" data-work="${escapeHtml(item.id)}">${draft ? `Continue ${name} draft` : `Draft ${name} with agent`}</button>` : ""}
+      ${draftAction}
       ${draft ? `<button type="button" class="text-button" data-bench-review-draft="${kind}" data-work="${escapeHtml(item.id)}">Review ${name} draft</button>` : ""}</li>`;
   }
+
+  const handling = new Set();
+  const handled = new Map();
 
   function renderNeeds() {
     const waiting = hostedSessions().filter(session => ui.waitingTerminals.has(session.id));
     const planning = (ui.state?.sessions ?? []).filter(session => session.planningAttention);
-    $("#bench-needs-count").textContent = waiting.length + planning.length;
+    const receiptFor = (session, kind) => session[`${kind}Handled`] ?? handled.get(`${kind}:${session.id}`);
+    const entries = [...waiting.map(session => [session, "waiting"]), ...planning.map(session => [session, "planning"])];
+    $("#bench-needs-count").textContent = entries.filter(([session, kind]) => !receiptFor(session, kind)).length;
     const list = $("#bench-needs-list");
-    const markup = waiting.map(session => `<button type="button" class="secondary-button" data-bench-waiting="${escapeHtml(session.id)}">${escapeHtml(agentDisplayName(session.agent))} · ${escapeHtml(session.id.slice(0, 8))}</button>`).join("")
-      + planning.map(({ workItemId, planningAttention }) => `<section><h3>Planning session · ${escapeHtml(workItemId)}</h3>
-        ${planningAttention.unavailable ? "<p>Verb could not compare Git status at session end.</p>" : `<p>Git changes outside the requested draft</p><ul>${planningAttention.paths.map(path => `<li><code>${escapeHtml(path)}</code></li>`).join("")}</ul>`}</section>`).join("")
-      || '<p class="muted">Nothing needs your attention.</p>';
+    const markup = entries.map(([session, kind]) => {
+      const receipt = receiptFor(session, kind);
+      const paths = session.planningAttention?.paths ?? [];
+      const key = `${kind}:${session.id}`;
+      return `<section class="bench-needs-entry"><h3>${kind === "waiting" ? `${escapeHtml(agentDisplayName(session.agent))} · Waiting for you` : `Planning session · ${escapeHtml(session.workItemId)}`}</h3>
+        ${kind === "planning" ? session.planningAttention.unavailable ? "<p>Verb could not compare Git status at session end.</p>" :
+          `<p>Git changes outside the requested draft</p><ul>${paths.map(path => `<li><code>${escapeHtml(path)}</code> <button class="text-button" type="button" data-bench-open-path="${escapeHtml(path)}" aria-label="Open ${escapeHtml(path)}">Open</button></li>`).join("")}</ul>` : ""}
+        <button type="button" class="secondary-button" data-bench-open-session="${escapeHtml(session.id)}">Open session</button>
+        ${receipt ? `<small>Handled by ${escapeHtml(receipt.actor)} · ${escapeHtml(new Date(receipt.at).toLocaleString())}</small>`
+          : `<button type="button" class="secondary-button" data-bench-handle="${kind}" data-session="${escapeHtml(session.id)}"${handling.has(key) ? " disabled" : ""}>Mark handled</button>`}
+      </section>`;
+    }).join("") || '<p class="muted">Nothing needs your attention.</p>';
     if (list._markup !== markup) {
       list.innerHTML = markup;
       list._markup = markup;
+    }
+  }
+
+  async function markHandled(button) {
+    const { session, benchHandle: kind } = button.dataset;
+    const key = `${kind}:${session}`;
+    if (handling.has(key)) return;
+    handling.add(key);
+    renderNeeds();
+    try {
+      handled.set(key, await api("POST", `/api/terminals/${session}/handled`, { kind }));
+      await refreshState();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      handling.delete(key);
+      renderNeeds();
     }
   }
 
@@ -190,6 +241,8 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
 
   let drafting;
   let reviewing;
+  let reviewGeneration = 0;
+  let publishingDraft = false;
   let taskSpec;
   function draftForm(button) {
     const form = $("#bench-draft-form");
@@ -250,6 +303,10 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
   async function reviewDraft(button) {
     const path = `/api/work-items/${button.dataset.work}/draft/${button.dataset.benchReviewDraft}`;
     const form = $("#bench-draft-review-form");
+    const dialog = form.closest("dialog");
+    const generation = ++reviewGeneration;
+    const publish = form.querySelector("[type=submit]");
+    publish.disabled = true;
     form.reset();
     reviewing = null;
     formError(form, "");
@@ -257,33 +314,49 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     $("#bench-draft-content").textContent = "Loading draft…";
     $("#bench-draft-stale").hidden = true;
     $("#bench-draft-current").hidden = true;
+    $("#bench-draft-difference").hidden = true;
     $("#bench-draft-confirm-stale").hidden = true;
-    showDialog("bench-draft-review-dialog");
-    await submit(form, async () => {
+    showDialog(dialog.id);
+    try {
       const draft = await readWithBusyRetry(api, path);
+      if (generation !== reviewGeneration || !dialog.open) return;
       if (!draft) throw new Error("The draft is no longer available. Refresh Plan.");
       $("#bench-draft-content").textContent = draft.content || "The agent has not written the draft yet.";
       $("#bench-draft-stale").hidden = !draft.stale;
       $("#bench-draft-current").hidden = !draft.stale;
       $("#bench-draft-current").querySelector("pre").textContent = draft.publishedContent ?? "There is no published document.";
+      const difference = $("#bench-draft-difference");
+      difference.hidden = draft.publishedContent == null;
+      if (!difference.hidden) difference.querySelector("pre").textContent = documentDiff(draft.publishedContent, draft.content);
       $("#bench-draft-confirm-stale").hidden = !draft.stale;
       if (draft.content.trim()) reviewing = { path, draft };
-    });
-    form.querySelector("[type=submit]").disabled = !reviewing;
+      publish.disabled = !reviewing;
+    } catch (error) {
+      if (generation === reviewGeneration && dialog.open) formError(form, error.message);
+    }
   }
 
+  $("#bench-draft-review-dialog").addEventListener("cancel", event => {
+    if (publishingDraft) event.preventDefault();
+  });
   $("#bench-draft-review-form").addEventListener("submit", event => {
     event.preventDefault();
     const form = event.currentTarget;
-    if (!reviewing) return;
+    if (!reviewing || publishingDraft) return;
     const { path, draft } = reviewing;
     if (draft.stale && !form.elements.acceptStale.checked) return formError(form, "Confirm you have reviewed the current published document.");
+    const dismiss = [...form.querySelectorAll("[data-close]")];
+    publishingDraft = true;
+    dismiss.forEach(button => { button.disabled = true; });
     submit(form, async () => {
       const result = await api("POST", path, { expectedRevision: draft.publishedRevision,
         draftRevision: draft.revision, acceptStale: form.elements.acceptStale.checked });
       closeDialog("bench-draft-review-dialog");
       toast([ "Published.", ...(result.warnings ?? []), result.draftNotice ].filter(Boolean).join(" "));
       await refresh();
+    }).finally(() => {
+      publishingDraft = false;
+      dismiss.forEach(button => { button.disabled = false; });
     });
   });
 
@@ -322,6 +395,7 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
   }
 
   function selectTab(tab) {
+    if (tab === "review" && activeTab !== tab) reviewTab.refreshChecks();
     activeTab = tab;
     for (const button of panel.querySelectorAll("[data-bench-tab]")) {
       const active = button.dataset.benchTab === tab;
@@ -347,6 +421,7 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     syncLayout();
     updateTerminalFocus();
     if (enabled()) { refresh(); render(); }
+    else renderTerminalEmpty(null);
   });
   toggleNavigation.addEventListener("click", () => {
     if (narrow.matches) {
@@ -382,11 +457,16 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     const documentButton = target.closest("[data-bench-document]");
     if (documentButton) return openFile(documentButton.dataset.benchDocument);
     const draft = target.closest("[data-bench-draft]");
-    if (draft) return draftForm(draft);
+    if (draft) {
+      const menu = draft.closest(".bench-document-menu");
+      if (menu) menu.open = false;
+      return draftForm(draft);
+    }
     const review = target.closest("[data-bench-review-draft]");
     if (review) return reviewDraft(review);
     const work = target.closest("[data-bench-work]");
     if (work) {
+      event.preventDefault();
       selectedId = null;
       selectedWork = work.dataset.benchWork;
       showView("sessions");
@@ -409,11 +489,12 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     if (spec) return focusSpec(spec.dataset.benchSpec);
     const tab = target.closest("[data-bench-tab]");
     if (tab) return selectTab(tab.dataset.benchTab);
-    const waiting = target.closest("[data-bench-waiting]");
-    if (waiting) {
-      showView("sessions");
-      return selectTerminal(waiting.dataset.benchWaiting);
-    }
+    const handle = target.closest("[data-bench-handle]");
+    if (handle) return markHandled(handle);
+    const session = target.closest("[data-bench-open-session]");
+    if (session) return openSession(session.dataset.benchOpenSession);
+    const file = target.closest("[data-bench-open-path]");
+    if (file) return openFile(file.dataset.benchOpenPath);
     if (target.closest("[data-bench-start], #bench-start-selected")) {
       closeOverlay();
       workbench.selectSpec(selectedId, { navigate: false });
@@ -451,6 +532,7 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     refresh: () => { if (enabled()) refresh(); },
     render,
     renderNeeds,
+    reviewChecks: reviewTab.setChecks,
     onView() {
       closeOverlay();
       if (ui.view === "needs-you") refreshState();
@@ -458,6 +540,7 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     terminalChanged(id) {
       if (!enabled() || id === terminalId) return;
       terminalId = id;
+      if (!id) return render();
       const session = ui.state?.sessions.find(session => session.id === id);
       selectedId = session?.specId ?? null;
       selectedWork = selectedId ? null : session?.workItemId ?? null;

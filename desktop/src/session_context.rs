@@ -22,6 +22,8 @@ pub(crate) struct Assignment {
     pub terminal_ended_at: Option<u128>,
     pub draft_path: Option<String>,
     pub planning_attention: Option<PlanningAttention>,
+    pub planning_handled: Option<Handled>,
+    pub waiting_handled: Option<Handled>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -29,6 +31,12 @@ pub(crate) struct Assignment {
 pub(crate) struct PlanningAttention {
     pub paths: Vec<String>,
     pub unavailable: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub(crate) struct Handled {
+    pub actor: String,
+    pub at: String,
 }
 
 pub(crate) fn check_planning_changes(session: &mut crate::Session) {

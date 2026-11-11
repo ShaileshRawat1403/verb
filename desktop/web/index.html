@@ -28,8 +28,9 @@
           <button type="button" class="nav-item" data-view="needs-you">Needs you <span id="bench-needs-count" class="nav-count">0</span></button>
           <button type="button" class="nav-item" data-bench-board>Board</button>
           <div class="bench-work">
-            <h2>Work</h2>
-            <button type="button" class="text-button" data-bench-draft="brd" data-new-item>Draft a work item</button>
+            <div class="bench-work-heading"><h2>Work</h2>
+              <button type="button" class="icon-button" data-bench-draft="brd" aria-label="New work item" title="New work item">+</button>
+            </div>
             <div id="bench-work-tree"><p role="status">Loading work items…</p></div>
           </div>
           <button type="button" class="nav-item" data-view="project">Context</button>
@@ -806,10 +807,11 @@
                     Hide sessions
                   </button>
                 </div>
-                <button id="bench-start-selected" class="secondary-button" type="button" hidden></button>
                 <div id="terminal-grid" class="terminal-grid">
                   <div class="terminal-empty">
                     <div class="empty-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></div>
+                    <button id="bench-start-selected" class="primary-button" type="button" hidden></button>
+                    <div class="terminal-empty-default">
                     <h3>Open a terminal in this project</h3>
                     <p>
                       Run commands or work with an installed CLI agent.
@@ -832,6 +834,7 @@
                       </button>
                     </div>
                     <p class="terminal-shortcuts"><kbd>Alt T</kbd> New terminal <span aria-hidden="true">·</span> <kbd>Ctrl / ⌘ K</kbd> Commands</p>
+                    </div>
                   </div>
                 </div>
                 <div id="bench-terminal-context" class="bench-terminal-context" hidden>
@@ -898,7 +901,16 @@
           <div id="bench-plan-spec"><p class="muted">Select a spec from the work tree.</p></div>
         </section>
         <section id="bench-review" role="tabpanel" aria-labelledby="bench-tab-review" hidden>
-          <button class="secondary-button" type="button" data-view="specs">Open spec review</button>
+          <div id="bench-review-body"></div>
+          <dialog id="bench-review-diff" class="modal" aria-labelledby="bench-review-diff-title">
+            <div class="modal-content">
+              <div class="modal-heading"><h2 id="bench-review-diff-title">Git diff</h2>
+                <button class="modal-close" type="button" data-close="bench-review-diff" aria-label="Close">×</button>
+              </div>
+              <p id="bench-review-diff-scope" role="status"></p>
+              <pre class="sdlc-diff" tabindex="0"></pre>
+            </div>
+          </dialog>
         </section>
         <section id="bench-preview" role="tabpanel" aria-labelledby="bench-tab-preview" hidden>
           <button class="secondary-button" type="button" data-view="project">Open project files</button>
@@ -1127,10 +1139,11 @@
         </div>
         <p id="bench-draft-stale" role="alert" hidden>The published document changed since drafting began. Read the current document before publishing.</p>
         <details id="bench-draft-current" hidden><summary>Current published document</summary><pre></pre></details>
+        <section id="bench-draft-difference" hidden><h3>Changes from the published document</h3><pre tabindex="0"></pre></section>
         <pre id="bench-draft-content" tabindex="0"></pre>
         <label id="bench-draft-confirm-stale" hidden><input type="checkbox" name="acceptStale"> I reviewed the current published document.</label>
         <p role="alert" data-draft-error hidden></p>
-        <div class="modal-footer"><button class="primary-button" type="submit">Publish reviewed draft</button></div>
+        <div class="modal-footer"><button class="secondary-button" type="button" data-close="bench-draft-review-dialog">Cancel</button><button class="primary-button" type="submit">Publish reviewed draft</button></div>
       </form>
     </dialog>
     <dialog id="bench-plan-task-dialog" class="modal">
@@ -1377,7 +1390,15 @@
           <label class="field-label">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
           <label class="field-label">Approved scope<textarea name="scope" maxlength="600" rows="2"></textarea></label>
           <label class="field-label">Approved checks<textarea name="checks" maxlength="600" rows="2"></textarea></label>
+          <details><summary>Reported work (unverified)</summary>
+            <label class="field-label">Outcome<textarea name="outcome" maxlength="300" rows="2"></textarea></label>
+            <label class="field-label">Files<textarea name="files" maxlength="300" rows="2"></textarea></label>
+            <label class="field-label">Check results<textarea name="reportedChecks" maxlength="300" rows="2"></textarea></label>
+          </details>
+          <details id="handoff-spec-preview" hidden><summary>Read the refreshed spec</summary><pre></pre></details>
+          <button class="secondary-button" type="button" id="handoff-refresh" hidden>Refresh spec revision</button>
         </div>
+        <p id="handoff-error" role="alert" hidden></p>
         <p class="proof-hint">The previous agent keeps running. End it yourself when you're ready.</p>
         <div class="modal-footer">
           <button class="secondary-button" type="button" data-close="handoff-dialog">Cancel</button
