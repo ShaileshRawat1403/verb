@@ -677,7 +677,7 @@ pub(crate) fn publish(
     Ok(serde_json::json!({"id": id, "revision": revision(&raw), "warnings": item.warnings}))
 }
 
-pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<(), String> {
+pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<bool, String> {
     if work_number(&input.work_item).is_none() {
         return Err("Invalid work item ID".into());
     }

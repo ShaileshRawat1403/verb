@@ -12,9 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 pub(crate) const STAGES: [&str; 6] = ["spec", "plan", "build", "verify", "review", "ship"];
 const CRITERIA_HEADING: &str = "## Acceptance criteria";
@@ -804,6 +805,32 @@ pub(crate) fn record(path: &Path, actor: &str, action: &str) -> Result<(), Strin
     write_atomic(path, &append_audit(&raw, &audit_line(actor, action)))
 }
 
+// Prevent two browser tabs from launching successors for the same reviewed spec concurrently.
+// The reservation is released on refusal, timeout, or completion of the post-admission record.
+static PENDING_HANDOFFS: LazyLock<Mutex<HashSet<(PathBuf, String)>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+pub(crate) struct HandoffReservation((PathBuf, String));
+
+impl HandoffReservation {
+    pub(crate) fn acquire(project: &Path, spec: &str) -> Result<Self, String> {
+        let key = (project.to_owned(), spec.to_owned());
+        if !PENDING_HANDOFFS.lock().unwrap().insert(key.clone()) {
+            return Err("Another handoff is starting for this spec. Try again shortly.".into());
+        }
+        Ok(Self(key))
+    }
+}
+
+impl Drop for HandoffReservation {
+    fn drop(&mut self) {
+        PENDING_HANDOFFS.lock().unwrap().remove(&self.0);
+    }
+}
+
+pub(crate) const HANDOFF_LINK_REVIEW: &str =
+    "The pending handoff needs a fresh review because the spec links changed.";
+
 /// Adds a work item and its legacy links without changing criterion text or order.
 pub(crate) fn link_work_item(
     project: &Path,
@@ -813,7 +840,7 @@ pub(crate) fn link_work_item(
     updates: &BTreeMap<usize, Option<String>>,
     actor: &str,
     warnings: &[String],
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let _writing = writing();
     let (path, spec) = find(project, spec_id)?;
     if spec.revision != expected_revision {
@@ -873,11 +900,19 @@ pub(crate) fn link_work_item(
     if !replaced {
         updated.push_str(&format!("\n\n## Traceability\n\n{rows}\n"));
     }
+    let reservations = PENDING_HANDOFFS.lock().unwrap();
+    let fresh_review = reservations.contains(&(project.to_owned(), spec_id.to_owned()));
     let mut action = format!("linked work item {work_item}");
+    if fresh_review {
+        action.push_str(". ");
+        action.push_str(HANDOFF_LINK_REVIEW);
+    }
     if !warnings.is_empty() {
         action.push_str(&format!(" (warning: {})", warnings.join(" | ")));
     }
-    write_atomic(&path, &append_audit(&updated, &audit_line(actor, &action)))
+    write_atomic(&path, &append_audit(&updated, &audit_line(actor, &action)))?;
+    drop(reservations);
+    Ok(fresh_review)
 }
 
 /// The prompt given to an agent started on a spec: read it, work criterion by criterion, and stop
@@ -1577,5 +1612,42 @@ mod tests {
     fn ids_must_be_digits() {
         let project = temp_repo();
         assert!(find(&project, "../etc").is_err());
+    }
+    #[test]
+    fn linking_a_spec_requires_a_fresh_review_for_a_pending_handoff() {
+        let project = temp_repo();
+        let original = new_spec(&project);
+        let pending = HandoffReservation::acquire(&project, &original.id).unwrap();
+        let updates = BTreeMap::from([(1, Some("- 1 · identity · R1".to_owned()))]);
+        let fresh_review = link_work_item(
+            &project,
+            &original.id,
+            &original.revision,
+            "001-example",
+            &updates,
+            "Owner",
+            &[],
+        )
+        .unwrap();
+        assert!(fresh_review);
+        let (_, current) = find(&project, &original.id).unwrap();
+        assert_ne!(current.revision, original.revision);
+        assert!(current
+            .audit
+            .last()
+            .unwrap()
+            .action
+            .contains(HANDOFF_LINK_REVIEW));
+        drop(pending);
+        assert!(!link_work_item(
+            &project,
+            &original.id,
+            &current.revision,
+            "001-example",
+            &updates,
+            "Owner",
+            &[],
+        )
+        .unwrap());
     }
 }

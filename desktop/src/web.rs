@@ -7,12 +7,12 @@ use state::{terminal_status, StateCache, StateJob};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
@@ -143,29 +143,6 @@ fn await_admission(
 /// Work that must happen only after a launched terminal is confirmed started (for example the spec
 /// record of an agent start). It runs once, after admission, and never for a refused launch.
 type AfterAdmission = Box<dyn FnOnce(&mut Value) -> Result<(), String> + Send>;
-
-// Prevent two browser tabs from launching successors for the same reviewed spec concurrently.
-// The reservation is released on refusal, timeout, or completion of the post-admission record.
-static PENDING_HANDOFFS: LazyLock<Mutex<HashSet<(PathBuf, String)>>> =
-    LazyLock::new(|| Mutex::new(HashSet::new()));
-
-struct HandoffReservation((PathBuf, String));
-
-impl HandoffReservation {
-    fn acquire(project: &Path, spec: &str) -> Result<Self, String> {
-        let key = (project.to_owned(), spec.to_owned());
-        if !PENDING_HANDOFFS.lock().unwrap().insert(key.clone()) {
-            return Err("Another handoff is starting for this spec. Try again shortly.".into());
-        }
-        Ok(Self(key))
-    }
-}
-
-impl Drop for HandoffReservation {
-    fn drop(&mut self) {
-        PENDING_HANDOFFS.lock().unwrap().remove(&self.0);
-    }
-}
 
 /// The spec audit line for a confirmed agent start.
 fn spec_start_line(agent: &str, session: &str, continues_talk: bool) -> String {
@@ -2436,8 +2413,12 @@ impl WebHost {
             let (project, actor) = (self.project.clone(), self.actor());
             self.invalidate_state();
             return Ok(self.off_loop(true, move || {
-                crate::work_items::link(&project, input, &actor)?;
-                Ok(json!({"linked": true}))
+                let fresh_review = crate::work_items::link(&project, input, &actor)?;
+                let mut result = json!({"linked": true});
+                if fresh_review {
+                    result["message"] = json!(crate::specs::HANDOFF_LINK_REVIEW);
+                }
+                Ok(result)
             }));
         }
         if method == &Method::Get && path == "/api/work-items" {
@@ -2784,7 +2765,8 @@ impl WebHost {
                         if prompt.len() > 4096 {
                             return Err("Shorten the approved handoff before submitting".into());
                         }
-                        let reservation = HandoffReservation::acquire(&launcher.project, &id)?;
+                        let reservation =
+                            crate::specs::HandoffReservation::acquire(&launcher.project, &id)?;
                         let (session, _) = launcher.start_on_spec_with(
                             &id,
                             &input.to,
