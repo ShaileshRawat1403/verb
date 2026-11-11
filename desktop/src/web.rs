@@ -1019,15 +1019,6 @@ impl Reply {
 }
 
 pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
-    let startup = Instant::now();
-    let trace = |phase: &str| {
-        if std::env::var_os("VERB_TEST_STARTUP_TRACE").is_some() {
-            eprintln!(
-                "VERB_STARTUP phase={phase} elapsed_ms={}",
-                startup.elapsed().as_millis()
-            );
-        }
-    };
     let port = match args {
         [] => 0,
         [flag, value] if flag == "--port" => value
@@ -1045,11 +1036,8 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         Ok(val) if !val.trim().is_empty() => (val.trim().to_owned(), true),
         _ => (secure_token()?, false),
     };
-    trace("bound");
     let identity = project::identity(project)?;
-    trace("identity");
     crate::host::mark_started();
-    trace("host_fingerprint");
     let mut host = WebHost {
         project: project.to_path_buf(),
         project_id: identity.id.clone(),
@@ -1114,7 +1102,6 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
     let signal_flag = Arc::clone(&running);
     ctrlc::set_handler(move || signal_flag.store(false, Ordering::SeqCst))
         .map_err(|error| format!("could not install shutdown handler: {error}"))?;
-    trace("ready");
     // One write, and nothing else on stdout afterwards: whoever launched us may read the URL line
     // and close the pipe (`verb web | head -1`, a test harness, a launcher script). A second
     // `println!` would then panic on EPIPE and take every hosted terminal down with it.
