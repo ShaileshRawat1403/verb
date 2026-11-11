@@ -337,10 +337,15 @@ fn keystroke_to_glyph_latency_under_10ms_median() {
 fn seq_throughput_and_second_terminal_responsiveness() {
     let server = WebServer::start();
 
-    // 1. Launch terminal 1 running custom fast output: `seq 1 1000000`
+    // Hold the producer until both terminals have WebSocket listeners.
     let (status1, res1) = server.post(
         "/api/terminals",
-        json!({"agent": "custom", "command": "seq", "args": ["1", "1000000"], "isolated": false}),
+        json!({
+            "agent": "custom",
+            "command": "/bin/sh",
+            "args": ["-c", "IFS= read -r start && exec seq 1 1000000"],
+            "isolated": false
+        }),
     );
     assert_eq!(status1, 201);
     let id1 = res1["sessionId"].as_str().unwrap().to_owned();
@@ -368,6 +373,8 @@ fn seq_throughput_and_second_terminal_responsiveness() {
 
     let mut bytes_from_1 = 0usize;
     let mut term2_responsive = false;
+    let mut attached1 = false;
+    let mut attached2 = false;
     let start = Instant::now();
 
     // During the stream, send input to terminal 2 and verify immediate response
@@ -399,7 +406,14 @@ fn seq_throughput_and_second_terminal_responsiveness() {
             }
             Ok(Message::Text(text)) => {
                 let val: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                if val["type"] == "exit" && val["id"] == id1 {
+                if val["type"] == "attached" {
+                    let both_attached = attached1 && attached2;
+                    attached1 |= val["id"] == id1 && val["running"] == true;
+                    attached2 |= val["id"] == id2 && val["running"] == true;
+                    if !both_attached && attached1 && attached2 {
+                        ws.send(encode_input_frame(&id1, b"\n")).unwrap();
+                    }
+                } else if val["type"] == "exit" && val["id"] == id1 {
                     println!("Terminal 1 seq finished with code {}", val["code"]);
                     break;
                 }
@@ -408,6 +422,10 @@ fn seq_throughput_and_second_terminal_responsiveness() {
         }
     }
 
+    assert!(
+        attached1 && attached2,
+        "Both terminals must attach while running"
+    );
     assert!(
         bytes_from_1 > 100_000,
         "Terminal 1 must stream substantial output from seq (got {} bytes)",
