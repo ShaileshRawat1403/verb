@@ -311,7 +311,20 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                     | "/api/work-items/link"
                     | "/api/hub/sync"
             ))
-        || matches!(parts.as_slice(), ["api", "terminals", _, "phone", ..]);
+        || matches!(
+            parts.as_slice(),
+            ["api", "terminals", _, "phone", ..]
+                | [
+                    "api",
+                    "terminals",
+                    _,
+                    "binding"
+                        | "delivered-context"
+                        | "context-preview"
+                        | "resend-context"
+                        | "session-note"
+                ]
+        );
     if owner_only {
         return Scope::Owner;
     }
@@ -484,6 +497,17 @@ mod tests {
             "screens can hold secrets"
         );
         assert_eq!(required_scope("POST", "/api/terminals"), Scope::Drive);
+        for action in [
+            "binding",
+            "session-note",
+            "resend-context",
+            "context-preview",
+            "delivered-context",
+        ] {
+            let path = format!("/api/terminals/abc/{action}");
+            assert_eq!(required_scope("GET", &path), Scope::Owner);
+            assert_eq!(required_scope("POST", &path), Scope::Owner);
+        }
         assert_eq!(required_scope("POST", "/api/specs/001/stage"), Scope::Drive);
         assert_eq!(required_scope("POST", "/api/git/commit"), Scope::Drive);
         assert_eq!(

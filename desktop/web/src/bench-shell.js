@@ -1,7 +1,7 @@
+import { readWithBusyRetry } from "./read-retry.js";
 import { makeResizer } from "./resize.js";
-import { specSessions } from "./workbench.js";
 
-export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile }) {
+export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch }) {
   const app = $("#app");
   const panel = $("#bench-right-panel");
   const tree = $("#bench-work-tree");
@@ -29,14 +29,14 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
 
   const enabled = () => !legacy.checked;
   const hostedSessions = () => (ui.state?.sessions ?? []).filter(session => session.hostedHere && session.terminal?.running);
-  const openSessions = (spec) => specSessions(spec, hostedSessions());
+  const openSessions = (spec) => hostedSessions().filter(session => session.specId === spec.id);
   const focusSpec = (id) => {
     const spec = workbench.current().specs.find(spec => spec.id === id);
     if (!spec) return;
     selectedId = id;
     workbench.selectSpec(id, { navigate: false });
     showView("sessions");
-    const running = openSessions(spec).find(session => session.live);
+    const running = openSessions(spec)[0];
     if (running) {
       selectTerminal(running.id);
     } else {
@@ -92,11 +92,14 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     }
     const spec = byId.get(selectedId);
     const item = workItems?.items.find(item => item.id === spec?.work_item);
+    const startSelected = $("#bench-start-selected");
+    startSelected.hidden = !spec || openSessions(spec).length > 0;
+    startSelected.textContent = spec ? `Start a terminal for ${spec.id} · ${spec.title}` : "";
     const plan = spec ? `<h2>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</h2>
       <p class="bench-spec-stage">${escapeHtml(spec.stage)}</p>
       <ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}</ul>
       <h3>Done when</h3><ul>${spec.criteria.map(criterion => `<li>${escapeHtml(criterion.text)}</li>`).join("")}</ul>
-      ${openSessions(spec).some(session => session.live) ? "" : '<button type="button" class="secondary-button" data-bench-start>Start terminal</button>'}`
+      ${openSessions(spec).length ? "" : '<button type="button" class="secondary-button" data-bench-start>Start terminal</button>'}`
       : '<p class="muted">Select a spec from the work tree.</p>';
     const planBody = $("#bench-plan-spec");
     if (planBody._markup !== plan) {
@@ -131,7 +134,7 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
   async function refresh() {
     const current = ++request;
     try {
-      const data = await api("GET", "/api/work-items");
+      const data = await readWithBusyRetry(api, "/api/work-items");
       if (current !== request) return;
       workItems = data;
       workError = "";
@@ -235,10 +238,10 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       showView("sessions");
       return selectTerminal(waiting.dataset.benchWaiting);
     }
-    if (target.closest("[data-bench-start]")) {
+    if (target.closest("[data-bench-start], #bench-start-selected")) {
       closeOverlay();
       workbench.selectSpec(selectedId, { navigate: false });
-      return workbench.startOnSpec("shell");
+      return openLaunch(selectedId);
     }
     if (target.closest("[data-bench-board]")) {
       showView("specs");

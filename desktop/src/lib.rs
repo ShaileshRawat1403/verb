@@ -47,6 +47,7 @@ mod pty;
 mod runtime;
 mod sdlc;
 mod session;
+mod session_context;
 mod shell;
 use session::{Agent, ResumeVerdict, Session, SessionState};
 mod spec_summary;
@@ -969,6 +970,9 @@ pub(crate) fn finish_session(session: &mut Session, exit_code: i32) -> Result<()
 /// by a stray line of stdout.
 pub(crate) fn finish_session_quietly(session: &mut Session, exit_code: i32) -> Result<(), String> {
     session.last_seen_at = now_millis();
+    if session.assignment.spec_id.is_some() {
+        session.assignment.terminal_ended_at = Some(session.last_seen_at);
+    }
     session.state = resolve_without_process(session);
     save_session(session)?;
     let mut logger = EventLogger::new(session)?;
@@ -1860,6 +1864,7 @@ mod tests {
             state: SessionState::Recoverable,
             agent: Some(Agent::Claude),
             resume_identity: Some("claude-conversation".to_owned()),
+            assignment: Default::default(),
         };
 
         let json = session_json(&session);
@@ -1991,6 +1996,17 @@ mod tests {
     }
 
     #[test]
+    fn old_session_records_have_no_assignment_or_delivery() {
+        let old = "schema_version=1\nsession_id=old-session\nproject_id=/tmp/project\nstate=ended\nagent=claude\n";
+        let session = Session::deserialize(old).unwrap();
+        assert_eq!(
+            session.assignment,
+            crate::session_context::Assignment::default()
+        );
+        assert_eq!(Session::deserialize(&session.serialize()), Some(session));
+    }
+
+    #[test]
     fn session_round_trips_without_external_format_dependencies() {
         let session = Session {
             id: "session-1".to_owned(),
@@ -2004,6 +2020,7 @@ mod tests {
             state: SessionState::Interrupted,
             agent: Some(Agent::Claude),
             resume_identity: Some("claude-conversation".to_owned()),
+            assignment: Default::default(),
         };
         let serialized = session.serialize();
         assert!(!serialized.contains("pid"));

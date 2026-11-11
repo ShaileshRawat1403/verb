@@ -236,13 +236,16 @@
           <details id="bench-terminal-menu" hidden>
             <summary aria-label="Terminal actions" title="Terminal actions">⋯</summary>
             <div class="bench-terminal-menu-items">
-              <button type="button" data-bench-terminal-action="search">Search terminal</button>
+              <small id="bench-terminal-id"></small>
+              <button type="button" data-bench-assign>Change assignment</button>
+              <button type="button" data-bench-split>Show side by side</button>
+              <button type="button" data-bench-terminal-action="search" aria-pressed="false">Search terminal</button>
               <button type="button" data-bench-terminal-action="phone" hidden>Phone access</button>
               <button type="button" data-bench-terminal-action="take" hidden>Take back input</button>
               <button type="button" data-bench-terminal-action="end">End session</button>
             </div>
           </details>
-          <button id="bench-new-terminal" class="panel-toggle" type="button" aria-label="New terminal" title="New terminal" data-action="new-session" hidden>+</button>
+          <button id="bench-new-terminal" class="primary-button"  type="button" aria-label="New terminal" title="New terminal" data-action="new-session" hidden>+</button>
           <div class="top-actions">
             <div class="git-indicator">
               <span class="git-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M18 10c0 4-6 3-10 6"/></svg></span><span id="top-branch">—</span
@@ -802,6 +805,7 @@
                     Hide sessions
                   </button>
                 </div>
+                <button id="bench-start-selected" class="secondary-button" type="button" hidden></button>
                 <div id="terminal-grid" class="terminal-grid">
                   <div class="terminal-empty">
                     <div class="empty-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg></div>
@@ -828,6 +832,13 @@
                     </div>
                     <p class="terminal-shortcuts"><kbd>Alt T</kbd> New terminal <span aria-hidden="true">·</span> <kbd>Ctrl / ⌘ K</kbd> Commands</p>
                   </div>
+                </div>
+                <div id="bench-terminal-context" class="bench-terminal-context" hidden>
+                  <span id="bench-terminal-context-summary"></span>
+                  <button type="button" class="text-button" id="bench-view-delivery" hidden>View delivered context</button>
+                  <button type="button" class="text-button" id="bench-resend-context" hidden>Resend context</button>
+                  <button type="button" class="text-button" id="bench-handoff" hidden>Hand off</button>
+                  <button type="button" class="text-button" id="bench-offer-note" hidden>Save session note</button>
                 </div>
               </div>
             </div>
@@ -1012,6 +1023,10 @@
           <span>PROJECT</span
           ><strong id="launch-project">Current project</strong
           ><small id="launch-node">Runs on your Verb host</small>
+        </div>
+        <div id="bench-launch-assignment" hidden>
+          <label class="field-label">Spec <select name="specId"><option value="">Scratch</option></select></label>
+          <label class="field-label">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
         </div>
         <div class="agent-choice" role="radiogroup" aria-label="Session type">
           <label class="full-span"
@@ -1318,10 +1333,57 @@
         <p class="proof-hint">The note includes open acceptance criteria, recent <code>spec:</code> commits, uncommitted files and the branch. Add anything they can't see:</p>
         <label class="field-label" for="handoff-note">Your note <span>(optional)</span></label
         ><textarea id="handoff-note" rows="3" maxlength="2000" placeholder="Login works; the email test is flaky on CI. Don't touch the session store."></textarea>
+        <div id="handoff-reviewed" hidden>
+          <p>Review spec revision <code id="handoff-revision"></code>.</p>
+          <label class="field-label">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
+          <label class="field-label">Approved scope<textarea name="scope" maxlength="600" rows="2"></textarea></label>
+          <label class="field-label">Approved checks<textarea name="checks" maxlength="600" rows="2"></textarea></label>
+        </div>
         <p class="proof-hint">The previous agent keeps running. End it yourself when you're ready.</p>
         <div class="modal-footer">
           <button class="secondary-button" type="button" data-close="handoff-dialog">Cancel</button
           ><button class="primary-button" type="submit" id="handoff-submit">Hand off</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="bench-context-dialog" class="modal" aria-labelledby="bench-context-title">
+      <form class="modal-content">
+        <h2 id="bench-context-title">Context</h2>
+        <p id="bench-context-detail"></p>
+        <pre id="bench-context-text" class="bench-context-text" tabindex="0"></pre>
+        <p id="bench-context-error" role="alert" hidden></p>
+        <div class="modal-footer">
+          <button type="button" class="secondary-button" data-close="bench-context-dialog">Close</button>
+          <button type="submit" class="primary-button" hidden>Paste context</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="bench-note-dialog" class="modal" aria-labelledby="bench-note-title">
+      <form class="modal-content">
+        <h2 id="bench-note-title">Save a session note</h2>
+        <p id="bench-note-detail"></p>
+        <label class="field-label">Outcome (reported, unverified)<textarea name="outcome" required maxlength="2000" rows="3"></textarea></label>
+        <label class="field-label">Files changed<textarea name="files" maxlength="1500" rows="3"></textarea></label>
+        <label class="field-label">Checks (reported, unverified)<textarea name="checks" maxlength="1000" rows="2"></textarea></label>
+        <p id="bench-note-error" role="alert" hidden></p>
+        <div class="modal-footer">
+          <button type="button" class="secondary-button" data-close="bench-note-dialog">Skip</button>
+          <button type="submit" class="primary-button">Save note</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="bench-binding-dialog" class="modal" aria-labelledby="bench-binding-title">
+      <form class="modal-content">
+        <h2 id="bench-binding-title">Change terminal assignment</h2>
+        <label class="field-label">Spec <select name="specId"></select></label>
+        <label class="field-label">Role <select name="role"><option value="">No role</option><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
+        <p id="bench-binding-error" role="alert" hidden></p>
+        <div class="modal-footer">
+          <button type="button" class="secondary-button" data-close="bench-binding-dialog">Cancel</button>
+          <button type="submit" class="primary-button">Change assignment</button>
         </div>
       </form>
     </dialog>

@@ -29,7 +29,7 @@ The slim sidebar collapses. Project switching sits at the top, followed by Needs
 
 Tabs show agent, spec number, role and observed status, using working, waiting for me, idle and ended. A terminal without a spec is labelled Scratch. Two terminals can appear side by side. The plus button opens a launch form with agent, spec or Scratch, and role.
 
-The context strip is display-only. It shows the spec, requirement IDs and note count given to that session. Resend context and Hand off are its actions. A spec-bound terminal that ends offers to append a session note containing outcome, files and checks. The note is attributed as reported and unverified and appears in the next agent's context for the spec.
+The context strip is display-only. It shows the spec, requirement IDs and note count given to that session. Resend context and Hand off are its actions. A spec-bound terminal that ends offers to append a session note to `specs/sessions/<spec-id>.md`, separately from the spec revision. Outcome and checks are reported and unverified. Files prefilled from a Git comparison are observed by Verb, and edits to that list are reported and unverified. Later per-spec launch context includes the notes, newest first.
 
 Board and Needs you replace the centre display while terminals stay alive. The new desktop layout keeps conversation in the terminal. The existing chat-style conversation surfaces remain accessible from the phone and the old layout.
 

@@ -132,7 +132,7 @@ pub(crate) fn files(project: &Path) -> Result<FileList, String> {
     Ok(FileList { files, truncated })
 }
 
-fn safe_relative(path: &str) -> Result<PathBuf, String> {
+pub(crate) fn safe_relative(path: &str) -> Result<PathBuf, String> {
     let p = Path::new(path);
     if path.is_empty()
         || p.is_absolute()
@@ -295,6 +295,9 @@ struct ContextParts {
     specs: Vec<String>,
     glossary: Option<String>,
     specific: Vec<String>,
+    links: Vec<String>,
+    session_notes: Vec<String>,
+    revision: String,
 }
 
 impl ContextParts {
@@ -303,6 +306,8 @@ impl ContextParts {
         for (heading, lines) in [
             ("Brief", &self.brief),
             ("Current spec", &self.specific),
+            ("Linked requirements and goals", &self.links),
+            ("Session notes (newest first)", &self.session_notes),
             ("Specs in progress", &self.specs),
             ("Shared notes (newest first)", &self.notes),
         ] {
@@ -316,8 +321,13 @@ impl ContextParts {
         out
     }
 
-    fn bounded(mut self, limit: usize, command: &str) -> (String, bool) {
-        let mut omitted = [0; 5];
+    fn bounded(self, limit: usize, command: &str) -> (String, bool) {
+        let (text, truncated, _, _) = self.bound(limit, command);
+        (text, truncated)
+    }
+
+    fn bound(mut self, limit: usize, command: &str) -> (String, bool, Option<String>, Self) {
+        let mut omitted = [0; 6];
         loop {
             let mut out = self.render();
             let omission = [
@@ -326,22 +336,26 @@ impl ContextParts {
                 "glossary sections",
                 "brief sections",
                 "spec sections",
+                "session notes",
             ]
             .into_iter()
             .zip(omitted)
             .filter(|(_, count)| *count > 0)
             .map(|(name, count)| format!("{count} {name}"))
             .collect::<Vec<_>>();
-            if !omission.is_empty() {
-                out.push_str(&format!(
-                    "\nOmitted {}. Run `{command}` for the full context.\n",
+            let omission = (!omission.is_empty()).then(|| {
+                format!(
+                    "Omitted {}. Run `{command}` for the full context.",
                     omission.join(", ")
-                ));
+                )
+            });
+            if let Some(line) = &omission {
+                out.push_str(&format!("\n{line}\n"));
             }
             out.push_str(END);
             out.push('\n');
             if out.len() <= limit {
-                return (out, omitted[3] > 0 || omitted[4] > 0);
+                return (out, omitted[3] > 0 || omitted[4] > 0, omission, self);
             }
             if !self.notes.is_empty() {
                 let mut excess = out.len() - limit;
@@ -359,12 +373,17 @@ impl ContextParts {
                 omitted[2] += 1;
             } else if self.specs.pop().is_some() {
                 omitted[1] += 1;
-            } else if self.specific.pop().is_some() {
+            } else if self.specific.len() > 1 {
+                self.specific.pop();
+                omitted[4] += 1;
+            } else if self.session_notes.pop().is_some() {
+                omitted[5] += 1;
+            } else if self.links.pop().is_some() || self.specific.pop().is_some() {
                 omitted[4] += 1;
             } else if self.brief.pop().is_some() {
                 omitted[3] += 1;
             } else {
-                return (String::new(), true);
+                return (String::new(), true, None, Self::default());
             }
         }
     }
@@ -393,11 +412,7 @@ fn visible_context_file(
     read_agent_file(project, path).ok().flatten()
 }
 
-fn context_parts(
-    project: &Path,
-    spec_id: Option<&str>,
-    launch: bool,
-) -> Result<ContextParts, String> {
+fn context_files(project: &Path) -> Result<std::collections::HashSet<String>, String> {
     let paths = if crate::isolation::external() {
         let result = files(project)?;
         if result.truncated {
@@ -407,7 +422,16 @@ fn context_parts(
     } else {
         visible_files(project)?
     };
-    let files = paths.into_iter().collect::<std::collections::HashSet<_>>();
+    Ok(paths.into_iter().collect())
+}
+
+fn context_parts(
+    project: &Path,
+    spec_id: Option<&str>,
+    launch: bool,
+    notes_project: Option<&Path>,
+) -> Result<ContextParts, String> {
+    let files = context_files(project)?;
     let mut parts = ContextParts::default();
     if let Some(raw) = visible_context_file(project, BRIEF_PATH, &files) {
         for heading in ["Problem", "Scope", "Constraints", "Who it is for"] {
@@ -467,6 +491,20 @@ fn context_parts(
         if matches.next().is_some() {
             return Err("Multiple visible specs have that ID".into());
         }
+        parts.revision = spec.revision.clone();
+        let notes_path = format!("specs/sessions/{id}.md");
+        let mut notes_root = files.contains(&notes_path).then_some(project);
+        if let Some(source) = notes_project.filter(|source| *source != project) {
+            if context_files(source)?.contains(&notes_path) {
+                notes_root = Some(source);
+            }
+        }
+        if let Some(root) = notes_root {
+            parts.session_notes = crate::session_context::notes(root, id)?
+                .iter()
+                .map(|note| context_text(note))
+                .collect();
+        }
         parts.specific.push(format!(
             "Spec {} · {} (`{}`)",
             spec.id,
@@ -479,7 +517,7 @@ fn context_parts(
                     visible_context_file(project, &format!("work/{work_item}/brd.md"), &files);
                 let prd =
                     visible_context_file(project, &format!("work/{work_item}/prd.md"), &files);
-                parts.specific.extend(
+                parts.links.extend(
                     crate::work_items::linked_context(spec, brd, prd)
                         .into_iter()
                         .map(|text| context_text(&text)),
@@ -554,25 +592,59 @@ fn context_parts(
 }
 
 pub(crate) fn full_context(project: &Path, spec: Option<&str>) -> Result<String, String> {
-    let mut out = context_parts(project, spec, false)?.render();
+    let mut out = context_parts(project, spec, false, None)?.render();
     out.push_str(END);
     out.push('\n');
     Ok(out)
 }
 
+#[cfg(test)]
 pub(crate) fn spec_launch_context(
     project: &Path,
     id: &str,
     limit: usize,
 ) -> Result<String, String> {
+    Ok(spec_delivery(project, project, id, limit, "launch")?.0)
+}
+
+pub(crate) fn spec_delivery(
+    project: &Path,
+    notes_project: &Path,
+    id: &str,
+    limit: usize,
+    trigger: &str,
+) -> Result<(String, crate::session_context::Delivery), String> {
     let command = format!("verb shared spec {id}");
-    Ok(context_parts(project, Some(id), true)?
-        .bounded(limit.min(CONTEXT_LIMIT), &command)
-        .0)
+    let (text, _, omission, parts) = context_parts(project, Some(id), true, Some(notes_project))?
+        .bound(limit.min(CONTEXT_LIMIT), &command);
+    let ids = |prefix: &str| {
+        parts
+            .links
+            .iter()
+            .filter_map(|line| {
+                line.strip_prefix(prefix)?
+                    .split_once(" · ")
+                    .map(|(id, _)| id.to_owned())
+            })
+            .collect()
+    };
+    let delivery = crate::session_context::Delivery {
+        at: crate::iso8601(crate::now_millis()),
+        trigger: trigger.to_owned(),
+        spec_id: id.to_owned(),
+        spec_revision: parts.revision.clone(),
+        requirements: ids("PRD requirement "),
+        goals: ids("BRD goal "),
+        note_count: parts.notes.len() + parts.session_notes.len(),
+        bytes: text.len(),
+        hash: crate::session_context::digest(text.as_bytes()),
+        omission,
+    };
+    Ok((text, delivery))
 }
 
 fn context_section(project: &Path) -> Result<(String, bool), String> {
-    Ok(context_parts(project, None, false)?.bounded(CONTEXT_LIMIT, "verb shared full"))
+    Ok(context_parts(project, None, false, None)?.bounded(CONTEXT_LIMIT, "verb shared full"))
 }
 
 fn current_section(raw: &str) -> Result<Option<&str>, String> {
@@ -1009,6 +1081,29 @@ mod tests {
         let brief = fs::read_to_string(project.join(BRIEF_PATH)).unwrap();
         assert!(brief.contains("synced agent context into AGENTS.md and CLAUDE.md"));
     }
+    #[test]
+    fn bound_removes_shared_notes_before_session_notes_and_preserves_brief() {
+        let parts = ContextParts {
+            brief: vec!["Problem survives".into()],
+            notes: vec!["Shared".repeat(80)],
+            session_notes: vec!["Session".repeat(80)],
+            ..ContextParts::default()
+        };
+        let (text, _, omission, retained) = parts.bound(550, "verb shared spec 001");
+        assert!(text.contains("Problem survives"));
+        assert!(retained.notes.is_empty() && retained.session_notes.is_empty());
+        assert!(omission.unwrap().contains("1 notes"));
+        let parts = ContextParts {
+            brief: vec!["Problem survives".into()],
+            notes: vec!["Shared".repeat(80)],
+            session_notes: vec!["newest session note".into()],
+            ..ContextParts::default()
+        };
+        let (_, _, _, retained) = parts.bound(250, "verb shared spec 001");
+        assert!(retained.notes.is_empty());
+        assert_eq!(retained.session_notes, ["newest session note"]);
+    }
+
     #[test]
     fn context_bound_drops_old_notes_and_preserves_section_boundaries() {
         let parts = ContextParts {

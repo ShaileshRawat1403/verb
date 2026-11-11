@@ -211,6 +211,7 @@ pub(crate) struct Session {
     /// The agent's own conversation id, per `docs/VERB_SESSION_SCHEMA.md`'s `agent.resumeIdentity`.
     /// Opaque to the session machinery -- only the agent interprets it.
     pub(crate) resume_identity: Option<String>,
+    pub(crate) assignment: crate::session_context::Assignment,
 }
 
 impl Session {
@@ -241,12 +242,13 @@ impl Session {
             state: SessionState::Live,
             agent: tracked_agent,
             resume_identity: None,
+            assignment: Default::default(),
         }
     }
 
     pub(crate) fn serialize(&self) -> String {
         format!(
-            "schema_version=1\nsession_id={}\nproject_id={}\nverb_project_id={}\nruntime_id={}\nlast_known_cwd={}\nlast_observed_at={}\ncreated_at={}\nlast_seen_at={}\nstate={}\nagent={}\nresume_identity={}\n",
+            "schema_version=1\nsession_id={}\nproject_id={}\nverb_project_id={}\nruntime_id={}\nlast_known_cwd={}\nlast_observed_at={}\ncreated_at={}\nlast_seen_at={}\nstate={}\nagent={}\nresume_identity={}\nassignment={}\n",
             self.id,
             self.project_id.display(),
             optional_string(self.verb_project_id.as_deref()),
@@ -260,6 +262,7 @@ impl Session {
                 .as_ref()
                 .map_or_else(String::new, |agent| agent.label().to_owned()),
             optional_string(self.resume_identity.as_deref()),
+            serde_json::to_string(&self.assignment).expect("session assignment serializes"),
         )
     }
 
@@ -336,6 +339,10 @@ impl Session {
                 .get("state")
                 .and_then(|value| SessionState::parse(value))?,
             agent,
+            assignment: match values.get("assignment") {
+                Some(raw) => serde_json::from_str(raw).ok()?,
+                None => Default::default(),
+            },
             resume_identity: values
                 .get("resume_identity")
                 .filter(|value| !value.is_empty())

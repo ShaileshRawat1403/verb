@@ -109,6 +109,7 @@ impl Hosted {
             }
             logger.process_started()?;
             session.state = crate::SessionState::Live;
+            session.assignment.terminal_ended_at = None;
             session.last_seen_at = crate::now_millis();
             crate::save_session(&session)?;
             Ok((reader, logger))

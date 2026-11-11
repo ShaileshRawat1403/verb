@@ -2993,3 +2993,225 @@ fn work_item_numbers_are_shared_by_git_checkouts_and_require_the_main_store() {
         "7\n"
     );
 }
+
+#[test]
+fn spec_terminal_deliveries_and_notes_keep_the_reviewed_revision() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .current_dir(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{:?}", result);
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "Start",
+    ]);
+    let bin = server.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let capture = server.root.join("prompt");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nprintf '\\033[?2004h'\nexec sleep 30\n",
+        capture.display()
+    );
+    fs::write(bin.join("claude"), &script).unwrap();
+    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(bin.join("codex"), &script).unwrap();
+    fs::set_permissions(bin.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let server = server.restart_with_env(&[("PATH", &path)]);
+    let item = project.join("work/001-delivery");
+    fs::create_dir_all(&item).unwrap();
+    fs::write(item.join("brd.md"), "Size: small\nProblem: Test the route\nGoal: G1 · Verify delivery\nSuccess: Observed context").unwrap();
+    fs::write(
+        item.join("prd.md"),
+        "| R1 | G1 | Include the note | Test the prompt |\n",
+    )
+    .unwrap();
+    let spec = server.json(
+        "POST",
+        "/api/specs",
+        Some(json!({"title":"Delivery fixture","criteria":["Observe the note (R1)"]})),
+    );
+    let spec_id = spec["id"].as_str().unwrap();
+    let route = format!("/api/specs/{spec_id}");
+    server.json("POST", "/api/work-items/link", Some(json!({
+        "workItem":"001-delivery", "specId":spec_id, "expectedRevision":spec["revision"], "criteria":{"1":["R1"]}
+    })));
+    let started = server.json(
+        "POST",
+        &format!("{route}/agent"),
+        Some(json!({"agent":"claude","role":"implement"})),
+    );
+    let id = started["sessionId"].as_str().unwrap();
+    let terminal = format!("/api/terminals/{id}");
+    let snapshot = server.json("GET", "/api/workspace", None);
+    let row = snapshot["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["specId"], spec_id);
+    assert_eq!(row["role"], "implement");
+    assert_eq!(row["workItemId"], "001-delivery");
+    let delivery = server.json("GET", &format!("{terminal}/delivered-context"), None);
+    assert_eq!(delivery["delivery"]["trigger"], "launch");
+    assert_eq!(delivery["delivery"]["requirements"], json!(["R1"]));
+    assert_eq!(delivery["delivery"]["goals"], json!(["G1"]));
+    assert_eq!(
+        delivery["delivery"]["bytes"].as_u64().unwrap() as usize,
+        delivery["text"].as_str().unwrap().len()
+    );
+    for _ in 0..100 {
+        if fs::read_to_string(&capture)
+            .is_ok_and(|text| text.contains(delivery["text"].as_str().unwrap()))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(fs::read_to_string(&capture)
+        .unwrap()
+        .contains(delivery["text"].as_str().unwrap()));
+    assert!(!project
+        .join(format!(
+            "delivered-context-{}.txt",
+            delivery["delivery"]["hash"].as_str().unwrap()
+        ))
+        .exists());
+
+    let preview = server.json("GET", &format!("{terminal}/context-preview"), None);
+    let resend = |hash: &Value| {
+        server.request("POST", &format!("{terminal}/resend-context"), Some(json!({
+        "hash": hash, "specRevision": preview["delivery"]["specRevision"], "deliveryCount": preview["deliveryCount"]
+    })), true)
+    };
+    assert_eq!(resend(&json!("different text")).0, 400);
+    let mut sent = (400, Vec::new());
+    for _ in 0..100 {
+        sent = resend(&preview["delivery"]["hash"]);
+        if sent.0 == 200 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(sent.0, 200, "{}", String::from_utf8_lossy(&sent.1));
+    assert_eq!(resend(&preview["delivery"]["hash"]).0, 400);
+    let resent = server.json("GET", &format!("{terminal}/delivered-context"), None);
+    assert_eq!(resent["text"], preview["text"]);
+    assert_eq!(resent["delivery"]["trigger"], "resend");
+    server.json(
+        "POST",
+        &format!("{terminal}/binding"),
+        Some(json!({"specId":spec_id,"role":"review"})),
+    );
+    let current = server.json("GET", "/api/workspace", None);
+    let bound = current["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(bound["role"], "review");
+    let encoded: String = id.bytes().map(|byte| format!("{byte:02x}")).collect();
+    let record = fs::read_to_string(
+        server
+            .root
+            .join(format!("state/sessions/s-{encoded}.session")),
+    )
+    .unwrap();
+    assert!(record.contains("changed session binding from"));
+    assert!(record.contains("resend"));
+    assert!(!record.contains("Project context (maintained by Verb)"));
+
+    fs::write(project.join("changed.txt"), "after launch").unwrap();
+    server.json("DELETE", &terminal, None);
+    let revision = server.json("GET", &route, None)["revision"].clone();
+    let note = server.json("GET", &format!("{terminal}/session-note"), None);
+    assert!(note["files"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .any(|path| path == "changed.txt"));
+    let secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
+    let note_body = json!({"outcome":format!("Second agent should verify marker {secret}"),"files":note["files"],"checks":"Manual review"});
+    server.json(
+        "POST",
+        &format!("{terminal}/session-note"),
+        Some(note_body.clone()),
+    );
+    assert_eq!(
+        server
+            .request(
+                "POST",
+                &format!("{terminal}/session-note"),
+                Some(note_body),
+                true
+            )
+            .0,
+        400
+    );
+    let notes = fs::read_to_string(project.join(format!("specs/sessions/{spec_id}.md"))).unwrap();
+    assert!(
+        notes.contains("reported, unverified")
+            && notes.contains("observed by Verb")
+            && notes.contains("[redacted]")
+    );
+    assert!(!notes.contains(secret));
+    assert_eq!(server.json("GET", &route, None)["revision"], revision);
+    let listing = server.json("GET", "/api/specs", None);
+    assert_eq!(listing["specs"].as_array().unwrap().len(), 1);
+    let (status, response) = server.request("POST", &format!("{route}/handoff"), Some(json!({
+        "to":"codex", "approved":{"revision":revision,"role":"review","scope":"Review changed.txt","checks":""}
+    })), true);
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&response));
+    let next = server.json(
+        "POST",
+        &format!("{route}/agent"),
+        Some(json!({"agent":"claude","role":"investigate"})),
+    );
+    let next_context = server.json(
+        "GET",
+        &format!(
+            "/api/terminals/{}/delivered-context",
+            next["sessionId"].as_str().unwrap()
+        ),
+        None,
+    );
+    let text = next_context["text"].as_str().unwrap();
+    assert!(
+        text.contains("Session notes (newest first)")
+            && text.contains("Second agent should verify marker [redacted]")
+    );
+    assert_eq!(next_context["delivery"]["noteCount"], 1);
+    assert!(!text.contains(secret));
+    let mut received = false;
+    for _ in 0..100 {
+        if fs::read_to_string(&capture).is_ok_and(|prompt| prompt.contains(text)) {
+            received = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        received,
+        "The next agent must receive the exact recorded context"
+    );
+}

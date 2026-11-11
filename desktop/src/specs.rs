@@ -948,7 +948,7 @@ pub(crate) fn agent_brief(spec: &Spec) -> String {
     )
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum AssignmentRole {
     Implement,
@@ -957,6 +957,14 @@ pub(crate) enum AssignmentRole {
 }
 
 impl AssignmentRole {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Implement => "Implement",
+            Self::Review => "Review",
+            Self::Investigate => "Investigate",
+        }
+    }
+
     pub(crate) fn instruction(self) -> &'static str {
         match self {
             Self::Implement => {

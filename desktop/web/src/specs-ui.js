@@ -753,9 +753,16 @@ export function initWorkbench(deps) {
   };
   $("#spec-agent").addEventListener("change", syncTalkButton);
 
-  function openHandoff() {
+  function openHandoff({ reviewed = false } = {}) {
     const spec = selected();
     if (!spec) return;
+    state.handoffReview = reviewed ? { id: spec.id, revision: spec.revision } : null;
+    $("#handoff-reviewed").hidden = !reviewed;
+    $("#handoff-revision").textContent = reviewed ? spec.revision : "";
+    const form = $("#handoff-dialog-form");
+    form.elements.scope.required = reviewed;
+    form.elements.scope.value = "";
+    form.elements.checks.value = "";
     const from = lastAgent(spec);
     $("#handoff-from").textContent = from ? agentDisplayName(from) : "nobody yet";
     $("#handoff-title").textContent = `Hand off spec ${spec.id}`;
@@ -1134,14 +1141,27 @@ export function initWorkbench(deps) {
     event.preventDefault();
     const spec = selected();
     if (!spec) return;
+    const form = event.currentTarget;
+    const submit = $("#handoff-submit");
+    if (submit.disabled) return;
     const to = $("#handoff-to").value;
+    const review = state.handoffReview;
+    if (review && review.id !== spec.id) {
+      toast("The selected spec changed. Review the handoff again.", "error");
+      return;
+    }
+    const approved = review ? {
+      revision: review.revision, role: form.elements.role.value,
+      scope: form.elements.scope.value, checks: form.elements.checks.value,
+    } : undefined;
+    submit.disabled = true;
     const from = lastAgent(spec);
     // Only say the previous agent is still running when one actually is.
     const fromLive = specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && x.agent === from);
     try {
-      const result = await api("POST", `/api/specs/${spec.id}/handoff`, { to, note: $("#handoff-note").value });
+      const result = await api("POST", `/api/specs/${spec.id}/handoff`, { to, note: $("#handoff-note").value, approved });
       closeDialog("handoff-dialog");
-      deps.mountLaunchedSession({ id: result.sessionId, agent: to, isolated: false, state: "live", hasTerminal: true, terminal: { running: true, replayAvailable: true }, hostedHere: true });
+      deps.mountLaunchedSession({ id: result.sessionId, agent: to, specId: spec.id, role: approved?.role ?? null, isolated: false, state: "live", hasTerminal: true, terminal: { running: true, replayAvailable: true }, hostedHere: true });
       if (result.warning) toast(result.warning, "error");
       else
         toast(
@@ -1150,6 +1170,8 @@ export function initWorkbench(deps) {
       await Promise.all([refreshSpecs(), refreshGit()]);
     } catch (error) {
       toast(error.message, "error");
+    } finally {
+      submit.disabled = false;
     }
   });
 

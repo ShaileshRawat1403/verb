@@ -20,6 +20,7 @@ import "./motion.css";
 import "./studio.css";
 import "./conversation.css";
 import { initStudio } from "./studio-ui.js";
+import { initBenchTerminals } from "./bench-terminals.js";
 import { initBenchShell } from "./bench-shell.js";
 import "./bench-shell.css";
 import { initWorkbench } from "./specs-ui.js";
@@ -61,6 +62,7 @@ if (location.hash && token) {
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
 let shell = null;
+let benchTerminals = null;
 let studio = null;
 let connections = null;
 // The Project view (project-ui.js): file tree, preview and context hub.
@@ -336,6 +338,7 @@ function showView(view) {
   connections?.onShowView(view);
   shell?.onView();
   if (shell) renderTerminalTabs();
+  benchTerminals?.render();
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -1117,6 +1120,7 @@ function addTerminal(session) {
   const openSearch = () => {
     searchBar.hidden = false;
     searchToggle.setAttribute("aria-pressed", "true");
+    renderTerminalTabs();
     searchInput.focus();
     searchInput.select();
     if (searchInput.value) runSearch(true);
@@ -1124,6 +1128,7 @@ function addTerminal(session) {
   const closeSearch = () => {
     searchBar.hidden = true;
     searchToggle.setAttribute("aria-pressed", "false");
+    renderTerminalTabs();
     try {
       search?.clearDecorations?.();
     } catch {}
@@ -1336,9 +1341,12 @@ function renderTerminalTabs() {
   if (strip.parentElement !== tabMount) tabMount.prepend(strip);
   strip.hidden = ui.terminals.size === 0 && (bench || ui.talks.size === 0);
   const menu = $("#bench-terminal-menu");
+  $("#bench-terminal-id").textContent = ui.focusedTerminal ? `Session ${ui.focusedTerminal}` : "";
   const activeTerminal = ui.terminals.get(ui.focusedTerminal);
   menu.hidden = !bench || ui.view !== "sessions" || !activeTerminal;
   if (menu.hidden) menu.open = false;
+  menu.querySelector('[data-bench-terminal-action="search"]').setAttribute("aria-pressed",
+    String(activeTerminal?.tile.querySelector(".terminal-search-bar").hidden === false));
   menu.querySelector('[data-bench-terminal-action="end"]').textContent = activeTerminal?.ended ? "Close terminal output" : "End session";
   for (const action of ["phone", "take"]) {
     menu.querySelector(`[data-bench-terminal-action="${action}"]`).hidden =
@@ -1349,7 +1357,17 @@ function renderTerminalTabs() {
     .map(([id, terminal]) => {
       const status = terminalTabStatus(terminal, id);
       const selected = id === ui.focusedTerminal;
-      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
+      const session = ui.state?.sessions.find(item => item.id === id);
+      const agent = agentDisplayName(terminal.agent);
+      const role = session?.role ? session.role[0].toUpperCase() + session.role.slice(1) : "";
+      const assignment = session?.specId ? `Spec ${session.specId}${role ? ` · ${role}` : ""}` : "Scratch";
+      const shortAgent = terminal.agent === "claude" ? "Claude" : terminal.agent === "agy" ? "AGY" : agent;
+      const title = `${agent} ${bench ? assignment : id.slice(0, 8)}: ${status.words}`;
+      const label = bench ? ` aria-label="${escapeHtml(title)}"` : "";
+      const details = bench && session?.specId
+        ? `<span class="bench-tab-spec-prefix">Spec </span>${escapeHtml(session.specId)}${role ? ` · ${escapeHtml(role)}` : ""}`
+        : escapeHtml(bench ? assignment : id.slice(0, 4));
+      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(title)}"${label}><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span class="bench-tab-agent">${escapeHtml(agent)}</span>${bench ? `<span class="bench-tab-short-agent">${escapeHtml(shortAgent)}</span>` : ""}<small>${details}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
   const talkTabs = [...ui.talks.entries()]
@@ -1382,6 +1400,10 @@ function renderTerminalTabs() {
 
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
+  const bench = shell?.enabled();
+  const primary = ui.focusedTerminal;
+  const secondary = [...ui.terminals.keys()].find(id => id !== primary);
+  grid.classList.toggle("bench-split", Boolean(bench && ui.splitTerminals && secondary));
   const talkVisible = !shell?.enabled() && ui.talks.size > 0;
   if (!ui.terminals.size && !talkVisible && !grid.querySelector(".terminal-empty"))
     grid.append(emptyTerminalTemplate.cloneNode(true));
@@ -1407,6 +1429,9 @@ function updateTerminalFocus() {
   ui.terminals.forEach(({ tile, fit, mount }, id) => {
     const focused = id === ui.focusedTerminal && !ui.splitTerminals;
     tile.classList.toggle("focused", focused);
+    tile.classList.toggle("bench-split-secondary", Boolean(bench && ui.splitTerminals && id === secondary));
+    tile.classList.toggle("bench-split-active", Boolean(bench && ui.splitTerminals && id === primary));
+    tile.classList.toggle("bench-split-hidden", Boolean(bench && ui.splitTerminals && id !== primary && id !== secondary));
     // The tab strip chooses and splits terminals now; the old per-pane button stays hidden.
     tile.querySelector("[data-focus-terminal]").hidden = true;
     requestAnimationFrame(() => {
@@ -1415,6 +1440,7 @@ function updateTerminalFocus() {
   });
   renderTerminalTabs();
   shell?.terminalChanged(ui.focusedTerminal);
+  benchTerminals?.render();
 }
 
 async function pollTerminal(id) {
@@ -1609,8 +1635,10 @@ $("#end-session-confirm").addEventListener("click", async () => {
   const button = $("#end-session-confirm");
   button.disabled = true;
   try {
-    await endTerminal($("#end-session-dialog").dataset.sessionId);
+    const id = $("#end-session-dialog").dataset.sessionId;
+    await endTerminal(id);
     closeDialog("end-session-dialog");
+    benchTerminals?.offerNote(id, true);
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -1805,6 +1833,7 @@ document.addEventListener("click", async (event) => {
     if (terminal.tile.classList.contains("ended")) {
       try {
         await endTerminal(id);
+        benchTerminals?.offerNote(id, true);
       } catch (error) {
         toast(error.message, "error");
       }
@@ -1821,6 +1850,8 @@ document.addEventListener("click", async (event) => {
       $("#session-launch-error").hidden = true;
       updateLaunchForm();
       loadInstalledAgents();
+      if (shell?.enabled()) return benchTerminals?.openLaunch();
+      $("#bench-launch-assignment").hidden = true;
       return showDialog("session-dialog");
     }
     if (actionButton.dataset.action === "new-task")
@@ -2029,6 +2060,9 @@ $("#session-form").addEventListener("submit", async (event) => {
   const agent = form.elements.agent.value;
   const command = form.elements.command.value.trim();
   const isolated = form.elements.isolated.checked;
+  const specId = shell?.enabled() ? form.elements.specId.value : "";
+  const role = specId ? form.elements.role.value : null;
+  if (specId && agent === "custom") return launchError("Choose a named agent or terminal for a spec.");
   if (isolated && !isolatedCheckoutAvailability(ui.agentCapabilities).available)
     return launchError(isolatedCheckoutAvailability(ui.agentCapabilities).reason);
   if (!agentAvailability(ui.agentCapabilities, agent).available)
@@ -2042,7 +2076,9 @@ $("#session-form").addEventListener("submit", async (event) => {
   button.disabled = true;
   button.textContent = "Opening…";
   try {
-    const result = await api("POST", "/api/terminals", {
+    const result = specId
+      ? await api("POST", `/api/specs/${specId}/agent`, { agent, role, isolated })
+      : await api("POST", "/api/terminals", {
       agent,
       isolated,
       command: agent === "custom" ? command : null,
@@ -2059,6 +2095,8 @@ $("#session-form").addEventListener("submit", async (event) => {
     $("#custom-command-fields").hidden = true;
     const sessionObj = {
       id: result.sessionId,
+      specId: specId || null,
+      role,
       agent: agent === "custom" ? command || "custom" : agent,
       isolated,
       state: "live",
@@ -2066,6 +2104,7 @@ $("#session-form").addEventListener("submit", async (event) => {
       terminal: { running: true, replayAvailable: true }, hostedHere: true,
     };
     mountLaunchedSession(sessionObj);
+    if (result.warning || result.contextWarning) toast(result.warning || result.contextWarning, "error");
   } catch (error) {
     launchError(error.message);
   } finally {
@@ -2281,6 +2320,8 @@ async function loadInstalledAgents() {
 async function showAccess() {
   try {
     const access = await api("GET", "/api/whoami");
+    ui.accessScope = access.scope;
+    benchTerminals?.render();
     $("#open-project-switch").hidden = access.scope !== "owner";
     const banner = $("#access-banner");
     banner.hidden = !access.token;
@@ -2346,9 +2387,16 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile });
+  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile, openLaunch: id => {
+    updateLaunchForm();
+    loadInstalledAgents();
+    benchTerminals?.openLaunch(id);
+  } });
+  benchTerminals = initBenchTerminals({ $, api, ui, shell, workbench, showDialog, closeDialog, refreshState, toast,
+    toggleSplit() { ui.splitTerminals = !ui.splitTerminals; updateTerminalFocus(); },
+  });
   $("#bench-terminal-menu").addEventListener("toggle", event => {
-    if (event.target.open) renderTerminalTabs();
+    if (event.target.open) { renderTerminalTabs(); benchTerminals?.render(); }
   });
   extras.shellCommands = () => shell.enabled() ? [
     { title: "Open Settings", run: () => showView("settings") },
