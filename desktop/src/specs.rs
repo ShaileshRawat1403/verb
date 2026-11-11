@@ -53,6 +53,8 @@ pub(crate) struct Spec {
 pub(crate) struct Change {
     pub code: String,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
     /// Lines added and removed against the last commit; absent for binary files.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<u32>,
@@ -646,7 +648,7 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
         }
     };
-    let status = read_git(&["status", "--porcelain=v1", "--branch", "-uall"])?;
+    let status = read_git(&["status", "--porcelain=v1", "--branch", "-z", "-uall"])?;
     let mut summary = GitSummary {
         branch: None,
         upstream: None,
@@ -655,7 +657,8 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
         changes: Vec::new(),
         recent: Vec::new(),
     };
-    for line in status.lines() {
+    let mut records = status.split_terminator('\0');
+    while let Some(line) = records.next() {
         if let Some(head) = line.strip_prefix("## ") {
             let (names, counts) = head.split_once(" [").unwrap_or((head, ""));
             let (branch, upstream) = names.split_once("...").unwrap_or((names, ""));
@@ -668,10 +671,21 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
                     summary.behind = n.parse().unwrap_or(0);
                 }
             }
-        } else if line.len() > 3 {
+        } else if let Some((code, path)) = line.get(..2).zip(line.get(3..)) {
+            let previous_path = if code.contains(['R', 'C']) {
+                Some(
+                    records
+                        .next()
+                        .ok_or("Git status omitted the source path")?
+                        .to_owned(),
+                )
+            } else {
+                None
+            };
             summary.changes.push(Change {
-                code: line[..2].trim().to_owned(),
-                path: line[3..].to_owned(),
+                code: code.trim().to_owned(),
+                path: path.to_owned(),
+                previous_path,
                 added: None,
                 removed: None,
             });

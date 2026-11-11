@@ -20,6 +20,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static NEXT_SERVER_ID: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/git_paths.rs"]
+mod git_paths;
+
 struct WebServer {
     child: Child,
     port: u16,
@@ -2433,4 +2436,67 @@ fn approved_agent_handoff_survives_host_interruption() {
         &format!("/api/terminals/{}", result["sessionId"].as_str().unwrap()),
         None,
     );
+}
+
+fn assert_git_paths(server: &WebServer) {
+    let request = |path: &str| {
+        let (status, body) = server.request("GET", path, None, true);
+        (status, serde_json::from_slice(&body).unwrap())
+    };
+    let (status, summary) = request("/api/git");
+    assert_eq!(status, 200, "{summary}");
+    git_paths::assert_summary(&summary);
+    git_paths::assert_previews(request);
+}
+
+#[test]
+fn local_git_paths_preserve_rename_copy_and_literal_arrow() {
+    let server = WebServer::start();
+    git_paths::fixture(&server.root.join("project"));
+    assert_git_paths(&server);
+}
+
+#[cfg(all(unix, feature = "synthetic-boundary"))]
+#[test]
+fn external_git_paths_preserve_rename_copy_and_literal_arrow() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let root = std::env::temp_dir().join(format!("verb-external-git-paths-{}", std::process::id()));
+    let checkout = root.join("0f1e2d3c4b5a69788796a5b4c3d2e1f0");
+    fs::create_dir_all(&checkout).unwrap();
+    fs::create_dir(root.join("home")).unwrap();
+    let boundary = root.join("boundary");
+    fs::create_dir_all(boundary.join("receipts")).unwrap();
+    symlink(&checkout, root.join("project")).unwrap();
+    git_paths::fixture(&checkout);
+    fs::write(boundary.join("fixture-binary"), env!("CARGO_BIN_EXE_verb")).unwrap();
+    let client = boundary.join("client");
+    fs::write(
+        &client,
+        r#"#!/bin/sh
+[ "$1" = --capabilities ] && exit 2
+[ "$5" = --mode ] && [ "$6" = pipes ] && [ "$7" = --program ] || exit 64
+program=$8
+shift 9
+if [ "$program" = git ]; then
+    exec /usr/bin/git "$@"
+fi
+case "$*" in
+    *"__project-read git")
+        exec env -u VERB_SYNTHETIC_BOUNDARY "$(cat "${0%/*}/fixture-binary")" __project-read git
+        ;;
+esac
+exit 64
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&client, fs::Permissions::from_mode(0o755)).unwrap();
+    let server = WebServer::start_in_root(
+        root,
+        &[
+            ("PATH", "/usr/bin:/bin"),
+            ("VERB_SYNTHETIC_BOUNDARY", boundary.to_str().unwrap()),
+        ],
+    );
+    assert_git_paths(&server);
 }
