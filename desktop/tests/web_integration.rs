@@ -2554,7 +2554,7 @@ fn work_item_reader_validates_links_and_preserves_legacy_spec_reads() {
     fs::write(specs.join("010-legacy.md"), legacy).unwrap();
     let identity = format!("{:x}", Sha256::digest(b"1\0Stable legacy criterion"));
     let linked = format!(
-        "---\nid: 011\ntitle: Linked\nstage: plan\nwork-item: 001-standard\n---\n## Acceptance criteria\n- [ ] New (R1, R2, R9)\n- [ ] Stable legacy criterion\n- [ ] Edited legacy criterion\n## Traceability\n- 2 · {identity} · R1\n- 3 · old-identity · R2\n"
+        "---\nid: 011\ntitle: Linked\nstage: plan\nwork-item: 001-standard\n---\n## Acceptance criteria\n- [ ] New (R1, R2, R9)\n- [ ] Stable legacy criterion\n- [ ] Edited legacy criterion\n- [ ] Cache hits (Redis)\n- [ ] Mixed prose (R1, Redis)\n## Traceability\n- 2 · {identity} · R1\n- 3 · old-identity · R2\n"
     );
     fs::write(specs.join("011-linked.md"), &linked).unwrap();
 
@@ -2589,6 +2589,9 @@ fn work_item_reader_validates_links_and_preserves_legacy_spec_reads() {
     assert_eq!(criteria[0]["requirements"], json!(["R1", "R2", "R9"]));
     assert_eq!(criteria[1]["stale"], false);
     assert_eq!(criteria[2]["stale"], true);
+    assert_eq!(criteria[3]["requirements"], json!([]));
+    assert_eq!(criteria[4]["requirements"], json!([]));
+    assert!(!warnings.contains("Redis"));
     let small = items.iter().find(|item| item["id"] == "002-small").unwrap();
     assert_eq!(small["goals"]["G1"], false);
     assert_eq!(

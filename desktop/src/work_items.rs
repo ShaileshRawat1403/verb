@@ -319,7 +319,7 @@ impl WorkItem {
                         .text
                         .rsplit_once(" (")
                         .and_then(|(_, suffix)| suffix.strip_suffix(')'))
-                        .filter(|refs| refs.starts_with('R')),
+                        .filter(|refs| refs.split(',').all(|id| valid_id(id.trim(), 'R'))),
                     false,
                 ),
             };
