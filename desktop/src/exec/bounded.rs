@@ -7,7 +7,7 @@ use std::time::Duration;
 pub(super) fn output(command: &mut Command, timeout: Duration, limit: usize) -> io::Result<Output> {
     #[cfg(unix)]
     {
-        unix::output(command, timeout, limit, None)
+        unix::output(command, timeout, limit, None, None)
     }
     #[cfg(not(unix))]
     {
@@ -27,7 +27,29 @@ pub(super) fn exchange(
     limit: usize,
     input: &[u8],
 ) -> io::Result<Output> {
-    unix::output(command, timeout, limit, Some(input))
+    unix::output(command, timeout, limit, Some(input), None)
+}
+
+type OutputSink<'a> = &'a mut dyn FnMut(&[u8]);
+
+pub(super) fn stream(
+    command: &mut Command,
+    timeout: Duration,
+    limit: usize,
+    sink: OutputSink<'_>,
+) -> io::Result<Output> {
+    #[cfg(unix)]
+    {
+        unix::output(command, timeout, limit, None, Some(sink))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (command, timeout, limit, sink);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "bounded observations require Unix",
+        ))
+    }
 }
 
 #[cfg(unix)]
@@ -63,16 +85,21 @@ mod unix {
 
     // Limit each drain turn as well as total bytes, so a continuously writing child cannot
     // starve the deadline check or the other stream. No pipe-reader threads can be stranded.
-    fn drain(reader: &mut impl Read, bytes: &mut Vec<u8>, limit: usize) -> io::Result<bool> {
+    fn drain(
+        reader: &mut impl Read,
+        remaining: &mut usize,
+        mut sink: impl FnMut(&[u8]),
+    ) -> io::Result<bool> {
         let mut buffer = [0; 8192];
         for _ in 0..8 {
             match reader.read(&mut buffer) {
                 Ok(0) => return Ok(true),
                 Ok(count) => {
-                    if count > limit.saturating_sub(bytes.len()) {
+                    if count > *remaining {
                         return Err(io::Error::other("observation output exceeds limit"));
                     }
-                    bytes.extend_from_slice(&buffer[..count]);
+                    *remaining -= count;
+                    sink(&buffer[..count]);
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -87,6 +114,7 @@ mod unix {
         timeout: Duration,
         limit: usize,
         input: Option<&[u8]>,
+        mut sink: Option<OutputSink<'_>>,
     ) -> io::Result<Output> {
         let deadline = Instant::now() + timeout;
         let mut probe = Probe {
@@ -121,6 +149,7 @@ mod unix {
         crate::pty::set_nonblocking(stdout.as_raw_fd())?;
         crate::pty::set_nonblocking(stderr.as_raw_fd())?;
         let (mut out, mut err) = (Vec::new(), Vec::new());
+        let (mut out_remaining, mut err_remaining) = (limit, limit.min(65536));
         let (mut out_done, mut err_done) = (false, false);
         loop {
             if Instant::now() >= deadline {
@@ -153,10 +182,18 @@ mod unix {
                 }
             }
             if !out_done {
-                out_done = drain(&mut stdout, &mut out, limit)?;
+                out_done = drain(&mut stdout, &mut out_remaining, |bytes| {
+                    if let Some(sink) = sink.as_mut() {
+                        sink(bytes);
+                    } else {
+                        out.extend_from_slice(bytes);
+                    }
+                })?;
             }
             if !err_done {
-                err_done = drain(&mut stderr, &mut err, limit.min(65536))?;
+                err_done = drain(&mut stderr, &mut err_remaining, |bytes| {
+                    err.extend_from_slice(bytes)
+                })?;
             }
             // Do not reap an exited leader while a descendant holds a pipe: on timeout we
             // still need its reserved process-group ID to safely terminate that group.
@@ -204,6 +241,29 @@ mod unix {
             .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::TimedOut);
             assert!(start.elapsed() < Duration::from_secs(3));
+        }
+
+        #[test]
+        fn streams_stdout_without_buffering_and_enforces_the_limit() {
+            let mut seen = Vec::new();
+            let result = super::super::stream(
+                Command::new("/bin/sh").args(["-c", "printf streamed"]),
+                Duration::from_secs(2),
+                8,
+                &mut |chunk| seen.extend_from_slice(chunk),
+            )
+            .unwrap();
+            assert!(result.status.success());
+            assert!(result.stdout.is_empty());
+            assert_eq!(seen, b"streamed");
+            let error = super::super::stream(
+                Command::new("/bin/sh").args(["-c", "printf oversized"]),
+                Duration::from_secs(2),
+                8,
+                &mut |_| {},
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("exceeds limit"));
         }
 
         #[test]

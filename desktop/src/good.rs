@@ -23,9 +23,7 @@ use crate::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 
 /// Beyond this much diff the fingerprint is skipped rather than holding it all in memory. The
 /// comparison still works from commits and file counts; only "exactly as marked" becomes unknown.
@@ -547,11 +545,7 @@ fn git(project: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_bytes(project: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = crate::exec::git(project)?
-        .args(args)
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
+    let output = crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()?;
     output.status.success().then_some(output.stdout)
 }
 
@@ -563,53 +557,28 @@ fn git_hash_bounded(
     hasher: &mut Sha256,
     limit: usize,
 ) -> Option<()> {
-    let mut child = crate::exec::git(project)?
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut seen = 0_usize;
-    loop {
-        let count = match stdout.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(count) => count,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        };
-        seen += count;
-        if seen > limit {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        hasher.update(&buffer[..count]);
-    }
-    child.wait().ok()?.success().then_some(())
+    let output = crate::exec::read_output_stream(
+        crate::exec::git(project)?.args(args),
+        limit,
+        &mut |bytes| hasher.update(bytes),
+    )
+    .ok()?;
+    output.status.success().then_some(())
 }
 
 fn git_bytes_with_input(project: &Path, args: &[&str], input: &[u8]) -> Option<Vec<u8>> {
-    let mut child = crate::exec::git(project)?
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdin = child.stdin.take()?;
-    let input = input.to_vec();
-    // Written from a thread so a large path list cannot deadlock against a full stdout pipe.
-    let writer = std::thread::spawn(move || {
-        let _ = stdin.write_all(&input);
-    });
-    let output = child.wait_with_output().ok()?;
-    let _ = writer.join();
-    output.status.success().then_some(output.stdout)
+    #[cfg(unix)]
+    {
+        let output =
+            crate::exec::read_output_with_input(crate::exec::git(project)?.args(args), input)
+                .ok()?;
+        output.status.success().then_some(output.stdout)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (project, args, input);
+        None
+    }
 }
 
 #[cfg(test)]

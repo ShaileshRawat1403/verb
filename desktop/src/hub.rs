@@ -74,14 +74,8 @@ pub(crate) struct Hub {
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    crate::exec::git_text(
-        crate::exec::git(project)
-            .ok_or("could not prepare git")?
-            .arg("-C")
-            .arg(project)
-            .args(args)
-            .output(),
-    )
+    let mut command = crate::exec::git(project).ok_or("could not prepare git")?;
+    crate::exec::git_text(crate::exec::read_output(command.args(args)))
 }
 
 fn visible_files(project: &Path) -> Result<Vec<String>, String> {
