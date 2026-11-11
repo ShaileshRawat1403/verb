@@ -654,8 +654,80 @@ fn agent_file_state(project: &Path, name: &'static str, wanted: Option<&str>) ->
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct AgentSync {
+    pub changed: Vec<&'static str>,
+    pub notice: String,
+}
+
+fn protect_agent_files_from_git(project: &Path) -> Result<String, String> {
+    let tracked = git(
+        project,
+        &["ls-files", "-z", "--cached", "--", "AGENTS.md", "CLAUDE.md"],
+    )?;
+    let tracked: Vec<_> = tracked.split_terminator('\0').collect();
+    if !tracked.is_empty() {
+        return Ok(format!(
+            "Git exclusions were left unchanged. Shared notes will be committed with {} if you commit its changes.",
+            tracked.join(" and ")
+        ));
+    }
+
+    let exclude = git(
+        project,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "info/exclude",
+        ],
+    )?;
+    let path = Path::new(exclude.trim_end_matches(['\r', '\n']));
+    if !path.is_absolute() {
+        return Err("Git did not provide an absolute info/exclude path".into());
+    }
+    let parent = path.parent().ok_or("Git info/exclude has no directory")?;
+    if !fs::symlink_metadata(parent)
+        .map_err(|error| error.to_string())?
+        .is_dir()
+    {
+        return Err("Git info/exclude must be inside a real info directory".into());
+    }
+    let raw = read_agent_file(
+        project,
+        path.to_str().ok_or("Git info/exclude is not UTF-8")?,
+    )?
+    .unwrap_or_default();
+    let mut next = raw.clone();
+    let mut added = Vec::new();
+    for name in AGENT_FILES {
+        let pattern = format!("/{name}");
+        let explicit = raw
+            .lines()
+            .rev()
+            .find(|line| line.trim_start_matches('!').trim_start_matches('/') == name);
+        if explicit.is_some_and(|line| !line.starts_with('!')) {
+            continue;
+        }
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(&pattern);
+        next.push('\n');
+        added.push(name);
+    }
+    if added.is_empty() {
+        return Ok("AGENTS.md and CLAUDE.md already have local Git exclusions.".into());
+    }
+    crate::fsutil::atomic_write(path, next.as_bytes())?;
+    Ok(format!(
+        "Added {} to local Git info/exclude.",
+        added.join(" and ")
+    ))
+}
+
 /// Publishes both files under the same project lock. Validate both marker pairs before writing.
-pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<Vec<&'static str>, String> {
+pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<AgentSync, String> {
     let identity = crate::project::identity(project)?;
     let _lock = crate::workbench::lock_project(&identity.store)?;
     let (wanted, _) = context_section(project)?;
@@ -674,6 +746,7 @@ pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<Vec<&'stat
         }
         writes.push((name, next));
     }
+    let notice = protect_agent_files_from_git(project)?;
     let mut changed = Vec::new();
     for (name, next) in writes {
         specs::write_atomic(&project.join(name), &next)?;
@@ -692,7 +765,7 @@ pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<Vec<&'stat
             &format!("synced agent context into {}", changed.join(" and ")),
         )?;
     }
-    Ok(changed)
+    Ok(AgentSync { changed, notice })
 }
 
 // ------------------------------------------------------------------------------- the hub view
@@ -892,7 +965,7 @@ mod tests {
         )
         .unwrap();
         let changed = sync_agent_files(&project, "A via test").unwrap();
-        assert_eq!(changed, vec!["AGENTS.md", "CLAUDE.md"]);
+        assert_eq!(changed.changed, vec!["AGENTS.md", "CLAUDE.md"]);
         let agents = fs::read_to_string(project.join("AGENTS.md")).unwrap();
         assert!(
             agents.starts_with("# My rules\n\nAlways use tabs.\n"),
@@ -900,7 +973,7 @@ mod tests {
         );
         assert!(agents.contains("**Problem:** Shops lose returning customers."));
         assert!(
-            sync_agent_files(&project, "A").unwrap().is_empty(),
+            sync_agent_files(&project, "A").unwrap().changed.is_empty(),
             "second sync changes nothing"
         );
         assert!(hub(&project)
@@ -1006,5 +1079,38 @@ mod tests {
         }
         assert!(!launch.contains("Audit entry") && !launch.contains("private-key"));
         assert!(launch.contains("spec sections"));
+    }
+    #[test]
+    fn sync_excludes_untracked_agent_files_and_warns_without_changing_git_if_tracked() {
+        let project = repo();
+        let exclude = project.join(".git/info/exclude");
+        fs::write(&exclude, "# owner rules\n/custom").unwrap();
+        let gitignore = fs::read(project.join(".gitignore")).ok();
+        let first = sync_agent_files(&project, "Owner").unwrap();
+        assert!(first.notice.contains("Added AGENTS.md and CLAUDE.md"));
+        let local = fs::read_to_string(&exclude).unwrap();
+        assert_eq!(local, "# owner rules\n/custom\n/AGENTS.md\n/CLAUDE.md\n");
+        assert!(git(&project, &["check-ignore", "AGENTS.md", "CLAUDE.md"]).is_ok());
+        let second = sync_agent_files(&project, "Owner").unwrap();
+        assert!(second.notice.contains("already have local Git exclusions"));
+        assert_eq!(fs::read_to_string(&exclude).unwrap(), local);
+
+        git(&project, &["add", "-f", "AGENTS.md"]).unwrap();
+        fs::write(&exclude, "# owner rules only\n").unwrap();
+        let tracked = sync_agent_files(&project, "Owner").unwrap();
+        assert!(tracked
+            .notice
+            .contains("Shared notes will be committed with AGENTS.md"));
+        assert_eq!(
+            fs::read_to_string(&exclude).unwrap(),
+            "# owner rules only\n"
+        );
+        assert_eq!(fs::read(project.join(".gitignore")).ok(), gitignore);
+        assert_eq!(
+            git(&project, &["ls-files", "--", "AGENTS.md", "CLAUDE.md"])
+                .unwrap()
+                .trim(),
+            "AGENTS.md"
+        );
     }
 }

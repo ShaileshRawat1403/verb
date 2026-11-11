@@ -2390,14 +2390,16 @@ impl WebHost {
                     }
                     None => project,
                 };
-                let changed = crate::hub::sync_agent_files(&project, &actor)?;
+                let synced = crate::hub::sync_agent_files(&project, &actor)?;
+                let message = if synced.changed.is_empty() {
+                    "Agent context was already up to date.".to_owned()
+                } else {
+                    format!("Updated {}.", synced.changed.join(" and "))
+                };
                 Ok(json!({
-                    "changed": changed,
-                    "message": if changed.is_empty() {
-                        "Agent context was already up to date.".to_owned()
-                    } else {
-                        format!("Updated {}", changed.join(" and "))
-                    },
+                    "changed": synced.changed,
+                    "message": format!("{message} {}", synced.notice),
+                    "git_notice": synced.notice,
                 }))
             }));
         }
