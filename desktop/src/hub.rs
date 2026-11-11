@@ -359,10 +359,10 @@ impl ContextParts {
                 omitted[2] += 1;
             } else if self.specs.pop().is_some() {
                 omitted[1] += 1;
-            } else if self.brief.pop().is_some() {
-                omitted[3] += 1;
             } else if self.specific.pop().is_some() {
                 omitted[4] += 1;
+            } else if self.brief.pop().is_some() {
+                omitted[3] += 1;
             } else {
                 return (String::new(), true);
             }
@@ -393,7 +393,11 @@ fn visible_context_file(
     read_agent_file(project, path).ok().flatten()
 }
 
-fn context_parts(project: &Path, spec_id: Option<&str>) -> Result<ContextParts, String> {
+fn context_parts(
+    project: &Path,
+    spec_id: Option<&str>,
+    launch: bool,
+) -> Result<ContextParts, String> {
     let paths = if crate::isolation::external() {
         let result = files(project)?;
         if result.truncated {
@@ -484,16 +488,32 @@ fn context_parts(project: &Path, spec_id: Option<&str>) -> Result<ContextParts, 
         } else {
             parts.specific.push("No work item is linked.".into());
         }
-        parts
-            .specific
-            .extend(spec.body.split("\n## ").map(|section| {
-                let section = context_text(section);
-                if section.starts_with('#') {
-                    section
-                } else {
-                    format!("## {section}")
-                }
-            }));
+        parts.specific.extend(
+            spec.body
+                .split("\n## ")
+                .enumerate()
+                .filter(|(index, section)| {
+                    !launch
+                        || !matches!(
+                            section
+                                .lines()
+                                .next()
+                                .unwrap_or("")
+                                .trim_end()
+                                .trim_start_matches("## "),
+                            "Audit trail" | "Traceability"
+                        )
+                        || (*index == 0 && !section.starts_with("## "))
+                })
+                .map(|(_, section)| {
+                    let section = context_text(section);
+                    if section.starts_with('#') {
+                        section
+                    } else {
+                        format!("## {section}")
+                    }
+                }),
+        );
     } else {
         specs.retain(|spec| matches!(spec.stage.as_str(), "plan" | "build" | "verify" | "review"));
         specs.sort_by(|left, right| {
@@ -534,7 +554,7 @@ fn context_parts(project: &Path, spec_id: Option<&str>) -> Result<ContextParts, 
 }
 
 pub(crate) fn full_context(project: &Path, spec: Option<&str>) -> Result<String, String> {
-    let mut out = context_parts(project, spec)?.render();
+    let mut out = context_parts(project, spec, false)?.render();
     out.push_str(END);
     out.push('\n');
     Ok(out)
@@ -546,13 +566,13 @@ pub(crate) fn spec_launch_context(
     limit: usize,
 ) -> Result<String, String> {
     let command = format!("verb shared spec {id}");
-    Ok(context_parts(project, Some(id))?
+    Ok(context_parts(project, Some(id), true)?
         .bounded(limit.min(CONTEXT_LIMIT), &command)
         .0)
 }
 
 fn context_section(project: &Path) -> Result<(String, bool), String> {
-    Ok(context_parts(project, None)?.bounded(CONTEXT_LIMIT, "verb shared full"))
+    Ok(context_parts(project, None, false)?.bounded(CONTEXT_LIMIT, "verb shared full"))
 }
 
 fn current_section(raw: &str) -> Result<Option<&str>, String> {
@@ -969,5 +989,22 @@ mod tests {
         fs::write(project.join("CLAUDE.md"), format!("{START}\nwrong\n{END}")).unwrap();
         assert!(checkout_context(&project).is_err());
         assert_eq!(hub(&project).agent_files[1].state, "outdated");
+    }
+    #[test]
+    fn launch_keeps_the_brief_and_omits_internal_spec_sections() {
+        let project = repo();
+        fs::create_dir_all(project.join("docs/project")).unwrap();
+        fs::write(project.join(BRIEF_PATH), "## Problem\nThe problem\n## Scope\nThe scope\n## Constraints\nThe constraints\n## Who it is for\nThe owner\n## Glossary\nTerms").unwrap();
+        fs::create_dir(project.join("specs")).unwrap();
+        fs::write(project.join("specs/001-example.md"), format!(
+            "---\nid: 001\ntitle: Example\nstage: plan\n---\n# Example\n## Details\n{}\n## Audit trail\n{}\n## Traceability\n- 1 · private-key · R1\n",
+            "Details ".repeat(500), "Audit entry ".repeat(500),
+        )).unwrap();
+        let launch = spec_launch_context(&project, "001", 600).unwrap();
+        for phrase in ["The problem", "The scope", "The constraints", "The owner"] {
+            assert!(launch.contains(phrase), "{launch}");
+        }
+        assert!(!launch.contains("Audit entry") && !launch.contains("private-key"));
+        assert!(launch.contains("spec sections"));
     }
 }
