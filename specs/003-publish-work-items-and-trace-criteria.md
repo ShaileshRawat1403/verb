@@ -36,10 +36,10 @@ replacements take the work item ID and the current document revision returned
 by GET. Publishing a first PRD requires a readable BRD. Validation warnings
 are returned and appended to the managed audit section of the published file.
 
-Verb advances `work/.next-id` under the existing project lock before
-publishing the first BRD. Keep the counter with the work item documents.
-Restoring or removing it can discard reservation history. Failed publications
-may leave gaps.
+Verb reserves numbers under the existing project lock in the shared project
+store. Legacy checkout `work/.next-id` remains readable and unchanged.
+An isolated checkout requires access to the initialized main project
+allocation store. Failed publications may leave gaps.
 
 The owner-only `POST /api/work-items/link` takes the work item ID, spec ID,
 expected spec revision, and a map of one-based criterion numbers to

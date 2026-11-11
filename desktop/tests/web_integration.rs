@@ -2655,7 +2655,11 @@ fn publishes_and_links_work_items_without_reusing_ids_or_changing_evidence_keys(
     assert_eq!(second["id"], "002-sample-work");
     let id = second["id"].as_str().unwrap();
     assert_eq!(
-        fs::read_to_string(project.join("work/.next-id")).unwrap(),
+        fs::read_dir(server.root.join("state/work"))
+            .unwrap()
+            .flatten()
+            .find_map(|entry| fs::read_to_string(entry.path().join("work-item-next-id")).ok())
+            .unwrap(),
         "3\n"
     );
 
@@ -2923,4 +2927,66 @@ fn shared_cli_projects_only_visible_context_and_checkout_read_uses_no_ledger() {
         assert!(published.contains("Latest note"));
         assert!(!published.contains("Private marker"));
     }
+}
+
+#[test]
+fn work_item_numbers_are_shared_by_git_checkouts_and_require_the_main_store() {
+    let main = WebServer::start();
+    let project = main.root.join("project");
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .current_dir(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{:?}", result);
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "Start",
+    ]);
+    fs::create_dir(project.join("work")).unwrap();
+    fs::write(project.join("work/.next-id"), "7\n").unwrap();
+    let input = json!({"title":"Shared", "document":"brd", "content":"Size: standard"});
+    let publish = |server: &WebServer| {
+        let (status, body) = server.request("POST", "/api/work-items", Some(input.clone()), true);
+        (status, serde_json::from_slice::<Value>(&body).unwrap())
+    };
+    let (status, first) = publish(&main);
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["id"], "007-shared");
+
+    let root = std::env::temp_dir().join(format!(
+        "verb-shared-allocation-{}",
+        NEXT_SERVER_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(root.join("home")).unwrap();
+    let checkout = root.join("project");
+    git(&["worktree", "add", "--detach", checkout.to_str().unwrap()]);
+    let isolated = WebServer::start_in_root(root, &[]);
+    let (status, refused) = publish(&isolated);
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("allocation store"));
+    let state = main.root.join("state");
+    let isolated = isolated.restart_with_env(&[("VERB_STATE_DIR", state.to_str().unwrap())]);
+    let (status, second) = publish(&isolated);
+    assert_eq!(status, 200, "{second}");
+    assert_eq!(second["id"], "008-shared");
+    let (status, third) = publish(&main);
+    assert_eq!(status, 200, "{third}");
+    assert_eq!(third["id"], "009-shared");
+    assert_eq!(
+        fs::read_to_string(project.join("work/.next-id")).unwrap(),
+        "7\n"
+    );
 }

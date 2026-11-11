@@ -478,36 +478,51 @@ fn require_dir(path: &Path) -> Result<(), String> {
     }
 }
 
-fn allocate(root: &Path) -> Result<u32, String> {
-    let mut highest = 0;
-    for entry in fs::read_dir(root).map_err(|error| error.to_string())? {
-        let entry = entry.map_err(|error| error.to_string())?;
-        if let Some(number) = entry.file_name().to_str().and_then(work_number) {
-            highest = highest.max(number);
+const STORE_COUNTER: &str = "work-item-next-id";
+const STORE_UNAVAILABLE: &str =
+    "Cannot create a work item without the main project's allocation store. Initialize it from the main checkout and use the same Verb host state.";
+
+fn read_counter(root: &Path, name: &str) -> Result<Option<u32>, String> {
+    let mut warnings = Vec::new();
+    let saved = read_document(root, name, &mut warnings);
+    if !warnings.is_empty() {
+        return Err(format!("Cannot read {name}"));
+    }
+    saved
+        .map(|raw| {
+            raw.trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|number| *number > 0)
+                .ok_or_else(|| format!("Invalid {name}"))
+        })
+        .transpose()
+}
+
+fn allocate(root: &Path, anchor: &Path, store: &Path, isolated: bool) -> Result<u32, String> {
+    let saved = read_counter(store, STORE_COUNTER)?;
+    if isolated && saved.is_none() {
+        return Err(STORE_UNAVAILABLE.into());
+    }
+    let mut number = saved.unwrap_or(1);
+    for work in [root, anchor] {
+        if fs::symlink_metadata(work).is_err_and(|error| error.kind() == io::ErrorKind::NotFound) {
+            continue;
+        }
+        require_dir(work)?;
+        number = number.max(read_counter(work, ".next-id")?.unwrap_or(1));
+        for entry in fs::read_dir(work).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            if let Some(issued) = entry.file_name().to_str().and_then(work_number) {
+                number = number.max(issued.checked_add(1).ok_or("Work item numbers exhausted")?);
+            }
         }
     }
-    let counter = root.join(".next-id");
-    let mut warnings = Vec::new();
-    let saved = read_document(root, ".next-id", &mut warnings);
-    if !warnings.is_empty() {
-        return Err("Cannot read work/.next-id".into());
-    }
-    let next = match saved {
-        Some(raw) => raw
-            .trim()
-            .parse::<u32>()
-            .ok()
-            .filter(|number| *number > 0)
-            .ok_or("Invalid work/.next-id")?,
-        None => 1,
-    };
-    let number = next.max(
-        highest
-            .checked_add(1)
-            .ok_or("Work item numbers exhausted")?,
-    );
     let following = number.checked_add(1).ok_or("Work item numbers exhausted")?;
-    crate::specs::write_atomic(&counter, &format!("{following}\n"))?;
+    crate::fsutil::atomic_write(
+        &store.join(STORE_COUNTER),
+        format!("{following}\n").as_bytes(),
+    )?;
     Ok(number)
 }
 
@@ -529,8 +544,38 @@ pub(crate) fn publish(
                 .into(),
         );
     }
-    let identity = crate::project::identity(project)?;
-    let _lock = crate::workbench::lock_project(&identity.store)?;
+    let creating = input.id.is_none();
+    let identity = crate::project::identity(project).map_err(|error| {
+        if creating {
+            format!("{STORE_UNAVAILABLE} {error}")
+        } else {
+            error
+        }
+    })?;
+    let isolated = project.canonicalize().map_err(|error| error.to_string())? != identity.anchor;
+    if creating && isolated && read_counter(&identity.store, STORE_COUNTER)?.is_none() {
+        return Err(STORE_UNAVAILABLE.into());
+    }
+    if creating {
+        if let Ok(id) = std::env::var("VERB_SESSION_ID") {
+            if !crate::load_session_by_id(&id)
+                .ok()
+                .flatten()
+                .is_some_and(|session| {
+                    crate::session_in_project_with_id(&session, project, &identity.id)
+                })
+            {
+                return Err(STORE_UNAVAILABLE.into());
+            }
+        }
+    }
+    let _lock = crate::workbench::lock_project(&identity.store).map_err(|error| {
+        if creating {
+            format!("{STORE_UNAVAILABLE} {error}")
+        } else {
+            error
+        }
+    })?;
     let root = project.join("work");
     match fs::create_dir(&root) {
         Ok(()) => {}
@@ -538,7 +583,6 @@ pub(crate) fn publish(
         Err(error) => return Err(error.to_string()),
     }
     require_dir(&root)?;
-    let creating = input.id.is_none();
     let id = match input.id {
         Some(id) if work_number(&id).is_some() => id,
         Some(_) => return Err("Invalid work item ID".into()),
@@ -552,7 +596,16 @@ pub(crate) fn publish(
             if !matches!(input.document, Document::Brd) || input.expected_revision.is_some() {
                 return Err("Start a new work item by publishing its BRD".into());
             }
-            format!("{:03}-{}", allocate(&root)?, crate::specs::slug(title))
+            format!(
+                "{:03}-{}",
+                allocate(
+                    &root,
+                    &identity.anchor.join("work"),
+                    &identity.store,
+                    isolated
+                )?,
+                crate::specs::slug(title)
+            )
         }
     };
     let dir = root.join(&id);
