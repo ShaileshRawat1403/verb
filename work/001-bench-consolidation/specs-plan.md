@@ -29,4 +29,8 @@ Use the existing owner scope and open only an explicitly supplied Verb workspace
 | 6. Board and Needs you | R4, R5, R10 | Existing spec board and observed signals, work item reader and approved archive action. | Every observed signal appears and clears, route to the right terminal and tab when identified, warn and audit stage move, archive and unarchive. Archive persists without moving files. |
 | 7. Context, Settings and cutover | R4, R6, R7, R8, R10 | Existing Project, notes, Host, Connections, phone and Tasks. Consolidate CSS tokens using the design direction. Update the docs index and move superseded docs to history. | Verify Context refresh, stale and size, all Settings destinations, continuity and cutover. Retire old code after replacement journeys pass. Report views, dialogs, CSS and JS counts before and after. |
 
-For implementation slices, run cargo fmt, Clippy with warnings denied, Rust all-target tests and web unit tests. Run browser journeys at 1440 and 390 pixels. Save changed-screen screenshots at both widths in light and dark under `work/bench-consolidation/screens/<slice>/`. Rebuild the browser bundle once per implementation slice in its own commit. Slice 0 changes documentation and has no screens or browser bundle changes.
+For implementation slices, run cargo fmt, Clippy with warnings denied, Rust all-target tests and web unit tests. Run browser journeys at 1440 and 390 pixels. Save changed-screen screenshots at both widths in light and dark under `work/001-bench-consolidation/screens/<slice>/`. Rebuild the browser bundle once per implementation slice in its own commit. Slice 0 changes documentation and has no screens or browser bundle changes.
+
+## Backlog
+
+- When an isolated checkout cannot find an initialized allocator, tell the owner the exact command to run in the main checkout.

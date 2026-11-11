@@ -1,5 +1,7 @@
 # Bench consolidation BRD
 
+Size: standard
+
 This standard work item proposes a consolidated Verb Desktop web workflow. Its factual baseline is [the UI inventory](../../docs/UI_INVENTORY_2026-11.md).
 
 ## Problem and audience
@@ -22,3 +24,9 @@ Desktop web navigation, work item documents and traceability, the spec Bench, sh
 ## Out of scope
 
 Phone redesign, editor and browser features, new connectors or extensions, deployment and release work, and the separate backup landing decisions.
+
+## Audit trail
+
+<!-- Written by Verb: one line per change, never edited. -->
+
+- 2026-11-11T11:08:22Z · Shailesh Rawat via Verb web · published brd.md (warning: BRD is missing content in Problem | BRD is missing content in Audience | BRD is missing content in Goals | BRD is missing content in Success measures)
