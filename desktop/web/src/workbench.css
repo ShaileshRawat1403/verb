@@ -99,6 +99,17 @@ kbd,
   padding: 6px 8px 14px;
   min-width: 0;
 }
+.workspace-switch {
+  flex: none;
+  margin-inline-start: auto;
+}
+.workspace-switch[hidden] {
+  display: none;
+}
+#project-switch-error {
+  color: var(--danger);
+  margin: 0;
+}
 .ws-mark {
   flex: none;
   width: 26px;
@@ -504,6 +515,7 @@ kbd {
 .list-search,
 .modal input[type="text"],
 .modal input[type="search"],
+#project-switch-url,
 .modal textarea,
 .modal select,
 .ask-input-row input {
@@ -1183,6 +1195,10 @@ select:focus-visible,
   }
   .workspace-head .project-copy {
     display: none;
+  }
+  .workspace-switch {
+    width: 44px;
+    height: 44px;
   }
   .main-nav {
     flex-direction: row;

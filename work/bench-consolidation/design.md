@@ -23,7 +23,7 @@ The values in the wireframe illustrate the approved layout. They are examples, n
 
 ## Sidebar
 
-The slim sidebar collapses. Project switching sits at the top, followed by Needs you with a count and Board. The work tree expands each work item to show its specs and stage markers. A spec selection focuses its existing terminal or shows its Plan with a start action. Unlinked legacy specs sit in a collapsed group with a count. Context and Settings sit at the bottom.
+The slim sidebar collapses. Project switching sits at the top, followed by Needs you with a count and Board. The owner can open a running workspace using its own Verb URL. It opens in a separate browser tab and authenticates independently, so the source workspace stays mounted. The work tree expands each work item to show its specs and stage markers. A spec selection focuses its existing terminal or shows its Plan with a start action. Unlinked legacy specs sit in a collapsed group with a count. Context and Settings sit at the bottom.
 
 ## Centre
 
@@ -81,7 +81,7 @@ These are implementation blockers or differences to resolve in their assigned sl
 | Proof and last-known-good review | SDLC exposes criterion evidence and freshness. Last-known-good comparison exists in Rust, but the Review panel does not exist. The existing evidence UI and Git controls are separate. The reviewed server handoff exists, with its matching browser form still pending. |
 | Preview availability and draft continuity | Studio and Project have separate preview and file surfaces. There is no combined tab eligibility rule in the new shell. Existing editor and preview behavior should move intact, with continuity verified across the new surfaces. |
 | Nonblocking stage gates and archive | The current stage routes warn and record readiness, including for Ship. They refuse stale spec or evidence revisions as write safeguards. Verify the new Board preserves that distinction. Archive and unarchive are absent. |
-| Project switcher | The web host serves one project and the sidebar displays its name. The inventory has no switcher or API that changes projects while preserving live terminal ownership. The shell needs a decision on authorized project destinations and session continuity before it can implement this control. |
+| Project switcher | The sidebar opens an owner-supplied workspace URL in a separate tab. Each host still serves one project. The switcher stores no destination history and starts no hosts. |
 | Old-layout switch, new shell and cutover | Current top-level views still drive navigation. The Settings switch, three-region shell, width persistence and narrow overlays do not exist. Terminal, conversation and draft continuity across the new mount points is unverified. |
 | Context and Settings | Existing brief, sync, notes, Host, Connections, phone and task controls exist in separate views or dialogs. The new destinations and Context size, omission and stale displays are pending. |
 | Documentation cutover | `docs/README.md` already exists. The final slice updates it as the current-document index and preserves superseded docs under `docs/history/`. |

@@ -22,6 +22,7 @@ import "./conversation.css";
 import { initStudio } from "./studio-ui.js";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
+import { initProjectSwitcher } from "./project-switcher.js";
 import "./connections.css";
 import { initConnections } from "./connections-ui.js";
 import { initHost } from "./host-ui.js";
@@ -2243,6 +2244,7 @@ async function loadInstalledAgents() {
 async function showAccess() {
   try {
     const access = await api("GET", "/api/whoami");
+    $("#open-project-switch").hidden = access.scope !== "owner";
     const banner = $("#access-banner");
     banner.hidden = !access.token;
     if (!access.token) return;
@@ -2285,6 +2287,7 @@ async function bootstrap() {
   const extras = {};
   host = initHost({ api, escapeHtml, $ });
   project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
+  initProjectSwitcher({ $, showDialog, closeDialog });
   workbench = initWorkbench({
     refreshState,
     extras,

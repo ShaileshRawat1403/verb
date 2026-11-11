@@ -4,13 +4,17 @@ The [approved design](design.md) governs the layout. Complete one slice at a tim
 
 ## Data prerequisites
 
-The data slices provide reading, publishing and shared context. Launcher and instruction-file behavior remains unverified where there is no verified prompt path. The project switcher gap is recorded in the design before layout slice 1.
+The data slices provide reading, publishing and shared context. Launcher and instruction-file behavior remains unverified where there is no verified prompt path. The project-switcher prerequisite opens owner-supplied workspace URLs in separate tabs while keeping the source workspace mounted.
 
 | Order | Requirements | Likely code | Verification and storage |
 | --- | --- | --- | --- |
 | 1. Read and validate work item documents | R1, R2, R3, R10 | specs.rs, work_items.rs, web.rs | Read both sizes and drafts, validate references, and preserve legacy reads. No existing files rewritten. |
 | 2. Publish work items and trace criteria | R1, R2, R3, R10, R11 | specs.rs, work_items.rs, fsutil.rs, web.rs | Verify allocation, concurrent publication, required warnings, traceability and stale legacy links. Adds work item Markdown and optional spec metadata. Preserve criterion index and text for existing evidence. |
 | 3. Publish shared and per-spec context and CLI commands | R7, R8, R9, R11 | hub.rs, lib.rs, web.rs, workbench.rs | Verify both approved CLI commands, shared-read prompts, bounds, omissions, redaction, marker errors, actual launch checkout and explicit recovery. Changes generated blocks and uses existing Shared notes. |
+
+## Project switching prerequisite
+
+Use the existing owner scope and open only an explicitly supplied Verb workspace URL. Verify that the destination uses its own credentials and that the original terminal, output and draft remain available. No destination URLs are stored.
 
 ## Layout slices
 
