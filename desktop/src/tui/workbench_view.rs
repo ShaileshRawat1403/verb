@@ -1623,6 +1623,7 @@ mod tests {
 
     fn sample_task(index: u128) -> crate::workbench::TaskSnapshot {
         crate::workbench::TaskSnapshot {
+            spec_id: None,
             id: format!("{index:032x}"),
             title: format!("Review agent handoff {index}"),
             brief: "Verify the proposed implementation and record a decision.".to_owned(),

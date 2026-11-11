@@ -32,6 +32,8 @@ struct Task {
     #[serde(default)]
     verb_project_id: Option<String>,
     title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec_id: Option<String>,
     brief: String,
     created_at: u128,
     events: Vec<TaskEvent>,
@@ -85,6 +87,7 @@ impl TaskAction {
 pub(crate) struct TaskSnapshot {
     pub id: String,
     pub title: String,
+    pub spec_id: Option<String>,
     pub brief: String,
     pub status: &'static str,
     pub owner: Option<String>,
@@ -121,6 +124,7 @@ pub(crate) fn snapshots_for_identity(
             TaskSnapshot {
                 id: task.id,
                 title: task.title,
+                spec_id: task.spec_id,
                 brief: task.brief,
                 status: status.label(),
                 owner: status.owner().map(str::to_owned),
@@ -175,8 +179,13 @@ pub(crate) fn append_ui_memory(project: &Path, note: &str) -> Result<String, Str
     Ok("Shared project memory saved.".to_owned())
 }
 
-pub(crate) fn create_ui_task(project: &Path, title: &str, brief: &str) -> Result<String, String> {
-    create_task_record(project, title, brief)
+pub(crate) fn create_ui_task(
+    project: &Path,
+    title: &str,
+    brief: &str,
+    spec_id: Option<String>,
+) -> Result<String, String> {
+    create_task_record(project, title, brief, spec_id)
 }
 
 pub(crate) fn apply_ui_action(
@@ -1022,11 +1031,19 @@ fn create_task(project: &Path, title: &str, brief: &str) -> Result<(), String> {
 }
 
 fn create_task_inner(project: &Path, title: &str, brief: &str) -> Result<String, String> {
-    let id = create_task_record(project, title, brief)?;
+    let id = create_task_record(project, title, brief, None)?;
     Ok(format!("Created task {id}: {}", title.trim()))
 }
 
-fn create_task_record(project: &Path, title: &str, brief: &str) -> Result<String, String> {
+fn create_task_record(
+    project: &Path,
+    title: &str,
+    brief: &str,
+    spec_id: Option<String>,
+) -> Result<String, String> {
+    if let Some(id) = spec_id.as_deref() {
+        crate::specs::find(project, id)?;
+    }
     if title.trim().is_empty() || title.len() > MAX_TITLE || title.chars().any(char::is_control) {
         return Err(format!(
             "task title must be one line and at most {MAX_TITLE} bytes"
@@ -1048,6 +1065,7 @@ fn create_task_record(project: &Path, title: &str, brief: &str) -> Result<String
         project_id: identity.anchor,
         verb_project_id: Some(identity.id),
         title: title.trim().to_owned(),
+        spec_id,
         brief: brief.to_owned(),
         created_at: now_millis(),
         events: Vec::new(),

@@ -24,6 +24,18 @@ test.beforeAll(async () => {
   const bin = join(fixture, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nprintf '\\033[?2004hAgent ready\\n'\nexec cat\n", { mode: 0o755 });
+  writeFileSync(join(project, "specs/099-legacy.md"),
+    "---\nid: 099\ntitle: Legacy sample\nstage: plan\n---\n## Acceptance criteria\n- [ ] A legacy criterion\n");
+  writeFileSync(join(bin, "codex"), String.raw`#!/bin/sh
+for prompt do :; done
+draft=$(printf '%s\n' "$prompt" | sed -n 's/^Draft path: //p' | head -n 1)
+case "$draft" in
+  *.brd.draft.md|*/brd.draft.md)
+    printf '# Small planning example\n\nSize: small\n\nProblem: Show work planning\nG1: Trace the outcome\nDone when: The owner publishes\n' > "$draft"
+    printf 'Review this scope change\n' > plan-fixture-change.txt
+    ;;
+esac
+`, { mode: 0o755 });
   child = spawn(resolve(process.env.VERB_BIN ?? "../target/debug/verb"), ["web", "--port", "0"], {
     cwd: project,
     env: { PATH: `${bin}:${process.env.PATH}`, HOME: fixture, VERB_STATE_DIR: join(fixture, "state"), VERB_TOKEN: token },
@@ -108,12 +120,12 @@ for (const width of [1440, 390]) {
       if (mobile) await navigation.click();
       const group = nav.locator('details[data-bench-group="001-bench-consolidation"]');
       await group.locator("summary").click();
-      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+8/);
+      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+9/);
       await expect(nav.locator('[data-bench-group="unlinked"]')).not.toHaveAttribute("open", "");
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
       await expect(panel.getByRole("heading", { name: /Terminal-first Shell/ })).toBeVisible();
-      await expect(panel.locator(".bench-documents li")).toHaveText(["Why (BRD)Published", "What (PRD)Published"]);
+      await expect(panel.locator(".bench-documents > li > div")).toHaveText(["Why (BRD)Published", "What (PRD)Published"]);
       await shot("plan");
       for (const [label, file] of [["Why (BRD)", "brd.md"], ["What (PRD)", "prd.md"]]) {
         await panel.getByRole("button", { name: label }).click();
@@ -260,8 +272,8 @@ test("Plan distinguishes a document with warnings from a missing document", asyn
   await page.locator('[data-bench-group="001-bench-consolidation"] summary').click();
   await page.locator('[data-bench-spec="006"]').click();
   const docs = page.locator(".bench-documents");
-  await expect(docs.locator("li")).toHaveText(["Why (BRD)Warnings", "What (PRD)Missing"]);
-  await expect(docs.getByRole("button")).toHaveCount(1);
+  await expect(docs.locator(":scope > li > div")).toHaveText(["Why (BRD)Warnings", "What (PRD)Missing"]);
+  await expect(docs.locator("[data-bench-document]")).toHaveCount(1);
 });
 
 test("the terminal shows connection text only during an interruption", async ({ page }) => {
@@ -411,6 +423,118 @@ for (const width of [1440, 390]) {
       await expect(review.locator("pre")).toContainText(marker);
       await expect(review.locator("pre")).toContainText("reported, unverified");
       await shot("delivered");
+    });
+  }
+}
+
+for (const width of [1440, 390]) {
+  for (const theme of ["light", "dark"]) {
+    test(`Plan traces work and publishes drafts at ${width} in ${theme}`, async ({ page, request }) => {
+      const mobile = width === 390;
+      test.setTimeout(90_000);
+      await page.setViewportSize({ width, height: mobile ? 844 : 900 });
+      await page.emulateMedia({ colorScheme: theme });
+      const shot = name => process.env.VERB_SLICE3_SCREEN_DIR
+        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE3_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
+        : Promise.resolve();
+      const auth = { "X-Verb-Token": token };
+      await page.goto(`${origin}/#${token}`);
+      const nav = page.locator("#bench-navigation");
+      const panel = page.locator("#bench-plan-spec");
+      const openNav = async () => {
+        if (!mobile || await nav.isVisible()) return;
+        if (await page.locator("#app").getAttribute("data-bench-overlay") === "details") {
+          await page.keyboard.press("Escape");
+        }
+        await page.locator("#bench-toggle-navigation").click();
+      };
+      await openNav();
+      const group = nav.locator('[data-bench-group="001-bench-consolidation"]');
+      await group.locator("summary").click();
+      await group.locator('[data-bench-spec="006"]').click();
+      await expect(panel.getByText("How (Spec)")).toBeVisible();
+      await expect(panel.getByText("R6", { exact: true }).first()).toBeVisible();
+      await expect(panel.getByText("G2", { exact: true }).first()).toBeVisible();
+      await shot("plan");
+      await panel.getByRole("button", { name: "New spec task" }).click();
+      const task = page.locator("#bench-plan-task-form");
+      const taskTitle = `Trace planning ${width} ${theme}`;
+      await task.getByLabel("Title").fill(taskTitle);
+      await shot("new-spec-task");
+      await task.getByRole("button", { name: "Create task" }).click();
+      await expect(panel.getByText(taskTitle, { exact: false })).toBeVisible();
+
+      await panel.getByRole("button", { name: "Start terminal" }).click();
+      const launch = page.locator("#session-form");
+      await expect(launch.getByLabel("Role")).toBeHidden();
+      await expect(launch.getByLabel("Spec")).toHaveValue("006");
+      await launch.locator('label:has([value="claude"])').click();
+      await expect(launch.getByLabel("Role")).toBeVisible();
+      if (!mobile) {
+        const fits = await launch.evaluate(form => {
+          const option = form.querySelector(".isolation-option").getBoundingClientRect();
+          return option.bottom <= form.getBoundingClientRect().bottom && form.scrollTop === 0;
+        });
+        expect(fits).toBe(true);
+      }
+      await shot("launch");
+      await launch.locator('label:has([value="shell"])').click();
+      await launch.getByRole("button", { name: /Open Terminal/ }).click();
+      await expect(launch).toBeHidden();
+      await expect.poll(async () => {
+        const response = await request.get(`${origin}/api/state`, { headers: auth });
+        return (await response.json()).sessions?.find(session => session.specId === "006" && session.terminal?.running)?.role;
+      }).toBeNull();
+
+      await openNav();
+      const unlinked = nav.locator('[data-bench-group="unlinked"]');
+      await unlinked.locator("summary").click();
+      await unlinked.locator('[data-bench-spec="099"]').click();
+      await expect(panel.getByText("No work item is linked.")).toBeVisible();
+      await expect(panel.getByText("No requirement linked")).toBeVisible();
+      await shot("unlinked");
+      await openNav();
+      await nav.getByRole("button", { name: "Draft a work item" }).click();
+      const draft = page.locator("#bench-draft-form");
+      await expect(draft.getByLabel("Agent").locator('option[value="codex"]')).toHaveCount(1);
+      await draft.getByLabel("Agent").selectOption("codex");
+      const title = `Small example ${width} ${theme}`;
+      await draft.getByLabel("Work item title").fill(title);
+      await draft.getByLabel("Size").selectOption("small");
+      await draft.getByLabel("Owner's brief").fill("Show the owner how a small work item starts.");
+      await shot("draft-with-agent");
+      await draft.getByRole("button", { name: "Start drafting" }).click();
+      await expect(draft).toBeHidden();
+
+      const item = nav.locator("details").filter({ hasText: new RegExp(`${title} · Draft`, "i") });
+      await openNav();
+      await expect(item).toBeVisible();
+      const id = await item.getAttribute("data-bench-group");
+      await expect.poll(async () => {
+        const response = await request.get(`${origin}/api/work-items/${id}/draft/brd`, { headers: auth });
+        return (await response.json()).content;
+      }).toContain("G1: Trace the outcome");
+      await item.locator("summary").click();
+      await item.getByRole("button", { name: "Open work item" }).click();
+      await expect(panel.getByText("Draft", { exact: true })).toBeVisible();
+      await shot("work-item-draft");
+      await panel.getByRole("button", { name: "Review BRD draft" }).click();
+      const review = page.locator("#bench-draft-review-form");
+      await expect(review.getByText("G1: Trace the outcome", { exact: false })).toBeVisible();
+      await shot("review-draft");
+      await review.getByRole("button", { name: "Publish reviewed draft" }).click();
+      await expect(review).toBeHidden();
+      await expect(panel.getByText("Published", { exact: true })).toBeVisible();
+      await expect(panel.getByRole("button", { name: "Draft PRD with agent" })).toBeVisible();
+      await shot("published-small-item");
+
+      if (mobile) await page.keyboard.press("Escape");
+      await openNav();
+      await nav.getByRole("button", { name: /Needs you/ }).click();
+      const needs = page.locator("#bench-needs-list");
+      await expect(needs.getByText("plan-fixture-change.txt").first()).toBeVisible({ timeout: 40_000 });
+      await shot("needs-you");
+      rmSync(join(fixture, "Bench workspace", "plan-fixture-change.txt"), { force: true });
     });
   }
 }

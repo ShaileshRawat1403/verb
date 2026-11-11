@@ -945,6 +945,8 @@ struct CommitRequest {
 #[serde(deny_unknown_fields)]
 struct TaskRequest {
     title: String,
+    #[serde(default, rename = "specId")]
+    spec_id: Option<String>,
     #[serde(default)]
     brief: String,
 }
@@ -2150,7 +2152,12 @@ impl WebHost {
         }
         if method == &Method::Post && path == "/api/tasks" {
             let input: TaskRequest = read_json(request)?;
-            let id = workbench::create_ui_task(&self.project, &input.title, &input.brief)?;
+            let id = workbench::create_ui_task(
+                &self.project,
+                &input.title,
+                &input.brief,
+                input.spec_id,
+            )?;
             self.invalidate_state();
             return Ok(Reply::json(
                 201,
@@ -2437,6 +2444,11 @@ impl WebHost {
             return Ok(self.off_loop(true, move || {
                 crate::work_items::publish(&project, input, &actor)
             }));
+        }
+        if method == &Method::Post && path == "/api/work-items/draft" {
+            let input: crate::work_items::StartDraft = read_json(request)?;
+            let launcher = self.launcher();
+            return Ok(self.launch_reply(move || launcher.start_planning(input)));
         }
         if method == &Method::Post && path == "/api/work-items/link" {
             let input: crate::work_items::Link = read_json(request)?;
@@ -2751,6 +2763,28 @@ impl WebHost {
                     Ok((session.clone(), json!({"sessionId": session}), Some(record)))
                 }))
             }
+            ["api", "work-items", id, "draft", kind @ ("brd" | "prd")] => {
+                let document = if *kind == "brd" {
+                    crate::work_items::Document::Brd
+                } else {
+                    crate::work_items::Document::Prd
+                };
+                let (project, id, actor) = (self.project.clone(), id.to_string(), self.actor());
+                if method == &Method::Get {
+                    return Ok(self.off_loop(false, move || {
+                        Ok(json!(crate::work_items::read_draft(
+                            &project, &id, document
+                        )?))
+                    }));
+                }
+                if method == &Method::Post {
+                    let review: crate::work_items::PublishDraft = read_json(request)?;
+                    return Ok(self.off_loop(true, move || {
+                        crate::work_items::publish_draft(&project, &id, document, review, &actor)
+                    }));
+                }
+                Err("Unsupported draft action".into())
+            }
             ["api", "specs", id, "agent"] if method == &Method::Post => {
                 let input: SpecAgentRequest = read_json(request)?;
                 let (launcher, id) = (self.launcher(), id.to_string());
@@ -2775,6 +2809,9 @@ impl WebHost {
                     return Err("choose a supported agent".to_owned());
                 }
                 if let Some(approved) = &input.approved {
+                    if approved.role == crate::specs::AssignmentRole::Plan {
+                        return Err("Start planning from a work item draft".into());
+                    }
                     if approved.scope.trim().is_empty()
                         || approved.scope.len() > 600
                         || approved.checks.len() > 600
@@ -2962,12 +2999,21 @@ impl WebHost {
                 let id = id.to_string();
                 Ok(self.off_loop(true, move || {
                     let spec = input.spec_id.as_deref().map(|spec| crate::specs::find(&launcher.project, spec).map(|(_, spec)| spec)).transpose()?;
+                    if input.role == Some(crate::specs::AssignmentRole::Plan) {
+                        return Err("Start planning from a work item draft".into());
+                    }
                     if spec.is_none() && input.role.is_some() {
                         return Err("Scratch terminals have no assignment role".into());
                     }
                     let mut terminals = launcher.terminals.lock().unwrap();
                     let hosted = running_terminal(&mut terminals, &id)?;
                     let mut record = hosted.session.clone();
+                    if record.assignment.draft_path.is_some() {
+                        return Err("A planning session keeps its original draft assignment".into());
+                    }
+                    if record.agent.is_none() && input.role.is_some() {
+                        return Err("Shell and Other CLI sessions have no agent role".into());
+                    }
                     let assignment = &mut record.assignment;
                     if assignment.binding_audit.len() >= crate::session_context::DELIVERY_LIMIT {
                         return Err("Session binding audit is full".into());
@@ -3441,6 +3487,10 @@ impl Launcher {
         role: Option<crate::specs::AssignmentRole>,
         isolated: bool,
     ) -> Result<(String, AfterAdmission), String> {
+        if role == Some(crate::specs::AssignmentRole::Plan) {
+            return Err("Start planning from a work item draft".into());
+        }
+        let role = if agent == "shell" { None } else { role };
         let (path, spec) = crate::specs::find(&self.project, id)?;
         if handoff
             .as_ref()
@@ -3498,6 +3548,52 @@ impl Launcher {
         let line = spec_start_line(agent, &session, conversation.is_some());
         let record: AfterAdmission = Box::new(move |_| crate::specs::record(&path, &actor, &line));
         Ok((session, record))
+    }
+
+    fn start_planning(
+        &self,
+        input: crate::work_items::StartDraft,
+    ) -> Result<(String, Value, Option<AfterAdmission>), String> {
+        if !matches!(
+            input.agent.as_str(),
+            "claude" | "codex" | "agy" | "gemini" | "opencode"
+        ) {
+            return Err("Choose a named planning agent".into());
+        }
+        if !crate::Agent::parse(&input.agent).installed() {
+            return Err("The planning agent is unavailable on this host".into());
+        }
+        if let Some(spec_id) = input.spec_id.as_deref() {
+            let (_, spec) = crate::specs::find(&self.project, spec_id)?;
+            if spec.work_item != input.id || input.id.is_none() {
+                return Err("The selected spec is not linked to this work item".into());
+            }
+        }
+        let draft = crate::work_items::start_draft(&self.project, &input)?;
+        let args = match input.agent.as_str() {
+            "agy" => vec!["-i".into(), draft.prompt],
+            "opencode" => vec!["--prompt".into(), draft.prompt],
+            _ => vec![draft.prompt],
+        };
+        let session = self.launch_with_spec_context(
+            LaunchRequest {
+                agent: input.agent,
+                isolated: false,
+                command: None,
+                args,
+                resume_id: None,
+            },
+            None,
+            Some(crate::session_context::Assignment {
+                spec_id: input.spec_id,
+                work_item_id: Some(draft.id.clone()),
+                role: Some(crate::specs::AssignmentRole::Plan),
+                draft_path: Some(draft.path.clone()),
+                ..Default::default()
+            }),
+        )?;
+        let body = json!({"sessionId": session, "workItemId": draft.id, "draftPath": draft.path, "message": draft.notice});
+        Ok((session, body, None))
     }
 
     fn launch(&self, input: LaunchRequest) -> Result<String, String> {
@@ -3562,6 +3658,11 @@ impl Launcher {
             };
             if let Some(assignment) = assignment.as_mut() {
                 assignment.git_start = crate::session_context::GitState::read(&workspace);
+                if assignment.draft_path.is_some() && assignment.git_start.is_none() {
+                    return Err(
+                        "Cannot capture starting Git status for this planning session".into(),
+                    );
+                }
             }
             if let (Some(spec), Some(prompt)) = (spec_context, input.args.last_mut()) {
                 let read = if crate::isolation::profile()?.is_some() {

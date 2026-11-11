@@ -300,7 +300,7 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let owner_only = matches!(
         path,
-        "/api/browser" | "/api/browser/pairing" | "/api/connections"
+        "/api/browser" | "/api/browser/pairing" | "/api/connections" | "/api/work-items/draft"
     ) || path.starts_with("/api/tokens")
         || (method != "GET"
             && matches!(
@@ -313,7 +313,8 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
             ))
         || matches!(
             parts.as_slice(),
-            ["api", "terminals", _, "phone", ..]
+            ["api", "work-items", _, "draft", "brd" | "prd"]
+                | ["api", "terminals", _, "phone", ..]
                 | [
                     "api",
                     "terminals",
@@ -508,6 +509,18 @@ mod tests {
             assert_eq!(required_scope("GET", &path), Scope::Owner);
             assert_eq!(required_scope("POST", &path), Scope::Owner);
         }
+        assert_eq!(
+            required_scope("POST", "/api/work-items/draft"),
+            Scope::Owner
+        );
+        assert_eq!(
+            required_scope("GET", "/api/work-items/001-item/draft/brd"),
+            Scope::Owner
+        );
+        assert_eq!(
+            required_scope("POST", "/api/work-items/001-item/draft/prd"),
+            Scope::Owner
+        );
         assert_eq!(required_scope("POST", "/api/specs/001/stage"), Scope::Drive);
         assert_eq!(required_scope("POST", "/api/git/commit"), Scope::Drive);
         assert_eq!(

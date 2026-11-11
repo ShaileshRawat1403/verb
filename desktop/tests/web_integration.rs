@@ -3215,3 +3215,215 @@ fn spec_terminal_deliveries_and_notes_keep_the_reviewed_revision() {
         "The next agent must receive the exact recorded context"
     );
 }
+
+#[test]
+fn plan_drafts_are_private_until_published_and_surface_unexpected_git_changes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    fs::create_dir(project.join("specs")).unwrap();
+    fs::write(project.join("specs/001-plan.md"),
+        "---\nid: 001\ntitle: Plan sample\nstage: plan\n---\n\n# 001 · Plan sample\n\n## Problem\nRead [the plan](../docs/Plan%20Notes.md#overview).\n\n## Acceptance criteria\n- [ ] Review (R1)\n").unwrap();
+    let bin = server.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let agent = bin.join("claude");
+    fs::write(&agent, r#"#!/bin/sh
+for prompt do :; done
+draft=$(printf '%s\n' "$prompt" | sed -n 's/^Draft path: //p' | head -n 1)
+case "$draft" in
+  */brd.draft.md)
+    printf '%s' "$prompt" | grep -Fq 'ask up to three questions in the terminal first and wait for the answers.' || exit 1
+    printf '%s' "$prompt" | grep -Fq '"Problem: ...", "G1: ...", and "Done when: ...".' || exit 1
+    printf '# First draft\n\nSize: small\n\nProblem: Need a place to plan\nG1: Draft marker for review\nDone when: Owner publishes\n' > "$draft"
+    ;;
+  */prd.draft.md)
+    printf '%s' "$prompt" | grep -Fq 'Add an "Out of scope" section.' || exit 1
+    printf '# PRD draft\n\n- R1 · G1 · Read draft · Open Plan\n\n## Out of scope\n\nShipping\n' > "$draft"
+    ;;
+esac
+case "$prompt" in *touch-other*) printf 'Unexpected change\n' > outside.txt;; esac
+"#).unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let server = server.restart_with_env(&[("PATH", &path)]);
+    let start = |id: Option<&str>, brief: &str| {
+        server.json(
+            "POST",
+            "/api/work-items/draft",
+            Some(json!({
+                "id": id, "title": "Planning draft", "document": "brd", "size": "small",
+                "agent": "claude", "brief": brief
+            })),
+        )
+    };
+    let created = start(None, "touch-other");
+    let id = created["workItemId"].as_str().unwrap();
+    assert_eq!(id, "001-planning-draft");
+    assert!(created["message"]
+        .as_str()
+        .unwrap()
+        .contains("info/exclude"));
+    let draft_path = format!("/api/work-items/{id}/draft/brd");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let draft = loop {
+        let draft = server.json("GET", &draft_path, None);
+        if draft["content"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+        {
+            break draft;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "agent did not write its draft"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(draft["stale"], false);
+    assert_eq!(draft["publishedRevision"], Value::Null);
+    assert!(
+        git(&["check-ignore", "work/001-planning-draft/brd.draft.md"]).contains("brd.draft.md")
+    );
+    assert!(!project.join(".gitignore").exists());
+    let items = server.json("GET", "/api/work-items", None);
+    assert_eq!(items["items"][0]["draft"], true);
+    assert_eq!(items["items"][0]["warnings"], json!([]));
+    assert_eq!(items["items"][0]["brd"], Value::Null);
+
+    loop {
+        let workspace = server.json("GET", "/api/state", None);
+        let session = workspace["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == created["sessionId"]);
+        if let Some(session) = session.filter(|session| !session["planningAttention"].is_null()) {
+            assert_eq!(session["role"], "plan");
+            assert_eq!(
+                session["planningAttention"]["paths"],
+                json!(["outside.txt"])
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "planning attention not recorded: {workspace}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let spec_path = project.join("specs/001-plan.md");
+    let spec = fs::read_to_string(&spec_path).unwrap();
+    fs::write(
+        &spec_path,
+        spec.replacen(
+            "stage: plan",
+            "stage: plan\nwork-item: 001-planning-draft",
+            1,
+        ),
+    )
+    .unwrap();
+    let read_context = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_verb"))
+            .current_dir(&project)
+            .env("VERB_STATE_DIR", server.root.join("state"))
+            .env("HOME", server.root.join("home"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for command in [&["shared", "full"][..], &["shared", "spec", "001"][..]] {
+        assert!(!read_context(command).contains("Draft marker for review"));
+    }
+
+    assert!(project.join("outside.txt").exists());
+    let approved = |draft: &Value, accept_stale: bool| {
+        json!({
+            "expectedRevision": draft["publishedRevision"], "draftRevision": draft["revision"],
+            "acceptStale": accept_stale
+        })
+    };
+    let published = server.json("POST", &draft_path, Some(approved(&draft, false)));
+    assert_eq!(published["warnings"], json!([]));
+    assert!(project.join(format!("work/{id}/brd.md")).exists());
+    assert!(!project.join(format!("work/{id}/brd.draft.md")).exists());
+
+    start(Some(id), "Reconsider the published BRD");
+    let item_dir = project.join("work").join(id);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while fs::metadata(item_dir.join("brd.draft.md")).map_or(0, |metadata| metadata.len()) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "second draft not written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let replacement = "# Updated\nSize: small\nProblem: New baseline\nG1: Keep the base visible\nDone when: Reviewed";
+    server.json(
+        "POST",
+        "/api/work-items",
+        Some(json!({
+            "id": id, "document": "brd", "content": replacement,
+            "expectedRevision": published["revision"]
+        })),
+    );
+    let draft = server.json("GET", &draft_path, None);
+    assert_eq!(draft["stale"], true);
+    assert!(draft["publishedContent"]
+        .as_str()
+        .unwrap()
+        .contains("New baseline"));
+    let (status, body) = server.request("POST", &draft_path, Some(approved(&draft, false)), true);
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&body).contains("since drafting began"));
+    assert!(item_dir.join("brd.draft.md").exists());
+    server.json("POST", &draft_path, Some(approved(&draft, true)));
+    assert!(!item_dir.join("brd.draft.md").exists());
+
+    server.json("POST", "/api/work-items/draft", Some(json!({
+        "id": id, "document": "prd", "agent": "claude", "brief": "Write requirements for the published BRD"
+    })));
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let path = format!("/api/work-items/{id}/draft/prd");
+    let draft = loop {
+        let draft = server.json("GET", &path, None);
+        if draft["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("Out of scope"))
+        {
+            break draft;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "PRD draft not written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(!item_dir.join("prd.md").exists());
+    assert_eq!(
+        server.json("POST", &path, Some(approved(&draft, false)))["warnings"],
+        json!([])
+    );
+    assert!(item_dir.join("prd.md").exists());
+    assert!(!item_dir.join("prd.draft.md").exists());
+}

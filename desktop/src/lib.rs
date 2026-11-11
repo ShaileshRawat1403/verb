@@ -970,7 +970,10 @@ pub(crate) fn finish_session(session: &mut Session, exit_code: i32) -> Result<()
 /// by a stray line of stdout.
 pub(crate) fn finish_session_quietly(session: &mut Session, exit_code: i32) -> Result<(), String> {
     session.last_seen_at = now_millis();
-    if session.assignment.spec_id.is_some() {
+    if session.assignment.draft_path.is_some() {
+        crate::session_context::check_planning_changes(session);
+    }
+    if session.assignment.spec_id.is_some() || session.assignment.draft_path.is_some() {
         session.assignment.terminal_ended_at = Some(session.last_seen_at);
     }
     session.state = resolve_without_process(session);

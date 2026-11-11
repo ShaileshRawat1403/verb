@@ -63,7 +63,7 @@ impl StateJob {
             .map(|task| {
                 json!({
                     "id": task.id, "title": task.title, "brief": task.brief, "status": task.status,
-                    "owner": task.owner, "needsHelp": task.needs_help, "createdAt": task.created_at,
+                    "owner": task.owner, "needsHelp": task.needs_help, "createdAt": task.created_at, "specId": task.spec_id,
                     "events": task.events.into_iter().map(|event| json!({
                         "at": event.at, "kind": event.kind.label(), "sessionId": event.session_id,
                         "note": event.note,
@@ -92,6 +92,7 @@ impl StateJob {
                 "workspace": session.project_id, "isolated": session.project_id != identity.anchor,
                 "specId": session.assignment.spec_id, "workItemId": session.assignment.work_item_id,
                 "role": session.assignment.role, "contextDelivery": session.assignment.deliveries.last(),
+                "planningAttention": session.assignment.planning_attention,
                 "lastSeenAt": session.last_seen_at, "hostedHere": self.hosted.get(&session.id).copied().unwrap_or(false),
                 "hasTerminal": self.hosted.contains_key(&session.id),
                 "terminal": terminal_status(self.hosted.get(&session.id).copied()),

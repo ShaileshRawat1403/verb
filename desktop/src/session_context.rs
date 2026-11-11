@@ -20,6 +20,39 @@ pub(crate) struct Assignment {
     pub binding_audit: Vec<String>,
     pub git_start: Option<GitState>,
     pub terminal_ended_at: Option<u128>,
+    pub draft_path: Option<String>,
+    pub planning_attention: Option<PlanningAttention>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PlanningAttention {
+    pub paths: Vec<String>,
+    pub unavailable: bool,
+}
+
+pub(crate) fn check_planning_changes(session: &mut crate::Session) {
+    let assignment = &mut session.assignment;
+    let Some(draft) = &assignment.draft_path else {
+        return;
+    };
+    let changed = assignment
+        .git_start
+        .as_ref()
+        .and_then(|start| start.changed_paths(&session.project_id));
+    assignment.planning_attention = match changed {
+        Some(mut paths) => {
+            paths.retain(|path| path != draft);
+            (!paths.is_empty()).then_some(PlanningAttention {
+                paths,
+                unavailable: false,
+            })
+        }
+        None => Some(PlanningAttention {
+            paths: Vec::new(),
+            unavailable: true,
+        }),
+    };
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -240,7 +273,8 @@ fn git(project: &Path, args: &[&str]) -> Option<String> {
 
 impl GitState {
     pub(crate) fn read(project: &Path) -> Option<Self> {
-        let head = git(project, &["rev-parse", "--verify", "HEAD"])?
+        let head = git(project, &["rev-parse", "--verify", "HEAD"])
+            .or_else(|| git(project, &["symbolic-ref", "-q", "HEAD"]).map(|_| String::new()))?
             .trim()
             .to_owned();
         let status = git(
@@ -291,36 +325,51 @@ impl GitState {
             };
             dirty.insert(
                 path.to_owned(),
-                value.map(|hash| format!("{}:{hash}", &entry[..2])),
+                Some(format!("{}:{}", &entry[..2], value.unwrap_or_default())),
             );
         }
         Some(Self { head, dirty })
     }
 
     pub(crate) fn changes(&self, project: &Path) -> Option<String> {
+        let text = self.changed_paths(project)?.join("\n");
+        (text.len() <= 1500).then_some(text)
+    }
+
+    fn changed_paths(&self, project: &Path) -> Option<Vec<String>> {
         let current = Self::read(project)?;
-        let diff = git(
-            project,
-            &[
-                "diff",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-renames",
-                "--name-only",
-                "-z",
-                &self.head,
-                &current.head,
-                "--",
-            ],
-        )?;
+        let diff = if self.head == current.head {
+            String::new()
+        } else if self.head.is_empty() || current.head.is_empty() {
+            let head = if self.head.is_empty() {
+                &current.head
+            } else {
+                &self.head
+            };
+            git(project, &["ls-tree", "-r", "--name-only", "-z", head])?
+        } else {
+            git(
+                project,
+                &[
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-renames",
+                    "--name-only",
+                    "-z",
+                    &self.head,
+                    &current.head,
+                    "--",
+                ],
+            )?
+        };
         let mut paths: std::collections::BTreeSet<_> = diff.split_terminator('\0').collect();
         for path in self.dirty.keys().chain(current.dirty.keys()) {
             if self.dirty.get(path) != current.dirty.get(path) {
                 paths.insert(path);
             }
         }
-        let text = paths.into_iter().collect::<Vec<_>>().join("\n");
-        (text.len() <= 1500).then_some(text)
+        Some(paths.into_iter().map(str::to_owned).collect())
     }
 }
 

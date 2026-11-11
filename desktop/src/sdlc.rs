@@ -470,7 +470,11 @@ pub(crate) fn enrich_all(
                     {
                         summary["attention"].as_array_mut().unwrap().push(json!({"reason": "Evidence, review or delivery needs attention", "sessionId": null, "source": "evidence ledger"}));
                     }
-                    summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"]});
+                    let criteria: Vec<_> = flow["criteria"].as_array().into_iter().flatten().map(|row| {
+                        json!({"index": row["index"], "accepted": row["accepted"], "freshness": row["freshness"],
+                            "result": row["result"], "recorded": !row["evidence"].is_null()})
+                    }).collect();
+                    summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"], "criteria": criteria});
                 }
                 Err(error) => {
                     summary["sdlc"] = json!({"error": error});

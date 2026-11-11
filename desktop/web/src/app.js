@@ -473,6 +473,7 @@ function render() {
   renderTaskDetail();
   syncHostedTerminals();
   studio?.render();
+  shell?.render();
 }
 
 function renderListResults() {
@@ -1360,7 +1361,8 @@ function renderTerminalTabs() {
       const session = ui.state?.sessions.find(item => item.id === id);
       const agent = agentDisplayName(terminal.agent);
       const role = session?.role ? session.role[0].toUpperCase() + session.role.slice(1) : "";
-      const assignment = session?.specId ? `Spec ${session.specId}${role ? ` · ${role}` : ""}` : "Scratch";
+      const assignment = session?.specId ? `Spec ${session.specId}${role ? ` · ${role}` : ""}`
+        : session?.role === "plan" && session.workItemId ? `Work item ${session.workItemId.split("-")[0]} · Plan` : "Scratch";
       const shortAgent = terminal.agent === "claude" ? "Claude" : terminal.agent === "agy" ? "AGY" : agent;
       const title = `${agent} ${bench ? assignment : id.slice(0, 8)}: ${status.words}`;
       const label = bench ? ` aria-label="${escapeHtml(title)}"` : "";
@@ -2030,6 +2032,7 @@ function updateLaunchForm() {
     form.querySelector('input[value="shell"]').checked = true;
   }
   const agent = form.elements.agent.value;
+  $("#bench-launch-role").hidden = ["shell", "custom"].includes(agent);
   $("#custom-command-fields").hidden = agent !== "custom";
   $("#launch-project").textContent =
     ui.state?.project.name || "Current project";
@@ -2061,7 +2064,7 @@ $("#session-form").addEventListener("submit", async (event) => {
   const command = form.elements.command.value.trim();
   const isolated = form.elements.isolated.checked;
   const specId = shell?.enabled() ? form.elements.specId.value : "";
-  const role = specId ? form.elements.role.value : null;
+  const role = specId && !["shell", "custom"].includes(agent) ? form.elements.role.value : null;
   if (specId && agent === "custom") return launchError("Choose a named agent or terminal for a spec.");
   if (isolated && !isolatedCheckoutAvailability(ui.agentCapabilities).available)
     return launchError(isolatedCheckoutAvailability(ui.agentCapabilities).reason);
@@ -2387,7 +2390,7 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile, openLaunch: id => {
+  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile, showDialog, closeDialog, mountLaunchedSession, refreshState, toast, openLaunch: id => {
     updateLaunchForm();
     loadInstalledAgents();
     benchTerminals?.openLaunch(id);

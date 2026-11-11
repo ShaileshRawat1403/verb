@@ -285,3 +285,15 @@
   #bench-terminal-tabs :is(.bench-tab-agent, .bench-tab-spec-prefix) { display: none; }
   #bench-terminal-tabs .bench-tab-short-agent { display: inline; }
 }
+
+.bench-criteria small { display: block; }
+.bench-criteria ul { margin-block: 5px 12px; }
+#bench-plan-spec .bench-documents > li { display: grid; justify-items: start; }
+#bench-plan-spec .bench-documents > li > div { display: flex; align-items: baseline; gap: 8px; }
+#bench-draft-form .field-label, #bench-plan-task-form .field-label { display: grid; gap: 4px; }
+#bench-draft-review-form pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+#bench-launch-role[hidden], #bench-draft-form .field-label[hidden] { display: none; }
+@media (min-width: 761px) {
+  .bench-layout ~ #session-dialog #session-form .agent-choice label { padding-block: 7px; }
+  .bench-layout ~ #session-dialog #session-form .modal-heading { margin-bottom: 12px; }
+}

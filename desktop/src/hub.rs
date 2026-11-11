@@ -425,6 +425,65 @@ fn context_files(project: &Path) -> Result<std::collections::HashSet<String>, St
     Ok(paths.into_iter().collect())
 }
 
+// Resolve inline Markdown links lexically. Context generation never opens their targets.
+fn project_links(text: &str, source: &str) -> String {
+    let mut output = String::new();
+    for line in text.split_inclusive('\n') {
+        let mut rest = line;
+        while let Some((before, candidate)) = rest.split_once('[') {
+            output.push_str(before);
+            rest = &rest[before.len()..];
+            let Some((label, tail)) = candidate.split_once("](") else {
+                break;
+            };
+            if label.contains(['[', ']']) {
+                output.push('[');
+                rest = candidate;
+                continue;
+            }
+            let Some((target, after)) = tail.split_once(')') else {
+                break;
+            };
+            let target = target.trim().trim_start_matches('<').trim_end_matches('>');
+            if target.starts_with("//")
+                || target
+                    .split('/')
+                    .next()
+                    .is_some_and(|part| part.contains(':'))
+            {
+                output.push_str(&rest[..rest.len() - after.len()]);
+            } else {
+                let target = target.split('#').next().unwrap_or("").replace("%20", " ");
+                let mut path = if target.starts_with('/') {
+                    PathBuf::new()
+                } else {
+                    Path::new(source)
+                        .parent()
+                        .unwrap_or(Path::new(""))
+                        .to_path_buf()
+                };
+                let mut inside = !target.is_empty();
+                for part in Path::new(target.trim_start_matches('/')).components() {
+                    match part {
+                        Component::Normal(part) => path.push(part),
+                        Component::ParentDir => inside &= path.pop(),
+                        Component::CurDir => (),
+                        _ => inside = false,
+                    }
+                }
+                output.push_str(if inside {
+                    path.to_str().unwrap_or(label)
+                } else {
+                    label
+                });
+            }
+            rest = after;
+        }
+        output.push_str(rest);
+    }
+    output
+}
+
 fn context_parts(
     project: &Path,
     spec_id: Option<&str>,
@@ -506,7 +565,8 @@ fn context_parts(
                 .collect();
         }
         parts.specific.push(format!(
-            "Spec {} · {} (`{}`)",
+            "{}Spec {} · {} (`{}`)",
+            if launch { "# " } else { "" },
             spec.id,
             context_text(&spec.title),
             spec.file
@@ -526,32 +586,44 @@ fn context_parts(
         } else {
             parts.specific.push("No work item is linked.".into());
         }
-        parts.specific.extend(
-            spec.body
-                .split("\n## ")
-                .enumerate()
-                .filter(|(index, section)| {
-                    !launch
-                        || !matches!(
+        parts
+            .specific
+            .extend(
+                spec.body
+                    .split("\n## ")
+                    .enumerate()
+                    .filter_map(|(index, section)| {
+                        let heading = section.lines().next().unwrap_or("").trim_end();
+                        if launch
+                            && (index != 0 || heading.starts_with("## "))
+                            && matches!(
+                                heading.trim_start_matches("## "),
+                                "Audit trail" | "Traceability"
+                            )
+                        {
+                            return None;
+                        }
+                        let section = if launch && index == 0 && heading.starts_with("# ") {
+                            section.split_once('\n').map_or("", |(_, body)| body).trim()
+                        } else {
                             section
-                                .lines()
-                                .next()
-                                .unwrap_or("")
-                                .trim_end()
-                                .trim_start_matches("## "),
-                            "Audit trail" | "Traceability"
-                        )
-                        || (*index == 0 && !section.starts_with("## "))
-                })
-                .map(|(_, section)| {
-                    let section = context_text(section);
-                    if section.starts_with('#') {
-                        section
-                    } else {
-                        format!("## {section}")
-                    }
-                }),
-        );
+                        };
+                        if section.trim().is_empty() {
+                            return None;
+                        }
+                        let section = if launch {
+                            project_links(section, &spec.file)
+                        } else {
+                            section.to_owned()
+                        };
+                        let section = context_text(&section);
+                        Some(if index == 0 || section.starts_with('#') {
+                            section
+                        } else {
+                            format!("## {section}")
+                        })
+                    }),
+            );
     } else {
         specs.retain(|spec| matches!(spec.stage.as_str(), "plan" | "build" | "verify" | "review"));
         specs.sort_by(|left, right| {
@@ -745,31 +817,7 @@ fn protect_agent_files_from_git(project: &Path) -> Result<String, String> {
         ));
     }
 
-    let exclude = git(
-        project,
-        &[
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-path",
-            "info/exclude",
-        ],
-    )?;
-    let path = Path::new(exclude.trim_end_matches(['\r', '\n']));
-    if !path.is_absolute() {
-        return Err("Git did not provide an absolute info/exclude path".into());
-    }
-    let parent = path.parent().ok_or("Git info/exclude has no directory")?;
-    if !fs::symlink_metadata(parent)
-        .map_err(|error| error.to_string())?
-        .is_dir()
-    {
-        return Err("Git info/exclude must be inside a real info directory".into());
-    }
-    let raw = read_agent_file(
-        project,
-        path.to_str().ok_or("Git info/exclude is not UTF-8")?,
-    )?
-    .unwrap_or_default();
+    let (path, raw) = git_exclude(project)?;
     let mut next = raw.clone();
     let mut added = Vec::new();
     for name in AGENT_FILES {
@@ -791,11 +839,70 @@ fn protect_agent_files_from_git(project: &Path) -> Result<String, String> {
     if added.is_empty() {
         return Ok("AGENTS.md and CLAUDE.md already have local Git exclusions.".into());
     }
-    crate::fsutil::atomic_write(path, next.as_bytes())?;
+    crate::fsutil::atomic_write(&path, next.as_bytes())?;
     Ok(format!(
         "Added {} to local Git info/exclude.",
         added.join(" and ")
     ))
+}
+
+fn git_exclude(project: &Path) -> Result<(PathBuf, String), String> {
+    let exclude = git(
+        project,
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            "info/exclude",
+        ],
+    )?;
+    let path = PathBuf::from(exclude.trim_end_matches(['\r', '\n']));
+    if !path.is_absolute() {
+        return Err("Git did not provide an absolute info/exclude path".into());
+    }
+    let parent = path.parent().ok_or("Git info/exclude has no directory")?;
+    if !fs::symlink_metadata(parent)
+        .map_err(|error| error.to_string())?
+        .is_dir()
+    {
+        return Err("Git info/exclude must be inside a real info directory".into());
+    }
+    let raw = read_agent_file(
+        project,
+        path.to_str().ok_or("Git info/exclude is not UTF-8")?,
+    )?
+    .unwrap_or_default();
+    Ok((path, raw))
+}
+
+pub(crate) fn protect_work_drafts_from_git(project: &Path) -> Result<&'static str, String> {
+    const PATTERN: &str = "/work/**/*.draft.md";
+    let tracked = git(
+        project,
+        &["ls-files", "--cached", "--", ":(glob)work/**/*.draft.md"],
+    )?;
+    if !tracked.is_empty() {
+        return Err(
+            "Work item drafts are already tracked. Remove them from the index before drafting."
+                .into(),
+        );
+    }
+    let (path, mut raw) = git_exclude(project)?;
+    if raw
+        .lines()
+        .rev()
+        .find(|line| line.trim_start_matches('!') == PATTERN)
+        == Some(PATTERN)
+    {
+        return Ok("Work item drafts already have a local Git exclusion.");
+    }
+    if !raw.is_empty() && !raw.ends_with('\n') {
+        raw.push('\n');
+    }
+    raw.push_str(PATTERN);
+    raw.push('\n');
+    crate::fsutil::atomic_write(&path, raw.as_bytes())?;
+    Ok("Added work item drafts to local Git info/exclude.")
 }
 
 /// Publishes both files under the same project lock. Validate both marker pairs before writing.
@@ -1102,6 +1209,23 @@ mod tests {
         let (_, _, _, retained) = parts.bound(250, "verb shared spec 001");
         assert!(retained.notes.is_empty());
         assert_eq!(retained.session_notes, ["newest session note"]);
+    }
+
+    #[test]
+    fn launch_context_has_one_spec_title_and_project_root_link_paths() {
+        let project = repo();
+        fs::create_dir(project.join("specs")).unwrap();
+        fs::write(project.join("specs/001-login.md"),
+            "---\nid: 001\ntitle: Login\nstage: plan\n---\n\n# 001 · Login\n\n## Problem\nRead [the notes](../docs/Plan%20Notes.md#scope), [the sample](./sample.md), and [external](https://example.com).\n\n## Acceptance criteria\n- [ ] Works (R1)\n").unwrap();
+        let text = spec_launch_context(&project, "001", CONTEXT_LIMIT).unwrap();
+        assert_eq!(text.matches("001 · Login").count(), 1, "{text}");
+        assert!(
+            text.contains("docs/Plan Notes.md, specs/sample.md"),
+            "{text}"
+        );
+        assert!(text.contains("[external](https://example.com)"), "{text}");
+        assert!(!text.contains("../docs/"), "{text}");
+        assert!(text.contains("- [ ] Works (R1)"), "{text}");
     }
 
     #[test]

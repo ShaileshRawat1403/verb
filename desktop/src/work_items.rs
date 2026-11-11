@@ -23,11 +23,15 @@ pub(crate) struct WorkItems {
 struct WorkItem {
     id: String,
     brd_revision: Option<String>,
+    draft: bool,
+    brd_draft: bool,
+    prd_draft: bool,
     prd_revision: Option<String>,
     size: Option<&'static str>,
     brd: Option<String>,
     prd: Option<String>,
     goals: BTreeMap<String, bool>,
+    goal_details: BTreeMap<String, String>,
     requirements: BTreeMap<String, Requirement>,
     specs: Vec<SpecLinks>,
     warnings: Vec<String>,
@@ -36,6 +40,7 @@ struct WorkItem {
 #[derive(Serialize)]
 struct Requirement {
     goal: String,
+    text: String,
     retired: bool,
 }
 
@@ -147,6 +152,14 @@ fn retired(value: &str) -> (&str, bool) {
 
 fn records(raw: &str, prefix: char) -> impl Iterator<Item = (&str, bool, Vec<&str>)> {
     raw.lines().filter_map(move |line| {
+        if prefix == 'G' {
+            if let Some((id, text)) = line.trim().split_once(": ") {
+                let (id, retired) = retired(id);
+                if valid_id(id, 'G') && !text.trim().is_empty() {
+                    return Some((id, retired, vec![text.trim()]));
+                }
+            }
+        }
         let mut fields = fields(line).into_iter();
         let first = fields.next()?;
         let first = first.strip_prefix("Goal: ").unwrap_or(first);
@@ -161,7 +174,20 @@ impl WorkItem {
         let mut warnings = Vec::new();
         let brd = read_document(dir, "brd.md", &mut warnings);
         let prd = read_document(dir, "prd.md", &mut warnings);
-        Self::validate(id, brd, prd, warnings)
+        let mut item = Self::validate(id, brd, prd, warnings);
+        let has_draft = |document: Document| {
+            dir.join(document.draft_name())
+                .symlink_metadata()
+                .is_ok_and(|meta| meta.is_file())
+        };
+        item.brd_draft = has_draft(Document::Brd);
+        item.prd_draft = has_draft(Document::Prd);
+        if item.brd.is_none() && item.prd.is_none() && item.brd_draft {
+            item.draft = true;
+            item.warnings
+                .retain(|warning| warning != "Missing readable BRD");
+        }
+        item
     }
 
     fn validate(
@@ -172,6 +198,7 @@ impl WorkItem {
     ) -> Self {
         let mut size = None;
         let mut goals = BTreeMap::new();
+        let mut goal_details = BTreeMap::new();
         let mut requirements = BTreeMap::new();
         if let Some(brd) = &brd {
             let brd = document_body(brd);
@@ -211,7 +238,10 @@ impl WorkItem {
             {
                 warnings.push("Small BRD needs three content lines".into());
             }
-            for (id, retired, _) in records(brd, 'G') {
+            for (id, retired, fields) in records(brd, 'G') {
+                if let Some(text) = fields.first() {
+                    goal_details.insert(id.to_owned(), (*text).to_owned());
+                }
                 if goals.insert(id.to_owned(), retired).is_some() {
                     warnings.push(format!("Duplicate BRD goal {id}"));
                 }
@@ -248,6 +278,7 @@ impl WorkItem {
                         id.to_owned(),
                         Requirement {
                             goal: goal.to_owned(),
+                            text: fields.get(1).copied().unwrap_or_default().to_owned(),
                             retired,
                         },
                     )
@@ -265,12 +296,16 @@ impl WorkItem {
         }
         Self {
             id,
+            draft: false,
+            brd_draft: false,
+            prd_draft: false,
             brd_revision: brd.as_deref().map(revision),
             prd_revision: prd.as_deref().map(revision),
             size,
             brd,
             prd,
             goals,
+            goal_details,
             requirements,
             specs: Vec::new(),
             warnings,
@@ -445,11 +480,309 @@ pub(crate) struct Publish {
     pub expected_revision: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Clone, Copy, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Document {
     Brd,
     Prd,
+}
+
+impl Document {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Brd => "brd.md",
+            Self::Prd => "prd.md",
+        }
+    }
+
+    fn draft_name(self) -> &'static str {
+        match self {
+            Self::Brd => "brd.draft.md",
+            Self::Prd => "prd.draft.md",
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StartDraft {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub document: Document,
+    pub size: Option<String>,
+    pub brief: String,
+    pub agent: String,
+    pub spec_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Draft {
+    content: String,
+    revision: String,
+    published_revision: Option<String>,
+    published_content: Option<String>,
+    stale: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PublishDraft {
+    expected_revision: Option<String>,
+    draft_revision: String,
+    #[serde(default)]
+    accept_stale: bool,
+}
+
+fn draft_meta(store: &Path, project: &Path, id: &str, document: Document) -> std::path::PathBuf {
+    let checkout = revision(&project.to_string_lossy());
+    store.join(format!(
+        "work-draft-{checkout}-{id}-{}.json",
+        document.name()
+    ))
+}
+
+fn document_at(dir: &Path, name: &str) -> Result<Option<String>, String> {
+    let mut warnings = Vec::new();
+    let raw = read_document(dir, name, &mut warnings);
+    if let Some(warning) = warnings.pop() {
+        return Err(warning);
+    }
+    Ok(raw)
+}
+
+fn draft_at(
+    project: &Path,
+    store: &Path,
+    dir: &Path,
+    id: &str,
+    document: Document,
+) -> Result<Option<Draft>, String> {
+    let Some(content) = document_at(dir, document.draft_name())? else {
+        return Ok(None);
+    };
+    let published_content = document_at(dir, document.name())?;
+    let published_revision = published_content.as_deref().map(revision);
+    let meta = draft_meta(store, project, id, document);
+    let baseline = document_at(store, meta.file_name().unwrap().to_str().unwrap())?
+        .map(|raw| serde_json::from_str::<Option<String>>(&raw).map_err(|error| error.to_string()))
+        .transpose()?;
+    Ok(Some(Draft {
+        revision: revision(&content),
+        content,
+        stale: baseline.as_ref() != Some(&published_revision),
+        published_revision,
+        published_content,
+    }))
+}
+
+pub(crate) fn read_draft(
+    project: &Path,
+    id: &str,
+    document: Document,
+) -> Result<Option<Draft>, String> {
+    let dir = work_dir(project, id)?;
+    let project = project.canonicalize().map_err(|error| error.to_string())?;
+    let identity = crate::project::identity(&project)?;
+    draft_at(&project, &identity.store, &dir, id, document)
+}
+
+fn work_dir(project: &Path, id: &str) -> Result<std::path::PathBuf, String> {
+    if !valid_work_item_id(id) {
+        return Err("Invalid work item ID".into());
+    }
+    let root = project.join("work");
+    require_dir(&root)?;
+    let dir = root.join(id);
+    require_dir(&dir)?;
+    Ok(dir)
+}
+
+pub(crate) struct DraftLaunch {
+    pub id: String,
+    pub path: String,
+    pub prompt: String,
+    pub notice: &'static str,
+}
+
+pub(crate) fn start_draft(project: &Path, input: &StartDraft) -> Result<DraftLaunch, String> {
+    if input.brief.len() > 2000 || input.brief.contains('\0') {
+        return Err("Keep the owner's brief under 2000 bytes".into());
+    }
+    let project = project.canonicalize().map_err(|error| error.to_string())?;
+    let identity = crate::project::identity(&project)?;
+    if input.id.is_none() {
+        validate_allocator(&project, &identity)?;
+    }
+    let _lock = crate::workbench::lock_project(&identity.store)?;
+    let root = project.join("work");
+    let (id, dir, size) = if let Some(id) = &input.id {
+        let dir = work_dir(&project, id)?;
+        let item = WorkItem::read(id.clone(), &dir);
+        let size = item.size.or(input.size.as_deref()).unwrap_or("standard");
+        if matches!(input.document, Document::Prd) && item.brd.is_none() {
+            return Err("Publish a readable BRD before drafting a PRD".into());
+        }
+        (id.clone(), dir, size)
+    } else {
+        let title = input
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| {
+                !title.is_empty() && title.len() <= 120 && !title.chars().any(char::is_control)
+            })
+            .ok_or("Enter a work item title of at most 120 bytes")?;
+        if !matches!(input.document, Document::Brd) || input.spec_id.is_some() {
+            return Err("Start a new work item with a BRD draft".into());
+        }
+        let size = input.size.as_deref().unwrap_or("standard");
+        if !matches!(size, "small" | "standard") {
+            return Err("Choose small or standard".into());
+        }
+        let isolated = project != identity.anchor;
+        let number = allocate(
+            &root,
+            &identity.anchor.join("work"),
+            &identity.store,
+            isolated,
+        )?;
+        let id = format!("{number:03}-{}", crate::specs::slug(title));
+        (id.clone(), root.join(id), size)
+    };
+    if !matches!(size, "small" | "standard") {
+        return Err("Choose small or standard".into());
+    }
+    let notice = crate::hub::protect_work_drafts_from_git(&project)?;
+    if input.id.is_none() {
+        match fs::create_dir(&root) {
+            Ok(()) => (),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => require_dir(&root)?,
+            Err(error) => return Err(error.to_string()),
+        }
+        fs::create_dir(&dir).map_err(|error| error.to_string())?;
+    }
+    let published = document_at(&dir, input.document.name())?
+        .as_deref()
+        .map(revision);
+    let draft = dir.join(input.document.draft_name());
+    if draft
+        .symlink_metadata()
+        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+    {
+        let meta = draft_meta(&identity.store, &project, &id, input.document);
+        let baseline = serde_json::to_vec(&published).map_err(|error| error.to_string())?;
+        crate::fsutil::atomic_write(&meta, &baseline)?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&draft)
+            .map_err(|error| error.to_string())?;
+    } else {
+        document_at(&dir, input.document.draft_name())?.ok_or("Draft disappeared")?;
+    }
+    let path = format!("work/{id}/{}", input.document.draft_name());
+    let prompt = draft_prompt(input, &id, &path, size);
+    Ok(DraftLaunch {
+        id,
+        path,
+        prompt,
+        notice,
+    })
+}
+
+fn draft_prompt(input: &StartDraft, id: &str, path: &str, size: &str) -> String {
+    let instruction = crate::specs::AssignmentRole::Plan.instruction();
+    let brief = &input.brief;
+    match input.document {
+        Document::Brd => format!(
+            r#"Work item: {id}
+Draft path: {path}
+Size: {size}
+
+{instruction}
+
+Draft the BRD using the owner's brief below and relevant project context. If a published BRD exists, use it as a reference. Preserve existing goal IDs and retired entries. Assign new goals the next unused G IDs.
+
+Use the work item title as the first heading and put "Size: {size}" near the top. For a standard BRD, include Problem, Audience, Goals, Success measures, and Scope. For a small BRD, use exactly three lines after the heading and size line:
+"Problem: ...", "G1: ...", and "Done when: ...".
+Record material unknowns as open questions.
+
+Owner's brief:
+{brief}"#
+        ),
+        Document::Prd => format!(
+            r#"Work item: {id}
+Published BRD: work/{id}/brd.md
+Draft path: {path}
+
+{instruction}
+
+Read the published BRD and use it as the source for goal IDs and work item size. If it is missing or unreadable, report that and stop before writing. If a published PRD exists, use it as a reference. Preserve existing requirement IDs and retired entries. Assign new requirements the next unused R IDs.
+
+Give each requirement an ID, one active BRD goal ID, requirement text, and a verification step. For a small work item, keep the PRD to at most five requirements and 60 lines. Record material unknowns as open questions.
+
+Add an "Out of scope" section. Do not add a requirement that serves no active BRD goal; put it under Out of scope or Open questions instead.
+
+Owner's brief:
+{brief}"#
+        ),
+    }
+}
+
+pub(crate) fn publish_draft(
+    project: &Path,
+    id: &str,
+    document: Document,
+    review: PublishDraft,
+    actor: &str,
+) -> Result<serde_json::Value, String> {
+    let dir = work_dir(project, id)?;
+    let project = project.canonicalize().map_err(|error| error.to_string())?;
+    let identity = crate::project::identity(&project)?;
+    let _lock = crate::workbench::lock_project(&identity.store)?;
+    let draft =
+        draft_at(&project, &identity.store, &dir, id, document)?.ok_or("No draft to publish")?;
+    if draft.revision != review.draft_revision
+        || draft.published_revision != review.expected_revision
+    {
+        return Err(
+            "The draft or published document changed. Review it again before publishing.".into(),
+        );
+    }
+    if draft.stale && !review.accept_stale {
+        return Err("The published document changed since drafting began. Review the current document before confirming.".into());
+    }
+    let mut result = publish_locked(
+        &project,
+        Publish {
+            id: Some(id.to_owned()),
+            title: None,
+            document,
+            content: draft.content,
+            expected_revision: review.expected_revision,
+        },
+        actor,
+        &identity,
+    )?;
+    // Recheck the draft because a terminal can edit it outside the project lock.
+    match document_at(&dir, document.draft_name()) {
+        Ok(Some(current)) if revision(&current) == draft.revision => {
+            if let Err(error) = fs::remove_file(dir.join(document.draft_name())) {
+                result["draftNotice"] = serde_json::json!(format!(
+                    "Published, but could not remove the draft: {error}"
+                ));
+            } else {
+                let _ = fs::remove_file(draft_meta(&identity.store, &project, id, document));
+            }
+        }
+        Ok(None) => (),
+        _ => {
+            result["draftNotice"] =
+                serde_json::json!("Published. The draft changed during publication and was kept.")
+        }
+    }
+    Ok(result)
 }
 
 #[derive(serde::Deserialize)]
@@ -526,10 +859,59 @@ fn allocate(root: &Path, anchor: &Path, store: &Path, isolated: bool) -> Result<
     Ok(number)
 }
 
+fn validate_allocator(
+    project: &Path,
+    identity: &crate::project::ProjectIdentity,
+) -> Result<(), String> {
+    let isolated = project.canonicalize().map_err(|error| error.to_string())? != identity.anchor;
+    if isolated && read_counter(&identity.store, STORE_COUNTER)?.is_none() {
+        return Err(STORE_UNAVAILABLE.into());
+    }
+    if let Ok(id) = std::env::var("VERB_SESSION_ID") {
+        if !crate::load_session_by_id(&id)
+            .ok()
+            .flatten()
+            .is_some_and(|session| {
+                crate::session_in_project_with_id(&session, project, &identity.id)
+            })
+        {
+            return Err(STORE_UNAVAILABLE.into());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn publish(
     project: &Path,
     input: Publish,
     actor: &str,
+) -> Result<serde_json::Value, String> {
+    let creating = input.id.is_none();
+    let identity = crate::project::identity(project).map_err(|error| {
+        if creating {
+            format!("{STORE_UNAVAILABLE} {error}")
+        } else {
+            error
+        }
+    })?;
+    if creating {
+        validate_allocator(project, &identity)?;
+    }
+    let _lock = crate::workbench::lock_project(&identity.store).map_err(|error| {
+        if creating {
+            format!("{STORE_UNAVAILABLE} {error}")
+        } else {
+            error
+        }
+    })?;
+    publish_locked(project, input, actor, &identity)
+}
+
+fn publish_locked(
+    project: &Path,
+    input: Publish,
+    actor: &str,
+    identity: &crate::project::ProjectIdentity,
 ) -> Result<serde_json::Value, String> {
     if input.content.trim().is_empty()
         || input.content.contains('\0')
@@ -545,37 +927,7 @@ pub(crate) fn publish(
         );
     }
     let creating = input.id.is_none();
-    let identity = crate::project::identity(project).map_err(|error| {
-        if creating {
-            format!("{STORE_UNAVAILABLE} {error}")
-        } else {
-            error
-        }
-    })?;
     let isolated = project.canonicalize().map_err(|error| error.to_string())? != identity.anchor;
-    if creating && isolated && read_counter(&identity.store, STORE_COUNTER)?.is_none() {
-        return Err(STORE_UNAVAILABLE.into());
-    }
-    if creating {
-        if let Ok(id) = std::env::var("VERB_SESSION_ID") {
-            if !crate::load_session_by_id(&id)
-                .ok()
-                .flatten()
-                .is_some_and(|session| {
-                    crate::session_in_project_with_id(&session, project, &identity.id)
-                })
-            {
-                return Err(STORE_UNAVAILABLE.into());
-            }
-        }
-    }
-    let _lock = crate::workbench::lock_project(&identity.store).map_err(|error| {
-        if creating {
-            format!("{STORE_UNAVAILABLE} {error}")
-        } else {
-            error
-        }
-    })?;
     let root = project.join("work");
     match fs::create_dir(&root) {
         Ok(()) => {}
@@ -609,10 +961,7 @@ pub(crate) fn publish(
         }
     };
     let dir = root.join(&id);
-    let name = match input.document {
-        Document::Brd => "brd.md",
-        Document::Prd => "prd.md",
-    };
+    let name = input.document.name();
     if !creating {
         require_dir(&dir)?;
     }

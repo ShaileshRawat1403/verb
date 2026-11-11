@@ -1949,6 +1949,7 @@ mod tests {
         app.mode = Mode::Workbench;
         app.work.detail = true;
         app.tasks.push(crate::workbench::TaskSnapshot {
+            spec_id: None,
             id: "a".repeat(32),
             title: "Review parser".to_owned(),
             brief: String::new(),
@@ -1985,6 +1986,7 @@ mod tests {
         app.mode = Mode::Workbench;
         app.work.filter = "older".to_owned();
         app.tasks.push(crate::workbench::TaskSnapshot {
+            spec_id: None,
             id: "a".repeat(32),
             title: "Older review".to_owned(),
             brief: String::new(),
@@ -1996,6 +1998,7 @@ mod tests {
         });
         let id = "b".repeat(32);
         app.tasks.push(crate::workbench::TaskSnapshot {
+            spec_id: None,
             id: id.clone(),
             title: "New task".to_owned(),
             brief: String::new(),

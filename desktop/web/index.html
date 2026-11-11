@@ -29,6 +29,7 @@
           <button type="button" class="nav-item" data-bench-board>Board</button>
           <div class="bench-work">
             <h2>Work</h2>
+            <button type="button" class="text-button" data-bench-draft="brd" data-new-item>Draft a work item</button>
             <div id="bench-work-tree"><p role="status">Loading work items…</p></div>
           </div>
           <button type="button" class="nav-item" data-view="project">Context</button>
@@ -1024,10 +1025,6 @@
           ><strong id="launch-project">Current project</strong
           ><small id="launch-node">Runs on your Verb host</small>
         </div>
-        <div id="bench-launch-assignment" hidden>
-          <label class="field-label">Spec <select name="specId"><option value="">Scratch</option></select></label>
-          <label class="field-label">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
-        </div>
         <div class="agent-choice" role="radiogroup" aria-label="Session type">
           <label class="full-span"
             ><input type="radio" name="agent" value="shell" checked /><span
@@ -1062,6 +1059,10 @@
               >&lt;/&gt;</span
             ><strong>Other CLI</strong><small>Checking availability…</small></label
           >
+        </div>
+        <div id="bench-launch-assignment" hidden>
+          <label class="field-label">Spec <select name="specId"><option value="">Scratch</option></select></label>
+          <label class="field-label" id="bench-launch-role">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
         </div>
         <div id="custom-command-fields" class="custom-fields" hidden>
           <label class="field-label" for="custom-command">Executable</label
@@ -1103,6 +1104,44 @@
             Open Terminal <span>→</span>
           </button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="bench-draft-dialog" class="modal">
+      <form class="modal-content" id="bench-draft-form">
+        <div class="modal-heading"><h2 id="bench-draft-title">Draft with agent</h2>
+          <button class="modal-close" type="button" data-close="bench-draft-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label">Agent <select name="agent" required></select></label>
+        <label class="field-label" data-new-work-item>Work item title <input name="title" maxlength="120"></label>
+        <label class="field-label" data-draft-size>Size <select name="size"><option value="standard">Standard</option><option value="small">Small</option></select></label>
+        <label class="field-label">Owner's brief <textarea name="brief" rows="4" maxlength="2000"></textarea></label>
+        <p role="alert" data-draft-error hidden></p>
+        <div class="modal-footer"><button class="primary-button" type="submit">Start drafting</button></div>
+      </form>
+    </dialog>
+    <dialog id="bench-draft-review-dialog" class="modal">
+      <form class="modal-content" id="bench-draft-review-form">
+        <div class="modal-heading"><h2 id="bench-draft-review-title">Review draft</h2>
+          <button class="modal-close" type="button" data-close="bench-draft-review-dialog" aria-label="Close">×</button>
+        </div>
+        <p id="bench-draft-stale" role="alert" hidden>The published document changed since drafting began. Read the current document before publishing.</p>
+        <details id="bench-draft-current" hidden><summary>Current published document</summary><pre></pre></details>
+        <pre id="bench-draft-content" tabindex="0"></pre>
+        <label id="bench-draft-confirm-stale" hidden><input type="checkbox" name="acceptStale"> I reviewed the current published document.</label>
+        <p role="alert" data-draft-error hidden></p>
+        <div class="modal-footer"><button class="primary-button" type="submit">Publish reviewed draft</button></div>
+      </form>
+    </dialog>
+    <dialog id="bench-plan-task-dialog" class="modal">
+      <form class="modal-content" id="bench-plan-task-form">
+        <div class="modal-heading"><h2>New spec task</h2>
+          <button class="modal-close" type="button" data-close="bench-plan-task-dialog" aria-label="Close">×</button>
+        </div>
+        <label class="field-label">Title <input name="title" maxlength="200" required></label>
+        <label class="field-label">Brief <textarea name="brief" rows="3"></textarea></label>
+        <p role="alert" data-draft-error hidden></p>
+        <div class="modal-footer"><button class="primary-button" type="submit">Create task</button></div>
       </form>
     </dialog>
 

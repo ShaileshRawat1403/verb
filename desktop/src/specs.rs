@@ -954,6 +954,7 @@ pub(crate) enum AssignmentRole {
     Implement,
     Review,
     Investigate,
+    Plan,
 }
 
 impl AssignmentRole {
@@ -962,6 +963,7 @@ impl AssignmentRole {
             Self::Implement => "Implement",
             Self::Review => "Review",
             Self::Investigate => "Investigate",
+            Self::Plan => "Plan",
         }
     }
 
@@ -971,6 +973,7 @@ impl AssignmentRole {
                 "Implement only within the approved scope. Run the specified checks."
             }
             Self::Review => "Review independently within the assigned scope. Do not edit files.",
+            Self::Plan => "Read what you need to draft the requested document. If the owner's brief is too thin to draft responsibly, ask up to three questions in the terminal first and wait for the answers. Write only to the draft path named in the request. Do not change any other file, publish the draft, or stage, commit, or push it. When finished, report the draft path and any open questions. The owner reviews and publishes the draft from Plan.",
             Self::Investigate => {
                 "Investigate the assigned question and report evidence. Do not edit files."
             }

@@ -22,6 +22,7 @@ import { icon } from "./icons.js";
 import { gitRemoteDescription } from "./project-git.js";
 import { specPresentation, filterSpecs } from "./spec-summary.js";
 import { initSdlc } from "./sdlc-ui.js";
+import { readWithBusyRetry } from "./read-retry.js";
 
 const SHORTCUTS = [
   ["⌘K / Ctrl+K", "Command palette: search specs and run any action"],
@@ -84,7 +85,7 @@ export function initWorkbench(deps) {
   async function refreshSpecs() {
     const request = ++specsRequest;
     try {
-      const result = await api("GET", "/api/specs");
+      const result = await readWithBusyRetry(api, "/api/specs");
       if (request !== specsRequest) return;
       state.specs = (result.specs || []).map(normalize);
       state.summaries = result.summaries || {};
@@ -96,6 +97,7 @@ export function initWorkbench(deps) {
       if (request !== specsRequest) return;
       state.specsError = error.message;
       renderOverview();
+      deps.extras?.onWorkbenchChange?.();
       toast(error.message, "error");
     }
   }
@@ -159,10 +161,13 @@ export function initWorkbench(deps) {
       : `<p class="rail-empty">${state.specsError ? "Specs unavailable. Refresh observations." : !state.specsLoaded ? "Reading specs…" : "No specs yet. A spec is a short description of one piece of work."}</p>`;
   }
 
-  function presentation(spec) {
+  function summaryFor(spec) {
     const fromState = deps.ui.state?.specSummaries?.[spec.id];
-    const summary = fromState?.revision === spec.revision ? fromState : state.summaries[spec.id];
-    return specPresentation(spec, summary, {
+    return fromState?.revision === spec.revision ? fromState : state.summaries[spec.id];
+  }
+
+  function presentation(spec) {
+    return specPresentation(spec, summaryFor(spec), {
       waitingTerminals: deps.ui.waitingTerminals,
       waitingTalkSpecs: deps.ui.waitingTalkSpecs,
       liveIds: new Set((deps.ui.state?.sessions || []).filter(s => s.state === "live").map(s => s.id)),
@@ -1247,6 +1252,7 @@ export function initWorkbench(deps) {
     openNewSpec,
     current: () => ({ spec: selected(), git: state.git, meters: state.meters,
       presentation: selected() ? presentation(selected()) : null, specs: state.specs, error: state.specsError, loaded: state.specsLoaded }),
+    summaryFor,
     meterFor: (id) => state.meters?.[id] ?? null,
     render,
     /** Opens the evidence dialog for a criterion of the selected spec, prefilled; the person decides. */
