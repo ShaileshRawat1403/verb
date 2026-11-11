@@ -10,6 +10,10 @@ does it merely add another capability?
 
 ---
 
+## Bench consolidation
+
+- Add DAX as a launchable CLI agent in Verb after verifying its executable and supported capabilities.
+
 ## PocketFabric web UX closeout — 1 October 2026
 
 **Completed and recorded.** Terminal hot-path isolation, incremental workspace loading,
