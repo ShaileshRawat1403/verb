@@ -1,4 +1,5 @@
 import { projectGitPresentation } from "./project-git.js";
+import { readApiResponse } from "./api-response.js";
 import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
@@ -294,18 +295,11 @@ async function api(method, path, body) {
     method,
     cache: "no-store",
     credentials: "same-origin",
+    redirect: "manual",
     headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const value = await response.json();
-  if (!response.ok) {
-    const error = new Error(value.error || `Request failed (${response.status})`);
-    // `code: "capacity"` marks temporary execution-boundary congestion, not a failed request.
-    error.status = response.status;
-    error.code = value.code;
-    throw error;
-  }
-  return value;
+  return readApiResponse(response);
 }
 
 function showView(view) {
@@ -674,12 +668,13 @@ async function refreshState(silent = false) {
 }
 
 async function refreshWorkspace() {
-  if (ui.workspaceRefreshing) return ui.workspaceRefreshing;
+  if (ui.workspaceRefreshing) return;
   const request = api("GET", "/api/workspace");
   ui.workspaceRefreshing = request;
   const revision = ui.sessionRevision;
   try {
     const workspace = await request;
+    ui.workspaceAccessInterrupted = false;
     if (revision !== ui.sessionRevision) return;
     const previous = ui.state;
     const ids = new Set(workspace.sessions.map((session) => session.id));
@@ -712,7 +707,11 @@ async function refreshWorkspace() {
       render();
     }
   } catch (error) {
-    if (!ui.state) toast(error.message, "error");
+    if (ui.state && error.code === "access_redirect" && !ui.workspaceAccessInterrupted) {
+      ui.workspaceAccessInterrupted = true;
+      toast(error.message, "error");
+    }
+    return error;
   } finally {
     ui.workspaceRefreshing = null;
   }
@@ -2255,13 +2254,16 @@ async function showAccess() {
 }
 
 async function bootstrap() {
-  await refreshWorkspace();
+  const workspaceError = await refreshWorkspace();
   if (!ui.state) {
-    if (!token) {
+    if (!token && workspaceError?.status === 403 && location.protocol === "http:") {
       $("#app").innerHTML =
         '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Open Verb from its local URL</h1><p>Run <code>verb web</code> in your project and open the URL printed in that terminal. It contains this browser session’s local access key.</p></div>';
     } else {
-      toast("Could not connect to Verb session", "error");
+      $("#app").innerHTML =
+        '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Could not open Verb</h1><p></p><button class="primary-button" type="button">Reload Verb</button></div>';
+      $("#app .locked p").textContent = workspaceError?.message || "Reload the page to try again.";
+      $("#app .locked button").addEventListener("click", () => location.reload());
     }
     return;
   }
