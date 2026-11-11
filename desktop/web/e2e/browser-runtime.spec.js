@@ -1,5 +1,5 @@
 // A real Chromium worker behind Verb, with HTTP fixtures that refuse all iframe embedding.
-import {test, expect, chromium} from '@playwright/test';
+import {test, expect, chromium} from './legacy-layout.js';
 import {spawn, execFileSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';

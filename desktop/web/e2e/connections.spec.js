@@ -1,6 +1,6 @@
 // UI → owner API → official Rust MCP client → official TypeScript SDK server.
 // The HTTP loopback exception is compiled only in the synthetic test binary, never releases.
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./legacy-layout.js";
 import {
   McpServer,
   WebStandardStreamableHTTPServerTransport,

@@ -1,4 +1,4 @@
-import { test, expect, chromium } from "@playwright/test";
+import { test, expect, chromium } from "./legacy-layout.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";

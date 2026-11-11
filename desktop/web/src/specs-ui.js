@@ -487,7 +487,7 @@ export function initWorkbench(deps) {
   /** The live terminals belong to the spec you are working on: show them in its work area. */
   function placeTerminals() {
     const grid = $("#terminal-grid");
-    const inSpecs = deps.ui.view === "specs" && selected();
+    const inSpecs = deps.ui.view === "specs" && selected() && !$("#app").classList.contains("bench-layout");
     const target = inSpecs ? $("#spec-work") : $("#view-sessions .terminal-area");
     if (grid && target && grid.parentElement !== target) {
       target.append(grid);
@@ -1206,6 +1206,8 @@ export function initWorkbench(deps) {
 
   return {
     selectSpec,
+    refreshSpecs,
+    startOnSpec,
     runCheck: () => lifecycle.openCheck(),
     reviewEvidence() {
       const spec = selected();

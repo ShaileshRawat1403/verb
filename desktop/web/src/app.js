@@ -20,6 +20,8 @@ import "./motion.css";
 import "./studio.css";
 import "./conversation.css";
 import { initStudio } from "./studio-ui.js";
+import { initBenchShell } from "./bench-shell.js";
+import "./bench-shell.css";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
 import { initProjectSwitcher } from "./project-switcher.js";
@@ -58,6 +60,7 @@ if (location.hash && token) {
 
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
+let shell = null;
 let studio = null;
 let connections = null;
 // The Project view (project-ui.js): file tree, preview and context hub.
@@ -245,6 +248,7 @@ function refreshTalkSignals() {
 function updateNeedsYou() {
   const waiting = ui.waitingTerminals.size + (ui.waitingTalks ?? 0);
   $('.nav-item[data-view="sessions"]')?.classList.toggle("needs-you", waiting > 0);
+  shell?.renderNeeds();
   const base = document.title.replace(/^\(\d+\) Needs you · /, "");
   document.title = waiting ? `(${waiting}) Needs you · ${base}` : base;
 }
@@ -330,6 +334,7 @@ function showView(view) {
   host?.onShowView(view);
   studio?.onShowView(view);
   connections?.onShowView(view);
+  shell?.onView();
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -1325,7 +1330,7 @@ function renderTerminalTabs() {
     strip.setAttribute("aria-label", "Terminals");
     grid.prepend(strip);
   }
-  strip.hidden = ui.terminals.size === 0 && ui.talks.size === 0;
+  strip.hidden = ui.terminals.size === 0 && (shell?.enabled() || ui.talks.size === 0);
   const split = ui.splitTerminals && ui.terminals.size > 1;
   const tabs = [...ui.terminals.entries()]
     .map(([id, terminal]) => {
@@ -1339,7 +1344,7 @@ function renderTerminalTabs() {
       const tone = talkTone(talk.data());
       const words = tone === "running" ? "answering" : tone === "waiting" ? "wants permission: continue in its terminal" : "ready";
       const selected = id === ui.focusedTerminal;
-      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
+      return `<button type="button" role="tab" class="terminal-tab" data-bench-talk data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
   const markup = `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
@@ -1364,11 +1369,12 @@ function renderTerminalTabs() {
 
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
-  if (!ui.terminals.size && !ui.talks.size && !grid.querySelector(".terminal-empty"))
+  const talkVisible = !shell?.enabled() && ui.talks.size > 0;
+  if (!ui.terminals.size && !talkVisible && !grid.querySelector(".terminal-empty"))
     grid.append(emptyTerminalTemplate.cloneNode(true));
-  if (ui.talks.size) grid.querySelector(".terminal-empty")?.remove();
-  if (!ui.focusedTerminal || (!ui.terminals.has(ui.focusedTerminal) && !ui.talks.has(ui.focusedTerminal)))
-    ui.focusedTerminal = ui.terminals.keys().next().value || ui.talks.keys().next().value || null;
+  if (talkVisible) grid.querySelector(".terminal-empty")?.remove();
+  if (!ui.terminals.has(ui.focusedTerminal) && !(talkVisible && ui.talks.has(ui.focusedTerminal)))
+    ui.focusedTerminal = ui.terminals.keys().next().value || (talkVisible ? ui.talks.keys().next().value : null);
   if (ui.focusProject) {
     try {
       const key = `verb.terminal-focus.${ui.focusProject}`;
@@ -1395,6 +1401,7 @@ function updateTerminalFocus() {
     });
   });
   renderTerminalTabs();
+  shell?.terminalChanged(ui.focusedTerminal);
 }
 
 async function pollTerminal(id) {
@@ -1936,7 +1943,10 @@ $("#phone-stop").addEventListener("click", async () => {
   }
 });
 
-$("#refresh-button").addEventListener("click", () => refreshState());
+$("#refresh-button").addEventListener("click", () => {
+  refreshState();
+  shell?.refresh();
+});
 function updateLaunchForm() {
   const form = $("#session-form");
   const checkout = isolatedCheckoutAvailability(ui.agentCapabilities);
@@ -2309,7 +2319,11 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  extras.onWorkbenchChange = () => studio.render();
+  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus });
+  extras.onWorkbenchChange = () => {
+    studio.render();
+    shell.render();
+  };
   extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
   extras.selectSpec = workbench.selectSpec;

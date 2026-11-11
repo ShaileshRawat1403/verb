@@ -22,6 +22,18 @@
             <svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 8h14m-4-4 4 4-4 4M17 16H3m4-4-4 4 4 4"/></svg>
           </button>
         </div>
+        <nav id="bench-navigation" aria-label="Bench navigation" hidden>
+          <button type="button" class="panel-toggle bench-mobile-close" data-bench-overlay-close>Close navigation</button>
+          <button type="button" class="nav-item" data-view="sessions">Terminals</button>
+          <button type="button" class="nav-item" data-view="needs-you">Needs you <span id="bench-needs-count" class="nav-count">0</span></button>
+          <button type="button" class="nav-item" data-bench-board>Board</button>
+          <div class="bench-work">
+            <h2>Work</h2>
+            <div id="bench-work-tree"><p role="status">Loading work items…</p></div>
+          </div>
+          <button type="button" class="nav-item" data-view="project">Context</button>
+          <button type="button" class="nav-item" data-view="settings">Settings</button>
+        </nav>
         <nav class="main-nav" aria-label="Workspace">
           <button class="nav-item" type="button" data-view="studio" aria-label="Studio" title="Studio · canvas workspace"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M16 4v16M3 16h13"/></svg></span><span>Studio</span></button>
 
@@ -204,6 +216,7 @@
         <div class="access-banner" id="access-banner" role="status" hidden></div>
         <header class="topbar">
           <div class="workspace-location">
+            <button id="bench-toggle-navigation" class="panel-toggle" type="button" aria-controls="workspace-navigation" aria-expanded="true" hidden>Navigation</button>
             <button
               class="panel-toggle"
               id="toggle-navigation"
@@ -279,6 +292,8 @@
             >
               <span class="btn-label">Commit</span>
             </button>
+            <button id="bench-settings" class="panel-toggle" type="button" data-view="settings">Settings</button>
+            <button id="bench-toggle-right" class="panel-toggle" type="button" aria-controls="bench-right-panel" aria-expanded="true" hidden>Details</button>
             <button
               class="icon-button"
               id="refresh-button"
@@ -308,6 +323,28 @@
         </header>
 
         <div class="page-content">
+          <section id="view-settings" class="view">
+            <div class="page-heading"><div><h1>Settings</h1></div></div>
+            <div class="panel bench-settings-panel">
+              <label><input type="checkbox" id="bench-legacy-layout"> Use previous navigation</label>
+              <h2>Workspace views</h2>
+              <nav class="bench-settings-links" aria-label="Workspace views">
+                <button class="secondary-button" type="button" data-view="sessions">Sessions</button>
+                <button class="secondary-button" type="button" data-view="specs">Specs</button>
+                <button class="secondary-button" type="button" data-view="studio">Studio</button>
+                <button class="secondary-button" type="button" data-view="project">Project</button>
+                <button class="secondary-button" type="button" data-view="overview">Overview</button>
+                <button class="secondary-button" type="button" data-view="tasks">Tasks</button>
+                <button class="secondary-button" type="button" data-view="memory">Shared notes</button>
+                <button class="secondary-button" type="button" data-view="host">Host</button>
+                <button class="secondary-button" type="button" data-view="connections">Connections</button>
+              </nav>
+            </div>
+          </section>
+          <section id="view-needs-you" class="view">
+            <div class="page-heading"><div><h1>Needs you</h1></div></div>
+            <div class="panel bench-settings-panel" id="bench-needs-list"></div>
+          </section>
           <section id="view-overview" class="view">
             <div class="page-heading">
               <div>
@@ -826,6 +863,25 @@
           </section>
         </div>
       </main>
+      <div id="bench-right-resize" class="resize-handle" aria-label="Resize details panel" hidden></div>
+      <aside id="bench-right-panel" aria-label="Spec details" hidden>
+        <button type="button" class="panel-toggle bench-mobile-close" data-bench-overlay-close>Close details</button>
+        <div class="bench-tabs" role="tablist" aria-label="Spec details">
+          <button type="button" id="bench-tab-plan" role="tab" aria-controls="bench-plan" aria-selected="true" data-bench-tab="plan">Plan</button>
+          <button type="button" id="bench-tab-review" role="tab" aria-controls="bench-review" aria-selected="false" tabindex="-1" data-bench-tab="review">Review</button>
+          <button type="button" id="bench-tab-preview" role="tab" aria-controls="bench-preview" aria-selected="false" tabindex="-1" data-bench-tab="preview">Preview</button>
+        </div>
+        <section id="bench-plan" role="tabpanel" aria-labelledby="bench-tab-plan">
+          <div id="bench-plan-spec"><p class="muted">Select a spec from the work tree.</p></div>
+        </section>
+        <section id="bench-review" role="tabpanel" aria-labelledby="bench-tab-review" hidden>
+          <button class="secondary-button" type="button" data-view="specs">Open spec review</button>
+        </section>
+        <section id="bench-preview" role="tabpanel" aria-labelledby="bench-tab-preview" hidden>
+          <button class="secondary-button" type="button" data-view="project">Open project files</button>
+        </section>
+      </aside>
+      <button type="button" class="bench-overlay-scrim" data-bench-overlay-close aria-label="Close overlay" hidden></button>
     </div>
 
     <dialog id="phone-dialog" class="modal">

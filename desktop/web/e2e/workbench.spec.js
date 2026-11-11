@@ -1,5 +1,5 @@
 // The spec-driven workbench, driven like a person would: through the browser, against the real host.
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./legacy-layout.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

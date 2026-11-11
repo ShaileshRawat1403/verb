@@ -1,7 +1,7 @@
 // The conversation flow against the real `verb web` binary, with a scripted stand-in for Claude Code
 // (e2e/fixtures/fake-claude.mjs) that writes Claude Code's own log and status formats. Real Claude
 // Code is exercised separately; this suite makes every state reachable on demand.
-import { test, expect } from "@playwright/test";
+import { test, expect, useLegacyLayout } from "./legacy-layout.js";
 import { spawn, execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -226,6 +226,7 @@ test("a resumed attempt names the same conversation and keeps the session", asyn
 
 test("turning the stream off clears at once, leaves the log, and reports each device", async ({ page, browser }) => {
   const other = await browser.newContext();
+  await useLegacyLayout(other);
   const second = await other.newPage();
   await second.goto(url);
   await openChat(second, session);
@@ -290,6 +291,7 @@ test("Studio reads the same conversation and opens the agent's files in the prev
 
 test("phone Studio keeps chat primary and preserves a separate work draft", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await useLegacyLayout(context);
   const page = await context.newPage();
   try {
     await page.goto(url);
@@ -315,6 +317,7 @@ test("phone Studio keeps chat primary and preserves a separate work draft", asyn
 
 test("phone width: one surface at a time, reachable controls, keyboard-only sending", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  await useLegacyLayout(context);
   const page = await context.newPage();
   await page.goto(url);
   const chat = await openChat(page, session);
