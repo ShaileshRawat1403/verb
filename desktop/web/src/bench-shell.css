@@ -108,3 +108,82 @@
   .bench-layout .main-content { min-height: 100dvh; }
   .bench-layout .top-actions { flex-wrap: wrap; }
 }
+
+/* The Bench keeps one control row, with the tab list scrolling independently. */
+#app.bench-layout .topbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-height: 48px;
+  padding: 2px 8px;
+}
+#app.bench-layout .topbar .workspace-location {
+  flex: none;
+  min-width: 0;
+  overflow: visible;
+}
+#app.bench-layout .topbar .breadcrumb,
+#app.bench-layout .top-actions > :not(.palette-hint):not(#bench-toggle-right) { display: none; }
+#app.bench-layout .topbar .top-actions { flex: none; flex-wrap: nowrap; gap: 2px; }
+#app.bench-layout .topbar :is(#bench-toggle-navigation, #bench-toggle-right, #bench-new-terminal, .palette-hint, #bench-terminal-menu summary) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 40px;
+  padding: 0 6px;
+}
+#app.bench-layout .palette-hint :is(.btn-label, kbd) { display: none; }
+#bench-terminal-tabs { flex: 0 1 auto; min-width: 0; }
+#bench-new-terminal { margin-left: auto; }
+#bench-terminal-tabs .terminal-tabs { background: none; box-shadow: none; padding: 3px; }
+#bench-terminal-menu { position: relative; flex: none; }
+#bench-terminal-menu summary { cursor: pointer; list-style: none; border-radius: 8px; }
+#bench-terminal-menu summary::-webkit-details-marker { display: none; }
+.bench-terminal-menu-items {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 25;
+  min-width: max-content;
+  display: grid;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+}
+.bench-terminal-menu-items button {
+  padding: 8px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+}
+.bench-terminal-menu-items button:hover { background: var(--surface-2); }
+.bench-layout .terminal-tile > :is(.terminal-titlebar, .terminal-bottom),
+.bench-layout .terminal-tabs [data-bench-talk],
+.bench-connection,
+.bench-connection > span { display: none; }
+.bench-layout .terminal-tile:has([data-connection]) > .bench-connection {
+  display: block;
+  margin: 0;
+  padding: 6px 10px;
+  font-size: .8rem;
+}
+.bench-layout .terminal-tile:has([data-connection="reconnecting"]) .bench-reconnecting,
+.bench-layout .terminal-tile:has([data-connection="disconnected"]) .bench-disconnected { display: inline; }
+.bench-spec-stage { text-transform: capitalize; }
+#bench-plan-spec .bench-documents { padding: 0; list-style: none; }
+.bench-documents li { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.bench-documents small { color: var(--text-muted); }
+.bench-tabs button:focus-visible,
+#bench-terminal-menu summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+@media (max-width: 760px) {
+  #bench-terminal-tabs .terminal-tab { padding-inline: 7px; }
+  #bench-terminal-tabs .terminal-tab :is(small, em) { display: none; }
+}

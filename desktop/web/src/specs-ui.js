@@ -970,6 +970,7 @@ export function initWorkbench(deps) {
     for (const s of state.specs) {
       list.push({ title: `Open spec ${s.id} · ${s.title}`, hint: STAGE_GUIDE[s.stage].label, run: () => selectSpec(s.id) });
     }
+    list.push(...(deps.extras.shellCommands?.() ?? []));
     list.push(...(deps.project?.commands(query) ?? []));
     // A typed question: offer Ask Verb, first when it reads like a question.
     const askEntries = deps.extras?.ask?.commands(query) ?? [];

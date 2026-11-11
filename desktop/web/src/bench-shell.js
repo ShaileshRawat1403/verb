@@ -1,7 +1,7 @@
 import { makeResizer } from "./resize.js";
 import { specSessions } from "./workbench.js";
 
-export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus }) {
+export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile }) {
   const app = $("#app");
   const panel = $("#bench-right-panel");
   const tree = $("#bench-work-tree");
@@ -77,7 +77,8 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       const unlinked = [];
       for (const spec of specs) (grouped.get(spec.work_item) ?? unlinked).push(spec.id);
       markup = workItems.items.map(item => {
-        const title = item.brd?.match(/^# (.+)$/m)?.[1] ?? item.id;
+        const title = item.brd?.match(/^#{1,6}[ 	]+(.+?)\s*#*\s*$/m)?.[1]?.replace(/\s+BRD$/i, "").trim()
+          || item.id.replace(/^\d+-/, "").replaceAll("-", " ").replace(/^./, letter => letter.toUpperCase());
         return group(item.id, title, grouped.get(item.id));
       }).join("") + group("unlinked", "Unlinked", unlinked);
     }
@@ -93,8 +94,7 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     const item = workItems?.items.find(item => item.id === spec?.work_item);
     const plan = spec ? `<h2>${escapeHtml(spec.id)} · ${escapeHtml(spec.title)}</h2>
       <p class="bench-spec-stage">${escapeHtml(spec.stage)}</p>
-      ${item?.brd ? '<p>Why (BRD)</p>' : ""}
-      ${item?.prd ? '<p>What (PRD)</p>' : ""}
+      <ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}</ul>
       <h3>Done when</h3><ul>${spec.criteria.map(criterion => `<li>${escapeHtml(criterion.text)}</li>`).join("")}</ul>
       ${openSessions(spec).some(session => session.live) ? "" : '<button type="button" class="secondary-button" data-bench-start>Start terminal</button>'}`
       : '<p class="muted">Select a spec from the work tree.</p>';
@@ -104,6 +104,15 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       planBody._markup = plan;
     }
     renderNeeds();
+  }
+
+  function documentRow(item, kind, title) {
+    const content = item?.[kind];
+    if (content == null) return `<li><span>${title}</span><small>Missing</small></li>`;
+    const warnings = item.warnings.filter(warning => kind === "brd"
+      ? /^(?:BRD|Small BRD|Duplicate BRD)\b/.test(warning)
+      : /^(?:PRD|Small PRD|Requirement|Duplicate PRD)\b/.test(warning));
+    return `<li><button type="button" class="text-button" data-bench-document="${escapeHtml(`work/${item.id}/${kind}.md`)}">${title}</button><small title="${escapeHtml(warnings.join("\n"))}">${warnings.length ? "Warnings" : "Published"}</small></li>`;
   }
 
   function renderNeeds() {
@@ -144,6 +153,9 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     $("#bench-navigation").hidden = !isBench;
     toggleNavigation.hidden = !isBench;
     toggleDetails.hidden = !isBench || !terminalView;
+    $("#bench-new-terminal").hidden = !isBench;
+    $("#bench-terminal-tabs").hidden = !isBench || !terminalView;
+    if (!isBench || !terminalView) $("#bench-terminal-menu").hidden = true;
     toggleNavigation.setAttribute("aria-expanded", String(navVisible));
     toggleDetails.setAttribute("aria-expanded", String(detailsVisible));
     panel.hidden = !detailsVisible;
@@ -212,6 +224,8 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
   document.addEventListener("click", event => {
     const target = event.target;
     if (target.closest("[data-bench-overlay-close]")) return closeOverlay(true);
+    const documentButton = target.closest("[data-bench-document]");
+    if (documentButton) return openFile(documentButton.dataset.benchDocument);
     const spec = target.closest("[data-bench-spec]");
     if (spec) return focusSpec(spec.dataset.benchSpec);
     const tab = target.closest("[data-bench-tab]");

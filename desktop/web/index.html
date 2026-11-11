@@ -216,7 +216,7 @@
         <div class="access-banner" id="access-banner" role="status" hidden></div>
         <header class="topbar">
           <div class="workspace-location">
-            <button id="bench-toggle-navigation" class="panel-toggle" type="button" aria-controls="workspace-navigation" aria-expanded="true" hidden>Navigation</button>
+            <button id="bench-toggle-navigation" class="panel-toggle" type="button" aria-controls="workspace-navigation" aria-expanded="true" aria-label="Toggle sidebar" title="Toggle sidebar" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16"/></svg></button>
             <button
               class="panel-toggle"
               id="toggle-navigation"
@@ -232,6 +232,17 @@
               ><strong id="breadcrumb-view">Sessions</strong>
             </div>
           </div>
+          <div id="bench-terminal-tabs" hidden></div>
+          <details id="bench-terminal-menu" hidden>
+            <summary aria-label="Terminal actions" title="Terminal actions">⋯</summary>
+            <div class="bench-terminal-menu-items">
+              <button type="button" data-bench-terminal-action="search">Search terminal</button>
+              <button type="button" data-bench-terminal-action="phone" hidden>Phone access</button>
+              <button type="button" data-bench-terminal-action="take" hidden>Take back input</button>
+              <button type="button" data-bench-terminal-action="end">End session</button>
+            </div>
+          </details>
+          <button id="bench-new-terminal" class="panel-toggle" type="button" aria-label="New terminal" title="New terminal" data-action="new-session" hidden>+</button>
           <div class="top-actions">
             <div class="git-indicator">
               <span class="git-icon"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8M18 10c0 4-6 3-10 6"/></svg></span><span id="top-branch">—</span
@@ -293,7 +304,7 @@
               <span class="btn-label">Commit</span>
             </button>
             <button id="bench-settings" class="panel-toggle" type="button" data-view="settings">Settings</button>
-            <button id="bench-toggle-right" class="panel-toggle" type="button" aria-controls="bench-right-panel" aria-expanded="true" hidden>Details</button>
+            <button id="bench-toggle-right" class="panel-toggle" type="button" aria-controls="bench-right-panel" aria-expanded="true" aria-label="Toggle right panel" title="Toggle right panel" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M16 4v16"/></svg></button>
             <button
               class="icon-button"
               id="refresh-button"

@@ -176,7 +176,7 @@ document.addEventListener("verb:observer", (event) => {
 document.addEventListener("keydown", (event) => {
   const tab = event.target.closest?.(".terminal-tab");
   if (!tab || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const tabs = [...tab.parentElement.querySelectorAll(".terminal-tab")];
+  const tabs = [...tab.parentElement.querySelectorAll(".terminal-tab")].filter(button => button.getClientRects().length);
   const i = tabs.indexOf(tab);
   const next =
     event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (i + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
@@ -184,7 +184,7 @@ document.addEventListener("keydown", (event) => {
   ui.focusedTerminal = tabs[next].dataset.tabTerminal;
   updateTerminalFocus();
   renderListResults();
-  $("#terminal-grid").querySelector(`[data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
+  document.querySelector(`.terminal-tabs [data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
 });
 
 /** Mounts the conversation tile for an Antigravity talk (src/talk-ui.js). */
@@ -335,6 +335,7 @@ function showView(view) {
   studio?.onShowView(view);
   connections?.onShowView(view);
   shell?.onView();
+  if (shell) renderTerminalTabs();
   if (view === "sessions" || view === "specs") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
@@ -863,7 +864,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${terminalTransport.ready ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${terminalTransport.ready ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div><p class="bench-connection" role="status"><span class="bench-reconnecting">Reconnecting…</span><span class="bench-disconnected">Disconnected</span></p>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -1321,7 +1322,7 @@ function terminalTabStatus(terminal, id) {
 
 function renderTerminalTabs() {
   const grid = $("#terminal-grid");
-  let strip = grid.querySelector(".terminal-tabs");
+  let strip = document.querySelector(".terminal-tabs");
   if (!strip) {
     // Not a div: the grid's CSS uses `.terminal-tile:only-of-type` to mean "the only terminal".
     strip = document.createElement("nav");
@@ -1330,7 +1331,19 @@ function renderTerminalTabs() {
     strip.setAttribute("aria-label", "Terminals");
     grid.prepend(strip);
   }
-  strip.hidden = ui.terminals.size === 0 && (shell?.enabled() || ui.talks.size === 0);
+  const bench = shell?.enabled();
+  const tabMount = bench ? $("#bench-terminal-tabs") : grid;
+  if (strip.parentElement !== tabMount) tabMount.prepend(strip);
+  strip.hidden = ui.terminals.size === 0 && (bench || ui.talks.size === 0);
+  const menu = $("#bench-terminal-menu");
+  const activeTerminal = ui.terminals.get(ui.focusedTerminal);
+  menu.hidden = !bench || ui.view !== "sessions" || !activeTerminal;
+  if (menu.hidden) menu.open = false;
+  menu.querySelector('[data-bench-terminal-action="end"]').textContent = activeTerminal?.ended ? "Close terminal output" : "End session";
+  for (const action of ["phone", "take"]) {
+    menu.querySelector(`[data-bench-terminal-action="${action}"]`).hidden =
+      activeTerminal?.tile.querySelector(`[data-${action}-terminal]`)?.hidden !== false;
+  }
   const split = ui.splitTerminals && ui.terminals.size > 1;
   const tabs = [...ui.terminals.entries()]
     .map(([id, terminal]) => {
@@ -1347,7 +1360,7 @@ function renderTerminalTabs() {
       return `<button type="button" role="tab" class="terminal-tab" data-bench-talk data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  const markup = `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
+  const markup = bench ? tabs : `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
     ui.terminals.size > 1
       ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
       : ""
@@ -1434,6 +1447,7 @@ async function pollTerminal(id) {
     if (terminal.closed || terminal.ending || terminal.streaming) return;
     terminal.cursor = output.cursor;
     if (output.running) {
+      delete terminal.tile.querySelector(".terminal-state").dataset.connection;
       terminal.tile.querySelector(".terminal-state").dataset.tone = "";
       terminal.reportedError = false;
       const phoneControls = output.controller === "phone";
@@ -1465,6 +1479,7 @@ async function pollTerminal(id) {
   } catch (error) {
     if (terminal.closed || terminal.ending || terminal.streaming) return;
     terminal.tile.querySelector(".terminal-state").textContent = "Connection interrupted";
+    terminal.tile.querySelector(".terminal-state").dataset.connection = "disconnected";
     terminal.tile.querySelector(".terminal-state").dataset.tone = "warn";
     if (!terminal.reportedError) toast(error.message, "error");
     terminal.reportedError = true;
@@ -1643,6 +1658,8 @@ async function launchQuickTerminal() {
 }
 
 document.addEventListener("click", async (event) => {
+  const terminalMenu = $("#bench-terminal-menu");
+  if (terminalMenu.open && !terminalMenu.contains(event.target)) terminalMenu.open = false;
   const quickTerm = event.target.closest(
     "#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty",
   );
@@ -1768,6 +1785,16 @@ document.addEventListener("click", async (event) => {
     } finally {
       phone.disabled = false;
     }
+    return;
+  }
+  const menuAction = event.target.closest("[data-bench-terminal-action]");
+  if (menuAction) {
+    const menu = $("#bench-terminal-menu");
+    menu.open = false;
+    menu.querySelector("summary").focus();
+    const action = menuAction.dataset.benchTerminalAction;
+    const control = action === "end" ? "close" : action;
+    ui.terminals.get(ui.focusedTerminal)?.tile.querySelector(`[data-${control}-terminal]`)?.click();
     return;
   }
   const terminalClose = event.target.closest("[data-close-terminal]");
@@ -2319,7 +2346,23 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus });
+  shell = initBenchShell({ $, api, ui, workbench, showView, selectTerminal, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile });
+  $("#bench-terminal-menu").addEventListener("toggle", event => {
+    if (event.target.open) renderTerminalTabs();
+  });
+  extras.shellCommands = () => shell.enabled() ? [
+    { title: "Open Settings", run: () => showView("settings") },
+    { title: "Open Sessions", run: () => showView("sessions") },
+    { title: "Refresh project", run: () => $("#refresh-button").click() },
+    { title: "Open Observer", run: () => $("#observer-pill").click() },
+    { title: "Ask Verb", run: () => $('[data-action="ask"]').click() },
+    { title: "Open plain terminal", run: launchQuickTerminal },
+    ...(ui.terminals.size > 1 ? [{ title: "Toggle terminal split", run: () => {
+      ui.splitTerminals = !ui.splitTerminals;
+      updateTerminalFocus();
+    } }] : []),
+    ...(!$("#top-commit").hidden ? [{ title: "Review commit", run: () => $("#top-commit").click() }] : []),
+  ] : [];
   extras.onWorkbenchChange = () => {
     studio.render();
     shell.render();

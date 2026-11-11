@@ -22,6 +22,7 @@ export function createTerminalStreamView({
       const state = terminal.tile.querySelector(".terminal-state");
       if (state && !terminal.ended) {
         state.textContent = "Connected to Verb (streaming)";
+        delete state.dataset.connection;
         state.dataset.tone = "";
       }
     });
@@ -32,6 +33,7 @@ export function createTerminalStreamView({
       const state = terminal.tile.querySelector(".terminal-state");
       if (state && !terminal.ended) {
         state.textContent = "Reconnecting stream…";
+        state.dataset.connection = "reconnecting";
         state.dataset.tone = "warn";
       }
       pollTerminal(id);
@@ -104,6 +106,7 @@ export function createTerminalStreamView({
       }
       const phoneControls = controller === "phone";
       const hasPhone = phoneControls || Boolean(phoneConnected);
+      delete terminal.tile.querySelector(".terminal-state").dataset.connection;
       terminal.tile.querySelector(".terminal-state").dataset.tone = "";
       terminal.tile.querySelector("[data-phone-terminal]").hidden = !hasPhone;
       terminal.tile.querySelector("[data-take-terminal]").hidden =
