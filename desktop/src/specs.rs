@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -809,7 +810,7 @@ pub(crate) fn link_work_item(
     spec_id: &str,
     expected_revision: &str,
     work_item: &str,
-    rows: &[String],
+    updates: &BTreeMap<usize, Option<String>>,
     actor: &str,
     warnings: &[String],
 ) -> Result<(), String> {
@@ -838,6 +839,15 @@ pub(crate) fn link_work_item(
     } else {
         format!("{}work-item: {work_item}\n{}", &raw[..end], &raw[end..])
     };
+    let mut rows: Vec<_> = section(&raw, "## Traceability")
+        .into_iter()
+        .filter(|line| {
+            !crate::work_items::traceability_number(line)
+                .is_some_and(|number| updates.contains_key(&number))
+        })
+        .collect();
+    rows.extend(updates.values().filter_map(Option::as_deref));
+    let rows = rows.join("\n");
     let has_traceability = raw.lines().any(|line| line.trim_end() == "## Traceability");
     let mut lines = raw.split_inclusive('\n').peekable();
     let mut updated = String::new();
@@ -851,17 +861,17 @@ pub(crate) fn link_work_item(
                 lines.next();
             }
             replaced = true;
-            updated.push_str(&format!("## Traceability\n\n{}\n\n", rows.join("\n")));
+            updated.push_str(&format!("## Traceability\n\n{rows}\n\n"));
         } else if line.trim_end() == AUDIT_HEADING && !has_traceability && !replaced {
             replaced = true;
-            updated.push_str(&format!("## Traceability\n\n{}\n\n", rows.join("\n")));
+            updated.push_str(&format!("## Traceability\n\n{rows}\n\n"));
             updated.push_str(line);
         } else {
             updated.push_str(line);
         }
     }
     if !replaced {
-        updated.push_str(&format!("\n\n## Traceability\n\n{}\n", rows.join("\n")));
+        updated.push_str(&format!("\n\n## Traceability\n\n{rows}\n"));
     }
     let mut action = format!("linked work item {work_item}");
     if !warnings.is_empty() {

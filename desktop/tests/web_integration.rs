@@ -2687,7 +2687,7 @@ fn publishes_and_links_work_items_without_reusing_ids_or_changing_evidence_keys(
 
     fs::create_dir(project.join("specs")).unwrap();
     let path = project.join("specs/004-legacy.md");
-    let criteria = "## Acceptance criteria\n\n- [x] Keep my text\n";
+    let criteria = "## Acceptance criteria\n\n- [x] Keep my text\n- [ ] Second criterion\n";
     fs::write(&path, format!("---\nid: 004\ntitle: Legacy\nstage: plan\n---\n{criteria}\n## Audit trail\n\n- date · Owner · existing audit\n")).unwrap();
     let (_, specs) = request("GET", "/api/specs", None);
     let expected = &specs["specs"][0]["revision"];
@@ -2708,6 +2708,35 @@ fn publishes_and_links_work_items_without_reusing_ids_or_changing_evidence_keys(
         items["items"][0]["specs"][0]["criteria"][0]["requirements"],
         json!(["R1", "R2"])
     );
+    let current_revision = || {
+        let (_, specs) = request("GET", "/api/specs", None);
+        specs["specs"][0]["revision"].clone()
+    };
+    let (status, linked) = post(
+        "/api/work-items/link",
+        json!({
+            "workItem": id, "specId": "004", "expectedRevision": current_revision(),
+            "criteria": {"2": ["R1"]}
+        }),
+    );
+    assert_eq!(status, 200, "{linked}");
+    let (_, items) = request("GET", "/api/work-items", None);
+    let links = &items["items"][0]["specs"][0]["criteria"];
+    assert_eq!(links[0]["requirements"], json!(["R1", "R2"]));
+    assert_eq!(links[1]["requirements"], json!(["R1"]));
+
+    let (status, removed) = post(
+        "/api/work-items/link",
+        json!({
+            "workItem": id, "specId": "004", "expectedRevision": current_revision(),
+            "removeCriteria": [1]
+        }),
+    );
+    assert_eq!(status, 200, "{removed}");
+    let (_, items) = request("GET", "/api/work-items", None);
+    let links = &items["items"][0]["specs"][0]["criteria"];
+    assert_eq!(links[0]["requirements"], json!([]));
+    assert_eq!(links[1]["requirements"], json!(["R1"]));
     std::thread::scope(|scope| {
         let one = scope.spawn(create);
         let two = scope.spawn(create);

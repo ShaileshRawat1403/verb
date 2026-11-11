@@ -42,8 +42,9 @@ Restoring or removing it can discard reservation history. Failed publications
 may leave gaps.
 
 The owner-only `POST /api/work-items/link` takes the work item ID, spec ID,
-expected spec revision, and complete map of one-based criterion numbers to
-requirement IDs. The write retains criterion text and records the association
+expected spec revision, and a map of one-based criterion numbers to
+requirement IDs. Omitted rows stay in place. Use `removeCriteria` with criterion
+numbers to remove legacy mapping rows. The write retains criterion text and records the association
 and warnings in the spec audit.
 
 ## Audit trail

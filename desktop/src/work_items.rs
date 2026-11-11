@@ -127,6 +127,13 @@ fn fields(line: &str) -> Vec<&str> {
         .collect()
 }
 
+pub(crate) fn traceability_number(line: &str) -> Option<usize> {
+    match fields(line).as_slice() {
+        [number, _, _] => number.parse().ok(),
+        _ => None,
+    }
+}
+
 fn label(value: &str) -> &str {
     value.trim_matches('`')
 }
@@ -451,7 +458,10 @@ pub(crate) struct Link {
     pub work_item: String,
     pub spec_id: String,
     pub expected_revision: String,
+    #[serde(default)]
     pub criteria: BTreeMap<usize, Vec<String>>,
+    #[serde(default)]
+    pub remove_criteria: Vec<usize>,
 }
 
 fn revision(raw: &str) -> String {
@@ -632,10 +642,19 @@ pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<(), Strin
     if spec.revision != input.expected_revision {
         return Err("The spec changed. Refresh before linking it.".into());
     }
-    if input.criteria.is_empty() {
-        return Err("Map at least one criterion to a requirement".into());
+    if input.criteria.is_empty() && input.remove_criteria.is_empty() {
+        return Err("Choose at least one criterion to link or remove".into());
     }
-    let mut rows = Vec::new();
+    if spec.work_item.is_none() && input.criteria.is_empty() {
+        return Err("Link this spec before removing links".into());
+    }
+    let mut rows = BTreeMap::new();
+    for number in input.remove_criteria {
+        if number == 0 || input.criteria.contains_key(&number) {
+            return Err("Choose a valid criterion to remove without also linking it".into());
+        }
+        rows.insert(number, None);
+    }
     let mut warnings = Vec::new();
     for (number, requirements) in input.criteria {
         let index = number.checked_sub(1).ok_or("Invalid criterion number")?;
@@ -655,10 +674,13 @@ pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<(), Strin
                 _ => {}
             }
         }
-        rows.push(format!(
-            "- {number} · {identity} · {}",
-            requirements.join(", ")
-        ));
+        rows.insert(
+            number,
+            Some(format!(
+                "- {number} · {identity} · {}",
+                requirements.join(", ")
+            )),
+        );
     }
     crate::specs::link_work_item(
         project,
