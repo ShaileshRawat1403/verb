@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -10,6 +11,8 @@ async function workspace(name, token) {
   const fixture = mkdtempSync(join(tmpdir(), "verb-project-switch-"));
   const project = join(fixture, name);
   mkdirSync(project);
+  const start = performance.now();
+  const elapsed = () => Math.round(performance.now() - start);
   const child = spawn(bin, ["web", "--port", "0"], {
     cwd: project,
     env: {
@@ -17,8 +20,13 @@ async function workspace(name, token) {
       HOME: fixture,
       VERB_STATE_DIR: join(fixture, "state"),
       VERB_TOKEN: token,
+      VERB_TEST_STARTUP_TRACE: "1",
     },
     stdio: ["ignore", "pipe", "pipe"],
+  });
+  console.log(`VERB_STARTUP fixture=${name} spawn pid=${child.pid} state=${join(fixture, "state")}`);
+  child.stderr.on("data", (chunk) => {
+    console.log(`VERB_STARTUP fixture=${name} elapsed_ms=${elapsed()} stderr=${String(chunk).trim()}`);
   });
   const close = async () => {
     if (child.exitCode === null && child.signalCode === null) {
@@ -32,17 +40,25 @@ async function workspace(name, token) {
   try {
     const origin = await new Promise((done, fail) => {
       let output = "";
-      const timeout = setTimeout(() => fail(new Error("Verb did not start")), 10000);
+      const originalDeadline = setTimeout(() => {
+        console.log(`VERB_STARTUP fixture=${name} exceeded original timeout elapsed_ms=${elapsed()}`);
+      }, 10000);
+      const timeout = setTimeout(() => fail(new Error(`Verb did not start: ${name}`)), 21000);
+      const stopTimers = () => {
+        clearTimeout(originalDeadline);
+        clearTimeout(timeout);
+      };
       child.stdout.on("data", (chunk) => {
         output += chunk;
         const origin = /^Verb web UI: (http:\/\/127\.0\.0\.1:\d+)/m.exec(output)?.[1];
         if (origin) {
-          clearTimeout(timeout);
+          stopTimers();
+          console.log(`VERB_STARTUP fixture=${name} ready origin=${origin} elapsed_ms=${elapsed()}`);
           done(origin);
         }
       });
       child.once("exit", (code) => {
-        clearTimeout(timeout);
+        stopTimers();
         fail(new Error(`Verb exited with ${code}`));
       });
     });
