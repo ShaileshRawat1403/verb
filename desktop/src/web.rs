@@ -2403,6 +2403,10 @@ impl WebHost {
                 }),
             ));
         }
+        if method == &Method::Get && path == "/api/work-items" {
+            let project = self.project.clone();
+            return Ok(self.off_loop(false, move || Ok(json!(crate::work_items::read(&project)?))));
+        }
         if method == &Method::Get && path == "/api/specs" {
             let project = self.project.clone();
             let project_id = self.identity.id.clone();

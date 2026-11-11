@@ -39,6 +39,8 @@ pub(crate) struct Spec {
     /// Derived from the file, never an additional durable store.
     pub revision: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_item: Option<String>,
     pub stage: String,
     pub branch: String,
     pub created: String,
@@ -109,7 +111,7 @@ fn front_matter(raw: &str) -> Option<(Vec<(String, String)>, &str)> {
 }
 
 /// Lines of the section that starts with `heading`, up to the next `## ` heading.
-fn section<'a>(body: &'a str, heading: &str) -> Vec<&'a str> {
+pub(crate) fn section<'a>(body: &'a str, heading: &str) -> Vec<&'a str> {
     let mut lines = body.lines();
     if !lines.any(|line| line.trim_end() == heading) {
         return Vec::new();
@@ -174,6 +176,7 @@ fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
     Some(Spec {
         revision: format!("{:x}", Sha256::digest(raw.as_bytes())),
         title: field("title"),
+        work_item: Some(field("work-item")).filter(|value| !value.is_empty()),
         stage: Some(field("stage"))
             .filter(|stage| STAGES.contains(&stage.as_str()))
             .unwrap_or_else(|| "spec".to_owned()),

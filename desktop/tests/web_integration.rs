@@ -2500,3 +2500,130 @@ exit 64
     );
     assert_git_paths(&server);
 }
+
+#[test]
+fn work_item_reader_validates_links_and_preserves_legacy_spec_reads() {
+    use sha2::{Digest, Sha256};
+
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let work = project.join("work");
+    let standard = work.join("001-standard");
+    let small = work.join("002-small");
+    let draft = work.join("003-draft");
+    let malformed = work.join("004-malformed");
+    for dir in [
+        &standard,
+        &small,
+        &draft,
+        &malformed,
+        &work.join("001-duplicate"),
+    ] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(
+        standard.join("brd.md"),
+        "# Standard\nSize: standard\n## Problem\nProblem\n## Audience\nOwner\n## Goals\n| G1 | Trace work |\n| G1 | Duplicate |\n## Success measures\nObserve links\n## Scope\nProject work\n",
+    )
+    .unwrap();
+    fs::write(
+        standard.join("prd.md"),
+        "| R1 | G1 | Read items | Open the item |\n| R2 (retired) | G1 | Old rule | |\n| R3 | G9 | Missing goal | |\n| R3 | G9 | Duplicate | |\n",
+    )
+    .unwrap();
+    let small_brd = "Size: small\nProblem and audience: Owner needs a reader\nGoal: G1 · Read a work item\nSuccess and boundary: Read without publishing\n";
+    fs::write(small.join("brd.md"), small_brd).unwrap();
+    fs::write(draft.join("brd.md"), small_brd).unwrap();
+    fs::write(
+        small.join("prd.md"),
+        (1..=6)
+            .map(|id| format!("- R{id} · G1 · Read · Verify"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    fs::write(
+        malformed.join("brd.md"),
+        "Size: standard\n## Goals\n- G1 · Goal\n",
+    )
+    .unwrap();
+    fs::write(malformed.join("prd.md"), [0xff]).unwrap();
+    let specs = project.join("specs");
+    fs::create_dir_all(&specs).unwrap();
+    let legacy = "---\nid: 010\ntitle: Legacy\nstage: plan\n---\n## Acceptance criteria\n- [ ] unchanged legacy text\n";
+    fs::write(specs.join("010-legacy.md"), legacy).unwrap();
+    let identity = format!("{:x}", Sha256::digest(b"1\0Stable legacy criterion"));
+    let linked = format!(
+        "---\nid: 011\ntitle: Linked\nstage: plan\nwork-item: 001-standard\n---\n## Acceptance criteria\n- [ ] New (R1, R2, R9)\n- [ ] Stable legacy criterion\n- [ ] Edited legacy criterion\n## Traceability\n- 2 · {identity} · R1\n- 3 · old-identity · R2\n"
+    );
+    fs::write(specs.join("011-linked.md"), &linked).unwrap();
+
+    let (status, body) = server.request("GET", "/api/work-items", None, false);
+    assert_eq!(status, 403, "{}", String::from_utf8_lossy(&body));
+    let (status, body) = server.request("GET", "/api/work-items", None, true);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let data: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(data["unlinkedSpecs"], json!(["010"]));
+    assert!(data["warnings"]
+        .to_string()
+        .contains("Duplicate work item number"));
+    let items = data["items"].as_array().unwrap();
+    let item = items
+        .iter()
+        .find(|item| item["id"] == "001-standard")
+        .unwrap();
+    assert_eq!(item["size"], "standard");
+    let warnings = item["warnings"].to_string();
+    for message in [
+        "Duplicate BRD goal G1",
+        "Duplicate PRD requirement R3",
+        "references missing goal",
+        "missing verification",
+        "references retired requirement R2",
+        "references missing requirement",
+        "stale Traceability link",
+    ] {
+        assert!(warnings.contains(message), "{message}: {warnings}");
+    }
+    let criteria = &item["specs"][0]["criteria"];
+    assert_eq!(criteria[0]["requirements"], json!(["R1", "R2", "R9"]));
+    assert_eq!(criteria[1]["stale"], false);
+    assert_eq!(criteria[2]["stale"], true);
+    let small = items.iter().find(|item| item["id"] == "002-small").unwrap();
+    assert_eq!(small["goals"]["G1"], false);
+    assert_eq!(
+        small["warnings"],
+        json!(["Small PRD exceeds five requirements or 60 lines"])
+    );
+    let draft = items.iter().find(|item| item["id"] == "003-draft").unwrap();
+    assert!(draft["prd"].is_null());
+    assert_eq!(draft["warnings"], json!([]));
+    let malformed = items
+        .iter()
+        .find(|item| item["id"] == "004-malformed")
+        .unwrap();
+    assert!(malformed["prd"].is_null());
+    let warnings = malformed["warnings"].to_string();
+    assert!(warnings.contains("prd.md"));
+    assert!(warnings.contains("missing content in Problem"));
+
+    let (status, body) = server.request("GET", "/api/specs", None, true);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let data: Value = serde_json::from_slice(&body).unwrap();
+    let legacy_spec = data["specs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|spec| spec["id"] == "010")
+        .unwrap();
+    assert_eq!(legacy_spec["criteria"][0]["text"], "unchanged legacy text");
+    assert!(legacy_spec.get("work_item").is_none());
+    assert_eq!(
+        fs::read_to_string(specs.join("010-legacy.md")).unwrap(),
+        legacy
+    );
+    assert_eq!(
+        fs::read_to_string(specs.join("011-linked.md")).unwrap(),
+        linked
+    );
+}

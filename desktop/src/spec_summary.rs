@@ -109,6 +109,7 @@ mod tests {
             id: "024".into(),
             revision: "revision".into(),
             title: "Recovery".into(),
+            work_item: None,
             stage: "build".into(),
             branch: "spec/024".into(),
             created: String::new(),

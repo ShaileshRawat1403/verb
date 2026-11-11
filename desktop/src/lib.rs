@@ -64,6 +64,7 @@ mod transcript;
 mod tui;
 #[cfg(unix)]
 mod web;
+mod work_items;
 mod workbench;
 
 const APP_NAME: &str = "Verb";

@@ -314,6 +314,7 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                 "/api/state"
                     | "/api/workspace"
                     | "/api/specs"
+                    | "/api/work-items"
                     | "/api/git"
                     | "/api/git/diff"
                     | "/api/files"

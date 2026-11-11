@@ -269,7 +269,7 @@ fn load(root: &Path, project_id: &str, id: &str) -> Result<Ledger, String> {
 fn version(ledger: &Ledger) -> String {
     digest(serde_json::to_vec(ledger).unwrap_or_default())
 }
-fn criterion_key(spec: &Spec, index: usize) -> Option<String> {
+pub(crate) fn criterion_key(spec: &Spec, index: usize) -> Option<String> {
     spec.criteria
         .get(index)
         .map(|c| digest(format!("{index}\0{}", c.text)))
@@ -874,6 +874,7 @@ mod tests {
             id: "1".into(),
             revision: "revision".into(),
             title: "Reliable answer".into(),
+            work_item: None,
             stage: "build".into(),
             branch: "main".into(),
             created: String::new(),
