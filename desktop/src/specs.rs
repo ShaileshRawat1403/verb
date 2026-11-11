@@ -819,7 +819,89 @@ pub(crate) fn agent_brief(spec: &Spec) -> String {
     )
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AssignmentRole {
+    Implement,
+    Review,
+    Investigate,
+}
+
+impl AssignmentRole {
+    pub(crate) fn instruction(self) -> &'static str {
+        match self {
+            Self::Implement => {
+                "Implement only within the approved scope. Run the specified checks."
+            }
+            Self::Review => "Review independently within the assigned scope. Do not edit files.",
+            Self::Investigate => {
+                "Investigate the assigned question and report evidence. Do not edit files."
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApprovedHandoff {
+    pub revision: String,
+    pub role: AssignmentRole,
+    pub scope: String,
+    pub checks: String,
+    #[serde(default)]
+    pub result: WorkerResult,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerResult {
+    pub outcome: String,
+    pub files: String,
+    pub checks: String,
+}
+
+impl WorkerResult {
+    fn fields(&self) -> [(&'static str, &str); 3] {
+        [
+            ("Reported outcome", self.outcome.trim()),
+            ("Reported changed files", self.files.trim()),
+            ("Reported check results (unverified)", self.checks.trim()),
+        ]
+    }
+}
+
+pub(crate) fn approved_handoff_prompt(id: &str, note: &str, approved: &ApprovedHandoff) -> String {
+    let role = approved.role.instruction();
+    let mut prompt = format!(
+        "Assignment for spec {id} at approved revision {}. {role} Work only within the approved scope and checks below. \
+         Read what you need to understand the approved scope. Change only files within it, and run only the approved checks. If you need more access or context, ask first. \
+         Do not commit, push, or switch branches. Return the outcome, files, checks you ran, and what the next agent needs. \
+         Treat reported results as unverified evidence.\n\n\
+         Approved scope: {}\nApproved checks: {}\nApproved handoff: {}",
+        approved.revision, approved.scope.trim(), approved.checks.trim(), note.trim()
+    );
+    for (label, value) in approved.result.fields() {
+        if !value.is_empty() {
+            prompt.push_str(&format!("\n{label}: {value}"));
+        }
+    }
+    prompt
+}
+
 const HANDOFF_HEADING: &str = "## Handoff notes";
+pub(crate) const STALE_HANDOFF: &str =
+    "The spec changed. Review the current revision before handing off.";
+
+fn heading_offset(raw: &str, heading: &str) -> Option<usize> {
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        if line.trim_end() == heading {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
 
 /// The agent that most recently started on a spec, from its audit trail.
 pub(crate) fn last_agent(spec: &Spec) -> Option<String> {
@@ -834,12 +916,25 @@ pub(crate) fn last_agent(spec: &Spec) -> Option<String> {
 /// Writes a handoff note into the spec (newest first, under `## Handoff notes`) and records the
 /// handoff in the audit trail. Returns the note. Starting the next agent is the caller's job, and
 /// the previous agent is never stopped here: that stays the person's decision.
+#[cfg(test)]
 pub(crate) fn handoff(
     project: &Path,
     id: &str,
     to: &str,
     note: &str,
     actor: &str,
+) -> Result<String, String> {
+    handoff_inner(project, id, to, note, actor, None, None)
+}
+
+pub(crate) fn handoff_inner(
+    project: &Path,
+    id: &str,
+    to: &str,
+    note: &str,
+    actor: &str,
+    approved: Option<&ApprovedHandoff>,
+    start: Option<&str>,
 ) -> Result<String, String> {
     let (path, spec) = find(project, id)?;
     let from = last_agent(&spec).unwrap_or_else(|| "nobody yet".to_owned());
@@ -849,51 +944,66 @@ pub(crate) fn handoff(
         "### {} · {from} → {to}",
         &at[..16].replace('T', " ")
     )];
-    let open: Vec<_> = spec.criteria.iter().filter(|c| !c.done).collect();
-    lines.push(if open.is_empty() {
-        "- All acceptance criteria are proven.".to_owned()
+    if let Some(approved) = approved {
+        lines.push(format!("- Source revision: {}", approved.revision));
+        lines.push(format!("- Assignment: {}", approved.role.instruction()));
+        lines.push(format!("- Approved scope: {}", one_line(&approved.scope)));
+        lines.push(format!(
+            "- Approved checks (requested, not observed): {}",
+            one_line(&approved.checks)
+        ));
+        for (label, value) in approved.result.fields() {
+            if !value.is_empty() {
+                lines.push(format!("- {label}: {}", one_line(value)));
+            }
+        }
     } else {
-        format!(
-            "- Still to prove: {}",
-            open.iter()
-                .map(|c| format!("{}. {}", c.index + 1, c.text))
-                .collect::<Vec<_>>()
-                .join("; ")
-        )
-    });
-    let grep = format!("spec:{id}");
-    if let Ok(log) = git(
-        project,
-        &[
-            "log",
-            "-5",
-            "--fixed-strings",
-            "--grep",
-            &grep,
-            "--format=%h %s",
-        ],
-    ) {
-        let commits: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
-        if !commits.is_empty() {
-            lines.push(format!(
-                "- Recent commits for this spec: {}",
-                commits.join("; ")
-            ));
+        let open: Vec<_> = spec.criteria.iter().filter(|c| !c.done).collect();
+        lines.push(if open.is_empty() {
+            "- All acceptance criteria are proven.".to_owned()
+        } else {
+            format!(
+                "- Still to prove: {}",
+                open.iter()
+                    .map(|c| format!("{}. {}", c.index + 1, c.text))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        });
+        let grep = format!("spec:{id}");
+        if let Ok(log) = git(
+            project,
+            &[
+                "log",
+                "-5",
+                "--fixed-strings",
+                "--grep",
+                &grep,
+                "--format=%h %s",
+            ],
+        ) {
+            let commits: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+            if !commits.is_empty() {
+                lines.push(format!(
+                    "- Recent commits for this spec: {}",
+                    commits.join("; ")
+                ));
+            }
         }
-    }
-    if let Ok(summary) = git_summary(project) {
-        let files: Vec<&str> = summary
-            .changes
-            .iter()
-            .map(|c| c.path.as_str())
-            .filter(|p| *p != spec.file)
-            .take(12)
-            .collect();
-        if !files.is_empty() {
-            lines.push(format!("- Uncommitted changes: {}", files.join(", ")));
-        }
-        if let Some(branch) = &summary.branch {
-            lines.push(format!("- Branch: {branch}"));
+        if let Ok(summary) = git_summary(project) {
+            let files: Vec<&str> = summary
+                .changes
+                .iter()
+                .map(|c| c.path.as_str())
+                .filter(|p| *p != spec.file)
+                .take(12)
+                .collect();
+            if !files.is_empty() {
+                lines.push(format!("- Uncommitted changes: {}", files.join(", ")));
+            }
+            if let Some(branch) = &summary.branch {
+                lines.push(format!("- Branch: {branch}"));
+            }
         }
     }
     let note = one_line(note);
@@ -907,10 +1017,15 @@ pub(crate) fn handoff(
 
     let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let next = if let Some(at_heading) = raw.find(HANDOFF_HEADING) {
+    if let Some(approved) = approved {
+        if format!("{:x}", Sha256::digest(raw.as_bytes())) != approved.revision {
+            return Err(STALE_HANDOFF.into());
+        }
+    }
+    let next = if let Some(at_heading) = heading_offset(&raw, HANDOFF_HEADING) {
         let insert = at_heading + HANDOFF_HEADING.len();
         format!("{}\n\n{entry}{}", &raw[..insert], &raw[insert..])
-    } else if let Some(at_audit) = raw.find(AUDIT_HEADING) {
+    } else if let Some(at_audit) = heading_offset(&raw, AUDIT_HEADING) {
         format!(
             "{}{HANDOFF_HEADING}\n\n<!-- Written by Verb at each handoff, newest first. -->\n\n{entry}\n\n{}",
             &raw[..at_audit],
@@ -923,7 +1038,11 @@ pub(crate) fn handoff(
     if !note.is_empty() {
         action.push_str(&format!(" — {note}"));
     }
-    write_atomic(&path, &append_audit(&next, &audit_line(actor, &action)))?;
+    let mut next = append_audit(&next, &audit_line(actor, &action));
+    if let Some(start) = start {
+        next = append_audit(&next, &audit_line(actor, start));
+    }
+    write_atomic(&path, &next)?;
     Ok(entry)
 }
 
@@ -1236,6 +1355,77 @@ mod tests {
             git_summary(&project).unwrap().branch.as_deref(),
             Some("spec/001-login-with-email")
         );
+    }
+
+    #[test]
+    fn approved_handoffs_bind_each_successor_to_the_reviewed_revision() {
+        let project = temp_repo();
+        let spec = new_spec(&project);
+        fs::write(project.join("unapproved-private-file"), "private").unwrap();
+        let approved = ApprovedHandoff {
+            revision: spec.revision,
+            role: AssignmentRole::Review,
+            scope: "Inspect parser.rs".into(),
+            checks: "cargo test parser".into(),
+            result: WorkerResult {
+                outcome: "Parser rejects empty input".into(),
+                files: "parser.rs".into(),
+                checks: "cargo test parser passed".into(),
+            },
+        };
+        let prompt = approved_handoff_prompt("001", "Reproduce the reported error.", &approved);
+        assert!(prompt.contains("Review independently"));
+        assert!(prompt.contains("Read what you need to understand the approved scope. Change only files within it, and run only the approved checks."));
+        assert!(prompt.contains("Reported check results (unverified): cargo test parser passed"));
+        assert!(prompt.contains(&approved.revision));
+        assert!(!prompt.contains("Bad email rejected"));
+        let first = handoff_inner(
+            &project,
+            "001",
+            "codex",
+            "Reproduce the reported error.",
+            "Owner",
+            Some(&approved),
+            None,
+        )
+        .unwrap();
+        assert!(first.contains("- Reported changed files: parser.rs"));
+        assert!(!first.contains("unapproved-private-file"));
+        assert!(!first.contains("Bad email rejected"));
+
+        // Reload from disk as a successor would after a process interruption.
+        let (path, after_review) = find(&project, "001").unwrap();
+        let recorded = fs::read(&path).unwrap();
+        assert!(handoff_inner(
+            &project,
+            "001",
+            "agy",
+            "A stale handoff",
+            "Owner",
+            Some(&approved),
+            None,
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), recorded);
+        let successor = ApprovedHandoff {
+            revision: after_review.revision,
+            role: AssignmentRole::Implement,
+            ..approved
+        };
+        let prompt = approved_handoff_prompt("001", "Fix the verified parser error.", &successor);
+        assert!(prompt.contains(&successor.revision));
+        assert!(!prompt.contains("Reproduce the reported error."));
+        assert!(!prompt.contains("unapproved-private-file"));
+        handoff_inner(
+            &project,
+            "001",
+            "agy",
+            "Fix the verified parser error.",
+            "Owner",
+            Some(&successor),
+            None,
+        )
+        .unwrap();
     }
 
     #[test]

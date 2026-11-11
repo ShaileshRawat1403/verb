@@ -2311,3 +2311,126 @@ fn a_rejected_body_retires_keep_alive_without_draining_or_poisoning_another_requ
     }
     assert_eq!(server.request("GET", "/api/state", None, true).0, 200);
 }
+
+#[test]
+fn approved_agent_handoff_survives_host_interruption() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let bin = server.root.join("handoff-bin");
+    fs::create_dir(&bin).unwrap();
+    let fixture = server.root.join("project");
+    fs::write(fixture.join("unapproved-private-file"), "unapproved").unwrap();
+    for (agent, script) in [
+        ("claude", "printf 'reported-defect\\n' > issue.txt"),
+        (
+            "codex",
+            "grep -qx reported-defect issue.txt && printf 'verified\\n' > review.txt",
+        ),
+        (
+            "agy",
+            "grep -qx verified review.txt && printf 'continued\\n' > successor.txt",
+        ),
+    ] {
+        let path = bin.join(agent);
+        let capture = server.root.join(format!("{agent}-args"));
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nset -e\nprintf '%s\\n' \"$@\" > '{}'\n{script}\nexec sleep 30\n",
+                capture.display(),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let env = [("PATH", path.as_str())];
+    let server = server.restart_with_env(&env);
+    let spec = server.json(
+        "POST",
+        "/api/specs",
+        Some(json!({
+            "title": "Handoff fixture", "problem": "unapproved-problem-marker",
+            "criteria": ["The successor can continue from checked evidence"]
+        })),
+    );
+    let endpoint = format!("/api/specs/{}", spec["id"].as_str().unwrap());
+    let start = server.json(
+        "POST",
+        &format!("{endpoint}/agent"),
+        Some(json!({
+            "agent": "claude", "role": "implement"
+        })),
+    );
+    let wait_for = |name: &str, expected: &str| {
+        let path = fixture.join(name);
+        for _ in 0..100 {
+            if fs::read_to_string(&path).ok().as_deref() == Some(expected) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("{name} did not contain the expected evidence");
+    };
+    wait_for("issue.txt", "reported-defect\n");
+    server.json(
+        "DELETE",
+        &format!("/api/terminals/{}", start["sessionId"].as_str().unwrap()),
+        None,
+    );
+    let current = server.json("GET", &endpoint, None);
+    let handoff = |server: &WebServer, to: &str, revision: &Value, role: &str, note: &str| {
+        server.request("POST", &format!("{endpoint}/handoff"), Some(json!({
+            "to": to, "note": note,
+            "approved": {"revision": revision, "role": role, "scope": "Inspect issue.txt", "checks": ""}
+        })), true)
+    };
+    let (status, body) = handoff(
+        &server,
+        "codex",
+        &current["revision"],
+        "review",
+        "approved-review-marker",
+    );
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    wait_for("review.txt", "verified\n");
+    let args = fs::read_to_string(server.root.join("codex-args")).unwrap();
+    assert!(args.contains("Review independently") && args.contains("approved-review-marker"));
+    assert!(args.contains("Work only within the approved scope and checks below"));
+    assert!(!args.contains("Inspect the assigned changes"));
+    assert!(
+        !args.contains("unapproved-problem-marker") && !args.contains("unapproved-private-file")
+    );
+
+    let reviewed = server.json("GET", &endpoint, None);
+    let server = server.restart_with_env(&env);
+    let (status, body) = handoff(&server, "agy", &current["revision"], "implement", "stale");
+    assert_eq!(status, 409, "{}", String::from_utf8_lossy(&body));
+    assert!(!server.root.join("agy-args").exists());
+    let (status, body) = handoff(
+        &server,
+        "agy",
+        &reviewed["revision"],
+        "implement",
+        "approved-successor-marker",
+    );
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    wait_for("successor.txt", "continued\n");
+    let args = fs::read_to_string(server.root.join("agy-args")).unwrap();
+    assert!(args.contains(reviewed["revision"].as_str().unwrap()));
+    assert!(args.contains("approved-successor-marker"));
+    assert!(
+        !args.contains("approved-review-marker") && !args.contains("unapproved-problem-marker")
+    );
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    server.json(
+        "DELETE",
+        &format!("/api/terminals/{}", result["sessionId"].as_str().unwrap()),
+        None,
+    );
+}
