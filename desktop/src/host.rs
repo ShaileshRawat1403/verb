@@ -232,8 +232,7 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 fn bounded_output(command: &mut Command) -> Option<String> {
-    let output =
-        crate::exec::probe_output(command, std::time::Duration::from_secs(2)).ok()?;
+    let output = crate::exec::probe_output(command, std::time::Duration::from_secs(2)).ok()?;
     output
         .status
         .success()
