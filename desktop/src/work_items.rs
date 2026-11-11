@@ -670,3 +670,52 @@ pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<(), Strin
         &warnings,
     )
 }
+
+pub(crate) fn valid_work_item_id(id: &str) -> bool {
+    work_number(id).is_some()
+}
+
+/// Selects only current requirement links and their goals for the spec context.
+pub(crate) fn linked_context(spec: &Spec, brd: Option<String>, prd: Option<String>) -> Vec<String> {
+    let Some(id) = &spec.work_item else {
+        return Vec::new();
+    };
+    let (Some(brd), Some(prd)) = (brd, prd) else {
+        return vec![format!(
+            "Work item {id} has no visible BRD and PRD in this checkout."
+        )];
+    };
+    let mut item = WorkItem::validate(id.clone(), Some(brd.clone()), Some(prd.clone()), Vec::new());
+    item.link_spec(spec);
+    let references: BTreeSet<_> = item.specs[0]
+        .criteria
+        .iter()
+        .filter(|link| !link.stale)
+        .flat_map(|link| &link.requirements)
+        .map(String::as_str)
+        .collect();
+    let goals: BTreeSet<_> = references
+        .iter()
+        .filter_map(|id| item.requirements.get(*id))
+        .filter(|record| !record.retired)
+        .map(|record| record.goal.as_str())
+        .collect();
+    let mut context = vec![format!("Work item {id}")];
+    for (id, retired, fields) in records(document_body(&brd), 'G') {
+        if !retired && goals.contains(id) && item.goals.get(id) == Some(&false) {
+            context.push(format!("BRD goal {id} · {}", fields.join(" · ")));
+        }
+    }
+    for (id, retired, fields) in records(document_body(&prd), 'R') {
+        if !retired
+            && references.contains(id)
+            && item
+                .requirements
+                .get(id)
+                .is_some_and(|record| !record.retired)
+        {
+            context.push(format!("PRD requirement {id} · {}", fields.join(" · ")));
+        }
+    }
+    context
+}

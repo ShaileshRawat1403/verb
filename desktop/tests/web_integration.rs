@@ -2719,3 +2719,179 @@ fn publishes_and_links_work_items_without_reusing_ids_or_changing_evidence_keys(
         assert_eq!(ids, ["003-sample-work", "004-sample-work"]);
     });
 }
+
+#[test]
+fn shared_cli_projects_only_visible_context_and_checkout_read_uses_no_ledger() {
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    assert!(Command::new("git")
+        .current_dir(&project)
+        .arg("init")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    fs::create_dir(project.join("specs")).unwrap();
+    fs::write(project.join(".gitignore"), "specs/002-private.md\n").unwrap();
+    fs::write(
+        project.join("specs/001-visible.md"),
+        "---\nid: 001\ntitle: Visible\nstage: plan\nwork-item: 001-visible\n---\n# Visible\n## Acceptance criteria\n- [ ] Works (R1)\n",
+    ).unwrap();
+    fs::write(
+        project.join("specs/002-private.md"),
+        "---\nid: 002\ntitle: Private marker\nstage: plan\n---\n# Private marker\n",
+    )
+    .unwrap();
+    let work = project.join("work/001-visible");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("brd.md"), "Size: small\nProblem and audience: owner\nGoal: G1 · Target goal\nSuccess and boundary: useful\n").unwrap();
+    fs::write(
+        work.join("prd.md"),
+        "- R1 · G1 · Target requirement · Verify\n- R2 · G1 · Unrelated requirement · Verify\n",
+    )
+    .unwrap();
+
+    for note in ["First note", "Latest note"] {
+        let (status, body) =
+            server.request("POST", "/api/memory", Some(json!({"note": note})), true);
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    }
+    let (status, body) = server.request("POST", "/api/hub/sync", None, true);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let cli = |args: &[&str], checkout_only: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_verb"));
+        cmd.current_dir(&project)
+            .env("VERB_STATE_DIR", server.root.join("state"))
+            .arg("shared")
+            .args(args);
+        if checkout_only {
+            cmd.env("VERB_SESSION_ID", "nonexistent-session")
+                .env("VERB_PROJECT_ROOT", &project);
+        }
+        let result = cmd.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let shared = cli(&["full"], false);
+    assert!(shared.contains("001-visible"));
+    assert!(!shared.contains("Private marker"));
+    assert!(shared.find("Latest note").unwrap() < shared.find("First note").unwrap());
+    let spec = cli(&["spec", "001"], false);
+    assert!(spec.contains("Target goal"));
+    assert!(spec.contains("Target requirement"));
+    assert!(!spec.contains("Unrelated requirement"));
+    let checkout = cli(&["read", "--checkout"], true);
+    assert!(checkout.contains("Latest note"));
+    assert!(!checkout.contains("Private marker"));
+    assert!(checkout.len() <= 8192);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+        let bin = server.root.join("context-bin");
+        fs::create_dir(&bin).unwrap();
+        let capture = server.root.join("context-prompt");
+        let launcher = bin.join("claude");
+        fs::write(
+            &launcher,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
+                capture.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let server = server.restart_with_env(&[("PATH", &path)]);
+        let (status, body) = server.request(
+            "POST",
+            "/api/specs/001/agent",
+            Some(json!({"agent": "claude"})),
+            true,
+        );
+        assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let prompt = loop {
+            if let Ok(text) = fs::read_to_string(&capture) {
+                if !text.is_empty() {
+                    break text;
+                }
+            }
+            assert!(Instant::now() < deadline, "no captured prompt");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(prompt.contains("Target goal"));
+        assert!(prompt.contains("Target requirement"));
+        assert!(prompt.contains("shared read"));
+        assert!(!prompt.contains("Private marker"));
+        let launch: Value = serde_json::from_slice(&body).unwrap();
+        let session = launch["sessionId"].as_str().unwrap();
+        let (status, body) = server.request(
+            "POST",
+            &format!("/api/hub/sync?session={session}"),
+            None,
+            true,
+        );
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+
+        for args in [
+            &["add", ".gitignore", "specs", "work"][..],
+            &[
+                "-c",
+                "user.name=Context Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "Fixture",
+            ],
+        ] {
+            let result = Command::new("git")
+                .current_dir(&project)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let (status, body) = server.request(
+            "POST",
+            "/api/terminals",
+            Some(json!({"agent": "shell", "isolated": true})),
+            true,
+        );
+        assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+        let launch: Value = serde_json::from_slice(&body).unwrap();
+        let id = launch["sessionId"].as_str().unwrap();
+        let (_, body) = server.request("GET", "/api/state", None, true);
+        let state: Value = serde_json::from_slice(&body).unwrap();
+        let session = state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == id)
+            .unwrap();
+        let workspace = Path::new(session["workspace"].as_str().unwrap());
+        assert!(session["isolated"].as_bool().unwrap());
+        assert!(!workspace.join("AGENTS.md").exists());
+        let original = fs::read(project.join("AGENTS.md")).unwrap();
+        let (status, body) =
+            server.request("POST", &format!("/api/hub/sync?session={id}"), None, true);
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        assert_eq!(fs::read(project.join("AGENTS.md")).unwrap(), original);
+        let published = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+        assert!(published.contains("Latest note"));
+        assert!(!published.contains("Private marker"));
+    }
+}

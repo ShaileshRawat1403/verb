@@ -305,7 +305,11 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
         || (method != "GET"
             && matches!(
                 path,
-                "/api/stream" | "/api/observer" | "/api/work-items" | "/api/work-items/link"
+                "/api/stream"
+                    | "/api/observer"
+                    | "/api/work-items"
+                    | "/api/work-items/link"
+                    | "/api/hub/sync"
             ))
         || matches!(parts.as_slice(), ["api", "terminals", _, "phone", ..]);
     if owner_only {

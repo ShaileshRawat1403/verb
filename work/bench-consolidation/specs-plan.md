@@ -4,7 +4,7 @@ The [approved design](design.md) governs the layout. Complete one slice at a tim
 
 ## Data prerequisites
 
-Complete these before layout slice 1. The first is implemented locally. Publishing and CLI work each require their own approval after the preceding stop.
+The data slices provide reading, publishing and shared context. Launcher and instruction-file behavior remains unverified where there is no verified prompt path. The project switcher gap is recorded in the design before layout slice 1.
 
 | Order | Requirements | Likely code | Verification and storage |
 | --- | --- | --- | --- |

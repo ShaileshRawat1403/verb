@@ -159,7 +159,7 @@ fn parse(file: &Path, project: &Path) -> Option<Spec> {
     parse_contents(file, project, &raw)
 }
 
-fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
+pub(crate) fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
     let (fields, body) = front_matter(raw)?;
     let field = |key: &str| {
         fields

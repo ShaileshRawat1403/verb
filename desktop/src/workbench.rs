@@ -158,7 +158,10 @@ pub(crate) fn append_ui_memory(project: &Path, note: &str) -> Result<String, Str
     let root = project_root(project)?;
     let _lock = lock_project(&root)?;
     let mut current = read_memory(project)?;
-    if !current.is_empty() && !current.ends_with('\n') {
+    if !current.is_empty() && !current.ends_with("\n\n") {
+        if !current.ends_with('\n') {
+            current.push('\n');
+        }
         current.push('\n');
     }
     current.push_str(note);
@@ -381,6 +384,15 @@ pub(crate) fn shared_command(
     args: &[String],
     json_output: bool,
 ) -> Result<(), String> {
+    // This mode reads only the explicitly published projection. It never authenticates
+    // against the private session ledger or records a fetch receipt.
+    if matches!(args, [read, checkout] if read == "read" && checkout == "--checkout") {
+        if json_output {
+            return Err("Checkout context is plain text".into());
+        }
+        print!("{}", crate::hub::checkout_context(project)?);
+        return Ok(());
+    }
     // An agent can move to a subdirectory or another working directory during its conversation.
     // The project inherited from its Verb host remains the collaboration scope.
     let hosted_project = match (
@@ -396,9 +408,17 @@ pub(crate) fn shared_command(
     };
     match args {
         [action] if action == "read" => shared_read(&hosted_project, json_output),
+        [action] if action == "full" && !json_output => {
+            print!("{}", crate::hub::full_context(&hosted_project, None)?);
+            Ok(())
+        }
+        [action, id] if action == "spec" && !json_output => {
+            print!("{}", crate::hub::full_context(&hosted_project, Some(id))?);
+            Ok(())
+        }
         [action] if action == "status" => shared_status(&hosted_project, json_output),
         [action, source] if action == "publish" => shared_publish(&hosted_project, source),
-        _ => Err("usage: verb shared read|status [--json] | publish FILE".to_owned()),
+        _ => Err("usage: verb shared read [--json|--checkout] | status [--json] | full | spec SPEC-ID | publish FILE".to_owned()),
     }
 }
 

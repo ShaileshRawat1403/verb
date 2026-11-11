@@ -56,6 +56,8 @@ pub(crate) struct AgentFile {
     pub exists: bool,
     /// "missing", "no-section", "outdated" or "current".
     pub state: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem: Option<String>,
 }
 
 #[derive(Serialize, Debug)]
@@ -71,6 +73,9 @@ pub(crate) struct Hub {
     pub documents: Vec<String>,
     pub agent_files: Vec<AgentFile>,
     pub nudges: Vec<Nudge>,
+    pub context_bytes: Option<usize>,
+    pub context_preview: Option<String>,
+    pub context_warning: Option<String>,
 }
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
@@ -281,133 +286,386 @@ fn brief_status(project: &Path) -> BriefStatus {
 
 // ------------------------------------------------------------------------- agent context sync
 
-fn first_paragraph(text: &str) -> String {
-    let text = text.trim();
-    let para = text.split("\n\n").next().unwrap_or(text);
-    let one_line = para.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.len() > 400 {
-        format!(
-            "{}…",
-            &one_line[..one_line
-                .char_indices()
-                .nth(400)
-                .map_or(one_line.len(), |(i, _)| i)]
-        )
-    } else {
-        one_line
+const CONTEXT_LIMIT: usize = 8192;
+
+#[derive(Default)]
+struct ContextParts {
+    brief: Vec<String>,
+    notes: Vec<String>,
+    specs: Vec<String>,
+    glossary: Option<String>,
+    specific: Vec<String>,
+}
+
+impl ContextParts {
+    fn render(&self) -> String {
+        let mut out = format!("{START}\n## Project context (maintained by Verb)\n");
+        for (heading, lines) in [
+            ("Brief", &self.brief),
+            ("Current spec", &self.specific),
+            ("Specs in progress", &self.specs),
+            ("Shared notes (newest first)", &self.notes),
+        ] {
+            if !lines.is_empty() {
+                out.push_str(&format!("\n### {heading}\n\n{}\n", lines.join("\n")));
+            }
+        }
+        if let Some(glossary) = &self.glossary {
+            out.push_str(&format!("\n### Glossary\n\n{glossary}\n"));
+        }
+        out
+    }
+
+    fn bounded(mut self, limit: usize, command: &str) -> (String, bool) {
+        let mut omitted = [0; 5];
+        loop {
+            let mut out = self.render();
+            let omission = [
+                "notes",
+                "in-progress specs",
+                "glossary sections",
+                "brief sections",
+                "spec sections",
+            ]
+            .into_iter()
+            .zip(omitted)
+            .filter(|(_, count)| *count > 0)
+            .map(|(name, count)| format!("{count} {name}"))
+            .collect::<Vec<_>>();
+            if !omission.is_empty() {
+                out.push_str(&format!(
+                    "\nOmitted {}. Run `{command}` for the full context.\n",
+                    omission.join(", ")
+                ));
+            }
+            out.push_str(END);
+            out.push('\n');
+            if out.len() <= limit {
+                return (out, omitted[3] > 0 || omitted[4] > 0);
+            }
+            if !self.notes.is_empty() {
+                let mut excess = out.len() - limit;
+                while let Some(note) = self.notes.pop() {
+                    omitted[0] += 1;
+                    excess = excess.saturating_sub(note.len() + 1);
+                    if excess == 0 {
+                        break;
+                    }
+                }
+            } else if self.specs.len() > 10 {
+                omitted[1] += self.specs.len() - 10;
+                self.specs.truncate(10);
+            } else if self.glossary.take().is_some() {
+                omitted[2] += 1;
+            } else if self.specs.pop().is_some() {
+                omitted[1] += 1;
+            } else if self.brief.pop().is_some() {
+                omitted[3] += 1;
+            } else if self.specific.pop().is_some() {
+                omitted[4] += 1;
+            } else {
+                return (String::new(), true);
+            }
+        }
     }
 }
 
-/// The section Verb maintains in AGENTS.md and CLAUDE.md. Deterministic: same inputs, same text, so
-/// "outdated" means something changed rather than a timestamp moving.
-pub(crate) fn context_section(project: &Path) -> String {
-    let mut out = format!(
-        "{START}\n## Project context (maintained by Verb)\n\n\
-         This section is generated from the project's brief and specs. Edit those, not this; Verb\n\
-         rewrites everything between the markers and leaves the rest of this file alone.\n"
-    );
-    if let Ok(raw) = fs::read_to_string(project.join(BRIEF_PATH)) {
-        out.push_str(&format!("\n**Brief:** `{BRIEF_PATH}`\n\n"));
-        for heading in BRIEF_SECTIONS {
+fn context_text(value: &str) -> String {
+    value
+        .replace(START, "[Verb context start marker]")
+        .replace(END, "[Verb context end marker]")
+}
+
+fn visible_context_file(
+    project: &Path,
+    path: &str,
+    files: &std::collections::HashSet<String>,
+) -> Option<String> {
+    if !files.contains(path) {
+        return None;
+    }
+    let root = project.canonicalize().ok()?;
+    let relative = safe_relative(path).ok()?;
+    let expected = root.join(relative);
+    if expected.canonicalize().ok()? != expected {
+        return None;
+    }
+    read_agent_file(project, path).ok().flatten()
+}
+
+fn context_parts(project: &Path, spec_id: Option<&str>) -> Result<ContextParts, String> {
+    let paths = if crate::isolation::external() {
+        let result = files(project)?;
+        if result.truncated {
+            return Err("The visible checkout file list is incomplete".into());
+        }
+        result.files.into_iter().map(|file| file.path).collect()
+    } else {
+        visible_files(project)?
+    };
+    let files = paths.into_iter().collect::<std::collections::HashSet<_>>();
+    let mut parts = ContextParts::default();
+    if let Some(raw) = visible_context_file(project, BRIEF_PATH, &files) {
+        for heading in ["Problem", "Scope", "Constraints", "Who it is for"] {
             let text = section_text(&raw, heading);
             if filled(&text) {
-                out.push_str(&format!("- **{heading}:** {}\n", first_paragraph(&text)));
+                parts
+                    .brief
+                    .push(format!("**{heading}:** {}", context_text(&text)));
             }
         }
-    } else {
-        out.push_str("\nNo project brief yet.\n");
-    }
-    let active: Vec<_> = specs::list(project)
-        .into_iter()
-        .filter(|s| s.stage != "ship")
-        .collect();
-    if !active.is_empty() {
-        out.push_str("\n### Active specs\n\n");
-        for spec in &active {
-            let open: Vec<&str> = spec
-                .criteria
-                .iter()
-                .filter(|c| !c.done)
-                .map(|c| c.text.as_str())
-                .collect();
-            out.push_str(&format!(
-                "- **{} · {}** (`{}`, stage: {}, {}/{} criteria proven){}\n",
-                spec.id,
-                spec.title,
-                spec.file,
-                spec.stage,
-                spec.criteria_done,
-                spec.criteria.len(),
-                if open.is_empty() {
-                    String::new()
-                } else {
-                    format!(". Open: {}", open.join("; "))
-                }
-            ));
+        let glossary = section_text(&raw, "Glossary");
+        if filled(&glossary) {
+            parts.glossary = Some(context_text(&glossary));
         }
     }
-    out.push_str(
-        "\n### Working agreements\n\n\
-         - Read the relevant spec before changing code, and stay within its Out of scope section.\n\
-         - Start commit messages with `spec:NNN` when the work belongs to a spec.\n\
-         - Never edit an `## Audit trail` section; Verb appends to it.\n",
-    );
+    let notes = crate::transcript::redact(&crate::workbench::shared_memory(project)?);
+    let mut paragraphs = Vec::new();
+    let mut current = Vec::new();
+    for line in notes.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join("\n"));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join("\n"));
+    }
+    parts.notes = paragraphs
+        .into_iter()
+        .rev()
+        .map(|note| format!("- {}", context_text(&note).replace('\n', "\n  ")))
+        .collect();
+
+    let mut specs: Vec<_> = files
+        .iter()
+        .filter_map(|path| {
+            let relative = Path::new(path);
+            if relative.parent() != Some(Path::new("specs"))
+                || relative
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    != Some("md")
+            {
+                return None;
+            }
+            let raw = visible_context_file(project, path, &files)?;
+            specs::parse_contents(&project.join(relative), project, &raw)
+        })
+        .collect();
+    if let Some(id) = spec_id {
+        let mut matches = specs.iter().filter(|spec| spec.id == id);
+        let spec = matches.next().ok_or("No visible spec with that ID")?;
+        if matches.next().is_some() {
+            return Err("Multiple visible specs have that ID".into());
+        }
+        parts.specific.push(format!(
+            "Spec {} · {} (`{}`)",
+            spec.id,
+            context_text(&spec.title),
+            spec.file
+        ));
+        if let Some(work_item) = &spec.work_item {
+            if crate::work_items::valid_work_item_id(work_item) {
+                let brd =
+                    visible_context_file(project, &format!("work/{work_item}/brd.md"), &files);
+                let prd =
+                    visible_context_file(project, &format!("work/{work_item}/prd.md"), &files);
+                parts.specific.extend(
+                    crate::work_items::linked_context(spec, brd, prd)
+                        .into_iter()
+                        .map(|text| context_text(&text)),
+                );
+            }
+        } else {
+            parts.specific.push("No work item is linked.".into());
+        }
+        parts
+            .specific
+            .extend(spec.body.split("\n## ").map(|section| {
+                let section = context_text(section);
+                if section.starts_with('#') {
+                    section
+                } else {
+                    format!("## {section}")
+                }
+            }));
+    } else {
+        specs.retain(|spec| matches!(spec.stage.as_str(), "plan" | "build" | "verify" | "review"));
+        specs.sort_by(|left, right| {
+            let left_at = left
+                .audit
+                .iter()
+                .map(|entry| entry.at.as_str())
+                .max()
+                .unwrap_or("");
+            right
+                .audit
+                .iter()
+                .map(|entry| entry.at.as_str())
+                .max()
+                .unwrap_or("")
+                .cmp(left_at)
+                .then_with(|| left.id.cmp(&right.id))
+                .then_with(|| left.file.cmp(&right.file))
+        });
+        parts.specs = specs
+            .iter()
+            .map(|spec| {
+                format!(
+                    "- **{} · {}** (`{}`, {}) · {}",
+                    spec.id,
+                    context_text(&spec.title).replace('\n', " "),
+                    spec.file,
+                    spec.stage,
+                    spec.work_item
+                        .as_deref()
+                        .filter(|id| crate::work_items::valid_work_item_id(id))
+                        .unwrap_or("unlinked")
+                )
+            })
+            .collect();
+    }
+    Ok(parts)
+}
+
+pub(crate) fn full_context(project: &Path, spec: Option<&str>) -> Result<String, String> {
+    let mut out = context_parts(project, spec)?.render();
     out.push_str(END);
     out.push('\n');
-    out
+    Ok(out)
 }
 
-fn current_section(raw: &str) -> Option<&str> {
-    let start = raw.find(START)?;
-    let end = raw[start..].find(END)? + start + END.len();
-    let end = if raw[end..].starts_with('\n') {
-        end + 1
-    } else {
-        end
-    };
-    Some(&raw[start..end])
+pub(crate) fn spec_launch_context(
+    project: &Path,
+    id: &str,
+    limit: usize,
+) -> Result<String, String> {
+    let command = format!("verb shared spec {id}");
+    Ok(context_parts(project, Some(id))?
+        .bounded(limit.min(CONTEXT_LIMIT), &command)
+        .0)
 }
 
-fn agent_file_state(project: &Path, name: &'static str, wanted: &str) -> AgentFile {
-    match fs::read_to_string(project.join(name)) {
-        Err(_) => AgentFile {
-            name,
-            exists: false,
-            state: "missing",
-        },
-        Ok(raw) => AgentFile {
-            name,
-            exists: true,
-            state: match current_section(&raw) {
-                None => "no-section",
-                Some(section) if section == wanted => "current",
-                Some(_) => "outdated",
-            },
-        },
+fn context_section(project: &Path) -> Result<(String, bool), String> {
+    Ok(context_parts(project, None)?.bounded(CONTEXT_LIMIT, "verb shared full"))
+}
+
+fn current_section(raw: &str) -> Result<Option<&str>, String> {
+    match (
+        raw.match_indices(START).collect::<Vec<_>>().as_slice(),
+        raw.match_indices(END).collect::<Vec<_>>().as_slice(),
+    ) {
+        ([], []) => Ok(None),
+        ([(start, _)], [(end, _)]) if end > start => {
+            let end = end + END.len();
+            Ok(Some(&raw[*start..end]))
+        }
+        _ => Err("Malformed or duplicate Verb context markers".into()),
     }
 }
 
-/// Writes the Verb section into AGENTS.md and CLAUDE.md, creating them if needed. Returns the files
-/// that changed; records the sync in the brief's audit trail when there is a brief.
+fn read_agent_file(project: &Path, name: &str) -> Result<Option<String>, String> {
+    use std::io::Read;
+    let path = project.join(name);
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Cannot read {name}: {error}")),
+    };
+    if !file
+        .metadata()
+        .map_err(|error| error.to_string())?
+        .is_file()
+    {
+        return Err(format!("{name} must be a regular file"));
+    }
+    let mut raw = String::new();
+    file.take(MAX_PREVIEW + 1)
+        .read_to_string(&mut raw)
+        .map_err(|error| error.to_string())?;
+    if raw.len() as u64 > MAX_PREVIEW {
+        return Err(format!("{name} exceeds 200 KiB"));
+    }
+    Ok(Some(raw))
+}
+
+pub(crate) fn checkout_context(project: &Path) -> Result<String, String> {
+    let agents =
+        read_agent_file(project, "AGENTS.md")?.ok_or("No published AGENTS.md in this checkout")?;
+    let claude =
+        read_agent_file(project, "CLAUDE.md")?.ok_or("No published CLAUDE.md in this checkout")?;
+    let block = current_section(&agents)?.ok_or("No published Verb context in this checkout")?;
+    if block.len() > CONTEXT_LIMIT || current_section(&claude)? != Some(block) {
+        return Err(
+            "Published context is inconsistent. Ask the owner to sync this checkout.".into(),
+        );
+    }
+    Ok(format!("{block}\n"))
+}
+
+fn agent_file_state(project: &Path, name: &'static str, wanted: Option<&str>) -> AgentFile {
+    let (exists, state, problem) = match read_agent_file(project, name) {
+        Ok(None) => (false, "missing", None),
+        Err(error) => (true, "outdated", Some(error)),
+        Ok(Some(raw)) => match current_section(&raw) {
+            Err(error) => (true, "outdated", Some(error)),
+            Ok(None) => (true, "no-section", None),
+            Ok(Some(section)) if Some(section) == wanted => (true, "current", None),
+            Ok(Some(_)) => (true, "outdated", None),
+        },
+    };
+    AgentFile {
+        name,
+        exists,
+        state,
+        problem,
+    }
+}
+
+/// Publishes both files under the same project lock. Validate both marker pairs before writing.
 pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<Vec<&'static str>, String> {
-    let wanted = context_section(project);
-    let mut changed = Vec::new();
+    let identity = crate::project::identity(project)?;
+    let _lock = crate::workbench::lock_project(&identity.store)?;
+    let (wanted, _) = context_section(project)?;
+    let block = wanted.trim_end_matches('\n');
+    let mut writes = Vec::new();
     for name in AGENT_FILES {
-        let path = project.join(name);
-        let raw = fs::read_to_string(&path).unwrap_or_default();
-        let next = match current_section(&raw) {
-            Some(section) if section == wanted => continue,
-            Some(section) => raw.replacen(section, &wanted, 1),
-            None if raw.trim().is_empty() => {
-                format!("# {}\n\n{wanted}", name.trim_end_matches(".md"))
-            }
-            None => format!("{}\n\n{wanted}", raw.trim_end()),
+        let raw = read_agent_file(project, name)?.unwrap_or_default();
+        let next = match current_section(&raw).map_err(|error| format!("{name}: {error}"))? {
+            Some(section) if section == block => continue,
+            Some(section) => raw.replacen(section, block, 1),
+            None if raw.is_empty() => format!("# {}\n\n{wanted}", name.trim_end_matches(".md")),
+            None => format!("{raw}\n\n{wanted}"),
         };
-        fs::write(&path, next).map_err(|e| format!("could not write {name}: {e}"))?;
+        if next.len() as u64 > MAX_PREVIEW {
+            return Err(format!("{name} would exceed 200 KiB"));
+        }
+        writes.push((name, next));
+    }
+    let mut changed = Vec::new();
+    for (name, next) in writes {
+        specs::write_atomic(&project.join(name), &next)?;
         changed.push(name);
     }
     let brief = project.join(BRIEF_PATH);
-    if !changed.is_empty() && brief.exists() {
+    let local_brief = project
+        .canonicalize()
+        .ok()
+        .zip(brief.canonicalize().ok())
+        .is_some_and(|(root, target)| target == root.join(BRIEF_PATH) && target.is_file());
+    if !changed.is_empty() && local_brief {
         specs::record(
             &brief,
             actor,
@@ -421,10 +679,14 @@ pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<Vec<&'stat
 
 pub(crate) fn hub(project: &Path) -> Hub {
     let brief = brief_status(project);
-    let wanted = context_section(project);
+    let context = context_section(project);
+    let wanted = context
+        .as_ref()
+        .ok()
+        .map(|(text, _)| text.trim_end_matches('\n'));
     let agent_files: Vec<AgentFile> = AGENT_FILES
         .iter()
-        .map(|name| agent_file_state(project, name, &wanted))
+        .map(|name| agent_file_state(project, name, wanted))
         .collect();
     let mut documents: Vec<String> = fs::read_dir(project.join("docs/project"))
         .into_iter()
@@ -491,6 +753,15 @@ pub(crate) fn hub(project: &Path) -> Hub {
         documents,
         agent_files,
         nudges,
+        context_bytes: context.as_ref().ok().map(|(text, _)| text.len()),
+        context_preview: context.as_ref().ok().map(|(text, _)| text.clone()),
+        context_warning: match context {
+            Ok((_, true)) => {
+                Some("Required context was omitted. Shorten the project brief.".into())
+            }
+            Err(error) => Some(error),
+            Ok((_, false)) => None,
+        },
     }
 }
 
@@ -635,6 +906,7 @@ mod tests {
             "A",
         )
         .unwrap();
+        specs::set_stage(&project, "001", "plan", "", "A", None, None).unwrap();
         assert_eq!(hub(&project).agent_files[0].state, "outdated");
         sync_agent_files(&project, "A").unwrap();
         let agents = fs::read_to_string(project.join("AGENTS.md")).unwrap();
@@ -643,5 +915,59 @@ mod tests {
         assert_eq!(agents.matches(START).count(), 1);
         let brief = fs::read_to_string(project.join(BRIEF_PATH)).unwrap();
         assert!(brief.contains("synced agent context into AGENTS.md and CLAUDE.md"));
+    }
+    #[test]
+    fn context_bound_drops_old_notes_and_preserves_section_boundaries() {
+        let parts = ContextParts {
+            brief: vec!["Problem stays".into()],
+            notes: vec!["newest".into(), "old".repeat(4000)],
+            ..ContextParts::default()
+        };
+        let (text, warning) = parts.bounded(CONTEXT_LIMIT, "verb shared full");
+        assert!(!warning);
+        assert!(text.len() <= CONTEXT_LIMIT);
+        assert!(text.contains("Problem stays"));
+        assert!(text.contains("newest"));
+        assert!(text.contains("Omitted 1 notes"));
+        assert!(text.contains("verb shared full"));
+        assert!(text.ends_with(&format!("{END}\n")));
+
+        let parts = ContextParts {
+            brief: vec!["Problem stays".into(), "é".repeat(4500)],
+            ..ContextParts::default()
+        };
+        let (text, warning) = parts.bounded(CONTEXT_LIMIT, "verb shared full");
+        assert!(warning);
+        assert!(text.len() <= CONTEXT_LIMIT);
+        assert!(text.contains("Omitted 1 brief sections"));
+        assert!(!text.contains('é'));
+    }
+
+    #[test]
+    fn sync_preflights_both_files_and_checkout_reads_only_matching_blocks() {
+        let project = repo();
+        let original = format!("before\n{START}\nold\n{END}after");
+        fs::write(project.join("AGENTS.md"), &original).unwrap();
+        fs::write(
+            project.join("CLAUDE.md"),
+            format!("{START}\n{START}\n{END}"),
+        )
+        .unwrap();
+        assert!(sync_agent_files(&project, "Owner")
+            .unwrap_err()
+            .contains("duplicate"));
+        assert_eq!(
+            fs::read_to_string(project.join("AGENTS.md")).unwrap(),
+            original
+        );
+        fs::write(project.join("CLAUDE.md"), "owner instructions\n").unwrap();
+        sync_agent_files(&project, "Owner").unwrap();
+        assert!(fs::read_to_string(project.join("AGENTS.md"))
+            .unwrap()
+            .ends_with("<!-- verb:context:end -->after"));
+        assert!(checkout_context(&project).unwrap().contains(START));
+        fs::write(project.join("CLAUDE.md"), format!("{START}\nwrong\n{END}")).unwrap();
+        assert!(checkout_context(&project).is_err());
+        assert_eq!(hub(&project).agent_files[1].state, "outdated");
     }
 }
