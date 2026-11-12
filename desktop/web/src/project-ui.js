@@ -1,5 +1,4 @@
-// The Project view: file tree, read-only preview, and the context hub (brief, agent context sync,
-// project documents, nudges). Rules that can be tested live in workbench.js.
+// The Preview file tree and Context hub.
 
 import { buildTree, changeLabel, filterFiles, renderMarkdown } from "./workbench.js";
 import { readWithBusyRetry } from "./read-retry.js";
@@ -13,20 +12,21 @@ export function initProject(deps) {
     open: new Set([""]),
     selected: null,
     hub: null,
-    loadedAt: 0,
   };
 
   // ------------------------------------------------------------------------------ data
 
+  let filesRequest = 0;
   async function refreshFiles() {
+    const request = ++filesRequest;
     try {
-      const result = await api("GET", "/api/files");
+      const result = await readWithBusyRetry(api, "/api/files");
+      if (request !== filesRequest) return;
       state.files = result.files;
       state.truncated = result.truncated;
-      state.loadedAt = Date.now();
       renderTree();
     } catch (error) {
-      $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+      if (request === filesRequest) $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
     }
   }
   let hubRequest = 0;
@@ -88,31 +88,14 @@ export function initProject(deps) {
       : renderDir(buildTree(state.files), 0);
   }
 
-  async function openFile(path) {
+  function openFile(path) {
     state.selected = path;
     renderTree();
-    $("#file-preview").hidden = false;
-    $("#preview-path").textContent = path;
-    $("#preview-meta").textContent = "Loading…";
-    $("#preview-body").innerHTML = "";
-    if (deps.ui.view !== "project") deps.showView("project");
-    try {
-      const preview = await api("GET", `/api/files/preview?path=${encodeURIComponent(path)}`);
-      $("#preview-meta").textContent = `${formatBytes(preview.bytes)} · read-only`;
-      if (preview.text == null) {
-        $("#preview-body").innerHTML = `<p class="muted preview-reason">Not shown: ${escapeHtml(preview.reason)}.</p>`;
-        return;
-      }
-      state.previewText = preview.text;
-      state.previewMarkdown = /\.(md|mdx|markdown)$/i.test(path);
-      state.previewRaw = false;
-      paintPreview();
-    } catch (error) {
-      $("#preview-meta").textContent = "";
-      $("#preview-body").innerHTML = `<p class="muted preview-reason">${escapeHtml(error.message)}</p>`;
-    }
+    $("#tree-selected-path").textContent = path;
+    $("#tree-selected-path").hidden = false;
+    $('[data-action="copy-file-path"]').hidden = false;
+    return deps.openPreview(path);
   }
-  const formatBytes = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`);
 
   function renderHub() {
     const hub = state.hub;
@@ -169,27 +152,6 @@ export function initProject(deps) {
     showDialog("brief-dialog");
     $("#brief-problem").focus();
   }
-  /** Markdown reads formatted by default, with a Raw toggle; everything else shows its lines. */
-  function paintPreview() {
-    const formatted = state.previewMarkdown && !state.previewRaw;
-    $("#preview-mode").hidden = !state.previewMarkdown;
-    $("#preview-mode").textContent = formatted ? "Raw" : "Formatted";
-    if (formatted) {
-      $("#preview-body").innerHTML = `<div class="md-preview">${renderMarkdown(state.previewText, escapeHtml)}</div>`;
-      return;
-    }
-    const lines = state.previewText.split("\n");
-    if (lines.at(-1) === "") lines.pop();
-    $("#preview-body").innerHTML = `<ol class="code-lines">${lines
-      .map((line) => `<li><code>${escapeHtml(line) || " "}</code></li>`)
-      .join("")}</ol>`;
-  }
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest('[data-action="preview-mode"]')) return;
-    state.previewRaw = !state.previewRaw;
-    paintPreview();
-  });
-
   async function syncAgents() {
     try {
       const result = await api("POST", "/api/hub/sync");
@@ -222,14 +184,14 @@ export function initProject(deps) {
 
   $("#file-filter").addEventListener("input", renderTree);
   document.addEventListener("click", (event) => {
-    const dir = event.target.closest("[data-dir]");
+    const dir = event.target.closest("#file-tree [data-dir]");
     if (dir) {
       const path = dir.dataset.dir;
       if (state.open.has(path)) state.open.delete(path);
       else state.open.add(path);
       return renderTree();
     }
-    const file = event.target.closest("[data-file]");
+    const file = event.target.closest("#file-tree [data-file], #hub-documents [data-file]");
     if (file) return openFile(file.dataset.file);
     const nudge = event.target.closest("[data-nudge]")?.dataset.nudge;
     const action = nudge ?? event.target.closest("[data-action]")?.dataset.action;
@@ -239,11 +201,6 @@ export function initProject(deps) {
       "sync-agents": syncAgents,
       "refresh-context": refreshHub,
       "open-spec": () => deps.showView("specs"),
-      "close-preview": () => {
-        state.selected = null;
-        $("#file-preview").hidden = true;
-        renderTree();
-      },
       "copy-file-path": async () => {
         try {
           await navigator.clipboard.writeText(state.selected);
@@ -258,9 +215,9 @@ export function initProject(deps) {
 
   return {
     openFile,
+    refreshFiles,
     onShowView(view) {
       if (view === "context") refreshHub();
-      if (view === "project" && Date.now() - state.loadedAt > 3000) refreshFiles();
     },
     /** Commands for the palette: hub actions always; files when the query looks for one. */
     commands(query) {
@@ -270,7 +227,9 @@ export function initProject(deps) {
         { title: "Sync agent context (AGENTS.md, CLAUDE.md)", run: syncAgents },
       ];
       if (query.trim().length >= 2) {
-        if (!state.files.length) refreshFiles();
+        if (!state.files.length && !state.loading) {
+          state.loading = refreshFiles().finally(() => { state.loading = null; });
+        }
         for (const file of filterFiles(state.files, query, 8)) {
           list.push({ title: `Open file ${file.path}`, hint: "file", run: () => openFile(file.path) });
         }

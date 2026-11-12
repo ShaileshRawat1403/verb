@@ -154,9 +154,7 @@ test("Studio intent stays a draft until explicit Spec creation and shares the wo
     .fill("Date is shown before the booking action");
   await page.locator('#spec-dialog button[type="submit"]').click();
   await expect(page.locator("#spec-dialog")).not.toBeVisible();
-  await expect(page.locator("#view-studio")).toHaveClass(/active/);
   await expect(page.locator("#studio-intent")).toHaveValue("");
-  await openWorkspaceView(page, "Studio");
   await expect(page.locator("#studio-thread-title")).toHaveText(
     intent.split("\n")[0],
   );
@@ -168,7 +166,7 @@ test("Studio intent stays a draft until explicit Spec creation and shares the wo
   await page
     .getByRole("button", { name: "Inspect work & evidence", exact: false })
     .click();
-  await expect(page.locator("#spec-title")).toContainText(
+  await expect(page.locator("#bench-plan-spec h2")).toContainText(
     intent.split("\n")[0],
   );
   const listing = await request.get(`${origin}/api/specs`, {

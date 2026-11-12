@@ -5,7 +5,7 @@ import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
 import { boardMarkup, specSignals } from "./bench-board.js";
 
-export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
+export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, refreshFiles, openTask, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
   const app = $("#app");
   const panel = $("#bench-right-panel");
@@ -289,7 +289,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   let reviewing;
   let reviewGeneration = 0;
   let publishingDraft = false;
-  let taskSpec;
   function draftForm(button) {
     const form = $("#bench-draft-form");
     form.reset();
@@ -406,16 +405,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     });
   });
 
-  $("#bench-plan-task-form").addEventListener("submit", event => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    submit(form, async () => {
-      await api("POST", "/api/tasks", { specId: taskSpec, title: form.elements.title.value, brief: form.elements.brief.value });
-      closeDialog("bench-plan-task-dialog");
-      await refreshState();
-    });
-  });
-
   function syncLayout() {
     const terminalView = ui.view === "sessions";
     const navVisible = narrow.matches ? mobileSurface === "navigation" : !ui.navigationCollapsed;
@@ -427,7 +416,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     toggleDetails.hidden = !terminalView;
     $("#bench-new-terminal").hidden = false;
     $("#bench-terminal-tabs").hidden = !terminalView;
-    if (!terminalView && ui.view !== "specs") $("#bench-terminal-menu").hidden = true;
+    if (!terminalView) $("#bench-terminal-menu").hidden = true;
     toggleNavigation.setAttribute("aria-expanded", String(navVisible));
     toggleDetails.setAttribute("aria-expanded", String(detailsVisible));
     panel.hidden = !detailsVisible;
@@ -440,10 +429,28 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     requestAnimationFrame(fitTerminals);
   }
 
+  function showDetails(tab) {
+    if (ui.view !== "sessions") showView("sessions");
+    if (narrow.matches) mobileSurface = "details";
+    else detailsCollapsed = false;
+    selectTab(tab);
+    syncLayout();
+  }
+
+  function filesMode(open) {
+    $("#bench-files-mode").setAttribute("aria-pressed", String(open));
+    $("#bench-files-panel").hidden = !open;
+    if (open) refreshFiles();
+  }
+
+  $("#bench-files-mode").addEventListener("click", event =>
+    filesMode(event.currentTarget.getAttribute("aria-pressed") !== "true"));
+
   function selectTab(tab) {
     if (tab === "review" && activeTab !== tab) reviewTab.refreshChecks();
-    if (tab === "preview" && $("#bench-tab-preview").hidden) return;
+
     activeTab = tab;
+    if (tab === "review") render();
     studio.mountPreview(ui.view === "sessions" ? $("#bench-preview-mount") : null,
       !panel.hidden && tab === "preview");
     for (const button of panel.querySelectorAll("[data-bench-tab]")) {
@@ -499,7 +506,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     if (target.closest("[data-bench-overlay-close]")) return closeOverlay(true);
     const documentButton = target.closest("[data-bench-document]");
     if (documentButton) {
-      if (!studio.hasPreviewFiles()) return openFile(documentButton.dataset.benchDocument);
       selectTab("preview");
       return studio.openPreviewFile(documentButton.dataset.benchDocument);
     }
@@ -525,13 +531,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       $("#bench-tab-plan").focus();
       return;
     }
-    if (target.closest("[data-bench-task]")) {
-      taskSpec = selectedId;
-      const form = $("#bench-plan-task-form");
-      form.reset();
-      formError(form, "");
-      return showDialog("bench-plan-task-dialog");
-    }
+    if (target.closest("[data-bench-task]")) return openTask(selectedId);
     const spec = target.closest("[data-bench-spec]");
     if (spec) return focusSpec(spec.dataset.benchSpec);
     const tab = target.closest("[data-bench-tab]");
@@ -561,10 +561,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       workbench.refreshSpecs();
     }
   });
-  document.addEventListener("verb:preview-files", () => {
-    $("#bench-tab-preview").hidden = !studio.hasPreviewFiles();
-    if ($("#bench-tab-preview").hidden && activeTab === "preview") selectTab("plan");
-  });
   panel.querySelector('[role="tablist"]').addEventListener("keydown", event => {
     const tabs = ["plan", "review", "preview"].filter(tab => !$("#bench-tab-" + tab).hidden);
     const index = tabs.indexOf(activeTab);
@@ -585,6 +581,10 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   return {
     refresh,
     render,
+    focusSpec,
+    openReview() { showDetails("review"); },
+    openFiles() { showDetails("preview"); filesMode(true); },
+    openPreview(path) { showDetails("preview"); return studio.openPreviewFile(path); },
     renderNeeds,
     reviewChecks: reviewTab.setChecks,
     onView() {

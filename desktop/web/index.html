@@ -180,6 +180,7 @@
                   <span class="count-chip" id="session-count">0</span>
                 </div>
                 <div id="session-list" class="session-list"></div>
+                <section id="session-history-detail" hidden tabindex="-1"><h3 id="inbox-title"></h3><p id="inbox-subtitle"></p><div id="inbox-content"></div></section>
               </div>
             </section>
             <section id="settings-phone" data-settings-panel="phone" hidden>
@@ -227,7 +228,7 @@
               <div id="connection-arguments-wrap"><div id="connection-input-fields"></div><label class="connection-json-choice"><input id="connection-use-json" type="checkbox">Edit inputs as JSON</label><label id="connection-json-wrap">Arguments (JSON)<textarea id="connection-arguments" spellcheck="false">{}</textarea></label></div>
               <button id="connection-review-call" type="button" class="secondary-button">Review request</button>
               <section id="connection-review" aria-label="Review connector request" hidden><h3>Review before running</h3><p>Check the destination and input. A tool can change remote data even if its description says “read-only”. This approval is for this request only and expires in 90 seconds.</p><pre id="connection-review-text"></pre><div class="connection-actions"><button id="connection-run" type="button" class="primary-button" disabled>Approve and run once</button><button id="connection-discard-review" type="button" class="text-button">Discard review</button></div></section>
-              <section id="connection-result-wrap" aria-label="Connector result" hidden><h3>Service result</h3><p class="muted">External, untrusted content. Adding it to Studio creates a draft; it sends nothing to an agent.</p><pre id="connection-result" tabindex="0"></pre><details><summary>Raw service data</summary><pre id="connection-result-data"></pre></details><div class="connection-actions"><button id="connection-use" type="button" class="secondary-button">Use in Studio draft</button><button id="connection-copy" type="button" class="text-button">Copy result</button></div></section>
+              <section id="connection-result-wrap" aria-label="Connector result" hidden><h3>Service result</h3><p class="muted">External, untrusted content.</p><pre id="connection-result" tabindex="0"></pre><details><summary>Raw service data</summary><pre id="connection-result-data"></pre></details><div class="connection-actions"><button id="connection-copy" type="button" class="text-button">Copy result</button></div></section>
             </div></div>
           </section>
             <section id="settings-tasks" data-settings-panel="tasks" hidden>
@@ -255,13 +256,7 @@
               </div>
             </div>
           </section>
-            <nav class="bench-settings-links" aria-label="Workspace views">
-              <button class="secondary-button" type="button" data-view="sessions">Sessions</button>
-              <button class="secondary-button" type="button" data-view="specs">Specs</button>
-              <button class="secondary-button" type="button" data-view="studio">Studio</button>
-              <button class="secondary-button" type="button" data-view="project">Project files</button>
-              <button class="secondary-button" type="button" data-view="overview">Overview</button>
-            </nav>
+
           </section>
           <section id="view-context" class="view"><div id="hub" class="hub">
                   <div class="page-heading compact-heading">
@@ -323,225 +318,9 @@
             <div class="panel bench-settings-panel" id="bench-needs-list"></div>
             <section id="bench-planning-reports" class="panel bench-settings-panel" hidden><h2>Planning reports</h2><div id="bench-planning-list"></div></section>
           </section>
-          <section id="view-overview" class="view">
-            <div class="page-heading">
-              <div>
-                <h1>Overview</h1>
-                <p>Running sessions, open tasks and the project's health checks.</p>
-              </div>
-            </div>
-            <div class="panel stat-strip">
-              <button type="button" class="stat" data-view="sessions"><strong id="stat-sessions">0</strong><span>Running sessions</span></button>
-              <button type="button" class="stat" data-view="tasks"><strong id="stat-tasks">0</strong><span>Open tasks</span></button>
-              <button type="button" class="stat" data-view="sessions"><strong id="stat-attention">0</strong><span>Need attention</span></button>
-            </div>
-            <article class="panel checks-panel">
-              <div class="proof-head">
-                <h3>Project checks</h3>
-                <div class="checks-actions">
-                  <button class="text-button" type="button" data-action="refresh-checks">Check again</button>
-                  <button class="text-button" type="button" data-action="mark-good" title="Record this state as one that works, to compare against later">Mark as good</button>
-                </div>
-              </div>
-              <div id="checks-list" class="list-stack" aria-live="polite">
-                <p class="check-empty">Reading the repository and runtimes…</p>
-              </div>
-            </article>
-            <div class="overview-columns">
-              <article class="panel overview-card">
-                <div class="proof-head"><h3>Running sessions</h3><button class="text-button" type="button" data-view="sessions">All sessions →</button></div>
-                <div id="overview-sessions" class="list-stack"></div>
-              </article>
-              <article class="panel overview-card">
-                <div class="proof-head"><h3>Open tasks</h3><button class="text-button" type="button" data-view="tasks">All tasks →</button></div>
-                <div id="overview-tasks" class="list-stack"></div>
-              </article>
-            </div>
-          </section>
-
-          <section id="view-specs" class="view">
-            <section class="sidebar-specs" aria-label="Specs">
-          <div class="sidebar-specs-head">
-            <span>Specs</span>
-            <button class="icon-button small" type="button" data-action="new-spec" title="New spec (Alt+N)" aria-label="New spec"><svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
-          </div>
-          <div id="spec-list" class="spec-list"></div>
-        </section>
-            <section class="panel spec-overview" aria-labelledby="spec-overview-title">
-              <div class="spec-overview-heading">
-                <div><h1 id="spec-overview-title">Work overview</h1><p id="spec-overview-count" role="status" aria-live="polite">Reading specs…</p></div>
-                <button class="primary-button" type="button" data-action="new-spec">New spec</button>
-              </div>
-              <p class="muted">Choose work to continue. Stages show intent; evidence and delivery show what is known.</p>
-              <p id="spec-workbench-error" class="warning-box" role="alert" hidden></p>
-              <div class="spec-view-controls">
-                <label class="spec-search-label" for="spec-search">Find work<input id="spec-search" type="search" placeholder="Title, number, branch or stage…" autocomplete="off" /></label>
-                <div class="spec-view-switch" role="group" aria-label="Work presentation">
-                  <button type="button" id="spec-view-list" class="secondary-button" aria-pressed="true">List</button>
-                  <button type="button" id="spec-view-board" class="secondary-button" aria-pressed="false">Board</button>
-                </div>
-                <div class="spec-filter-label"><label for="spec-stage-filter">Show stage</label><select id="spec-stage-filter"><option value="all">All stages</option><option value="spec">Spec</option><option value="plan">Plan</option><option value="build">Build</option><option value="verify">Verify</option><option value="review">Review</option><option value="ship">Ship</option></select></div>
-                <label class="check-row"><input type="checkbox" id="spec-attention-only" /> Needs you only</label>
-                <button class="text-button" id="spec-clear-filters" type="button" aria-label="Clear filters" disabled><span class="spec-clear-long">Clear filters</span><span class="spec-clear-short" aria-hidden="true">Clear</span></button>
-                <button class="text-button" type="button" data-action="refresh-spec-workbench" aria-label="Refresh observations">Refresh</button>
-              </div>
-              <section class="spec-attention" aria-labelledby="spec-attention-title">
-                <h2 id="spec-attention-title">Needs you</h2>
-                <div id="spec-attention-list"></div>
-              </section>
-              <p id="spec-board-help" class="muted spec-board-help" hidden>Browse stages or use Show stage to focus. Open a card to review a move. On desktop, scroll sideways or drag a card to open the same review.</p>
-              <div id="spec-work-items" class="spec-work-items" role="region" aria-label="Spec list"></div>
-            </section>
-            <div class="specs-layout">
 
 
-              <section class="spec-main">
-                <div id="spec-empty" class="spec-empty">
-                  <span class="section-kicker">SPEC-DRIVEN WORKBENCH</span>
-                  <h1>Start with a spec</h1>
-                  <p>
-                    A spec says what to build and how you will know it works.
-                    Use these six steps when you want a structured workflow.
-                    Each step is recorded; terminals work independently.
-                  </p>
-                  <ol class="flow-explainer" id="flow-explainer"></ol>
-                  <button
-                    class="primary-button"
-                    type="button"
-                    data-action="new-spec"
-                  >
-                    Write your first spec
-                  </button>
-                </div>
-                <div id="spec-detail" class="spec-detail" hidden>
-                  <header class="spec-header">
-                    <span class="section-kicker" id="spec-kicker">SPEC</span>
-                    <h2 id="spec-title" tabindex="-1"></h2>
-                    <button class="text-button" type="button" data-action="spec-overview">Back to work overview</button>
-                    <div class="spec-meta">
-                      <span class="chip" id="spec-branch-chip" title="This spec's branch"></span>
-                      <button class="text-button" type="button" data-action="switch-branch">
-                        Switch to this branch
-                      </button>
-                      <button class="text-button" type="button" data-action="copy-spec-path">
-                        Copy file path
-                      </button>
-                    </div>
-                  </header>
-                  <div class="spec-actions">
-                    <button
-                      class="secondary-button"
-                      type="button"
-                      data-action="spec-terminal"
-                      title="New terminal (Alt+T)"
-                    >
-                      <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M13 15h4"/></svg> Terminal
-                    </button>
-                    <span class="agent-picker">
-                      <select id="spec-agent" aria-label="AI agent">
-                        <option value="claude">Claude Code</option>
-                        <option value="codex">Codex</option>
-                        <option value="gemini">Gemini</option>
-                        <option value="agy">Antigravity</option>
-                        <option value="opencode">OpenCode</option>
-                      </select>
-                      <button class="primary-button" type="button" data-action="spec-agent">
-                        Start agent on this spec
-                      </button>
-                    </span>
-                    <button class="text-button" type="button" id="spec-talk" data-action="spec-talk" hidden title="A read-only conversation with Antigravity about this spec. It can read and plan; anything it would change continues in its terminal.">Plan in Talk</button>
-                    <button class="secondary-button" type="button" data-action="handoff" title="Pass this spec to another agent with a written note">
-                      Hand off…
-                    </button>
-                  </div>
-                  <section id="sdlc-workflow" class="sdlc-workflow" aria-labelledby="sdlc-title">
-                    <div class="sdlc-heading"><h3 id="sdlc-title">Work through this spec</h3><button type="button" class="text-button" data-sdlc-action="refresh">Refresh evidence</button></div>
-                    <div id="sdlc-tabs" class="sdlc-tabs" role="group" aria-label="Lifecycle workspace"></div>
-                    <p id="sdlc-context" class="muted"></p>
-                    <p id="sdlc-status" role="status" aria-live="polite"></p>
-                    <div id="sdlc-content" class="sdlc-content" tabindex="-1"></div>
-                    <details class="sdlc-records"><summary>Evidence and delivery history</summary><ol id="sdlc-history"></ol><button class="secondary-button" type="button" data-sdlc-action="export">Export all evidence metadata</button></details>
-                  </section>
-                  <dl id="spec-facts" class="spec-facts" aria-label="Independent work observations"></dl>
-                  <div class="spec-move-controls">
-                    <label for="spec-stage-target">Move this spec to</label>
-                    <select id="spec-stage-target" aria-label="Target stage">
-                      <option value="spec">Spec</option><option value="plan">Plan</option><option value="build">Build</option><option value="verify">Verify</option><option value="review">Review</option><option value="ship">Ship</option>
-                    </select>
-                    <button class="secondary-button" type="button" id="spec-stage-move" data-action="move-spec-stage">Review move…</button>
-                  </div>
-                  <ol class="stage-bar" id="stage-bar" aria-label="Stage"></ol>
-                  <div class="stage-guide" id="stage-guide"></div>
-                  <div id="spec-work" class="spec-work">
-                    <p class="work-hint">Terminals and agents you open for this spec appear here. Agents start by reading the spec.</p>
-                  </div>
-                  <section id="spec-changes" class="spec-changes" aria-labelledby="spec-changes-title" hidden>
-                    <div class="spec-changes-head">
-                      <h3 id="spec-changes-title">Changes</h3>
-                      <span id="spec-changes-total" class="count-chip"></span>
-                    </div>
-                    <div id="spec-changes-list" class="spec-changes-list"></div>
-                  </section>
-                  <div id="spec-sessions" class="spec-sessions" hidden></div>
-                </div>
-              </section>
 
-              <div class="resize-handle resize-proof" id="resize-proof" aria-label="Resize the proof column"></div>
-              <aside class="panel spec-proof" aria-label="Criterion claims and changes">
-                <section>
-                  <div class="proof-head">
-                    <h3>Acceptance criteria</h3>
-                    <span id="criteria-progress" class="count-chip"></span>
-                  </div>
-                  <p class="proof-hint">Checkmarks record your claim. Use Verify to link and accept current evidence.</p>
-                  <ul id="criteria-list" class="criteria-list"></ul>
-                </section>
-                <section>
-                  <div class="proof-head">
-                    <h3>Changed files</h3>
-                    <span id="changes-count" class="count-chip"></span>
-                  </div>
-                  <ul id="changes-list" class="changes-list"></ul>
-                </section>
-                <section>
-                  <div class="proof-head"><h3>Audit trail</h3></div>
-                  <p class="proof-hint">Every change, who made it, and when. Stored in the spec file and in Git.</p>
-                  <ol id="audit-list" class="audit-list"></ol>
-                </section>
-                <section class="git-section">
-                  <div class="git-card">
-                  <div class="git-card-head">
-                    <h3>Git</h3>
-                    <button
-                      class="text-button"
-                      type="button"
-                      data-action="refresh-git"
-                      title="Refresh Git status"
-                      aria-label="Refresh Git status"
-                    >
-                      <svg class="icon" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
-                    </button>
-                  </div>
-                  <div id="git-branch" class="git-branch">Reading…</div>
-                  <div id="git-status" class="git-status"></div>
-                  <p id="git-remote" class="muted"></p>
-                  <button class="secondary-button full" type="button" data-action="git-transfer">Upload / download…</button>
-                  <button
-                    class="secondary-button full"
-                    type="button"
-                    data-action="commit"
-                    title="Commit changes (Alt+C)"
-                  >
-                    Commit changes…
-                  </button>
-                  <details class="git-recent">
-                    <summary>Recent commits</summary>
-                    <ol id="git-recent"></ol>
-                  </details>
-                </section>
-              </aside>
-            </div>
-          </section>
 
           <section id="view-studio" class="view" aria-label="Studio canvas workspace" data-focus="canvas">
             <div class="studio-focus" role="group" aria-label="Studio focus"><button id="studio-focus-canvas" class="text-button" type="button" aria-controls="studio-canvas-panel" aria-pressed="true">Canvas</button><button id="studio-focus-work" class="text-button" type="button" aria-controls="studio-work-panel" aria-pressed="false">Current work</button></div>
@@ -610,43 +389,6 @@
 
             </div>
           </section>
-
-          <section id="view-project" class="view">
-            <div class="project-layout">
-              <aside class="panel files-panel" aria-label="Project files">
-                <div class="rail-head">
-                  <h2>Files</h2>
-                  <span class="count-chip" id="file-count"></span>
-                </div>
-                <button class="secondary-button full" type="button" data-action="git-transfer">Upload / download…</button>
-                <input
-                  id="file-filter"
-                  class="list-search"
-                  type="search"
-                  placeholder="Find a file…"
-                  autocomplete="off"
-                  aria-label="Find a file"
-                />
-                <div id="file-tree" class="file-tree" role="tree"></div>
-                <p class="files-note">Shows what Git tracks or would track. Ignored files such as <code>.env</code> stay hidden.</p>
-              </aside>
-              <section class="project-main">
-                <div id="file-preview" class="panel file-preview" hidden>
-                  <div class="preview-head">
-                    <code id="preview-path"></code>
-                    <span class="preview-meta" id="preview-meta"></span>
-                    <button class="text-button" type="button" id="preview-mode" data-action="preview-mode" hidden>Raw</button>
-                    <button class="text-button" type="button" data-action="copy-file-path">Copy path</button>
-                    <button class="modal-close" type="button" data-action="close-preview" aria-label="Close preview">×</button>
-                  </div>
-                  <div id="preview-body" class="preview-body"></div>
-                </div>
-
-              </section>
-            </div>
-          </section>
-
-
 
 
 
@@ -717,9 +459,6 @@
             </div>
           </section>
 
-
-
-
         </div>
       </main>
       <div id="bench-right-resize" class="resize-handle" aria-label="Resize details panel" hidden></div>
@@ -728,13 +467,14 @@
         <div class="bench-tabs" role="tablist" aria-label="Spec details">
           <button type="button" id="bench-tab-plan" role="tab" aria-controls="bench-plan" aria-selected="true" data-bench-tab="plan">Plan</button>
           <button type="button" id="bench-tab-review" role="tab" aria-controls="bench-review" aria-selected="false" tabindex="-1" data-bench-tab="review">Review</button>
-          <button type="button" id="bench-tab-preview" role="tab" hidden aria-controls="bench-preview" aria-selected="false" tabindex="-1" data-bench-tab="preview">Preview</button>
+          <button type="button" id="bench-tab-preview" role="tab" aria-controls="bench-preview" aria-selected="false" tabindex="-1" data-bench-tab="preview">Preview</button>
         </div>
         <section id="bench-plan" role="tabpanel" aria-labelledby="bench-tab-plan">
           <div id="bench-plan-spec"><p class="muted">Select a spec from the work tree.</p></div>
         </section>
         <section id="bench-review" role="tabpanel" aria-labelledby="bench-tab-review" hidden>
           <div id="bench-review-body"></div>
+          <section id="bench-evidence-history" hidden><h3>Evidence and delivery history</h3><ol id="sdlc-history"></ol></section>
           <dialog id="bench-review-diff" class="modal" aria-labelledby="bench-review-diff-title">
             <div class="modal-content">
               <div class="modal-heading"><h2 id="bench-review-diff-title">Git diff</h2>
@@ -749,6 +489,24 @@
           </dialog>
         </section>
         <section id="bench-preview" role="tabpanel" aria-labelledby="bench-tab-preview" hidden>
+          <button class="text-button" type="button" id="bench-files-mode" aria-controls="bench-files-panel" aria-pressed="false">Files</button>
+          <div id="bench-files-panel" hidden><aside class="panel files-panel" aria-label="Project files">
+                <div class="rail-head">
+                  <h2>Files</h2>
+                  <span class="count-chip" id="file-count"></span>
+                </div>
+                <input
+                  id="file-filter"
+                  class="list-search"
+                  type="search"
+                  placeholder="Filter files…"
+                  autocomplete="off"
+                  aria-label="Filter the file tree"
+                />
+                <div id="file-tree" class="file-tree" role="tree"></div>
+                <p id="tree-selected-path" hidden></p><button class="text-button" type="button" data-action="copy-file-path" hidden>Copy path</button>
+                <p class="files-note">Shows what Git tracks or would track. Ignored files such as <code>.env</code> stay hidden.</p>
+              </aside></div>
           <div id="bench-preview-mount"></div>
         </section>
       </aside>
@@ -911,6 +669,7 @@
         <div id="bench-launch-assignment" hidden>
           <label class="field-label">Spec <select name="specId"><option value="">Scratch</option></select></label>
           <label class="field-label" id="bench-launch-role">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
+            <label id="bench-launch-talk" hidden><input type="checkbox" name="talk"> Plan in Antigravity Talk</label>
         </div>
         <div id="custom-command-fields" class="custom-fields" hidden>
           <label class="field-label" for="custom-command">Executable</label
@@ -982,17 +741,7 @@
         <div class="modal-footer"><button class="secondary-button" type="button" data-close="bench-draft-review-dialog">Cancel</button><button class="primary-button" type="submit">Publish reviewed draft</button></div>
       </form>
     </dialog>
-    <dialog id="bench-plan-task-dialog" class="modal">
-      <form class="modal-content" id="bench-plan-task-form">
-        <div class="modal-heading"><h2>New spec task</h2>
-          <button class="modal-close" type="button" data-close="bench-plan-task-dialog" aria-label="Close">×</button>
-        </div>
-        <label class="field-label">Title <input name="title" maxlength="200" required></label>
-        <label class="field-label">Brief <textarea name="brief" rows="3"></textarea></label>
-        <p role="alert" data-draft-error hidden></p>
-        <div class="modal-footer"><button class="primary-button" type="submit">Create task</button></div>
-      </form>
-    </dialog>
+
 
     <dialog id="spec-dialog" class="modal">
       <form id="spec-dialog-form" class="modal-content">
@@ -1041,24 +790,7 @@
       </form>
     </dialog>
 
-    <dialog id="evidence-dialog" class="modal">
-      <form id="evidence-dialog-form" class="modal-content">
-        <div class="modal-heading">
-          <div>
-            <span class="section-kicker">RECORD A CRITERION CLAIM</span>
-            <h2 id="evidence-dialog-title">How do you know it works?</h2>
-            <p id="evidence-dialog-sub"></p>
-          </div>
-          <button class="modal-close" type="button" data-close="evidence-dialog" aria-label="Close">×</button>
-        </div>
-        <label class="field-label" for="evidence-text">Evidence <span>(recommended: a test name, a link, or what you checked)</span></label
-        ><textarea id="evidence-text" rows="3" placeholder="login.test.ts passes; checked on a phone"></textarea>
-        <div class="modal-footer">
-          <button class="secondary-button" type="button" data-close="evidence-dialog">Cancel</button
-          ><button class="primary-button" type="submit" id="evidence-dialog-submit">Record as complete</button>
-        </div>
-      </form>
-    </dialog>
+
 
     <dialog id="git-transfer-dialog" class="modal">
       <div class="modal-content">
@@ -1294,6 +1026,7 @@
 
     <dialog id="task-dialog" class="modal">
       <form id="task-form" class="modal-content">
+        <input type="hidden" name="specId"><p id="task-spec-label" hidden></p>
         <div class="modal-heading">
           <div>
             <span class="section-kicker">NEW TASK</span>
@@ -1413,35 +1146,7 @@
       </form>
     </dialog>
 
-    <dialog id="inbox-dialog" class="modal">
-      <div class="modal-content">
-        <div class="modal-heading">
-          <div>
-            <span class="section-kicker">SESSION</span>
-            <h2 id="inbox-title">Recorded attention</h2>
-            <p id="inbox-subtitle"></p>
-          </div>
-          <button
-            class="modal-close"
-            type="button"
-            data-close="inbox-dialog"
-            aria-label="Close"
-          >
-            ×
-          </button>
-        </div>
-        <div id="inbox-content" class="inbox-content"></div>
-        <div class="modal-footer">
-          <button
-            class="secondary-button"
-            type="button"
-            data-close="inbox-dialog"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-    </dialog>
+
 
     <dialog id="paste-dialog" class="modal">
       <div class="modal-content">

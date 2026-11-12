@@ -1,5 +1,5 @@
 // Real Git, local bare remote, isolated home: no credentials or external network.
-import { test, expect } from "./workspace-navigation.js";
+import { test, expect, runPaletteCommand } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,8 +54,7 @@ test("a person checks, reviews, uploads and downloads without losing diverged wo
     if (request.method() === "POST" && request.url().endsWith("/api/git/transfer")) actions.push(request.postDataJSON().action);
   });
   await page.goto(url);
-  await page.keyboard.press("Alt+Digit2");
-  const open = () => page.getByRole("button", { name: "Upload / download…", exact: true }).click();
+  const open = () => runPaletteCommand(page, "Review Git upload / download");
   const status = page.locator("#git-transfer-status");
   const upload = page.locator("#git-transfer-upload");
   const download = page.locator("#git-transfer-download");

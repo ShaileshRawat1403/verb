@@ -232,7 +232,7 @@ test("a resumed attempt names the same conversation and keeps the session", asyn
 });
 
 test("turning the stream off clears at once, leaves the log, and reports each device", async ({ page, browser }) => {
-  const other = await browser.newContext();
+  const other = await browser.newContext({ userAgent: "Firefox/123.0 (Linux)" });
   const second = await other.newPage();
   await second.goto(url);
   await openChat(second, session);
@@ -248,7 +248,8 @@ test("turning the stream off clears at once, leaves the log, and reports each de
   await expect(chat.locator(".conv-devices")).toContainText("Stream turned off on this device");
   await expect(chat.locator(".conv-devices")).toContainText("not yet confirmed cleared");
   await expect(chat.locator(".conv-devices")).toContainText("last seen");
-  const waiting = await chat.locator(".conv-devices li[data-state='not_confirmed']").count();
+  const otherDevice = chat.locator(".conv-devices li").filter({ hasText: "Firefox on Linux" });
+  await expect(otherDevice).toHaveAttribute("data-state", "not_confirmed");
   expect(claudeLogs().map((f) => readFileSync(f))).toEqual(logs);
   const view = (await call("GET", `/api/terminals/${session}/conversation`)).body;
   expect(view.items).toEqual([]);
@@ -257,8 +258,7 @@ test("turning the stream off clears at once, leaves the log, and reports each de
 
   await other.setOffline(false);
   await expect(second.locator(".conv-agent")).toHaveCount(0, { timeout: 10000 });
-  // The reconnected browser cleared and said so; tabs closed earlier can never say so.
-  await expect(chat.locator(".conv-devices li[data-state='not_confirmed']")).toHaveCount(waiting - 1, { timeout: 15000 });
+  await expect(otherDevice).toHaveAttribute("data-state", "acknowledged", { timeout: 15000 });
   await other.close();
   await chat.getByRole("button", { name: "Turn on for this project" }).click();
   await expect(chat.locator(".conv-agent").first()).toBeVisible();

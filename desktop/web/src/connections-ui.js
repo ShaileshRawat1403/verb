@@ -481,9 +481,6 @@ export function initConnections({ $, api, escapeHtml: esc, useInStudio }) {
     invalidate();
     say("Review discarded. Nothing was sent to the service.");
   };
-  $("#connection-use").onclick = () => {
-    if (result) useInStudio(result);
-  };
   $("#connection-copy").onclick = async () => {
     if (!result) return;
     try {
@@ -494,6 +491,16 @@ export function initConnections({ $, api, escapeHtml: esc, useInStudio }) {
     }
   };
   return {
+    commands() {
+      const reviewedResult = result;
+      if (!reviewedResult) return [];
+      return [{
+        title: "Attach connection result to Studio draft",
+        run: () => {
+          if (result === reviewedResult) useInStudio(reviewedResult);
+        },
+      }];
+    },
     onShowView(view) {
       clearInterval(timer);
       if (view !== "connections") return;

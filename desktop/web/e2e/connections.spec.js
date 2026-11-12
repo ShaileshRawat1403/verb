@@ -1,6 +1,6 @@
 // UI → owner API → official Rust MCP client → official TypeScript SDK server.
 // The HTTP loopback exception is compiled only in the synthetic test binary, never releases.
-import { test, expect, openWorkspaceView } from "./workspace-navigation.js";
+import { test, expect, openWorkspaceView, runPaletteCommand } from "./workspace-navigation.js";
 import {
   McpServer,
   WebStandardStreamableHTTPServerTransport,
@@ -281,14 +281,10 @@ test("a person connects, reviews a call, inspects the result and attaches a Stud
     path: testInfo.outputPath("mcp-desktop.png"),
     fullPage: true,
   });
-  await page
-    .getByRole("button", { name: "Use in Studio draft", exact: true })
-    .click();
+  await runPaletteCommand(page, "Attach connection result to Studio draft");
+  await openWorkspaceView(page, "Studio");
   await expect(page.locator("#studio-context-text")).toContainText(
     "Exactly what I approved",
-  );
-  await expect(page.locator("#studio-message")).toContainText(
-    "Nothing was sent to an agent",
   );
 });
 

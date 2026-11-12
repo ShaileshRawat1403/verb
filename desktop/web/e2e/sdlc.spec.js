@@ -30,8 +30,14 @@ test.beforeAll(async ({ request }) => {
   expect(response.ok()).toBeTruthy(); spec = await response.json();
 });
 test.afterAll(() => server?.kill());
-const tab = (page, name) => page.locator("#sdlc-tabs").getByRole("button", { name, exact: true }).click();
-const action = (page, name) => page.locator("#sdlc-content").getByRole("button", { name, exact: true }).click();
+async function action(page, name) {
+  const menu = page.locator("#bench-review").getByText("Evidence actions", { exact: true });
+  await menu.click();
+  await page.locator("#bench-review").getByRole("button", { name, exact: true }).click();
+}
+const review = page => page.locator("#bench-review");
+const history = page => page.locator("#sdlc-history");
+const runCheck = page => review(page).getByRole("button", { name: "Run a check", exact: true }).click();
 async function save(page) { await page.locator("#sdlc-submit").click(); await expect(page.locator("#sdlc-dialog")).not.toBeVisible({ timeout: 30_000 }); }
 async function flow(request) { const response = await request.get(`${origin}/api/specs/${spec.id}/sdlc`, { headers }); expect(response.ok()).toBeTruthy(); return response.json(); }
 
@@ -83,8 +89,8 @@ test("Studio reviews a real project check before execution and keeps evidence ac
   expect(runs).toBe(1);
   await expect(page.locator("#view-studio")).toBeVisible();
   await page.getByRole("button", { name: "Review evidence", exact: true }).click();
-  await expect(page.locator("#sdlc-content")).toContainText("Evidence for each promise");
-  await expect(page.locator(".sdlc-result")).toHaveText("Not accepted · passed · current");
+  await expect(review(page).getByRole("heading", { name: "Criterion proof", exact: true })).toBeVisible();
+  await expect(review(page)).toContainText("Pass awaiting acceptance");
   const response = await request.get(`${origin}/api/specs/${chosen.id}/sdlc`, { headers });
   const result = await response.json();
   expect(result.criteria[0].evidence.source).toBe("observed");
@@ -107,59 +113,63 @@ test("Studio reviews a real project check before execution and keeps evidence ac
 
 test("complete evidence, acceptance, review and delivery workflow retains provenance and becomes stale after code changes", async ({ page, request }) => {
   test.setTimeout(120_000);
-  await page.goto(url); await page.keyboard.press("Alt+Digit1");
-  await page.locator(`#spec-work-items [data-spec-id="${spec.id}"]`).click();
-  await expect(page.locator("#sdlc-context")).toContainText("code committed");
-  await tab(page, "Plan"); await action(page, "Write plan…");
+  await page.goto(url);
+  const unlinked = page.locator('#bench-work-tree [data-bench-group="unlinked"]');
+  await unlinked.locator("summary").click();
+  await unlinked.locator(`[data-bench-spec="${spec.id}"]`).click();
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
+  await action(page, "Record implementation plan");
   await page.locator("#sdlc-text").fill("Implement the answer, run the Python test, review the source, then report the fixture deployment and health.");
   await page.locator("#sdlc-target").fill("phone fixture"); await page.locator("#sdlc-goal").selectOption("service"); await save(page);
-  await expect(page.locator("#sdlc-content")).toContainText("service · phone fixture");
-  await tab(page, "Verify"); await action(page, "Run a check…"); await page.locator("#sdlc-check").selectOption("python"); await save(page);
-  await expect(page.locator(".sdlc-criteria")).toContainText("Verb-observed");
-  await expect(page.locator(".sdlc-result")).toHaveText("Not accepted · passed · current");
-  await page.getByRole("button", { name: "Accept this evidence…" }).click();
+  await runCheck(page);
+  await expect(page.locator("#sdlc-check-source")).toContainText("code committed");
+  await page.locator("#sdlc-check").selectOption("python"); await save(page);
+  await expect(review(page)).toContainText("Verb-observed");
+  await expect(review(page)).toContainText("Pass awaiting acceptance");
+  await review(page).getByRole("button", { name: "Accept evidence", exact: true }).click();
   await page.locator("#sdlc-text").fill("The observed assertion directly checks the promised answer on this source revision."); await save(page);
-  await expect(page.locator(".sdlc-result")).toHaveText("Accepted · passed · current");
-  await tab(page, "Review"); await action(page, "Inspect implementation changes");
-  await expect(page.locator("#sdlc-diff")).toContainText("return 42");
-  await action(page, "Record review…"); await page.locator("#sdlc-decision").selectOption("approved");
+  await expect(review(page)).toContainText("Accepted proof");
+  await review(page).getByRole("button", { name: "Changes", exact: true }).click();
+  await expect(page.locator("#bench-review-diff pre")).toContainText("return 42");
+  await page.keyboard.press("Escape");
+  await action(page, "Record implementation review"); await page.locator("#sdlc-decision").selectOption("approved");
   await page.locator("#sdlc-text").fill("Reviewed the implementation and accepted check. No additional execution authority was granted."); await save(page);
-  await expect(page.locator("#sdlc-content")).toContainText("Review: approved");
-  await tab(page, "Ship"); await action(page, "Check remote and record observation…"); await save(page);
-  await expect(page.locator("#sdlc-content")).toContainText("service · phone fixture");
-  await expect(page.locator("#sdlc-content")).toContainText("Implementation present in the last explicit remote check");
-  await action(page, "Record delivery report…"); await page.locator("#sdlc-milestone").selectOption("health");
+  await action(page, "Check remote"); await save(page);
+  await action(page, "Record delivery report"); await page.locator("#sdlc-milestone").selectOption("health");
   await page.locator("#sdlc-text").fill("Fixture health report"); await page.locator("#sdlc-submit").click();
   await expect(page.locator("#sdlc-dialog-error")).toContainText("successful deployment");
   await page.locator("#sdlc-milestone").selectOption("deployment"); await save(page);
-  await action(page, "Record delivery report…"); await page.locator("#sdlc-milestone").selectOption("health");
+  await action(page, "Record delivery report"); await page.locator("#sdlc-milestone").selectOption("health");
   await page.locator("#sdlc-text").fill("A person checked the fixture target; this is not an independent network probe."); await save(page);
-  await expect(page.locator("#sdlc-content")).toContainText("Delivery conditions recorded");
+  await action(page, "Evidence history");
+  await expect(history(page)).toContainText("health");
   const complete = await flow(request); expect(complete.ready).toBe(true); expect(complete.goal).toBe("service");
-  const exported = await request.get(`${origin}/api/specs/${spec.id}/sdlc-export`, { headers });
-  const exportedText = await exported.text();
+  const downloadPromise = page.waitForEvent("download");
+  await action(page, "Export evidence metadata");
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe(`spec-${spec.id}-evidence.json`);
+  const exportedText = readFileSync(await download.path(), "utf8");
   expect(exportedText).not.toContain("NO_RAW_LOG_SDLC_MARKER"); expect(exportedText).not.toContain(TOKEN);
   expect(exportedText).not.toContain("python3 -m unittest"); expect(JSON.parse(exportedText).records).toHaveLength(7);
-  // A new deployment cannot reuse the previous deployment's health attestation.
-  await action(page, "Record delivery report…"); await page.locator("#sdlc-milestone").selectOption("deployment");
+  await action(page, "Record delivery report"); await page.locator("#sdlc-milestone").selectOption("deployment");
   await page.locator("#sdlc-text").fill("Second deployment to the same target"); await save(page);
   expect((await flow(request)).ready).toBe(false);
-  await action(page, "Record delivery report…"); await page.locator("#sdlc-milestone").selectOption("health");
+  await action(page, "Record delivery report"); await page.locator("#sdlc-milestone").selectOption("health");
   await page.locator("#sdlc-result").selectOption("failed");
   await page.locator("#sdlc-text").fill("Second deployment failed its health check"); await save(page);
-  await expect(page.locator("#sdlc-content")).toContainText("Delivery failure reported");
   const listing = await request.get(`${origin}/api/specs`, { headers });
   expect(JSON.stringify((await listing.json()).summaries[spec.id].attention)).toContain("delivery needs attention");
   writeFileSync(join(repo, "feature.py"), "def answer():\n    return 43\n"); git("commit", "-qam", "change implementation after review");
-  await tab(page, "Verify"); await expect(page.locator(".sdlc-result")).toHaveText("Not accepted · passed · stale", { timeout: 20_000 });
-  await expect(page.getByRole("button", { name: "Accept this evidence…" })).toHaveCount(0);
-  await action(page, "Run a check…"); await page.locator("#sdlc-check").selectOption("python"); await save(page);
-  await expect(page.locator(".sdlc-result")).toHaveText("Not accepted · failed · current");
-  await tab(page, "Review"); await action(page, "Record review…");
+  await expect(review(page)).toContainText("Stale proof", { timeout: 20_000 });
+  await expect(review(page).getByRole("button", { name: "Accept evidence" })).toHaveCount(0);
+  await runCheck(page); await page.locator("#sdlc-check").selectOption("python"); await save(page);
+  await expect(review(page).locator(".bench-proof-state")).toHaveText("Failed check");
+  await action(page, "Record implementation review");
   await expect(page.locator('#sdlc-decision option[value="approved"]')).toBeDisabled(); await page.keyboard.press("Escape");
-  await page.setViewportSize({ width: 390, height: 844 }); await tab(page, "Verify");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator("#bench-toggle-right").click();
+  await expect(review(page)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-  await page.locator("#sdlc-workflow").scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("sdlc-verification-phone.png") });
 });
 

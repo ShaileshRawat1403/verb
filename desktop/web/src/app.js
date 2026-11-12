@@ -42,7 +42,6 @@ import {
   takeInputChunk,
   agentDisplayName,
   agentMark,
-  checksHtml,
   escapeHtml,
   filterSessions,
   filterTasks,
@@ -65,7 +64,7 @@ let shell = null;
 let benchTerminals = null;
 let studio = null;
 let connections = null;
-// The Project view (project-ui.js): file tree, preview and context hub.
+// Preview file tree and Context hub (project-ui.js).
 let project = null;
 // The Host view (host-ui.js): read-only machine health.
 let host = null;
@@ -272,6 +271,9 @@ async function api(method, path, body) {
 }
 
 function showView(destination) {
+  if (destination === "specs") destination = "bench-board";
+  if (destination === "project" && shell) return shell.openFiles();
+  if (destination === "overview" && shell) return shell.openReview();
   const settings = ["host", "connections", "tasks", "phone", "session-history"];
   const section = settings.includes(destination) ? destination : "host";
   const view = settings.includes(destination) ? "settings" : destination === "memory" ? "context" : destination;
@@ -281,7 +283,6 @@ function showView(destination) {
   });
   if (view === "settings" && section === "phone") renderPhoneSettings();
   $("#app").classList.toggle("studio-open", view === "studio");
-  $("#app").classList.toggle("specs-open", view === "specs");
   document
     .querySelectorAll(".view")
     .forEach((element) =>
@@ -294,7 +295,6 @@ function showView(destination) {
     else element.removeAttribute("aria-current");
   });
   $("#breadcrumb-view").textContent = view[0].toUpperCase() + view.slice(1);
-  if (view === "overview") refreshChecks();
   if (["tasks", "session-history"].includes(destination) || view === "context") refreshState();
   workbench?.onShowView(view);
   project?.onShowView(view);
@@ -304,7 +304,7 @@ function showView(destination) {
   shell?.onView();
   if (shell) renderTerminalTabs();
   benchTerminals?.render();
-  if (view === "sessions" || view === "specs") {
+  if (view === "sessions") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
       fitTerminals();
@@ -377,9 +377,6 @@ function render() {
   }
   const activeCount = sessions.filter(isActiveSession).length;
   $("#view-sessions").classList.toggle("has-sessions", activeCount > 0);
-  const attention = tasks.filter(
-    (task) => task.needsHelp || task.status === "needs review",
-  ).length;
   $("#sidebar-project").textContent = project.name || "Project";
   $(".ws-mark").textContent = (project.name || "v").trim().charAt(0).toLowerCase() || "v";
   $(".workspace-head").title =
@@ -392,42 +389,8 @@ function render() {
   $("#top-branch").title = git.detail;
   $("#top-changes").textContent = git.changes;
 
-  $("#stat-sessions").textContent = activeCount;
-  $("#stat-tasks").textContent = tasks.filter(
-    (task) => task.status !== "done",
-  ).length;
-  $("#stat-attention").textContent = attention;
   $("#session-count").textContent = activeCount;
   $("#task-count").textContent = tasks.length;
-
-  const activeSessions = sessions.filter(isActiveSession);
-  $("#overview-sessions").innerHTML = activeSessions.length
-    ? activeSessions
-        .slice(0, 3)
-        .map((session) => sessionItem(session, true))
-        .join("")
-    : emptyState(
-        "terminal",
-        "Nothing running",
-        "Open a terminal or start an agent from a spec.",
-      );
-  $("#overview-tasks").innerHTML = tasks.length
-    ? tasks
-        .filter((task) => task.status !== "done")
-        .slice(0, 3)
-        .map((task) => taskItem(task, true))
-        .join("") ||
-      emptyState(
-        "check",
-        "All caught up",
-        "Completed tasks remain in the task history.",
-      )
-    : emptyState(
-        "list",
-        "Nothing to track yet",
-        "Give an agent a task that can survive a handoff.",
-        '<button class="text-button" type="button" data-action="new-task">Create a task →</button>',
-      );
   renderListResults();
   // One note per line (that is how they are appended); each keeps its own inline Markdown.
   const notes = (memory || "").split("\n").filter((line) => line.trim());
@@ -714,14 +677,12 @@ function mountLaunchedSession(session) {
   }
   addTerminal(session);
   selectTerminal(session.id);
-  // The spec workbench shows terminals in place; stay there rather than jumping to Sessions.
-  showView(ui.view === "specs" ? "specs" : "sessions");
+  showView("sessions");
   render();
   refreshState(true);
 }
 
 function renderChecks(report) {
-  $("#checks-list").innerHTML = checksHtml(report);
   shell?.reviewChecks(report);
 }
 
@@ -743,9 +704,11 @@ async function refreshChecks(silent = true, attempt = 0) {
   }
 }
 
+let sessionDetailRequest = 0;
 async function activateSession(id, { resume = true } = {}) {
   const session = ui.state?.sessions.find((item) => item.id === id);
   if (!session) return;
+  const detailRequest = ++sessionDetailRequest;
   if (hasTerminalReplay(session)) {
     showView("sessions");
     if (!ui.terminals.has(id)) addTerminal(session);
@@ -773,12 +736,13 @@ async function activateSession(id, { resume = true } = {}) {
     return;
   }
   try {
-    const inbox = await api("GET", `/api/inbox/${encodeURIComponent(id)}`);
+    const inbox = session.agent === "shell" ? { items: [] } : await api("GET", `/api/inbox/${encodeURIComponent(id)}`);
+    if (detailRequest !== sessionDetailRequest) return;
     const name = agentDisplayName(session.agent);
     $("#inbox-title").textContent = `${name} session ${id.slice(0, 8)}`;
     $("#inbox-subtitle").textContent =
       session.state === "interrupted"
-        ? "It stopped when Verb last restarted, so its terminal is gone."
+        ? "Recovery is unconfirmed. There is no terminal replay."
         : "This session has ended.";
     const items = inbox.items.length
       ? `<p class="inbox-lead">It left these for you:</p>${inbox.items
@@ -804,7 +768,10 @@ async function activateSession(id, { resume = true } = {}) {
       (notHere
         ? `<p class="inbox-note">${escapeHtml(name)} is unavailable in this execution environment, so this conversation cannot be continued here. Ask the host operator to provision it, or continue on the machine where it ran.</p>`
         : actions);
-    showDialog("inbox-dialog");
+    showView("session-history");
+    const detail = $("#session-history-detail");
+    detail.hidden = false;
+    detail.focus();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -822,7 +789,7 @@ $("#inbox-content")?.addEventListener("click", async (event) => {
   if (!button) return;
   const agent = button.dataset.inboxLaunch;
   const args = button.dataset.inboxContinue ? CONTINUE_ARGS[agent] : [];
-  closeDialog("inbox-dialog");
+  $("#session-history-detail").hidden = true;
   try {
     const result = await api("POST", "/api/terminals", { agent, isolated: false, args });
     mountLaunchedSession({
@@ -1315,13 +1282,13 @@ function renderTerminalTabs() {
     strip.setAttribute("aria-label", "Terminals");
     grid.prepend(strip);
   }
-  const tabMount = ui.view === "specs" ? grid : $("#bench-terminal-tabs");
+  const tabMount = $("#bench-terminal-tabs");
   if (strip.parentElement !== tabMount) tabMount.prepend(strip);
   strip.hidden = ui.terminals.size === 0 && ui.talks.size === 0;
   const menu = $("#bench-terminal-menu");
   $("#bench-terminal-id").textContent = ui.focusedTerminal ? `Session ${ui.focusedTerminal}` : "";
   const activeTerminal = ui.terminals.get(ui.focusedTerminal);
-  menu.hidden = !["sessions", "specs"].includes(ui.view) || !activeTerminal;
+  menu.hidden = ui.view !== "sessions" || !activeTerminal;
   if (menu.hidden) menu.open = false;
   menu.querySelector('[data-bench-terminal-action="search"]').setAttribute("aria-pressed",
     String(activeTerminal?.tile.querySelector(".terminal-search-bar").hidden === false));
@@ -1828,12 +1795,13 @@ document.addEventListener("click", async (event) => {
   if (actionButton) {
     if (actionButton.dataset.action === "new-session") {
       $("#session-launch-error").hidden = true;
+      benchTerminals?.openLaunch();
       updateLaunchForm();
       loadInstalledAgents();
-      return benchTerminals?.openLaunch();
+      return;
     }
     if (actionButton.dataset.action === "new-task")
-      return showDialog("task-dialog");
+      return openTask();
     if (actionButton.dataset.action === "add-note")
       return showDialog("note-dialog");
     if (actionButton.dataset.action === "refresh-checks")
@@ -2006,7 +1974,13 @@ function updateLaunchForm() {
     form.querySelector('input[value="shell"]').checked = true;
   }
   const agent = form.elements.agent.value;
-  $("#bench-launch-role").hidden = ["shell", "custom"].includes(agent);
+  const talk = form.elements.talk;
+  const talkAvailable = agent === "agy" && !!form.elements.specId.value;
+  $("#bench-launch-talk").hidden = !talkAvailable;
+  talk.disabled = !talkAvailable;
+  if (!talkAvailable) talk.checked = false;
+  if (talk.checked) { isolated.checked = false; isolated.disabled = true; }
+  $("#bench-launch-role").hidden = talk.checked || ["shell", "custom"].includes(agent);
   $("#custom-command-fields").hidden = agent !== "custom";
   $("#launch-project").textContent =
     ui.state?.project.name || "Current project";
@@ -2016,7 +1990,7 @@ function updateLaunchForm() {
       ? `Runs on ${deployment.name}`
       : "Runs on this computer";
   form.querySelector('[type="submit"]').textContent =
-    agent === "custom" ? "Open CLI →" : `Open ${agentDisplayName(agent)} →`;
+    talk.checked ? "Open Antigravity Talk →" : agent === "custom" ? "Open CLI →" : `Open ${agentDisplayName(agent)} →`;
 }
 document
   .querySelectorAll('#session-dialog input[name="agent"]')
@@ -2024,6 +1998,9 @@ document
     $("#session-launch-error").hidden = true;
     updateLaunchForm();
   }));
+
+$("#session-form").elements.specId.addEventListener("change", updateLaunchForm);
+$("#session-form").elements.talk.addEventListener("change", updateLaunchForm);
 
 function launchError(message) {
   const error = $("#session-launch-error");
@@ -2053,6 +2030,15 @@ $("#session-form").addEventListener("submit", async (event) => {
   button.disabled = true;
   button.textContent = "Opening…";
   try {
+    if (agent === "agy" && specId && form.elements.talk.checked) {
+      const { talkId } = await api("POST", `/api/specs/${specId}/talk`);
+      closeDialog("session-dialog");
+      form.reset();
+      showView("sessions");
+      mountTalk(talkId, { focus: true });
+      await workbench.refreshSpecs();
+      return;
+    }
     const result = specId
       ? await api("POST", `/api/specs/${specId}/agent`, { agent, role, isolated })
       : await api("POST", "/api/terminals", {
@@ -2090,11 +2076,25 @@ $("#session-form").addEventListener("submit", async (event) => {
   }
 });
 
+function openTask(specId = "") {
+  const form = $("#task-form");
+  form.reset();
+  form.elements.specId.value = specId;
+  $("#task-spec-label").hidden = !specId;
+  $("#task-spec-label").textContent = specId ? `Linked to spec ${specId}` : "";
+  showDialog("task-dialog");
+}
+
 $("#task-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const specId = form.elements.specId.value;
+  const button = form.querySelector("[type=submit]");
+  if (button.disabled) return;
+  button.disabled = true;
   try {
     const result = await api("POST", "/api/tasks", {
+      ...(specId ? { specId } : {}),
       title: form.elements.title.value,
       brief: form.elements.brief.value,
     });
@@ -2102,11 +2102,11 @@ $("#task-form").addEventListener("submit", async (event) => {
     form.reset();
     ui.selectedTask = result.id;
     await refreshState();
-    showView("tasks");
+    if (!specId) showView("tasks");
     toast(result.message);
   } catch (error) {
     toast(error.message, "error");
-  }
+  } finally { button.disabled = false; }
 });
 
 $("#note-form").addEventListener("submit", async (event) => {
@@ -2202,17 +2202,6 @@ function initResizers() {
     initial: () => $(".sidebar").getBoundingClientRect().width,
     axis: "x",
   });
-  makeResizer({
-    handle: $("#resize-proof"),
-    target: $(".specs-layout"),
-    name: "--proof-w",
-    key: "verb.layout.proof",
-    min: 240,
-    max: 520,
-    initial: () => $(".spec-proof").getBoundingClientRect().width,
-    axis: "x",
-    direction: -1,
-  });
   const grid = $("#terminal-grid");
   const termHandle = document.createElement("span");
   termHandle.className = "resize-handle term-resize";
@@ -2277,19 +2266,6 @@ async function loadInstalledAgents() {
     ui.installed = {};
     ui.agentCapabilities = { unavailable: true };
   }
-  const missing = (agent) => !agentAvailability(ui.agentCapabilities, agent).available;
-  document.querySelectorAll("#spec-agent option, #talk-agent option").forEach((option) => {
-    option.disabled = missing(option.value);
-    option.dataset.originalText ??= option.textContent;
-    option.textContent = option.dataset.originalText + (option.disabled ? " · unavailable here" : "");
-  });
-  for (const selector of ["#spec-agent", "#talk-agent"]) {
-    const picker = $(selector);
-    if (picker?.selectedOptions[0]?.disabled) {
-      const first = [...picker.options].find((o) => !o.disabled);
-      if (first) picker.value = first.value;
-    }
-  }
   updateLaunchForm();
 }
 
@@ -2343,7 +2319,7 @@ async function bootstrap() {
   // Late-bound cross-links between views (Ask Verb opens specs and files).
   const extras = {};
   host = initHost({ api, escapeHtml, $ });
-  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
+  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, openPreview: path => shell.openPreview(path) });
   initProjectSwitcher({ $, showDialog, closeDialog });
   workbench = initWorkbench({
     refreshState,
@@ -2366,10 +2342,10 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
+  shell = initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
+    benchTerminals?.openLaunch(id);
     updateLaunchForm();
     loadInstalledAgents();
-    benchTerminals?.openLaunch(id);
   } });
   benchTerminals = initBenchTerminals({ $, api, ui, workbench, showDialog, closeDialog, refreshState, toast,
     toggleSplit() { ui.splitTerminals = !ui.splitTerminals; updateTerminalFocus(); },
@@ -2377,8 +2353,11 @@ async function bootstrap() {
   $("#bench-terminal-menu").addEventListener("toggle", event => {
     if (event.target.open) { renderTerminalTabs(); benchTerminals?.render(); }
   });
+  extras.openBenchSpec = shell.focusSpec;
+  extras.openBenchLaunch = id => { benchTerminals.openLaunch(id); updateLaunchForm(); };
   extras.shellCommands = () => [
-    ...Object.entries({ Studio: "studio", Specs: "specs", "Project files": "project", Overview: "overview", Host: "host",
+    ...connections.commands(),
+    ...Object.entries({ Studio: "studio", Board: "bench-board", "Project files": "project", Review: "overview", Host: "host",
       Connections: "connections", Tasks: "tasks", "Phone pairing": "phone", "Session history": "session-history" }).map(([label, view]) => ({
         title: `Open ${label}`, run: () => showView(view),
       })),
@@ -2422,13 +2401,10 @@ async function bootstrap() {
     history.replaceState(null, "", url.pathname + url.search);
   }
   const views = ["sessions", "bench-board", "needs-you", "context", "memory", "settings",
-    "specs", "project", "studio", "overview", "host", "connections", "tasks", "phone", "session-history"];
+    "specs", "project", "overview", "host", "connections", "tasks", "phone", "session-history"];
   showView(views.includes(linkedView) ? linkedView : ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);
-  setInterval(() => {
-    if (ui.view === "overview") refreshChecks();
-  }, 60000);
   setInterval(updatePhoneStatus, 1000);
   setInterval(refreshPhoneStatus, 2500);
 }

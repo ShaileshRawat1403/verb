@@ -31,6 +31,7 @@ test.beforeAll(async () => {
     "commit", "-qm", "Start"]);
   const bin = join(fixture, "bin");
   mkdirSync(bin);
+  writeFileSync(join(bin, "agy"), "#!/bin/sh\nprintf '%s\\n' '{}'\n", { mode: 0o755 });
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nprintf '\\033[?2004hAgent ready\\n'\nexec cat\n", { mode: 0o755 });
   writeFileSync(join(project, "specs/099-legacy.md"),
     "---\nid: 099\ntitle: Legacy sample\nstage: plan\n---\n## Acceptance criteria\n- [ ] A legacy criterion\n");
@@ -133,7 +134,7 @@ for (const width of [1440, 390]) {
       if (mobile) await navigation.click();
       const group = nav.locator('details[data-bench-group="001-bench-consolidation"]');
       await group.locator("summary").click({ position: { x: 6, y: 8 } });
-      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+13/);
+      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+14/);
       await expect(nav.locator('[data-bench-group="unlinked"]')).not.toHaveAttribute("open", "");
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
@@ -236,8 +237,7 @@ for (const width of [1440, 390]) {
       await shot("settings");
       await expect(page.getByRole("checkbox", { name: "Use previous navigation" })).toHaveCount(0);
       await expect(app).toHaveClass(/bench-layout/);
-      const viewLinks = page.getByRole("navigation", { name: "Workspace views" });
-      await viewLinks.getByRole("button", { name: "Studio" }).click();
+      await run("Open Studio");
       if (mobile) await page.locator("#studio-focus-work").click();
       const draft = page.locator("#studio-intent");
       const newChange = page.locator("#studio-new-change-toggle");
@@ -245,10 +245,10 @@ for (const width of [1440, 390]) {
       await draft.fill("Keep this draft through navigation");
       await openSettings();
       await expect(app).toHaveClass(/bench-layout/);
-      await viewLinks.getByRole("button", { name: "Studio" }).click();
+      await run("Open Studio");
       await expect(draft).toHaveValue("Keep this draft through navigation");
       await openSettings();
-      await viewLinks.getByRole("button", { name: "Sessions" }).click();
+      await run("Open Sessions");
       await expect(tile).toHaveAttribute("id", id);
       expect(await tile.evaluate((node, previous) => node === previous, domTile)).toBeTruthy();
       await command("after-navigation");
@@ -756,7 +756,7 @@ for (const width of [1440, 390]) {
       await expect(panel.getByText("G2", { exact: true }).first()).toBeVisible();
       await shot("plan");
       await panel.getByRole("button", { name: "New spec task" }).click();
-      const task = page.locator("#bench-plan-task-form");
+      const task = page.locator("#task-form");
       const taskTitle = `Trace planning ${width} ${theme}`;
       await task.getByLabel("Title").fill(taskTitle);
       await shot("new-spec-task");
@@ -837,7 +837,7 @@ for (const width of [1440, 390]) {
       await expect(attention.getByText("plan-fixture-change.txt")).toBeVisible({ timeout: 40_000 });
       await shot("needs-you");
       await attention.getByRole("button", { name: "Open plan-fixture-change.txt" }).click();
-      await expect(page.locator("#preview-path")).toHaveText("plan-fixture-change.txt");
+      await expect(page.locator("#studio-document-path")).toHaveText("plan-fixture-change.txt");
       await openNav();
       await nav.locator('[data-view="needs-you"]').click();
       await attention.getByRole("button", { name: "Mark handled" }).click();
@@ -869,14 +869,14 @@ for (const width of [1440, 390]) {
   }
 }
 
-test("Preview stays hidden when the project file browser is empty", async ({ page }) => {
+test("Preview Files mode stays reachable for an empty project", async ({ page }) => {
   await page.route("**/api/files", route => route.fulfill({ json: { files: [], truncated: false } }));
   const files = page.waitForResponse(response => response.url().endsWith("/api/files"));
   await page.goto(`${origin}/#${token}`);
   await files;
-  await expect(page.locator("#bench-tab-preview")).toBeHidden();
-  await page.locator("#bench-tab-plan").press("End");
-  await expect(page.locator("#bench-tab-review")).toHaveAttribute("aria-selected", "true");
+  await page.locator("#bench-tab-preview").click();
+  await page.locator("#bench-files-mode").click();
+  await expect(page.locator("#file-tree")).toContainText("No files yet.");
 });
 
 for (const width of [1440, 390]) {
@@ -1036,6 +1036,116 @@ for (const width of [1440, 390]) {
       await pairing.locator("#phone-stop").click();
       await expect(pairing).toBeHidden();
       rmSync(brief);
+    });
+  }
+}
+
+for (const width of [1440, 390]) {
+  for (const theme of ["light", "dark"]) {
+    test(`Moved workflows stay reachable at ${width} in ${theme}`, async ({ page, request }) => {
+      const headers = { "X-Verb-Token": token };
+      const suffix = `${width}-${theme}`;
+      const created = await request.post(`${origin}/api/specs`, { headers, data: {
+        title: `Removal journey ${suffix}`, criteria: ["A completion claim stays unproven"],
+      } });
+      expect(created.ok()).toBeTruthy();
+      const spec = await created.json();
+      const shot = name => process.env.VERB_REMOVAL_SCREEN_DIR
+        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_REMOVAL_SCREEN_DIR, `${name}-${suffix}.png`) })
+        : Promise.resolve();
+      const palette = async title => {
+        const close = page.getByRole("button", { name: "Close details", exact: true });
+        if (await close.isVisible()) await close.click();
+        await page.getByRole("button", { name: "Search or run", exact: true }).click();
+        await page.locator("#palette-input").fill(title);
+        await page.getByRole("option").filter({ has: page.getByText(title, { exact: true }) }).click();
+      };
+      await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+      await page.emulateMedia({ colorScheme: theme });
+      await page.goto(`${origin}/?view=project#${token}`);
+      const files = page.locator("#bench-files-panel");
+      await expect(files).toBeVisible();
+      const specsFolder = files.locator('[data-dir="specs"]');
+      await specsFolder.click();
+      await expect(files.locator('[data-file="specs/099-legacy.md"] .file-status')).toHaveText("U");
+      await specsFolder.click();
+      await files.getByRole("treeitem", { name: "README.md", exact: true }).click();
+      await expect(page.locator("#studio-document-path")).toHaveText("README.md");
+      await page.evaluate(() => {
+        navigator.clipboard.writeText = async text => { window.fixtureCopiedPath = text; };
+      });
+      await files.getByRole("button", { name: "Copy path", exact: true }).click();
+      await expect.poll(() => page.evaluate(() => window.fixtureCopiedPath)).toBe("README.md");
+      await shot("files");
+      await page.goto(`${origin}/?view=overview#${token}`);
+      const mark = page.waitForResponse(response => response.url().endsWith("/api/good/mark") && response.request().method() === "POST");
+      await page.getByRole("button", { name: "Mark as good", exact: true }).click();
+      expect((await mark).ok()).toBeTruthy();
+      await shot("checks");
+      await palette(`Open spec ${spec.id} · ${spec.title}`);
+      await page.getByRole("tab", { name: "Review", exact: true }).click();
+      const row = page.locator(".bench-proof-list > li");
+      await row.getByRole("button", { name: "Record completion claim" }).click();
+      await shot("criterion-claim");
+      await page.getByRole("button", { name: "Record claim", exact: true }).click();
+      await expect(row).toContainText("Proof still needed");
+      await expect(row).toContainText("Unproven");
+      await row.getByRole("button", { name: "Record proof", exact: true }).click();
+      await expect(page.locator("#sdlc-dialog-title")).toHaveText("Link an evidence report");
+      await shot("criterion-proof");
+      await page.keyboard.press("Escape");
+      await page.getByText("Evidence actions", { exact: true }).click();
+      await shot("evidence-actions");
+      if (width === 1440 && theme === "light") {
+        await page.route("**/api/checks", route => route.fulfill({ json: {
+          clear: false, repository: [{ level: "caution", fact: "Fixture check refreshed", safeNext: "Inspect project settings" }], runtimes: [],
+        } }));
+        await page.getByRole("button", { name: "Check again", exact: true }).click();
+        await expect(page.getByText("Fixture check refreshed", { exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Evidence history", exact: true })).toBeVisible();
+        await page.unroute("**/api/checks");
+        await page.getByRole("button", { name: "Check again", exact: true }).click();
+      }
+      await page.getByRole("button", { name: "Evidence history", exact: true }).click();
+      await expect(page.locator("#sdlc-history")).toContainText("No lifecycle records yet");
+      await shot("evidence-history");
+      await palette(`Start agent on spec ${spec.id}`);
+      const launch = page.locator("#session-form");
+      await launch.locator('label:has([name="agent"][value="agy"])').click();
+      await launch.getByLabel("Plan in Antigravity Talk").check();
+      await expect(launch.locator('[name="isolated"]')).toBeDisabled();
+      await shot("talk-launch");
+      const admission = page.waitForResponse(response => response.url().endsWith(`/api/specs/${spec.id}/talk`) && response.request().method() === "POST");
+      await launch.getByRole("button", { name: "Open Antigravity Talk", exact: false }).click();
+      expect((await admission).ok()).toBeTruthy();
+      const talk = page.locator(".talk-tile");
+      await expect(talk.getByRole("button", { name: "Continue in terminal" })).toBeVisible();
+      await talk.getByRole("button", { name: "End", exact: true }).click();
+      await expect(talk).toHaveCount(0);
+
+      await page.goto(`${origin}/?view=specs#${token}`);
+      await expect(page.locator("#view-bench-board")).toBeVisible();
+      await palette("Open Tasks");
+      await page.getByRole("button", { name: "New task", exact: true }).click();
+      await expect(page.locator("#task-form [name=specId]")).toHaveValue("");
+      await shot("task");
+      await page.keyboard.press("Escape");
+      const agent = width === 1440 ? "claude" : "shell";
+      const started = await request.post(`${origin}/api/terminals`, { headers, data: { agent } });
+      expect(started.ok()).toBeTruthy();
+      const { sessionId } = await started.json();
+      expect((await request.delete(`${origin}/api/terminals/${sessionId}`, { headers })).ok()).toBeTruthy();
+      await palette("Open Session history");
+      await page.getByRole("searchbox", { name: "Find a session" }).fill(sessionId);
+      await page.locator(`#session-list [data-session-id="${sessionId}"]`).click();
+      const detail = page.locator("#session-history-detail");
+      await expect(detail.getByRole("heading", { name: new RegExp(sessionId.slice(0, 8)) })).toBeVisible();
+      await expect(detail.getByRole("button", { name: /Start a new .* session/ })).toBeVisible();
+      await shot("session-history-detail");
+      await page.goto(`${origin}/?view=studio#${token}`);
+      await expect(page.locator("#view-studio")).toBeHidden();
+      await palette("Open Studio");
+      await expect(page.locator("#view-studio")).toBeVisible();
     });
   }
 }

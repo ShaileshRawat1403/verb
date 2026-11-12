@@ -159,7 +159,7 @@
   border: 0;
 }
 .bench-terminal-menu-items button:hover { background: var(--surface-2); }
-.bench-layout .terminal-tile > :is(.terminal-titlebar, .terminal-bottom),
+.bench-layout .terminal-tile:not(.talk-tile) > :is(.terminal-titlebar, .terminal-bottom),
 .bench-connection,
 .bench-connection > span { display: none; }
 .bench-layout .terminal-tile:has([data-connection]) > .bench-connection {
@@ -286,7 +286,7 @@
 #bench-plan-spec .bench-documents > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 #bench-plan-spec .bench-documents > li > div { display: flex; align-items: baseline; gap: 8px; }
 #bench-plan-spec .bench-documents [data-bench-review-draft] { grid-column: 1 / -1; justify-self: start; }
-#bench-draft-form .field-label, #bench-plan-task-form .field-label { display: grid; gap: 4px; }
+#bench-draft-form .field-label { display: grid; gap: 4px; }
 #bench-draft-review-form pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 #bench-launch-role[hidden], #bench-draft-form .field-label[hidden] { display: none; }
 @media (min-width: 761px) {
@@ -310,6 +310,7 @@
 #bench-review-body > section { margin-block: 14px; }
 #bench-review-body h2 { font-size: 1.1rem; }
 #bench-review-body h3, #bench-draft-difference h3 { font-size: .95rem; }
+.bench-evidence-actions { list-style: none; padding-left: 0; }
 .bench-review-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .bench-proof-list, .bench-failed-checks { display: grid; gap: 8px; padding-left: 20px; }
 .bench-proof-list small, .bench-needs-entry small { display: block; color: var(--text-muted); }
@@ -319,6 +320,8 @@
 .bench-needs-entry { width: 100%; overflow-wrap: anywhere; }
 #handoff-spec-preview pre { max-height: 180px; overflow: auto; white-space: pre-wrap; }
 
+#bench-files-panel:not([hidden]) + #bench-preview-mount .studio-file-picker > :not(#bench-file-limit),
+#bench-files-panel:not([hidden]) + #bench-preview-mount .studio-file-picker:has(#bench-file-limit[hidden]) { display: none; }
 #bench-preview-mount .studio-canvas { min-width: 0; padding: 0; }
 #bench-preview-mount :is(#studio-show-browser, #studio-use-selection, #studio-toggle-changes, #studio-expand-preview, #studio-checkout) { display: none; }
 #bench-preview-mount .studio-heading { margin: 0 0 4px; }

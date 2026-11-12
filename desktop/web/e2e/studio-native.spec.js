@@ -938,19 +938,23 @@ for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px c
 
 
 test("Studio retries busy file reads, then exposes manual recovery if the host stays busy", async ({ page }) => {
+  await page.goto(url);
+  await openWorkspaceView(page, "Studio");
+  const file = page.locator("#studio-file option[value='app.html']");
+  await expect(file).toHaveCount(1);
   let available = false, reads = 0;
   await page.route("**/api/files", route => {
     reads++;
     return available ? route.continue() : route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } });
   });
-  const studio = new URL(url);
-  studio.searchParams.set("view", "studio");
-  await page.goto(studio.href);
+  const refresh = page.getByRole("button", { name: "Refresh canvas", exact: true });
+  await refresh.click();
   await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.");
   expect(reads).toBe(3);
   available = true;
-  await page.getByRole("button", { name: "Refresh canvas", exact: true }).click();
-  await expect(page.locator("#studio-file option[value='app.html']")).toHaveCount(1);
+  await refresh.click();
+  await expect(page.locator("#studio-file-note")).not.toHaveText("Files unavailable. Refresh to retry.");
+  await expect(file).toHaveCount(1);
   expect(reads).toBe(4);
 });
 

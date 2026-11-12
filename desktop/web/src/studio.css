@@ -36,7 +36,6 @@
   background: var(--bg-1);
   padding: 20px 9px;
 }
-.studio-open .sidebar-specs,
 .studio-open #resize-sidebar {
   display: none;
 }

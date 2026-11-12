@@ -260,47 +260,38 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
 
   // The default workspace is a terminal; specs remain an explicit optional workflow.
   await expect(page.locator("#view-sessions")).toHaveClass(/active/);
-  await openWorkspaceView(page, "Specs");
-  await expect(page.getByRole("heading", { name: "Start with a spec" })).toBeVisible();
+
 
   // Create a spec through the guided form.
-  await page.getByRole("button", { name: "Write your first spec" }).click();
+  await runPaletteCommand(page, "New spec");
   await page.locator("#spec-title-input").fill("Let people sign in with email");
   await page.locator("#spec-problem").fill("Returning customers cannot sign in.");
   await page.locator("#spec-criteria").fill("A sign-in link arrives\nA bad email shows a message");
   await page.getByRole("button", { name: "Create spec" }).click();
-  await expect(page.locator("#spec-title")).toHaveText("Let people sign in with email");
-  await expect(page.locator(".spec-item.current")).toContainText("0/2 recorded complete");
+  await expect(page.locator("#bench-plan-spec h2")).toContainText("Let people sign in with email");
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
+  const criterion = page.locator(".bench-proof-list > li").filter({ hasText: "A bad email shows a message" });
+  await criterion.getByRole("button", { name: "Record completion claim" }).click();
+  await page.locator("#sdlc-text").fill("unit test rejects a@");
+  await page.getByRole("button", { name: "Record claim" }).click();
+  await expect(criterion).toContainText("Proof still needed");
 
-  // Prove a criterion: Verb asks for evidence and records it.
-  await page.locator('[data-criterion="1"]').click({ force: true });
-  await expect(page.getByRole("heading", { name: "How do you know it works?" })).toBeVisible();
-  await page.locator("#evidence-text").fill("unit test rejects a@");
-  await page.getByRole("button", { name: "Record as complete" }).click();
-  await expect(page.locator(".spec-item.current")).toContainText("1/2 recorded complete");
-  await expect(page.locator("#audit-list li").first()).toContainText("evidence: unit test rejects a@");
+  await page.getByRole("tab", { name: "Plan" }).click();
+  await page.getByLabel("Stage for spec 001").selectOption("build");
+  await expect(page.locator("#stage-warnings")).toContainText(/plan/i);
+  await page.locator("#stage-dialog-submit").click();
+  await expect(page.getByLabel("Stage for spec 001")).toHaveValue("build");
 
-  // Skipping stages is allowed, warned about, and shown as skipped.
-  await page.locator('#stage-bar [data-stage="build"]').click();
-  await expect(page.locator("#stage-warnings")).toContainText("skipped plan");
-  await page.getByRole("button", { name: "Move to Build" }).click();
-  await expect(page.locator("#stage-bar li.skipped")).toHaveCount(1);
-
-  // The new spec file is reviewable as a diff before committing: every line added.
-  const card = page.locator('.diff-card[data-diff-path="specs/001-let-people-sign-in-with-email.md"]');
-  await card.locator("summary").click();
-  await expect(card.locator(".diff-line.add").first()).toBeVisible();
-  await expect(card.locator(".diff-line.del")).toHaveCount(0);
-
-  // Commit from the dialog; the audit line lands in the same commit.
+  // Review the untracked spec in the commit dialog before saving it.
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-dialog-sub")).toContainText("does not upload your work");
   await expect(page.locator("#commit-scope")).toContainText("Only selected files");
   await expect(page.locator("#commit-message")).toHaveValue(/^spec:001 /);
+  await page.locator('[data-commit-diff="specs/001-let-people-sign-in-with-email.md"]').click();
+  await expect(page.locator("#commit-diff-text")).toContainText("+# 001 · Let people sign in with email");
   await page.locator("#commit-message").fill("spec:001 add the sign-in spec");
   await page.getByRole("button", { name: "Commit", exact: true }).click();
-  await expect(page.locator("#git-status")).toHaveText("No uncommitted changes");
-  await expect(page.locator("#git-remote")).toContainText("No remote branch is linked");
+  await expect(page.locator("#commit-dialog")).toBeHidden();
   expect(git("log", "-1", "--format=%s").trim()).toBe("spec:001 add the sign-in spec");
   const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
   expect(file).toContain("committed: spec:001 add the sign-in spec");
@@ -313,16 +304,16 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await openWorkspaceView(page, "Specs");
-  await expect(page.locator("#spec-title")).toBeVisible();
+  await runPaletteCommand(page, "Open spec 001 · Let people sign in with email");
+  await expect(page.locator("#bench-plan-spec h2")).toBeVisible();
 
   // The command palette finds and runs actions.
   await page.locator(".palette-hint").click();
-  await page.locator("#palette-input").fill("go to overview");
+  await page.locator("#palette-input").fill("Open Review");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#view-overview")).toHaveClass(/active/);
+  await expect(page.locator("#bench-review")).toBeVisible();
   await page.keyboard.press("Alt+Digit1");
-  await expect(page.locator("#view-specs")).toHaveClass(/active/);
+  await expect(page.locator("#view-bench-board")).toHaveClass(/active/);
 
   // The theme toggle cycles and the page follows.
   const resolved = () => page.evaluate(() => document.documentElement.dataset.resolvedTheme);
@@ -332,9 +323,10 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   expect(await resolved()).toBe("dark");
 
   // A terminal opened from the spec appears in the spec's work area.
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
-  await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
-  await expect(page.locator("#spec-work .work-hint")).toBeHidden();
+  await runPaletteCommand(page, "Start agent on spec 001");
+  await expect(page.locator('#session-form [name="agent"][value="shell"]')).toBeChecked();
+  await page.locator('#session-dialog button[type="submit"]').click();
+  await expect(page.locator("#terminal-grid .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
   // A terminal must start without page errors (it once threw a CSP error compiling the image
   // addon's WebAssembly decoder, which silently disabled inline images).
   await page.waitForTimeout(500);
@@ -346,7 +338,7 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
   await page.keyboard.press("Alt+Digit2");
-  await expect(page.locator("#view-project")).toHaveClass(/active/);
+  await expect(page.locator("#bench-files-panel")).toBeVisible();
 
   // The tree shows what Git tracks or would track, and never ignored files.
   await expect(page.locator('#file-tree [data-file="README.md"]')).toBeVisible();
@@ -355,12 +347,12 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await expect(page.locator('#file-tree [data-file=".env"]')).toHaveCount(0);
   await page.locator("#file-filter").fill("");
 
-  // Markdown reads formatted, with Raw for the exact lines; everything stays read-only.
+  // The file opens in Preview and Source shows the exact Markdown.
   await page.locator('#file-tree [data-file="README.md"]').click();
-  await expect(page.locator("#preview-path")).toHaveText("README.md");
-  await expect(page.locator(".md-preview h1")).toHaveText("e2e");
-  await page.locator("#preview-mode").click();
-  await expect(page.locator(".code-lines li")).toHaveText(["# e2e"]);
+  await expect(page.locator("#studio-document-path")).toHaveText("README.md");
+  await expect(page.locator("#studio-document h1")).toHaveText("e2e");
+  await page.locator("#studio-source").click();
+  await expect(page.locator("#studio-document")).toContainText("# e2e");
 
   await openWorkspaceView(page, "Context");
   // Nudges point at the next useful step; nothing is forced.
@@ -369,8 +361,7 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await page.locator("#brief-problem").fill("Shops lose returning customers.");
   await page.locator("#brief-users").fill("Returning shoppers");
   await page.getByRole("button", { name: "Create brief" }).click();
-  await expect(page.locator("#preview-path")).toHaveText("docs/project/BRIEF.md");
-  await expect(page.locator("#brief-progress")).toHaveText("2/5 filled");
+  await expect(page.locator("#studio-document-path")).toHaveText("docs/project/BRIEF.md");
 
   // Sync writes Verb's section and keeps the user's own text.
   await openWorkspaceView(page, "Context");
@@ -456,8 +447,8 @@ test("ask verb answers from evidence and its sources open", async ({ page }) => 
   // A source opens the spec it cites.
   await answer.locator('[data-source-kind="spec"]').click();
   await expect(page.locator("#ask-dialog")).toBeHidden();
-  await expect(page.locator("#view-specs")).toHaveClass(/active/);
-  await expect(page.locator("#spec-title")).toHaveText("Let people sign in with email");
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+  await expect(page.locator("#bench-plan-spec h2")).toContainText("Let people sign in with email");
 
   // A question typed in the palette is offered to Ask Verb first.
   await page.locator(".palette-hint").click();
@@ -473,25 +464,21 @@ test("ask verb answers from evidence and its sources open", async ({ page }) => 
   expect(errors).toEqual([]);
 });
 
-test("session board and handoff with a written note", async ({ page }) => {
+test("spec terminal handoff with a written note", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await openWorkspaceView(page, "Specs");
-  await expect(page.locator("#spec-title")).toBeVisible();
+  await runPaletteCommand(page, "Open spec 001 · Let people sign in with email");
+  await expect(page.locator("#bench-plan-spec h2")).toBeVisible();
 
-  // An earlier test opened a terminal from the spec; the board lists it from the audit trail.
-  await expect(page.locator("#spec-sessions")).toBeVisible();
-  await expect(page.locator("#spec-sessions .board-row").first()).toContainText("Terminal");
-
-  // Hand off (to a plain terminal here: CI has no agent CLIs installed).
-  await page.locator('[data-action="handoff"]').click();
+  // This shortcut exercises the existing written-note handoff.
+  await runPaletteCommand(page, "Hand off spec 001 to another agent");
   await expect(page.locator("#handoff-from")).toHaveText("Terminal");
   await page.locator("#handoff-to").selectOption("shell");
   await page.locator("#handoff-note").fill("Validation is done; persistence is next.");
   await page.locator("#handoff-submit").click();
   await expect(page.locator("#handoff-dialog")).toBeHidden();
-  await expect(page.locator("#spec-sessions .board-row.live")).toHaveCount(2, { timeout: 15_000 });
+  await expect(page.locator("#terminal-grid .terminal-tile")).toHaveCount(2, { timeout: 15_000 });
 
   const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
   expect(file).toContain("## Handoff notes");
@@ -499,7 +486,7 @@ test("session board and handoff with a written note", async ({ page }) => {
   expect(file).toContain("- Note from E2E Person: Validation is done; persistence is next.");
   expect(file).toContain("handed off from shell to shell — Validation is done; persistence is next.");
   expect(file.indexOf("## Handoff notes")).toBeLessThan(file.indexOf("## Audit trail"));
-  await expect(page.locator("#audit-list li").first()).toContainText("started shell on this spec");
+  expect(file).toContain("started shell on this spec");
 
   // Context meters cover running Claude/Codex sessions only; plain terminals have none.
   const meters = await page.request.get(url.replace(/#.*/, "api/meters"), { headers: { "X-Verb-Token": TOKEN } });
@@ -517,8 +504,8 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
       ...(body ? { data: body } : {}),
     });
   await page.goto(url);
-  await openWorkspaceView(page, "Specs");
-  await expect(page.locator("#spec-title")).toBeVisible();
+  await runPaletteCommand(page, "Open spec 001 · Let people sign in with email");
+  await expect(page.locator("#bench-plan-spec h2")).toBeVisible();
 
   // Off until chosen, and it explains its boundaries before asking.
   await expect(page.locator("#observer-label")).toHaveText("Observer off");
@@ -534,10 +521,12 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   // Real terminal activity: a fake token on screen, and the same command failing three times.
   // Terminals still running from earlier tests come back with the page, so "the new one" is the
   // selected tab once one more terminal exists, not necessarily the last in the page.
-  const before = await page.locator("#spec-work .terminal-tile").count();
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
-  await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(before + 1);
-  const tile = page.locator("#spec-work .terminal-tile.focused");
+  const before = await page.locator("#terminal-grid .terminal-tile").count();
+  await runPaletteCommand(page, "Start agent on spec 001");
+  await expect(page.locator('#session-form [name="agent"][value="shell"]')).toBeChecked();
+  await page.locator('#session-dialog button[type="submit"]').click();
+  await expect(page.locator("#terminal-grid .terminal-tile")).toHaveCount(before + 1);
+  const tile = page.locator("#terminal-grid .terminal-tile.focused");
   const input = tile.getByRole("textbox", { name: "Terminal input" });
   const fake = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
   await input.pressSequentially(`echo ${fake}`);
@@ -557,7 +546,7 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await expect(tile.locator(".cmd-meta.failed").first().getByRole("button", { name: "Copy" })).toBeVisible();
   await expect(tile.getByRole("button", { name: "Ask agent" })).toHaveCount(0);
   // Its tab shows the failure too, and is the selected one.
-  const selectedTab = page.locator('#spec-work .terminal-tab[aria-selected="true"]');
+  const selectedTab = page.locator('#bench-terminal-tabs .terminal-tab[aria-selected="true"]');
   await expect(selectedTab.locator(".tab-dot")).toHaveAttribute("data-tone", "failed");
   const raw = await (await api("api/observer")).text();
   expect(raw).not.toContain(fake.slice(4)); // the value never leaves the server
@@ -623,14 +612,15 @@ test("terminal input stays hidden when the real PTY disables echo", async ({ pag
 });
 
 test("commit review lists every file and explains local versus remote history", async ({ page }) => {
-  await page.route("**/api/git", route => route.fulfill({ json: {
-    branch: "main", upstream: "origin/main", ahead: 2, behind: 1,
-    changes: Array.from({ length: 41 }, (_, i) => ({ code: "??", path: `new-file-${i}.txt` })),
-    recent: [],
+  await page.route("**/api/git/transfer", route => route.fulfill({ json: {
+    branch: "main", remote: "origin", remote_ref: "refs/heads/main", server: "fixture",
+    ahead: 2, behind: 1, outgoing: ["First local commit", "Second local commit"], incoming: ["Remote commit"],
   } }));
   await page.route("**/api/git/commit-review", route => route.fulfill({ json: { version: "fixture", files: Array.from({ length: 41 }, (_, i) => `new-file-${i}.txt`), blocked: null } }));
   await page.goto(url);
-  await expect(page.locator("#git-remote")).toContainText("2 local commits to upload; 1 remote commit to bring in");
+  await runPaletteCommand(page, "Review Git upload / download");
+  await expect(page.locator("#git-transfer-status")).toContainText("2 local commits to upload; 1 remote commit to download");
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-files li")).toHaveCount(41);
   await expect(page.locator("#commit-files li").last()).toContainText("new-file-40.txt");
@@ -639,10 +629,13 @@ test("commit review lists every file and explains local versus remote history", 
   // A failed observation must not offer an empty commit as if the checkout were clean.
   await page.keyboard.press("Escape");
   await page.route("**/api/git/commit-review", route => route.fulfill({ status: 500, json: { error: "Git review failed" } }));
-  await page.route("**/api/git", route => route.fulfill({ status: 500, json: { error: "Git read failed" } }));
-  await page.reload();
-  await expect(page.locator("#git-remote")).toHaveText("Remote comparison unavailable.");
+  await page.route("**/api/git/transfer", route => route.fulfill({ status: 500, json: { error: "Remote comparison unavailable." } }));
+  await runPaletteCommand(page, "Review Git upload / download");
+  await expect(page.locator("#git-transfer-status")).toHaveText("Remote comparison unavailable.");
+  await expect(page.locator("#git-transfer-check")).toBeDisabled();
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Alt+KeyC");
+  await expect(page.locator("#commit-scope")).toContainText("Commit review unavailable: Git review failed");
   await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
 });
 

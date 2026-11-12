@@ -30,6 +30,7 @@ export function initStudio({
   const state = {
     files: [],
     loaded: false,
+    filesUnavailable: false,
     selected: null,
     request: 0,
     mode: "document",
@@ -153,6 +154,10 @@ export function initStudio({
       ...options,
     );
     $("#studio-file").value = state.selected || "";
+    if (state.filesUnavailable) {
+      setText("#studio-file-note", "Files unavailable. Refresh to retry.");
+      return;
+    }
     if (previewMounted) return;
     setText(
       "#studio-file-note",
@@ -232,6 +237,7 @@ export function initStudio({
       const result = await readWithBusyRetry(api, "/api/files");
       state.files = result.files ?? [];
       state.loaded = true;
+      state.filesUnavailable = false;
       state.truncated = result.truncated;
       renderFileOptions();
       document.dispatchEvent(new Event("verb:preview-files"));
@@ -246,8 +252,9 @@ export function initStudio({
         }
       }
     } catch (error) {
+      state.filesUnavailable = true;
       message(`Could not read files: ${error.message}`);
-      setText("#studio-file-note", "Files unavailable. Refresh to retry.");
+      renderFileOptions();
     }
   }
 
@@ -700,8 +707,8 @@ export function initStudio({
     acceptExternalResult({ source, text }) {
       if (state.context) { toast('A context is already attached to the Studio draft. Remove it before adding another result.'); return false; }
       state.context = { path: `MCP · ${source}`, text: `External, untrusted connector result:\n${text.slice(0, 3800)}${text.length > 3800 ? '\n[Result truncated for this draft]' : ''}` };
-      showView('studio'); renderContext(); showChangeDraft(true, { user: true });
-      focusSurface('work'); $('#studio-intent').focus();
+      renderContext(); showChangeDraft(true, { user: true });
+      toast('Attached to the Studio draft. Open Studio from the command palette.');
       message('Connector result attached to your draft. Nothing was sent to an agent.');
       return true;
     },
