@@ -32,7 +32,7 @@ Rust formatting and Clippy passed. The all-targets Rust suite passed 478 tests w
 
 The capability probe test uses separate immutable fixture executables and distinguishes spawn, process deadline, stdout deadline, and invalid results. A deliberately slow fixture reaches the one-second deadline. The earlier failure's cause remains unverified. The production deadline and fallback retain their prior behavior. Measuring cold-start time on the phone node is in the backlog.
 
-The 12 focused browser journeys passed on the final build. The earlier complete run passed 32 journeys and exposed two desktop stale-proof failures. The spec-list refresh was returning fresh evidence while the Board was selecting an older workspace summary. The final run uses the freshly fetched spec summaries.
+The 12 focused browser journeys passed on the final build. The earlier complete run passed 32 journeys and exposed two desktop stale-proof failures. The spec-list refresh was returning fresh evidence while the Board was selecting an older workspace summary. Board now uses the freshly fetched spec summaries. A subsequent full run passed 33 journeys and showed one race in the browser fixture: the regular observer poll could replace the injected wait event. The Board journey now supplies a stable observer response and exercises the regular poll. All four Board variants passed with that fixture.
 
 [Browser journeys](../desktop/web/e2e/bench-shell.spec.js) exercise stage warnings, archive and unarchive, opening and clearing observed signals, and Preview continuity. [Screenshots](../work/001-bench-consolidation/screens/board/) cover the changed surfaces at 1440 and 390 pixels in light and dark.
 

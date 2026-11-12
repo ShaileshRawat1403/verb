@@ -599,6 +599,9 @@ for (const width of [1440, 390]) {
       const launched = await request.post(`${origin}/api/specs/${id}/agent`, { headers, data: { agent: "shell" } });
       expect(launched.ok()).toBe(true);
       const session = (await launched.json()).sessionId;
+      let asking = [];
+      await page.route("**/api/observer", route =>
+        route.fulfill({ json: { enabled: false, muted: [], kinds: [], signals: [], asking } }));
       await page.goto(`${origin}/#${token}`);
       const nav = page.locator("#bench-navigation");
       const go = async name => {
@@ -652,9 +655,6 @@ for (const width of [1440, 390]) {
           expectedRevision: revision, expectedVersion: current.version, expectedContext: current.context } }));
       };
       await run();
-      const setWait = asking => page.evaluate(ids => document.dispatchEvent(new CustomEvent("verb:observer", {
-        detail: { enabled: false, signals: [], asking: ids },
-      })), asking);
       await go(/Needs you/);
       const needs = page.locator("#bench-needs-list");
       const failed = needs.locator("section").filter({ hasText: `Failed check · ${id}` });
@@ -662,14 +662,14 @@ for (const width of [1440, 390]) {
       const waiting = needs.locator("section").filter({ hasText: "Waiting for you" });
       await expect(failed).toBeVisible();
       await expect(gate).toBeVisible();
-      await setWait([session]);
-      await expect(waiting).toBeVisible();
+      asking = [session];
+      await expect(waiting).toBeVisible({ timeout: 10_000 });
       await shot("needs-you");
       await waiting.getByRole("button", { name: "Open session" }).click();
       await expect(page.locator("#view-sessions")).toBeVisible();
       await go(/Needs you/);
-      await setWait([]);
-      await expect(waiting).toHaveCount(0);
+      asking = [];
+      await expect(waiting).toHaveCount(0, { timeout: 10_000 });
       await failed.getByRole("button", { name: "Open Review" }).click();
       await expect(page.locator("#bench-tab-review")).toHaveAttribute("aria-selected", "true");
 
