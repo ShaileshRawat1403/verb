@@ -314,6 +314,7 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
         || matches!(
             parts.as_slice(),
             ["api", "work-items", _, "draft", "brd" | "prd"]
+                | ["api", "work-items", _, "archive"]
                 | ["api", "terminals", _, "phone", ..]
                 | [
                     "api",

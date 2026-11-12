@@ -2767,6 +2767,24 @@ impl WebHost {
                     Ok((session.clone(), json!({"sessionId": session}), Some(record)))
                 }))
             }
+            ["api", "work-items", id, "archive"] if method == &Method::Post => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Input {
+                    archived: bool,
+                }
+                let input: Input = read_json(request)?;
+                let (project, store, id, actor) = (
+                    self.project.clone(),
+                    self.identity.store.clone(),
+                    id.to_string(),
+                    self.actor(),
+                );
+                Ok(self.off_loop(true, move || {
+                    crate::work_items::archive(&project, &store, &id, input.archived, actor)?;
+                    Ok(json!({"archived": input.archived}))
+                }))
+            }
             ["api", "work-items", id, "draft", kind @ ("brd" | "prd")] => {
                 let document = if *kind == "brd" {
                     crate::work_items::Document::Brd

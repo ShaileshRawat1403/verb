@@ -26,7 +26,7 @@
           <button type="button" class="panel-toggle bench-mobile-close" data-bench-overlay-close>Close navigation</button>
           <button type="button" class="nav-item" data-view="sessions">Terminals</button>
           <button type="button" class="nav-item" data-view="needs-you">Needs you <span id="bench-needs-count" class="nav-count">0</span></button>
-          <button type="button" class="nav-item" data-bench-board>Board</button>
+          <button type="button" class="nav-item" data-view="bench-board">Board</button>
           <div class="bench-work">
             <div class="bench-work-heading"><h2>Work</h2>
               <button type="button" class="icon-button" data-bench-draft="brd" aria-label="New work item" title="New work item">+</button>
@@ -357,9 +357,14 @@
               </nav>
             </div>
           </section>
+          <section id="view-bench-board" class="view">
+            <div class="page-heading"><div><h1>Board</h1></div><label><input id="bench-show-archived" type="checkbox"> Show archived</label></div>
+            <div id="bench-board-rows"></div>
+          </section>
           <section id="view-needs-you" class="view">
             <div class="page-heading"><div><h1>Needs you</h1></div></div>
             <div class="panel bench-settings-panel" id="bench-needs-list"></div>
+            <section id="bench-planning-reports" class="panel bench-settings-panel" hidden><h2>Planning reports</h2><div id="bench-planning-list"></div></section>
           </section>
           <section id="view-overview" class="view">
             <div class="page-heading">
@@ -613,7 +618,7 @@
                 </section>
                 <section id="studio-preview-content" class="studio-document-frame" role="tabpanel" tabindex="0" aria-label="Project document">
                   <div class="studio-document-head"><span id="studio-document-path">Project canvas</span><span id="studio-document-meta">Read-only project document</span></div>
-                  <div class="studio-file-picker"><label for="studio-file-search">Find a canvas file</label><input id="studio-file-search" type="search" placeholder="Search paths…" autocomplete="off" /><label for="studio-file">Canvas file</label><select id="studio-file"><option value="">Choose a project file…</option></select><p id="studio-file-note">Reading workspace files…</p></div>
+                  <div class="studio-file-picker"><label for="studio-file-search">Find a canvas file</label><input id="studio-file-search" type="search" placeholder="Search paths…" autocomplete="off" /><label for="studio-file">Canvas file</label><select id="studio-file"><option value="">Choose a project file…</option></select><p id="studio-file-note">Reading workspace files…</p><ul id="bench-file-results" aria-label="Matching files" hidden></ul><p id="bench-file-limit" hidden></p></div>
                   <div id="studio-document" class="studio-document"><h2 class="studio-empty-title">Start with what you’re making.</h2><p>Open a project document, or describe the change you want to make.</p></div>
                   <section id="studio-image-panel" class="studio-image-panel" aria-label="Image preview" hidden><div class="studio-image-tools"><span id="studio-image-state" role="status"></span><button id="studio-image-minus" class="text-button" type="button" aria-label="Zoom image out">−</button><span id="studio-image-scale">Fit</span><button id="studio-image-plus" class="text-button" type="button" aria-label="Zoom image in">+</button><button id="studio-image-fit" class="text-button" type="button">Fit image</button><a id="studio-image-download" class="text-button" hidden>Download image</a></div><div class="studio-image-viewport"><img id="studio-preview-image" alt="" /></div></section>
                   <section id="studio-edit-panel" class="studio-edit-panel" aria-label="File editor" hidden>

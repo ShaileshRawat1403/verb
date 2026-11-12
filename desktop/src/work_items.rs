@@ -14,6 +14,7 @@ const BRD_SECTIONS: [&str; 5] = ["Problem", "Audience", "Goals", "Success measur
 #[serde(rename_all = "camelCase")]
 pub(crate) struct WorkItems {
     items: Vec<WorkItem>,
+    archived: BTreeMap<String, Archive>,
     unlinked_specs: Vec<String>,
     warnings: Vec<String>,
 }
@@ -403,6 +404,44 @@ impl WorkItem {
     }
 }
 
+#[derive(serde::Deserialize, Serialize)]
+struct Archive {
+    archived: bool,
+    at: String,
+    actor: String,
+}
+
+fn archives(store: &Path) -> Result<BTreeMap<String, Archive>, String> {
+    document_at(store, "work-item-archives.json")?
+        .map(|raw| serde_json::from_str(&raw).map_err(|error| error.to_string()))
+        .unwrap_or_else(|| Ok(BTreeMap::new()))
+}
+
+pub(crate) fn archive(
+    project: &Path,
+    store: &Path,
+    id: &str,
+    archived: bool,
+    actor: String,
+) -> Result<(), String> {
+    let _lock = crate::workbench::lock_project(store)?;
+    work_dir(project, id)?;
+    let mut records = archives(store)?;
+    records.insert(
+        id.to_owned(),
+        Archive {
+            archived,
+            at: crate::iso8601(crate::now_millis()),
+            actor,
+        },
+    );
+    let raw = serde_json::to_vec(&records).map_err(|error| error.to_string())?;
+    if raw.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err("Archive records reached their storage limit".into());
+    }
+    crate::fsutil::atomic_write(&store.join("work-item-archives.json"), &raw)
+}
+
 pub(crate) fn read(project: &Path) -> Result<WorkItems, String> {
     let root = project.join("work");
     let mut items = Vec::new();
@@ -463,8 +502,10 @@ pub(crate) fn read(project: &Path) -> Result<WorkItems, String> {
             unlinked_specs.push(spec.id);
         }
     }
+    let identity = crate::project::identity(project)?;
     Ok(WorkItems {
         items,
+        archived: archives(&identity.store)?,
         unlinked_specs,
         warnings,
     })

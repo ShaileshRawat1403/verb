@@ -34,3 +34,6 @@ For implementation slices, run cargo fmt, Clippy with warnings denied, Rust all-
 ## Backlog
 
 - When an isolated checkout cannot find an initialized allocator, tell the owner the exact command to run in the main checkout.
+
+- Measure cold-start capability probe times on the phone node before proposing a deadline change.
+- Show ended reviewed handoffs in Needs you once a durable admission identifies both the reviewed handoff and its launched session. The current handoff audit line carries neither a reviewed marker nor a session ID. The adjacent start line uses an eight-character session prefix, and the legacy flow can also produce adjacent handoff and start lines.

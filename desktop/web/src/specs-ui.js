@@ -1308,10 +1308,15 @@ export function initWorkbench(deps) {
     refreshGit();
     renderSessions(); // live/ended follows the workspace poll
   }, 5000);
-  setInterval(() => deps.ui.view === "specs" && !document.hidden && refreshMeters(), 15000);
+  setInterval(() => {
+    if (document.hidden) return;
+    if (deps.ui.view === "specs") refreshMeters();
+    if (["bench-board", "needs-you"].includes(deps.ui.view)) refreshSpecs();
+  }, 15000);
 
   return {
     selectSpec,
+    openStage,
     refreshSpecs,
     startOnSpec,
     runCheck: () => lifecycle.openCheck(),
@@ -1334,6 +1339,7 @@ export function initWorkbench(deps) {
     current: () => ({ spec: selected(), git: state.git, meters: state.meters,
       presentation: selected() ? presentation(selected()) : null, specs: state.specs, error: state.specsError, loaded: state.specsLoaded }),
     summaryFor,
+    boardSummaryFor: spec => state.summaries[spec.id],
     meterFor: (id) => state.meters?.[id] ?? null,
     render,
     /** Opens the evidence dialog for a criterion of the selected spec, prefilled; the person decides. */

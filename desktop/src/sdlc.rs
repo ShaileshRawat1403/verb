@@ -479,7 +479,7 @@ pub(crate) fn enrich_all(
                             "evidenceId": row["evidence"]["id"], "label": row["evidence"]["label"],
                             "source": row["evidence"]["source"], "observedCheck": row["observedCheck"]})
                     }).collect();
-                    summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"], "criteria": criteria});
+                    summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"], "criteria": criteria, "activityAt": ledger.records.last().map(|record| crate::iso8601(record.at))});
                 }
                 Err(error) => {
                     summary["sdlc"] = json!({"error": error});

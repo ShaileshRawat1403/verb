@@ -3,6 +3,7 @@ import { makeResizer } from "./resize.js";
 import { agentAvailability } from "./agent-availability.js";
 import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
+import { boardMarkup, specSignals } from "./bench-board.js";
 
 export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
@@ -35,7 +36,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   const enabled = () => !legacy.checked;
   const hostedSessions = () => (ui.state?.sessions ?? []).filter(session => session.hostedHere && session.terminal?.running);
   const openSessions = (spec) => hostedSessions().filter(session => session.specId === spec.id);
-  const focusSpec = (id) => {
+  const focusSpec = (id, tab) => {
     const spec = workbench.current().specs.find(spec => spec.id === id);
     if (!spec) return;
     selectedId = id;
@@ -50,11 +51,16 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       else detailsCollapsed = false;
       selectTab("plan");
     }
+    if (tab) {
+      if (narrow.matches) mobileSurface = "details";
+      else detailsCollapsed = false;
+      selectTab(tab);
+    }
     render();
     syncLayout();
-    if (!running) {
+    if (!running || tab) {
       if (narrow.matches) panel.querySelector("[data-bench-overlay-close]").focus();
-      else $("#bench-tab-plan").focus();
+      else $("#bench-tab-" + (tab ?? "plan")).focus();
     }
   };
 
@@ -187,10 +193,11 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     const waiting = hostedSessions().filter(session => ui.waitingTerminals.has(session.id));
     const planning = (ui.state?.sessions ?? []).filter(session => session.planningAttention);
     const receiptFor = (session, kind) => session[`${kind}Handled`] ?? handled.get(`${kind}:${session.id}`);
-    const entries = [...waiting.map(session => [session, "waiting"]), ...planning.map(session => [session, "planning"])];
-    $("#bench-needs-count").textContent = entries.filter(([session, kind]) => !receiptFor(session, kind)).length;
-    const list = $("#bench-needs-list");
-    const markup = entries.map(([session, kind]) => {
+    const specs = workbench.current().specs;
+    const attention = specs.flatMap(spec => specSignals(spec, workbench.boardSummaryFor(spec)));
+    const waits = waiting.filter(session => !receiptFor(session, "waiting"));
+    $("#bench-needs-count").textContent = waits.length + attention.length;
+    const sessionEntry = (session, kind) => {
       const receipt = receiptFor(session, kind);
       const paths = session.planningAttention?.paths ?? [];
       const key = `${kind}:${session.id}`;
@@ -201,10 +208,46 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
         ${receipt ? `<small>Handled by ${escapeHtml(receipt.actor)} · ${escapeHtml(new Date(receipt.at).toLocaleString())}</small>`
           : `<button type="button" class="secondary-button" data-bench-handle="${kind}" data-session="${escapeHtml(session.id)}"${handling.has(key) ? " disabled" : ""}>Mark handled</button>`}
       </section>`;
-    }).join("") || '<p class="muted">Nothing needs your attention.</p>';
-    if (list._markup !== markup) {
-      list.innerHTML = markup;
-      list._markup = markup;
+    };
+    const specEntries = attention.map(signal => `<section class="bench-needs-entry"><h3>${escapeHtml(signal.label)} · ${escapeHtml(signal.specId)} ${escapeHtml(signal.specTitle)}</h3>
+      <p>${escapeHtml(signal.detail ?? "")}</p><button class="secondary-button" type="button" data-bench-attention-spec="${escapeHtml(signal.specId)}" data-criterion-index="${signal.criterion ?? ""}">Open Review</button></section>`).join("");
+    const paint = (node, markup) => {
+      if (node._markup === markup) return;
+      const expanded = node.querySelector("[data-board-unlinked]")?.open;
+      node.innerHTML = markup;
+      node._markup = markup;
+      if (expanded) node.querySelector("[data-board-unlinked]")?.setAttribute("open", "");
+    };
+    paint($("#bench-needs-list"), waiting.map(session => sessionEntry(session, "waiting")).join("") + specEntries
+      || '<p class="muted">Nothing needs your attention.</p>');
+    $("#bench-planning-reports").hidden = !planning.length;
+    paint($("#bench-planning-list"), planning.map(session => sessionEntry(session, "planning")).join(""));
+    const signals = [...attention, ...waits.map(session => ({ workItemId: specs.find(spec => spec.id === session.specId)?.work_item }))];
+    paint($("#bench-board-rows"), boardMarkup({ data: workItems, specs, signals, summaries: workbench.boardSummaryFor, workTitle,
+      showArchived: $("#bench-show-archived").checked, error: workError, owner: ui.accessScope === "owner", esc: escapeHtml }));
+  }
+
+  $("#bench-show-archived").addEventListener("change", renderNeeds);
+  $("#bench-board-rows").addEventListener("change", event => {
+    const control = event.target.closest("[data-bench-stage]");
+    if (!control) return;
+    const spec = workbench.current().specs.find(spec => spec.id === control.dataset.benchStage);
+    if (!spec) return;
+    const next = control.value;
+    control.value = spec.stage;
+    workbench.selectSpec(spec.id, { navigate: false });
+    workbench.openStage(next);
+  });
+
+  async function archiveWork(button) {
+    button.disabled = true;
+    try {
+      await api("POST", `/api/work-items/${button.dataset.benchArchive}/archive`, { archived: button.dataset.archiveValue === "true" });
+      await refresh();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -509,10 +552,14 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       workbench.selectSpec(selectedId, { navigate: false });
       return openLaunch(selectedId);
     }
-    if (target.closest("[data-bench-board]")) {
-      showView("specs");
-      $("#spec-view-board").click();
-      $('[data-action="spec-overview"]').click();
+    const archive = target.closest("[data-bench-archive]");
+    if (archive) return archiveWork(archive);
+    const attention = target.closest("[data-bench-attention-spec]");
+    if (attention) {
+      focusSpec(attention.dataset.benchAttentionSpec, "review");
+      const index = attention.dataset.criterionIndex;
+      if (index) $("#bench-review-body").querySelector(`[data-criterion="${index}"]`)?.closest("li")?.scrollIntoView({ block: "nearest" });
+      return;
     }
     if (target.closest("[data-bench-retry]")) {
       refresh();
@@ -548,7 +595,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     reviewChecks: reviewTab.setChecks,
     onView() {
       closeOverlay();
-      if (ui.view === "needs-you") refreshState();
+      if (["needs-you", "bench-board"].includes(ui.view)) { refreshState(); workbench.refreshSpecs(); }
     },
     terminalChanged(id) {
       if (!enabled() || id === terminalId) return;

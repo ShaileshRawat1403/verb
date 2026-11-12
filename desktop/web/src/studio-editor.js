@@ -4,7 +4,7 @@ import { initEditorFind } from "./studio-find.js";
 import { initEditorNavigation } from "./studio-navigation.js";
 // Local text editing is an adapter, not a replacement for the full IDE foundation.
 // File drafts live in this tab only. No writes, app code, or server commands run on entry.
-export function initStudioEditor({ $, api, onMode, onSaved }) {
+export function initStudioEditor({ $, api, onMode, onSaved, inBench, onCapability }) {
   let capability = null,
     path = null,
     mode = "document",
@@ -69,7 +69,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     $("#studio-document").hidden = next !== "document";
     $("#studio-show-document").setAttribute(
       "aria-pressed",
-      String(next === "document"),
+      String(next === "document" || (inBench() && next === "app")),
     );
     $("#studio-edit-file").setAttribute(
       "aria-pressed",
@@ -341,9 +341,11 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   });
   $("#studio-preview-app").addEventListener("click", preview);
   $("#studio-refresh-app").addEventListener("click", preview);
-  $("#studio-show-document").addEventListener("click", () =>
-    setMode("document"),
-  );
+  function showPreview() {
+    if (inBench() && !$("#studio-preview-app").disabled) return preview();
+    setMode("document");
+  }
+  $("#studio-show-document").addEventListener("click", showPreview);
   $("#studio-stop-app").addEventListener("click", () => {
     setMode("document");
     status("Preview stopped.");
@@ -356,6 +358,8 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   });
   return {
     mode: () => mode,
+    showPreview,
+    readOnly: () => !capability?.editing.available,
     hasUnsaved: (wanted) => {
       const d = drafts.get(wanted);
       return Boolean(d && (dirty(d) || d.saving || d.recovery != null));
@@ -387,6 +391,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
           "Workspace bridge unavailable. Project documents remain read-only.";
       }
       update();
+      onCapability();
     },
   };
 }

@@ -2335,6 +2335,7 @@ async function showAccess() {
   try {
     const access = await api("GET", "/api/whoami");
     ui.accessScope = access.scope;
+    shell?.renderNeeds();
     benchTerminals?.render();
     $("#open-project-switch").hidden = access.scope !== "owner";
     const banner = $("#access-banner");

@@ -327,8 +327,6 @@
 #bench-preview-mount .studio-heading { margin: 0 0 4px; }
 #bench-preview-mount .studio-heading > div { display: none; }
 #bench-preview-mount #studio-file { max-width: 100%; min-width: 0; }
-#bench-preview-mount [data-canvas-mode="edit"] .studio-file-picker,
-#bench-preview-mount [data-canvas-mode="app"] .studio-file-picker { display: none; }
 .bench-review-verdict { font-weight: 650; margin: 8px 0 14px; }
 .bench-proof-list { list-style: none; padding-left: 0; }
 .bench-proof-list > li { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
@@ -346,3 +344,21 @@
   .handoff-fields label { flex: 1; min-width: 0; }
 }
 .handoff-fields textarea { display: block; width: 100%; }
+#bench-board-rows { display: grid; gap: 10px; }
+.bench-board-row { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-1); }
+.bench-board-row header, .bench-board-row li { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bench-board-row h2 { font-size: 1rem; margin: 0; }
+.bench-board-row ul { list-style: none; padding: 0; margin: 4px 0; }
+.bench-board-row li { margin-block: 4px; }
+.bench-board-row li button { text-align: left; }
+.bench-stage-counts { display: flex; flex-wrap: wrap; gap: 10px; }
+.bench-stage-counts div { display: grid; gap: 2px; text-align: center; }
+.bench-stage-counts dd { margin: 0; }
+.bench-stage-counts dt { font-size: .8rem; color: var(--text-muted); }
+#bench-planning-reports { margin-top: 12px; }
+#bench-preview-mount :is(.studio-heading, .studio-document-head, .studio-limits, #studio-preview-app, #studio-file, label[for=studio-file]) { display: none; }
+#bench-preview-mount .studio-file-picker { display: grid; grid-template-columns: minmax(0, 1fr); }
+#bench-file-results { grid-column: 1 / -1; list-style: none; padding: 0; margin: 0; max-height: 12rem; overflow: auto; }
+#bench-file-results button { text-align: left; overflow-wrap: anywhere; }
+#bench-preview-mount #studio-file-note:empty { display: none; }
+#bench-file-limit { grid-column: 1 / -1; margin: 0; color: var(--text-muted); }
