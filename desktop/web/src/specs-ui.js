@@ -764,24 +764,35 @@ export function initWorkbench(deps) {
     $("#handoff-error").hidden = !message;
   }
 
-  function openHandoff({ reviewed = false } = {}) {
+  function openHandoff({ reviewed = false, role = "review" } = {}) {
     if (handoffPending) return;
     const spec = selected();
     if (!spec) return;
     state.handoffReview = reviewed ? { id: spec.id, revision: spec.revision } : null;
     $("#handoff-reviewed").hidden = !reviewed;
-    $("#handoff-revision").textContent = reviewed ? spec.revision : "";
+    $("#handoff-revision").textContent = reviewed ? spec.revision.slice(0, 10) : "";
     $("#handoff-refresh").hidden = true;
     $("#handoff-spec-preview").hidden = true;
     $("#handoff-submit").disabled = false;
     handoffError("");
     const form = $("#handoff-dialog-form");
     form.elements.scope.required = reviewed;
+    form.elements.role.value = role;
     form.elements.scope.value = "";
     form.elements.checks.value = "";
     for (const key of ["outcome", "files", "reportedChecks"]) form.elements[key].value = "";
-    const from = lastAgent(spec);
-    $("#handoff-from").textContent = from ? agentDisplayName(from) : "nobody yet";
+    function showSource(sessions) {
+      const agents = sessions.filter(session => session.specId === spec.id && session.terminal?.running
+        && !["shell", "external"].includes(session.agent));
+      const current = agents.find(session => session.id === deps.ui.focusedTerminal) ?? agents[0];
+      const agent = reviewed ? current?.agent : lastAgent(spec);
+      $("#handoff-from").textContent = reviewed && current
+        ? agentDisplayName(agent) + " · " + current.id.slice(0, 8)
+        : agent ? agentDisplayName(agent) : "No agent running";
+      $("#handoff-running-note").hidden = !current;
+      return agent;
+    }
+    const from = showSource(deps.ui.state?.sessions ?? []);
     $("#handoff-title").textContent = `Hand off spec ${spec.id}`;
     const to = $("#handoff-to");
     for (const option of to.options) {
@@ -794,6 +805,12 @@ export function initWorkbench(deps) {
     $("#handoff-note").value = "";
     showDialog("handoff-dialog");
     $("#handoff-note").focus();
+    if (reviewed) {
+      const review = state.handoffReview;
+      readWithBusyRetry(api, "/api/workspace").then(workspace => {
+        if (state.handoffReview === review && $("#handoff-dialog").open) showSource(workspace.sessions ?? []);
+      }).catch(() => { /* Keep the last observed session state if the host is busy. */ });
+    }
   }
 
   async function switchBranch() {
@@ -1173,7 +1190,7 @@ export function initWorkbench(deps) {
       if (state.handoffReview !== review || !$("#handoff-dialog").open) return;
       replaceSpec(result);
       state.handoffReview = { id: result.id, revision: result.revision };
-      $("#handoff-revision").textContent = result.revision;
+      $("#handoff-revision").textContent = result.revision.slice(0, 10);
       const preview = $("#handoff-spec-preview");
       preview.querySelector("pre").textContent = result.body;
       preview.hidden = false;

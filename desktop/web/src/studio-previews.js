@@ -277,7 +277,7 @@ export function initStudioPreviews({
       selected = path;
       showChanges(false);
       renderTabs();
-      root.dataset.previewKind = isImage(path) ? "image" : "document";
+      root.dataset.previewKind = $("#studio-canvas-panel").dataset.previewKind = isImage(path) ? "image" : "document";
       $("#studio-show-document").textContent = isImage(path)
         ? "Image"
         : "Document";

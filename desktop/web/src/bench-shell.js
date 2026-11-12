@@ -4,7 +4,7 @@ import { agentAvailability } from "./agent-availability.js";
 import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
 
-export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
+export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
   const app = $("#app");
   const panel = $("#bench-right-panel");
@@ -387,6 +387,8 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     toggleNavigation.setAttribute("aria-expanded", String(navVisible));
     toggleDetails.setAttribute("aria-expanded", String(detailsVisible));
     panel.hidden = !detailsVisible;
+    studio.mountPreview(isBench && terminalView ? $("#bench-preview-mount") : null,
+      detailsVisible && activeTab === "preview");
     $("#bench-right-resize").hidden = !detailsVisible || narrow.matches;
     $(".bench-overlay-scrim").hidden = !app.dataset.benchOverlay;
     // Keep the terminal mounted while an overlay owns the narrow layout.
@@ -396,7 +398,10 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
 
   function selectTab(tab) {
     if (tab === "review" && activeTab !== tab) reviewTab.refreshChecks();
+    if (tab === "preview" && $("#bench-tab-preview").hidden) return;
     activeTab = tab;
+    studio.mountPreview(enabled() && ui.view === "sessions" ? $("#bench-preview-mount") : null,
+      !panel.hidden && tab === "preview");
     for (const button of panel.querySelectorAll("[data-bench-tab]")) {
       const active = button.dataset.benchTab === tab;
       button.setAttribute("aria-selected", String(active));
@@ -455,7 +460,11 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
     const target = event.target;
     if (target.closest("[data-bench-overlay-close]")) return closeOverlay(true);
     const documentButton = target.closest("[data-bench-document]");
-    if (documentButton) return openFile(documentButton.dataset.benchDocument);
+    if (documentButton) {
+      if (!studio.hasPreviewFiles()) return openFile(documentButton.dataset.benchDocument);
+      selectTab("preview");
+      return studio.openPreviewFile(documentButton.dataset.benchDocument);
+    }
     const draft = target.closest("[data-bench-draft]");
     if (draft) {
       const menu = draft.closest(".bench-document-menu");
@@ -510,8 +519,12 @@ export function initBenchShell({ $, api, ui, workbench, showView, selectTerminal
       workbench.refreshSpecs();
     }
   });
+  document.addEventListener("verb:preview-files", () => {
+    $("#bench-tab-preview").hidden = !studio.hasPreviewFiles();
+    if ($("#bench-tab-preview").hidden && activeTab === "preview") selectTab("plan");
+  });
   panel.querySelector('[role="tablist"]').addEventListener("keydown", event => {
-    const tabs = ["plan", "review", "preview"];
+    const tabs = ["plan", "review", "preview"].filter(tab => !$("#bench-tab-" + tab).hidden);
     const index = tabs.indexOf(activeTab);
     const next = { ArrowRight: tabs[(index + 1) % tabs.length], ArrowLeft: tabs[(index + tabs.length - 1) % tabs.length], Home: tabs[0], End: tabs.at(-1) }[event.key];
     if (!next) return;

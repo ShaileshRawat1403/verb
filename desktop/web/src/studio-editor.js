@@ -225,9 +225,12 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       if (generation === request) status(error.message);
     }
   }
+  let previewVisibility = 0;
   async function preview() {
     const wanted = path,
-      generation = ++request;
+      generation = ++request,
+      visibility = ++previewVisibility;
+    const stillVisible = () => visibility === previewVisibility;
     if (dirty(current())) {
       status("Save your draft first. App preview uses a saved file.");
       return;
@@ -235,13 +238,13 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     status("Preparing isolated preview of the saved file…");
     try {
       const doc = await load(wanted);
-      if (generation !== request || wanted !== path || dirty(current())) return;
+      if (!stillVisible() || generation !== request || wanted !== path || dirty(current())) return;
       const result = await api("POST", "/api/studio/preview", {
         workspaceId: capability.workspaceId,
         path: wanted,
         expectedRevision: doc.revision,
       });
-      if (generation !== request || wanted !== path || dirty(current())) return;
+      if (!stillVisible() || generation !== request || wanted !== path || dirty(current())) return;
       if (
         result.workspaceId !== capability.workspaceId ||
         result.revision !== doc.revision ||
@@ -281,7 +284,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       setMode("app");
       status("Loading the saved file in an isolated preview…");
     } catch (error) {
-      if (generation === request) status(error.message);
+      if (stillVisible() && generation === request) status(error.message);
     }
   }
   editor.addEventListener("input", () => {
@@ -365,6 +368,10 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     },
     document() {
       setMode("document");
+    },
+    suspendPreview() {
+      ++previewVisibility;
+      if (mode === "app") setMode("document");
     },
     async connect() {
       try {

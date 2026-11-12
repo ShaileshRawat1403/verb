@@ -21,6 +21,12 @@ export function initStudio({
   agentMark,
 }) {
   const root = $("#view-studio");
+  const canvas = $("#studio-canvas-panel");
+  const canvasHome = document.createComment("Studio preview canvas");
+  canvas.before(canvasHome);
+  let previewMounted = false;
+  let filesRequest;
+
   const state = {
     files: [],
     loaded: false,
@@ -44,7 +50,7 @@ export function initStudio({
     $,
     api,
     onMode(next) {
-      root.dataset.canvasMode = next;
+      root.dataset.canvasMode = canvas.dataset.canvasMode = next;
       if (next === "document") renderDocument();
       else
         setText(
@@ -164,6 +170,26 @@ export function initStudio({
       : intent;
   }
 
+  function loadFiles() {
+    filesRequest ??= refreshFiles().finally(() => { filesRequest = null; });
+    return filesRequest;
+  }
+
+  function mountPreview(mount, visible) {
+    if (mount && canvas.parentElement !== mount) {
+      previewMounted = true;
+      browser.hide();
+      if (!$("#studio-changes-panel").hidden) $("#studio-toggle-changes").click();
+      mount.append(canvas);
+      if (!state.loaded) loadFiles();
+    } else if (!mount && previewMounted) {
+      bridge.suspendPreview();
+      previewMounted = false;
+      canvasHome.after(canvas);
+    }
+    if (!visible && previewMounted) bridge.suspendPreview();
+  }
+
   async function refreshFiles() {
     try {
       const result = await readWithBusyRetry(api, "/api/files");
@@ -171,6 +197,7 @@ export function initStudio({
       state.loaded = true;
       state.truncated = result.truncated;
       renderFileOptions();
+      document.dispatchEvent(new Event("verb:preview-files"));
       // Background file discovery must not replace the browser the person just opened.
       if (!state.selected && $("#studio-browser").hidden) {
         const path =
@@ -606,6 +633,9 @@ export function initStudio({
   });
   return {
     render,
+    mountPreview,
+    openPreviewFile: openFile,
+    hasPreviewFiles: () => state.files.length > 0,
     acceptExternalResult({ source, text }) {
       if (state.context) { toast('A context is already attached to the Studio draft. Remove it before adding another result.'); return false; }
       state.context = { path: `MCP · ${source}`, text: `External, untrusted connector result:\n${text.slice(0, 3800)}${text.length > 3800 ? '\n[Result truncated for this draft]' : ''}` };
@@ -630,13 +660,13 @@ export function initStudio({
     onShowView(view) {
       if (view !== "studio") {
         browser.hide();
-        bridge.document(); // Stop app code on navigation; retain file drafts.
+        if (view !== "sessions" || !previewMounted) bridge.document();
         conversation.panel?.stop();
         return;
       }
       conversation.panel?.start();
       render();
-      if (!state.loaded) refreshFiles();
+      if (!state.loaded) loadFiles();
     },
   };
 }

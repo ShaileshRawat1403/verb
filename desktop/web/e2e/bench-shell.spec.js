@@ -20,6 +20,9 @@ test.beforeAll(async () => {
   cpSync("../../specs", join(project, "specs"), { recursive: true });
   execFileSync("git", ["init", "-q", project]);
   writeFileSync(join(project, "package.json"), JSON.stringify({ scripts: { test: "node -e 'process.exit(1)'" } }));
+  writeFileSync(join(project, "README.md"), "# Bench Preview\n\nA document in the project.");
+  writeFileSync(join(project, "preview.html"), "<!doctype html><h1>Bench preview app</h1>");
+  writeFileSync(join(project, "preview.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/n3sAAAAASUVORK5CYII=", "base64"));
   for (const id of ["090", "091", "092", "093"]) {
     writeFileSync(join(project, `specs/${id}-review.md`), `---\nid: ${id}\ntitle: Review sample ${id}\nstage: review\n---\n## Acceptance criteria\n- [x] A claim without proof\n- [ ] The check must pass\n`);
   }
@@ -129,7 +132,7 @@ for (const width of [1440, 390]) {
       if (mobile) await navigation.click();
       const group = nav.locator('details[data-bench-group="001-bench-consolidation"]');
       await group.locator("summary").click({ position: { x: 6, y: 8 } });
-      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+10/);
+      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+11/);
       await expect(nav.locator('[data-bench-group="unlinked"]')).not.toHaveAttribute("open", "");
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
@@ -138,15 +141,14 @@ for (const width of [1440, 390]) {
       await shot("plan");
       for (const [label, file] of [["Why (BRD)", "brd.md"], ["What (PRD)", "prd.md"]]) {
         await panel.getByRole("button", { name: label }).click();
-        await expect(page.locator("#preview-path")).toHaveText(`work/001-bench-consolidation/${file}`);
-        await run("Open Sessions");
-        if (mobile) await details.click();
+        await expect(panel.locator("#studio-document-path")).toHaveText(`work/001-bench-consolidation/${file}`);
+        await panel.getByRole("tab", { name: "Plan", exact: true }).click();
       }
       await panel.getByRole("tab", { name: "Plan" }).press("ArrowRight");
       await expect(panel.getByRole("tab", { name: "Review", exact: true })).toHaveAttribute("aria-selected", "true");
       await shot("review");
       await panel.getByRole("tab", { name: "Preview" }).click();
-      await expect(panel.getByRole("button", { name: "Open project files" })).toBeVisible();
+      await expect(panel.getByLabel("Canvas file", { exact: true })).toBeVisible();
       await shot("preview");
       await panel.getByRole("tab", { name: "Plan" }).click();
 
@@ -446,9 +448,10 @@ for (const width of [1440, 390]) {
       const id = String(90 + (mobile ? 2 : 0) + (theme === "dark" ? 1 : 0)).padStart(3, "0");
       const headers = { "X-Verb-Token": token };
       const project = join(fixture, "Bench workspace");
-      const shot = name => process.env.VERB_SLICE4_SCREEN_DIR
-        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE4_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
-        : Promise.resolve();
+      const shot = name => {
+        const dir = process.env.VERB_SLICE5_SCREEN_DIR || process.env.VERB_SLICE4_SCREEN_DIR;
+        return dir ? page.screenshot({ animations: "disabled", path: join(dir, `${name}-${width}-${theme}.png`) }) : Promise.resolve();
+      };
       await page.setViewportSize({ width, height: mobile ? 844 : 900 });
       await page.emulateMedia({ colorScheme: theme });
       const marked = await request.post(`${origin}/api/good/mark`, { headers });
@@ -465,6 +468,8 @@ for (const width of [1440, 390]) {
       if (mobile) await page.locator("#bench-toggle-right").click();
       await page.getByRole("tab", { name: "Review", exact: true }).click();
       const panel = page.locator("#bench-review");
+      await expect(panel.locator(".bench-review-verdict")).toHaveCount(0);
+      await expect(panel.getByRole("button", { name: "Hand off for review" })).toBeVisible();
       await expect(panel.getByText("Unproven", { exact: true }).first()).toBeVisible();
       await expect(panel.getByText("Marked complete in the spec. Proof still needed.")).toBeVisible();
       await panel.getByRole("button", { name: "Run a check" }).click();
@@ -474,6 +479,8 @@ for (const width of [1440, 390]) {
       await page.locator("#sdlc-submit").click();
       await expect(panel.locator(".bench-failed-checks")).toContainText("Failed check", { timeout: 30_000 });
       await expect(panel.getByText("All checks passed.")).toBeHidden();
+      await expect(panel.locator(".bench-review-verdict")).toHaveText("Not ready: 1 failed check, 1 unproven");
+      await expect(panel.locator(".bench-proof-list > li").first()).toContainText("Criterion 2");
       await expect(panel.locator(".bench-proof-list > li").first()).toContainText("The check must pass");
       await expect(panel.locator(".bench-proof-list > li").nth(1)).toContainText("Unproven");
       await shot("review");
@@ -493,9 +500,20 @@ for (const width of [1440, 390]) {
       const launched = await request.post(`${origin}/api/specs/${id}/agent`, { headers, data: { agent: "claude", role: "implement" } });
       expect(launched.ok()).toBe(true);
       const first = (await launched.json()).sessionId;
-      await panel.getByRole("button", { name: "Review handoff" }).click();
+      await panel.getByRole("button", { name: "Hand fix to an agent" }).click();
       const form = page.locator("#handoff-dialog-form");
       const oldRevision = await form.locator("#handoff-revision").textContent();
+      expect(oldRevision).toMatch(/^[a-f0-9]{10}$/);
+      await expect(form.getByText("You reviewed the spec as it is now", { exact: false })).toBeVisible();
+      await expect(form.getByLabel("Role")).toHaveValue("implement");
+      await expect(form.locator("#handoff-from")).toHaveText(new RegExp(first.slice(0, 8)));
+      await expect(form.locator("#handoff-running-note")).toBeVisible();
+      if (!mobile) {
+        expect(await form.evaluate(node => node.scrollHeight - node.clientHeight)).toBeLessThanOrEqual(1);
+        const note = await form.locator("#handoff-running-note").boundingBox();
+        const buttons = await form.locator("#handoff-submit").boundingBox();
+        expect(note.y + note.height).toBeLessThanOrEqual(buttons.y);
+      }
       await form.locator("#handoff-to").selectOption("codex");
       await form.getByLabel("Role").selectOption("review");
       await form.getByLabel("Approved scope").fill("Inspect package.json and report why the check fails.");
@@ -540,14 +558,21 @@ for (const width of [1440, 390]) {
       const original = readFileSync(codePath, "utf8");
       try {
         writeFileSync(codePath, original + "\n");
-        await panel.getByRole("button", { name: "View diff since mark" }).click();
+        await panel.getByRole("button", { name: "Changes", exact: true }).click();
         await expect(page.locator("#bench-review-diff pre")).toContainText("package.json");
+        await expect(page.locator("#bench-review-diff-range")).toHaveValue("good");
         await shot("diff");
+        await page.locator("#bench-review-diff-range").selectOption("implementation");
+        await expect(page.locator("#bench-review-diff-scope")).toContainText(/Latest commit|Committed implementation/);
+        await shot("implementation-diff");
         await page.locator("#bench-review-diff").getByRole("button", { name: "Close" }).click();
+        await panel.getByLabel("Git actions").click();
+        await shot("git-menu");
         await panel.getByRole("button", { name: "Review commit" }).click();
         await expect(page.locator("#commit-dialog")).toBeVisible();
         await shot("commit");
         await page.keyboard.press("Escape");
+        await panel.getByLabel("Git actions").click();
         await panel.getByRole("button", { name: "Git transfer" }).click();
         await expect(page.locator("#git-transfer-dialog")).toBeVisible();
         await shot("git-transfer");
@@ -699,6 +724,91 @@ for (const width of [1440, 390]) {
       expect(readFileSync(draftPath, "utf8")).toContain("Improve the plan");
       rmSync(draftPath);
       rmSync(join(fixture, "Bench workspace", "plan-fixture-change.txt"), { force: true });
+    });
+  }
+}
+
+test("Preview stays hidden when the project file browser is empty", async ({ page }) => {
+  await page.route("**/api/files", route => route.fulfill({ json: { files: [], truncated: false } }));
+  const files = page.waitForResponse(response => response.url().endsWith("/api/files"));
+  await page.goto(`${origin}/#${token}`);
+  await files;
+  await expect(page.locator("#bench-tab-preview")).toBeHidden();
+  await page.locator("#bench-tab-plan").press("End");
+  await expect(page.locator("#bench-tab-review")).toHaveAttribute("aria-selected", "true");
+});
+
+for (const width of [1440, 390]) {
+  for (const theme of ["light", "dark"]) {
+    test(`Preview keeps its editor and terminals at ${width} in ${theme}`, async ({ page, request }) => {
+      test.setTimeout(90_000);
+      const mobile = width === 390;
+      const headers = { "X-Verb-Token": token };
+      const shot = name => process.env.VERB_SLICE5_SCREEN_DIR
+        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE5_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
+        : Promise.resolve();
+      for (let i = 0; i < 2; i++) {
+        const response = await request.post(`${origin}/api/terminals`, { headers, data: { agent: "shell" } });
+        expect(response.ok()).toBe(true);
+      }
+      await page.setViewportSize({ width, height: mobile ? 844 : 900 });
+      await page.emulateMedia({ colorScheme: theme });
+      await page.goto(`${origin}/#${token}`);
+      const terminals = page.getByRole("tablist", { name: "Terminals", exact: true });
+      await expect(terminals.getByRole("tab")).toHaveCount(2);
+      await expect(page.locator("#bench-work-tree")).toContainText("Bench consolidation");
+      const originalTile = await page.locator(".terminal-tile.focused").elementHandle();
+      const panel = page.locator("#bench-preview");
+      if (mobile) await page.locator("#bench-toggle-right").click();
+      await page.locator("#bench-tab-preview").click();
+      await expect(panel.locator("#studio-document")).toContainText("A document in the project.");
+      await shot("preview-document");
+      const files = panel.locator("#studio-file");
+      await panel.locator("#studio-file-search").fill("preview");
+      await files.selectOption("preview.png");
+      const image = panel.locator("#studio-preview-image");
+      await expect(image).toBeVisible();
+      await expect.poll(() => image.evaluate(node => node.naturalWidth)).toBe(1);
+      await shot("preview-image");
+      await files.selectOption("preview.html");
+      await panel.getByRole("button", { name: "App preview", exact: true }).click();
+      await expect(panel.frameLocator("#studio-app-frame iframe").getByRole("heading", { name: "Bench preview app" })).toBeVisible();
+      await expect(panel.locator("#studio-app-frame iframe")).toHaveAttribute("sandbox", "allow-scripts");
+      await shot("preview-app");
+      await panel.getByRole("button", { name: "Document", exact: true }).click();
+      if (width === 1440 && theme === "light") {
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        await page.route("**/api/studio/preview", async route => { await gate; await route.continue(); }, { times: 1 });
+        const pending = page.waitForRequest(request => request.url().endsWith("/api/studio/preview"));
+        const response = page.waitForResponse(response => response.url().endsWith("/api/studio/preview"));
+        await panel.getByRole("button", { name: "App preview", exact: true }).click();
+        await pending;
+        await page.locator("#bench-tab-plan").click();
+        release();
+        await response;
+        await page.locator("#bench-tab-preview").click();
+        await expect(panel.locator("#studio-app-frame iframe")).toHaveCount(0);
+      }
+      await panel.getByRole("button", { name: "Edit file", exact: true }).click();
+      await panel.getByRole("button", { name: "Plain text", exact: true }).click();
+      const editor = panel.locator("#studio-editor-text");
+      const draft = "<!doctype html><h1>Unsaved preview draft</h1>";
+      await editor.fill(draft);
+      const originalEditor = await editor.elementHandle();
+      await shot("preview-draft");
+      await page.locator("#bench-tab-review").click();
+      await page.locator("#bench-tab-preview").click();
+      await expect(editor).toHaveValue(draft);
+      if (mobile) await page.getByRole("button", { name: "Close details" }).click();
+      await terminals.getByRole("tab", { selected: false }).click();
+      if (mobile) await page.locator("#bench-toggle-right").click();
+      await expect(editor).toHaveValue(draft);
+      expect(await editor.evaluate((node, previous) => node === previous, originalEditor)).toBe(true);
+      if (mobile) await page.getByRole("button", { name: "Close details" }).click();
+      await terminals.getByRole("tab", { selected: false }).click();
+      expect(await page.locator(".terminal-tile.focused").evaluate((node, previous) => node === previous, originalTile)).toBe(true);
+      expect(readFileSync(join(fixture, "Bench workspace", "preview.html"), "utf8")).toContain("Bench preview app");
     });
   }
 }

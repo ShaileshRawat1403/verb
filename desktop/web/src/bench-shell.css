@@ -321,3 +321,28 @@
 .bench-proof-state[data-proof-state="failed"], .bench-failed-checks { color: var(--danger-text); }
 .bench-needs-entry { width: 100%; overflow-wrap: anywhere; }
 #handoff-spec-preview pre { max-height: 180px; overflow: auto; white-space: pre-wrap; }
+
+#bench-preview-mount .studio-canvas { min-width: 0; padding: 0; }
+#bench-preview-mount :is(#studio-show-browser, #studio-use-selection, #studio-toggle-changes, #studio-expand-preview, #studio-checkout) { display: none; }
+#bench-preview-mount .studio-heading { margin: 0 0 4px; }
+#bench-preview-mount .studio-heading > div { display: none; }
+#bench-preview-mount #studio-file { max-width: 100%; min-width: 0; }
+#bench-preview-mount [data-canvas-mode="edit"] .studio-file-picker,
+#bench-preview-mount [data-canvas-mode="app"] .studio-file-picker { display: none; }
+.bench-review-verdict { font-weight: 650; margin: 8px 0 14px; }
+.bench-proof-list { list-style: none; padding-left: 0; }
+.bench-proof-list > li { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+.bench-git-menu { position: absolute; inset: 100% 0 auto auto; z-index: 2; display: grid; padding: 4px; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; }
+.bench-document-menu .bench-git-menu button { position: static; border: 0; text-align: left; }
+#handoff-dialog .handoff-footer { display: grid; grid-template-columns: auto auto; justify-content: end; margin-top: 10px; padding-top: 8px; }
+#handoff-running-note { grid-column: 1 / -1; justify-self: end; margin: 0; }
+#handoff-dialog .modal-heading { margin-bottom: 10px; }
+#handoff-dialog .proof-hint { margin-block: 5px; }
+#handoff-reviewed { gap: 4px; }
+#handoff-reviewed > p { margin: 4px 0; }
+#handoff-dialog textarea { min-height: 0; }
+@media (min-width: 761px) {
+  .handoff-fields { display: flex; gap: 10px; }
+  .handoff-fields label { flex: 1; min-width: 0; }
+}
+.handoff-fields textarea { display: block; width: 100%; }

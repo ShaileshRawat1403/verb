@@ -895,7 +895,7 @@
         <div class="bench-tabs" role="tablist" aria-label="Spec details">
           <button type="button" id="bench-tab-plan" role="tab" aria-controls="bench-plan" aria-selected="true" data-bench-tab="plan">Plan</button>
           <button type="button" id="bench-tab-review" role="tab" aria-controls="bench-review" aria-selected="false" tabindex="-1" data-bench-tab="review">Review</button>
-          <button type="button" id="bench-tab-preview" role="tab" aria-controls="bench-preview" aria-selected="false" tabindex="-1" data-bench-tab="preview">Preview</button>
+          <button type="button" id="bench-tab-preview" role="tab" hidden aria-controls="bench-preview" aria-selected="false" tabindex="-1" data-bench-tab="preview">Preview</button>
         </div>
         <section id="bench-plan" role="tabpanel" aria-labelledby="bench-tab-plan">
           <div id="bench-plan-spec"><p class="muted">Select a spec from the work tree.</p></div>
@@ -907,13 +907,16 @@
               <div class="modal-heading"><h2 id="bench-review-diff-title">Git diff</h2>
                 <button class="modal-close" type="button" data-close="bench-review-diff" aria-label="Close">×</button>
               </div>
+              <label class="field-label">Compare <select id="bench-review-diff-range">
+                <option value="good">Since last good</option><option value="implementation">Whole implementation</option>
+              </select></label>
               <p id="bench-review-diff-scope" role="status"></p>
               <pre class="sdlc-diff" tabindex="0"></pre>
             </div>
           </dialog>
         </section>
         <section id="bench-preview" role="tabpanel" aria-labelledby="bench-tab-preview" hidden>
-          <button class="secondary-button" type="button" data-view="project">Open project files</button>
+          <div id="bench-preview-mount"></div>
         </section>
       </aside>
       <button type="button" class="bench-overlay-scrim" data-bench-overlay-close aria-label="Close overlay" hidden></button>
@@ -1372,7 +1375,7 @@
           </div>
           <button class="modal-close" type="button" data-close="handoff-dialog" aria-label="Close">×</button>
         </div>
-        <div class="handoff-route"><span id="handoff-from">nobody yet</span><span aria-hidden="true">→</span>
+        <div class="handoff-route"><span id="handoff-from">No agent running</span><span aria-hidden="true">→</span>
           <select id="handoff-to" aria-label="Hand off to">
             <option value="codex">Codex</option>
             <option value="claude">Claude Code</option>
@@ -1384,23 +1387,23 @@
         </div>
         <p class="proof-hint">The note includes open acceptance criteria, recent <code>spec:</code> commits, uncommitted files and the branch. Add anything they can't see:</p>
         <label class="field-label" for="handoff-note">Your note <span>(optional)</span></label
-        ><textarea id="handoff-note" rows="3" maxlength="2000" placeholder="Login works; the email test is flaky on CI. Don't touch the session store."></textarea>
+        ><textarea id="handoff-note" rows="2" maxlength="2000" placeholder="Login works; the email test is flaky on CI. Don't touch the session store."></textarea>
         <div id="handoff-reviewed" hidden>
-          <p>Review spec revision <code id="handoff-revision"></code>.</p>
+          <p>You reviewed the spec as it is now <code id="handoff-revision"></code>.</p>
           <label class="field-label">Role <select name="role"><option value="implement">Implement</option><option value="review">Review</option><option value="investigate">Investigate</option></select></label>
-          <label class="field-label">Approved scope<textarea name="scope" maxlength="600" rows="2"></textarea></label>
-          <label class="field-label">Approved checks<textarea name="checks" maxlength="600" rows="2"></textarea></label>
+          <div class="handoff-fields"><label class="field-label">Approved scope<textarea name="scope" maxlength="600" rows="2"></textarea></label>
+          <label class="field-label">Approved checks<textarea name="checks" maxlength="600" rows="2"></textarea></label></div>
           <details><summary>Reported work (unverified)</summary>
-            <label class="field-label">Outcome<textarea name="outcome" maxlength="300" rows="2"></textarea></label>
+            <div class="handoff-fields"><label class="field-label">Outcome<textarea name="outcome" maxlength="300" rows="2"></textarea></label>
             <label class="field-label">Files<textarea name="files" maxlength="300" rows="2"></textarea></label>
-            <label class="field-label">Check results<textarea name="reportedChecks" maxlength="300" rows="2"></textarea></label>
+            <label class="field-label">Check results<textarea name="reportedChecks" maxlength="300" rows="2"></textarea></label></div>
           </details>
           <details id="handoff-spec-preview" hidden><summary>Read the refreshed spec</summary><pre></pre></details>
           <button class="secondary-button" type="button" id="handoff-refresh" hidden>Refresh spec revision</button>
         </div>
         <p id="handoff-error" role="alert" hidden></p>
-        <p class="proof-hint">The previous agent keeps running. End it yourself when you're ready.</p>
-        <div class="modal-footer">
+        <div class="modal-footer handoff-footer">
+          <p class="proof-hint" id="handoff-running-note" hidden>The current agent keeps running until you end its session.</p>
           <button class="secondary-button" type="button" data-close="handoff-dialog">Cancel</button
           ><button class="primary-button" type="submit" id="handoff-submit">Hand off</button>
         </div>

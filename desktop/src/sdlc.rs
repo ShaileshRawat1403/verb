@@ -308,10 +308,13 @@ fn assemble(spec: &Spec, ledger: &Ledger, source: Option<&Snapshot>) -> Value {
     let criteria: Vec<_> = spec.criteria.iter().map(|c| {
         let key = criterion_key(spec, c.index).unwrap_or_default();
         let latest = ledger.records.iter().rev().find(|r| r.kind == Kind::Evidence && r.criterion.as_deref() == Some(&key));
+        let observed = ledger.records.iter().rev().find(|r| r.kind == Kind::Evidence
+            && r.source == Source::Observed && r.criterion.as_deref() == Some(&key));
         let freshness = latest.map(|r| fresh(r, source, &intent)).unwrap_or("unknown");
         let accepted = latest.is_some_and(|e| e.result == Some(Outcome::Passed) && freshness == "current" && ledger.records.iter().any(|a| a.kind == Kind::Acceptance && a.evidence_id.as_deref() == Some(&e.id)));
         json!({"index": c.index, "text": c.text, "claimed": c.done, "accepted": accepted, "freshness": freshness,
-            "result": latest.and_then(|r| r.result.as_ref()), "evidence": latest})
+            "result": latest.and_then(|r| r.result.as_ref()), "evidence": latest,
+            "observedCheck": observed.map(|r| json!({"result": r.result, "freshness": fresh(r, source, &intent), "label": r.label}))})
     }).collect();
     let accepted = criteria.iter().filter(|c| c["accepted"] == true).count();
     let all_accepted = !criteria.is_empty() && accepted == criteria.len();
@@ -474,7 +477,7 @@ pub(crate) fn enrich_all(
                         json!({"index": row["index"], "accepted": row["accepted"], "freshness": row["freshness"],
                             "result": row["result"], "recorded": !row["evidence"].is_null(),
                             "evidenceId": row["evidence"]["id"], "label": row["evidence"]["label"],
-                            "source": row["evidence"]["source"]})
+                            "source": row["evidence"]["source"], "observedCheck": row["observedCheck"]})
                     }).collect();
                     summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"], "criteria": criteria});
                 }
