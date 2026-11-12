@@ -111,6 +111,49 @@ test("Studio reviews a real project check before execution and keeps evidence ac
   // Leave the original workflow test on its own Spec rather than this independent fixture.
 });
 
+test("Review stops showing Ready after an implementation commit without a full-state refresh", async ({ page, request }) => {
+  const response = await request.post(`${origin}/api/specs`, { headers, data: {
+    title: "Refresh accepted proof after a commit", criteria: ["The feature returns the expected answer"],
+  } });
+  expect(response.ok()).toBeTruthy();
+  const chosen = await response.json();
+  await page.goto(url);
+  const unlinked = page.locator('#bench-work-tree [data-bench-group="unlinked"]');
+  await unlinked.locator("summary").click();
+  await unlinked.locator(`[data-bench-spec="${chosen.id}"]`).click();
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
+  await runCheck(page);
+  await page.locator("#sdlc-check").selectOption("python");
+  await save(page);
+  await review(page).getByRole("button", { name: "Accept evidence", exact: true }).click();
+  await page.locator("#sdlc-text").fill("The observed check proves the criterion for this implementation.");
+  await save(page);
+  const verdict = review(page).locator(".bench-review-verdict");
+  await expect(verdict).toContainText("Ready to ship");
+  for (const path of ["/api/state", "/api/specs"]) {
+    const old = await request.get(origin + path, { headers });
+    expect(old.ok()).toBeTruthy();
+    const json = await old.json();
+    await page.route(`**${path}`, route => route.fulfill({ json }));
+  }
+
+  const implementation = join(repo, "feature.py");
+  const original = readFileSync(implementation, "utf8");
+  try {
+    writeFileSync(implementation, original + "\n# Change the implementation after accepting proof.\n");
+    git("commit", "-qam", "change implementation after accepting proof");
+    await expect(verdict).toHaveText("Not ready: 1 stale check", { timeout: 15_000 });
+    await expect(review(page).getByText("Stale proof", { exact: true })).toBeVisible();
+    await expect(review(page).getByText("Accepted proof", { exact: true })).toHaveCount(0);
+    await page.route(`**/api/specs/${chosen.id}/sdlc`, route =>
+      route.fulfill({ status: 500, json: { error: "Proof source unavailable" } }));
+    await expect(verdict).toHaveText("Not ready: proof freshness unavailable", { timeout: 15_000 });
+  } finally {
+    writeFileSync(implementation, original);
+    git("commit", "-qam", "restore implementation fixture");
+  }
+});
+
 test("complete evidence, acceptance, review and delivery workflow retains provenance and becomes stale after code changes", async ({ page, request }) => {
   test.setTimeout(120_000);
   await page.goto(url);

@@ -1,11 +1,15 @@
 import { readWithBusyRetry } from "./read-retry.js";
 import { checksHtml } from "./view.js";
 
+const PROOF_REFRESH_MS = 4000;
+const PROOF_MAX_AGE_MS = 8000;
+
 function proofState(record) {
   if (record?.result === "failed") return ["failed", "Failed check"];
   if (record?.freshness === "stale") return ["stale", "Stale proof"];
-  if (record?.accepted) return ["accepted", "Accepted proof"];
-  if (!record?.recorded) return ["unproven", "Unproven"];
+  if (!record?.evidence) return ["unproven", "Unproven"];
+  if (record.freshness !== "current") return ["unknown", "Proof freshness unavailable"];
+  if (record.accepted) return ["accepted", "Accepted proof"];
   if (record.result === "passed") return ["pending", "Pass awaiting acceptance"];
   return ["unproven", "Inconclusive proof"];
 }
@@ -15,13 +19,18 @@ const countLabel = (count, noun) => count ? count + " " + noun + (count === 1 ||
 
 export function reviewVerdict(rows) {
   const observed = rows.filter(row => row.record?.observedCheck);
+  if (rows.some(({ record }) =>
+    ((record?.evidence || record?.accepted) && !["current", "stale"].includes(record.freshness))
+    || (record?.observedCheck && !["current", "stale"].includes(record.observedCheck.freshness))))
+    return "Not ready: proof freshness unavailable";
   if (!observed.length) return "";
   const failed = observed.filter(row => row.record.observedCheck.freshness === "current" && row.record.observedCheck.result === "failed");
-  const stale = observed.filter(row => row.record.observedCheck.freshness !== "current");
+  const stale = observed.filter(row => row.record.observedCheck.freshness === "stale");
+  const staleProof = rows.filter(({ record }) => record?.freshness === "stale" && record.observedCheck?.freshness !== "stale");
   const inconclusive = observed.filter(row => row.record.observedCheck.freshness === "current" && row.record.observedCheck.result !== "passed" && row.record.observedCheck.result !== "failed");
-  const unproven = rows.filter(row => !row.record?.accepted && !failed.includes(row));
+  const unproven = rows.filter(row => (!row.record?.accepted || row.record.freshness !== "current") && !failed.includes(row) && row.record?.freshness !== "stale");
   const reasons = [countLabel(failed.length, "failed check"), countLabel(unproven.length, "unproven"),
-    countLabel(stale.length, "stale check"), countLabel(inconclusive.length, "inconclusive check")].filter(Boolean);
+    countLabel(stale.length, "stale check"), countLabel(staleProof.length, "stale proof"), countLabel(inconclusive.length, "inconclusive check")].filter(Boolean);
   return reasons.length ? "Not ready: " + reasons.join(", ") : "Ready to ship: all checks passed, all criteria proven";
 }
 
@@ -33,19 +42,88 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
   let diffSpec;
   const range = $("#bench-review-diff-range");
   let actionPending = false;
+  let active = false;
+  let observation;
+  let pendingRead;
+  let readFailed = false;
+
+  function invalidateProof() {
+    observation = undefined;
+    pendingRead = undefined;
+    readFailed = false;
+  }
+
+  async function refreshProof() {
+    if (!active || document.hidden || !selected || pendingRead) return;
+    const { id, revision } = selected;
+    const read = { started: Date.now() };
+    pendingRead = read;
+    try {
+      const flow = await readWithBusyRetry(api, `/api/specs/${encodeURIComponent(id)}/sdlc`);
+      if (pendingRead !== read) return;
+      if (flow.specRevision !== revision || !flow.source || !Array.isArray(flow.criteria)) {
+        observation = undefined;
+        readFailed = true;
+        if (flow.specRevision && flow.specRevision !== revision) void workbench.refreshSpecs();
+      } else {
+        observation = { flow, started: read.started };
+        readFailed = false;
+      }
+    } catch {
+      if (pendingRead !== read) return;
+      observation = undefined;
+      readFailed = true;
+    } finally {
+      if (pendingRead === read) {
+        pendingRead = undefined;
+        render();
+      }
+    }
+  }
+
+  function recheckProof() {
+    invalidateProof();
+    render();
+    return refreshProof();
+  }
+
+  function setActive(next) {
+    if (active === next) return;
+    active = next;
+    recheckProof();
+  }
+
+  setInterval(() => {
+    if (!active || document.hidden || !selected) return;
+    if (observation && Date.now() - observation.started >= PROOF_MAX_AGE_MS) render();
+    refreshProof();
+  }, PROOF_REFRESH_MS);
+  document.addEventListener("visibilitychange", recheckProof);
+  document.addEventListener("verb:git-changed", recheckProof);
+  document.addEventListener("verb:evidence-changed", event => {
+    if (selected?.id === event.detail.specId) recheckProof();
+  });
 
   const history = $("#bench-evidence-history");
   function render(spec = selected) {
     const sameSpec = selected?.id === spec?.id;
     if (!sameSpec) history.hidden = true;
+    const selectionChanged = !sameSpec || selected?.revision !== spec?.revision;
     selected = spec;
-    const evidence = spec ? workbench.summaryFor(spec)?.sdlc : null;
+    if (selectionChanged) {
+      invalidateProof();
+      refreshProof();
+    }
+    const expired = observation && Date.now() - observation.started >= PROOF_MAX_AGE_MS;
+    const evidence = expired ? undefined : observation?.flow;
     const rows = (spec?.criteria ?? []).map(criterion => {
       const record = evidence?.criteria?.find(row => row.index === criterion.index);
       const [state, label] = evidence?.criteria ? proofState(record) : ["unknown", "Proof unavailable"];
       return { criterion, record, state, label };
     }).sort((left, right) => severity.indexOf(left.state) - severity.indexOf(right.state));
-    const verdict = reviewVerdict(rows);
+    const verdict = readFailed || expired
+      ? "Not ready: proof freshness unavailable"
+      : reviewVerdict(rows);
     const failed = rows.filter(row => row.record?.observedCheck?.result === "failed");
     const good = report?.lastKnownGood;
     const failedForHandoff = failed.some(row => row.record.observedCheck.freshness === "current")
@@ -87,11 +165,11 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
           <small class="bench-criterion-number">Criterion ${criterion.index + 1}</small>
           <strong class="bench-proof-state" data-proof-state="${state}">${label}</strong>
           <div>${esc(criterion.text)}</div>
-          ${criterion.done ? `<small>${record?.accepted ? "Completion claim recorded." : "Marked complete in the spec. Proof still needed."}</small>` : ""}
+          ${criterion.done ? `<small>${state === "accepted" ? "Completion claim recorded." : "Marked complete in the spec. Proof still needed."}</small>` : ""}
           <button class="text-button" type="button" data-bench-review-action="${criterion.done ? "reopen" : "claim"}" data-claim-index="${criterion.index}">${criterion.done ? "Reopen criterion" : "Record completion claim"}</button>
-          ${record?.recorded ? `<p>${record.source === "observed" ? "Verb-observed" : record.source === "agent" ? "Agent-reported" : "Person-reported"} · ${esc(record.label || "")}</p>` : ""}
+          ${record?.evidence ? `<p>${record.evidence.source === "observed" ? "Verb-observed" : record.evidence.source === "agent" ? "Agent-reported" : "Person-reported"} · ${esc(record.evidence.label || "")}</p>` : ""}
           <button class="text-button" type="button" data-bench-review-action="report" data-criterion="${criterion.index}">Record proof</button>
-          ${state === "pending" ? `<button class="text-button" type="button" data-bench-review-action="accept" data-criterion="${criterion.index}" data-evidence="${esc(record.evidenceId)}">Accept evidence</button>` : ""}
+          ${state === "pending" ? `<button class="text-button" type="button" data-bench-review-action="accept" data-criterion="${criterion.index}" data-evidence="${esc(record.evidence.id)}">Accept evidence</button>` : ""}
         </li>`).join("")}</ul>
         ${!rows.length ? '<p class="muted">This spec has no criteria.</p>' : ""}
       </section>
@@ -140,6 +218,7 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
   }
 
   body.addEventListener("click", async event => {
+    if (event.target.closest('[data-action="refresh-checks"]')) recheckProof();
     const button = event.target.closest("[data-bench-review-action]");
     if (!button || !selected || actionPending) return;
     const id = selected.id;
@@ -173,5 +252,5 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
     }
   });
 
-  return { render, refreshChecks, setChecks(value) { report = value; render(); } };
+  return { render, setActive, refreshChecks, setChecks(value) { report = value; render(); } };
 }

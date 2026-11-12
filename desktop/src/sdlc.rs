@@ -160,7 +160,7 @@ pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
     )?;
     let tree = text_git(
         project,
-        &["ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+        &["ls-tree", "-r", "-z", "--full-tree", &commit],
         deadline,
     )?;
     let tree = tree
@@ -219,6 +219,14 @@ pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
             _ => None,
         };
         break;
+    }
+    if text_git(
+        project,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        deadline,
+    )? != commit
+    {
+        return Err("Source changed while proof freshness was being checked.".into());
     }
     Ok(Snapshot {
         tree: digest(tree),
@@ -410,7 +418,7 @@ fn assemble(spec: &Spec, ledger: &Ledger, source: Option<&Snapshot>) -> Value {
         intent,
         serde_json::to_string(&source).unwrap_or_default()
     ));
-    json!({"version": version(ledger), "context": context, "criteria": criteria, "accepted": accepted, "total": spec.criteria.len(),
+    json!({"specRevision": spec.revision, "version": version(ledger), "context": context, "criteria": criteria, "accepted": accepted, "total": spec.criteria.len(),
         "verification": verification, "reviewState": review_state, "review": review, "plan": plan,
         "goal": goal, "ready": ready, "uploaded": uploaded, "source": source, "proofVersion": proof_version,
         "deliveryFailed": delivery_failed,

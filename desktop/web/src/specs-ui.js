@@ -315,8 +315,10 @@ export function initWorkbench(deps) {
         transferReview = await api("POST", "/api/git/transfer", { action, review: transferReview });
         transferRunning = false;
         paintTransfer(`${action === "check" ? "Remote checked." : "Git transfer completed."} ${transferDescription(transferReview)}`, true);
-        await refreshGit();
+        if (action === "download") document.dispatchEvent(new Event("verb:git-changed"));
+        else await refreshGit();
       } catch (error) {
+        if (action === "download") document.dispatchEvent(new Event("verb:git-changed"));
         transferRunning = false;
         // A failure can mean the remote changed or completion is uncertain. Never leave a
         // previously enabled upload button available against that obsolete observation.
@@ -389,7 +391,8 @@ export function initWorkbench(deps) {
     try {
       const result = await api("POST", `/api/specs/${spec.id}/branch`);
       toast(`${result.message}. Recorded in the audit trail.`);
-      await Promise.all([refreshSpecs(), refreshGit()]);
+      document.dispatchEvent(new Event("verb:git-changed"));
+      await refreshSpecs();
     } catch (error) {
       toast(error.message, "error");
     }
@@ -470,7 +473,8 @@ export function initWorkbench(deps) {
       const result = await api("POST", "/api/git/commit-recovery", { version: recovery.version });
       closeDialog("commit-dialog");
       toast(result.message);
-      await Promise.all([refreshGit(), refreshSpecs()]);
+      document.dispatchEvent(new Event("verb:git-changed"));
+      await refreshSpecs();
     } catch (error) {
       $("#commit-scope").textContent = `Repair not confirmed: ${error.message}. Reopen review before trying again.`;
       commitReview = { ...commitReview, recovery: { ...recovery, canRepair: false } };
@@ -496,12 +500,13 @@ export function initWorkbench(deps) {
       });
       closeDialog("commit-dialog");
       toast(`${result.message}.`);
-      await Promise.all([refreshGit(), refreshSpecs()]);
+      document.dispatchEvent(new Event("verb:git-changed"));
+      await refreshSpecs();
     } catch (error) {
       toast(error.message, "error");
       $("#commit-scope").textContent = `Commit not confirmed: ${error.message} Close and reopen this review before trying again. Check Git history if the connection was interrupted; do not resend blindly.`;
       commitReview = null;
-      refreshGit();
+      document.dispatchEvent(new Event("verb:git-changed"));
     } finally {
       commitRunning = false;
       updateCommitSelection();

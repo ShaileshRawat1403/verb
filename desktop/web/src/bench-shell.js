@@ -420,6 +420,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     toggleNavigation.setAttribute("aria-expanded", String(navVisible));
     toggleDetails.setAttribute("aria-expanded", String(detailsVisible));
     panel.hidden = !detailsVisible;
+    reviewTab.setActive(detailsVisible && activeTab === "review");
     studio.mountPreview(terminalView ? $("#bench-preview-mount") : null,
       detailsVisible && activeTab === "preview");
     $("#bench-right-resize").hidden = !detailsVisible || narrow.matches;
@@ -450,6 +451,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     if (tab === "review" && activeTab !== tab) reviewTab.refreshChecks();
 
     activeTab = tab;
+    reviewTab.setActive(ui.view === "sessions" && !panel.hidden && tab === "review");
     if (tab === "review") render();
     studio.mountPreview(ui.view === "sessions" ? $("#bench-preview-mount") : null,
       !panel.hidden && tab === "preview");

@@ -95,6 +95,7 @@ export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDial
       const value = await api("POST", `/api/specs/${id}/sdlc`, request);
       if (current()?.id === id) { flow = value; render(); }
       status(request.action === "run" ? "Check result recorded. Review evidence before accepting it." : "Record saved.", id);
+      document.dispatchEvent(new CustomEvent("verb:evidence-changed", { detail: { specId: id } }));
       await changed();
       closeDialog("sdlc-dialog");
     } catch (error) {
