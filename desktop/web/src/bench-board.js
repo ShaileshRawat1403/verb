@@ -3,6 +3,31 @@ import { STAGES } from "./workbench.js";
 const title = value => value[0].toUpperCase() + value.slice(1);
 const time = value => Date.parse(value) || 0;
 
+export function stageAudit(action) {
+  const move = /^stage \S+ → (\w+)(.*)$/.exec(action);
+  if (!move) return null;
+  const [, stage, tail] = move;
+  const structured = tail.match(/^ \(warnings: (\[.*?\])\)(?: — (.*))?$/);
+  if (structured) {
+    try {
+      const warnings = JSON.parse(structured[1]);
+      if (warnings.every(line => typeof line === "string")) return { stage, warnings, note: structured[2] };
+    } catch { /* A manually edited line may be malformed. */ }
+  }
+  const base = tail.match(/^ \(warning: (.*?)\)(?: — |$)/)?.[1];
+  const [legacyNote, extra] = tail.split(/; SDLC readiness warnings: /, 2);
+  const warnings = [base, extra].filter(Boolean).flatMap(value =>
+    value.replace("Git readiness could not be established; release status is unknown",
+      "Git readiness could not be established. Release status is unknown.")
+      .split(/;\s*/).map(line => line.trim()).filter(Boolean));
+  const note = legacyNote.slice(legacyNote.indexOf(" — ") + 3).trim();
+  return { stage, warnings, note: legacyNote.includes(" — ") && note ? note : undefined };
+}
+
+export function stageSummary(stage, count) {
+  return `Moved to ${title(stage)}${count ? ` with ${count} warning${count === 1 ? "" : "s"}` : ""}`;
+}
+
 export function specSignals(spec, summary) {
   const signals = [];
   for (const proof of summary?.sdlc?.criteria ?? []) {
@@ -13,8 +38,9 @@ export function specSignals(spec, summary) {
       signals.push({ label: "Stale proof", detail: proof.label, criterion: proof.index });
   }
   const stage = (spec.audit ?? []).findLast(entry => entry.action.startsWith("stage "));
-  if (stage?.action.includes(" (warning: "))
-    signals.push({ label: "Recorded gate warning", detail: stage.action });
+  const gate = stage && stageAudit(stage.action);
+  if (gate?.warnings.length)
+    signals.push({ label: "Recorded gate warning", detail: stageSummary(gate.stage, gate.warnings.length), warnings: gate.warnings });
   return signals.map(signal => ({ ...signal, specId: spec.id, specTitle: spec.title, workItemId: spec.work_item }));
 }
 
@@ -43,18 +69,15 @@ export function boardMarkup({ data, specs, signals, summaries, workTitle, showAr
   if (error) return `<p role="alert">${esc(error)}</p><button class="secondary-button" type="button" data-bench-retry>Retry</button>`;
   if (!data) return '<p role="status">Loading work items…</p>';
   const { rows, unlinked } = boardRows(data.items, specs, signals, summaries);
-  const specRow = spec => `<li><button class="text-button" type="button" data-bench-spec="${esc(spec.id)}">${esc(spec.id)} · ${esc(spec.title)}</button>
-    <select data-bench-stage="${esc(spec.id)}" aria-label="Stage for spec ${esc(spec.id)}"${owner ? "" : " disabled"}>
-    ${STAGES.map(stage => `<option value="${stage}"${stage === spec.stage ? " selected" : ""}>${title(stage)}</option>`).join("")}</select></li>`;
   return rows.filter(({ item }) => showArchived || !data.archived?.[item.id]?.archived)
-    .map(({ item, linked, counts, state, needs }) => {
+    .map(({ item, counts, state, needs, latest }) => {
       const archived = data.archived?.[item.id]?.archived;
       return `<section class="bench-board-row" data-board-item="${esc(item.id)}">
         <header><h2><button class="text-button" type="button" data-bench-work="${esc(item.id)}">${esc(workTitle(item))}</button></h2>
           ${owner ? `<button class="text-button" type="button" data-bench-archive="${esc(item.id)}" data-archive-value="${!archived}">${archived ? "Unarchive" : "Archive"}</button>` : ""}</header>
-        <p>${archived ? "Archived" : state}${needs ? " · Needs you" : ""}</p>
+        <p>${[item.size ? title(item.size) : "Size unavailable", archived ? "Archived" : state, needs ? "Needs you" : ""].filter(Boolean).join(" · ")}</p>
+        <p>${latest ? `Last change <time datetime="${new Date(latest).toISOString()}">${esc(new Date(latest).toLocaleString())}</time>` : "No spec activity recorded"}</p>
         <dl class="bench-stage-counts">${STAGES.map(stage => `<div><dt>${title(stage)}</dt><dd>${counts[stage]}</dd></div>`).join("")}</dl>
-        <ul>${linked.map(specRow).join("")}</ul>
       </section>`;
-    }).join("") + `<details class="bench-board-row" data-board-unlinked><summary>Unlinked (${unlinked.length})</summary><ul>${unlinked.map(specRow).join("")}</ul></details>`;
+    }).join("") + `<details class="bench-board-row" data-board-unlinked><summary>Unlinked (${unlinked.length})</summary><p>Open an unlinked spec from the Work sidebar.</p></details>`;
 }

@@ -1,4 +1,4 @@
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView, runPaletteCommand } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -142,7 +142,7 @@ async function selectCanvasFile(page, path) {
 }
 async function openFile(page, path) {
   await page.goto(url);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await selectCanvasFile(page, path);
   await expect(
     page.getByRole("button", { name: "Edit file", exact: true }),
@@ -227,7 +227,7 @@ test("edit, explicit save, app interaction and Git review share one actual file"
     .locator("#commit-dialog")
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
-  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await openWorkspaceView(page, "Sessions");
   await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
 });
 
@@ -566,7 +566,7 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
 
 test("console tabs, image zoom and keyboard resize preserve editable drafts", async ({ page, request }) => {
   await page.goto(url);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await expect(page.locator("#studio-document h1")).toHaveText("Native Studio");
   const work = await page.locator("#studio-work-panel").boundingBox();
   const preview = await page.locator("#studio-canvas-panel").boundingBox();
@@ -628,7 +628,7 @@ test("preview dock reviews real Git diffs and expands without losing the work th
   await expect(frame.getByRole("heading", { name: /A slower Sunday/ })).toBeVisible();
   await frame.getByRole("button", { name: "See walk details" }).click();
   await expect(frame.locator("#details")).toBeVisible();
-  for (let step = 0; step < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== "dark"; step++) await page.locator("#theme-toggle").click();
+  for (let step = 0; step < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== "dark"; step++) await runPaletteCommand(page, "Theme: dark");
   await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", "dark");
   await expect(page.locator(".toast.visible")).toHaveCount(0, { timeout: 8000 });
   await page.screenshot({ path: testInfo.outputPath("console-preview-desktop.png") });
@@ -677,7 +677,7 @@ test("Studio prioritises selected work, keeps details optional and preserves the
   for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(url);
-    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    await openWorkspaceView(page, "Studio");
     if (width === 390) await page.getByRole("button", { name: "Current work", exact: true }).click();
     await page.getByRole("combobox", { name: "Current work", exact: true }).selectOption(spec.id);
     await expect(page.locator("#studio-next-hint")).toHaveText("Inspect the actual changes before deciding what to keep.");
@@ -717,13 +717,13 @@ test("Studio visual themes keep readable hierarchy and phone-sized controls", as
     const created = await page.request.post(`${origin}/api/specs`, { headers, data: { title: "Make the workspace welcoming", problem: "Help someone understand the task and confidently choose their next action.", criteria: ["The next action is readable and reachable"] } });
     const spec = await created.json();
     await page.goto(url);
-    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    await openWorkspaceView(page, "Studio");
     if (width === 390) await page.getByRole("button", { name: "Current work", exact: true }).click();
     await page.getByRole("combobox", { name: "Current work", exact: true }).selectOption(spec.id);
     await expect(page.locator("#studio-next-action")).toBeVisible();
     for (const theme of ["dark", "light"]) {
       for (let i = 0; i < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== theme; i++)
-        await page.getByRole("button", { name: "Change theme", exact: true }).click();
+        await runPaletteCommand(page, `Theme: ${theme}`);
       await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", theme);
       expect(await page.locator("#studio-next-action").evaluate(node => getComputedStyle(node).transitionDuration)).toBe("0s");
       const contrast = await page.locator("#studio-next-hint, #studio-next-action, #studio-stage-label, #studio-conversation-empty").evaluateAll(nodes => {
@@ -943,8 +943,9 @@ test("Studio retries busy file reads, then exposes manual recovery if the host s
     reads++;
     return available ? route.continue() : route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } });
   });
-  await page.goto(url);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  const studio = new URL(url);
+  studio.searchParams.set("view", "studio");
+  await page.goto(studio.href);
   await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.");
   expect(reads).toBe(3);
   available = true;
@@ -1078,7 +1079,7 @@ test("closing a preview while Reload is pending never reopens it", async ({ page
 
 async function openCodeFile(page, path) {
   await page.goto(url);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await selectCanvasFile(page, path);
   await page.getByRole("button", { name: "Edit file", exact: true }).click();
   const code = page.getByRole("textbox", { name: "Code editor", exact: true });
@@ -1264,7 +1265,7 @@ test("Studio pane collapse retains editor drafts and app state, and every pane c
     .click();
   await page.getByRole("button", { name: "Hide preview", exact: true }).click();
   await page
-    .getByRole("button", { name: "Hide navigation", exact: true })
+    .getByRole("button", { name: "Toggle sidebar", exact: true })
     .click();
   expect(
     (await page.locator(".main-content").boundingBox()).width,

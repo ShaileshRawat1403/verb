@@ -1,5 +1,5 @@
 // The spec-driven workbench, driven like a person would: through the browser, against the real host.
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView, runPaletteCommand, terminalAction } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,7 +64,7 @@ test("agent chooser explains isolated availability before a launch", async ({ pa
       restricted: true, programs: ["bash", "claude", "codex", "git"] },
   }));
   await page.goto(url);
-  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("button", { name: "New terminal", exact: true }).click();
   const dialog = page.locator("#session-dialog");
   await expect(dialog.locator('input[value="agy"]')).toBeDisabled();
   await expect(dialog.locator('input[value="opencode"]')).toBeDisabled();
@@ -92,7 +92,7 @@ test("provisioned OpenCode has its own choice and launch errors stay inside the 
     return route.fulfill({ status: 503, json: { error: "All terminal slots on this host are in use." } });
   });
   await page.goto(url);
-  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("button", { name: "New terminal", exact: true }).click();
   const dialog = page.locator("#session-dialog");
   await expect(dialog.locator('input[value="opencode"]')).toBeEnabled();
   await dialog.locator('label:has(input[value="opencode"])').click();
@@ -121,7 +121,7 @@ test("a fresh project opens directly into a native terminal", async ({ page }) =
       { headers: { "X-Verb-Token": TOKEN } });
     return Buffer.from((await result.json()).data, "base64").toString();
   }).toContain("terminal-first-ok");
-  await page.locator("[data-close-terminal]").click();
+  await (await terminalAction(page, "End session")).click();
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
   expect(errors).toEqual([]);
@@ -132,7 +132,8 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(url);
   await page.locator("#quick-terminal-empty").click();
-  await page.locator("[data-terminal-new]").click();
+  await expect(page.getByRole("tab", { name: /Terminal/ })).toHaveCount(1);
+  await runPaletteCommand(page, "New terminal");
   const tabs = page.getByRole("tab", { name: /Terminal/ });
   await expect(tabs).toHaveCount(2);
   await tabs.last().focus();
@@ -145,7 +146,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   const input = page.getByRole("textbox", { name: "Terminal input" }).filter({ visible: true });
   await input.pressSequentially("exit");
   await input.press("Enter");
-  const close = page.getByRole("button", { name: "Close terminal output", exact: true });
+  const close = await terminalAction(page, "Close terminal output");
   await expect(close).toBeVisible();
   await page.waitForTimeout(4500); // Includes the lightweight workspace refresh after exit.
   await expect(close).toBeVisible();
@@ -159,7 +160,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   await expect(page.locator("#toast")).toHaveText(/Temporarily unavailable/);
   await expect(tabs).toHaveCount(2);
   await page.unroute("**/api/terminals/*");
-  await close.click();
+  await (await terminalAction(page, "Close terminal output")).click();
   await expect(page.locator("#end-session-dialog")).not.toBeVisible();
   await expect(tabs).toHaveCount(1);
   await page.waitForTimeout(2500); // A closed output buffer must stay closed after refresh.
@@ -169,7 +170,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   const record = (await state.json()).sessions.find((session) => session.id === closedId);
   expect(record).toBeDefined();
   expect(record.hasTerminal).toBe(false);
-  await page.locator("[data-close-terminal]:visible").click();
+  await (await terminalAction(page, "End session")).click();
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
   expect(errors).toEqual([]);
@@ -178,7 +179,8 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
 test("refresh restores the selected terminal and ignores stale saved selections", async ({ page }) => {
   await page.goto(url);
   await page.locator("#quick-terminal-empty").click();
-  await page.locator("[data-terminal-new]").click();
+  await expect(page.getByRole("tab", { name: /Terminal/ })).toHaveCount(1);
+  await runPaletteCommand(page, "New terminal");
   const tabs = page.getByRole("tab", { name: /Terminal/ });
   await expect(tabs).toHaveCount(2);
   const ids = await tabs.evaluateAll((items) => items.map((item) => item.dataset.tabTerminal));
@@ -221,7 +223,7 @@ test("reduced motion preserves an immediate terminal surface", async ({ page }) 
   const input = page.getByRole("textbox", { name: "Terminal input" });
   await input.pressSequentially("exit");
   await input.press("Enter");
-  await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
+  await (await terminalAction(page, "Close terminal output")).click();
 });
 
 test("a late polling failure cannot overwrite a connected stream", async ({ page }) => {
@@ -247,7 +249,7 @@ test("a late polling failure cannot overwrite a connected stream", async ({ page
   const input = page.getByRole("textbox", { name: "Terminal input" });
   await input.pressSequentially("exit");
   await input.press("Enter");
-  await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
+  await (await terminalAction(page, "Close terminal output")).click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
 });
 
@@ -258,7 +260,7 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
 
   // The default workspace is a terminal; specs remain an explicit optional workflow.
   await expect(page.locator("#view-sessions")).toHaveClass(/active/);
-  await page.locator('.nav-item[data-view="specs"]').click();
+  await openWorkspaceView(page, "Specs");
   await expect(page.getByRole("heading", { name: "Start with a spec" })).toBeVisible();
 
   // Create a spec through the guided form.
@@ -311,7 +313,7 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await page.locator('.nav-item[data-view="specs"]').click();
+  await openWorkspaceView(page, "Specs");
   await expect(page.locator("#spec-title")).toBeVisible();
 
   // The command palette finds and runs actions.
@@ -324,9 +326,9 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
 
   // The theme toggle cycles and the page follows.
   const resolved = () => page.evaluate(() => document.documentElement.dataset.resolvedTheme);
-  await page.locator("#theme-toggle").click(); // system → light
+  await runPaletteCommand(page, "Theme: light");
   expect(await resolved()).toBe("light");
-  await page.locator("#theme-toggle").click(); // light → dark
+  await runPaletteCommand(page, "Theme: dark");
   expect(await resolved()).toBe("dark");
 
   // A terminal opened from the spec appears in the spec's work area.
@@ -360,6 +362,7 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await page.locator("#preview-mode").click();
   await expect(page.locator(".code-lines li")).toHaveText(["# e2e"]);
 
+  await openWorkspaceView(page, "Context");
   // Nudges point at the next useful step; nothing is forced.
   await expect(page.locator("#hub-nudges")).toContainText("project brief");
   await page.locator('[data-nudge="write-brief"]').click();
@@ -370,8 +373,10 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await expect(page.locator("#brief-progress")).toHaveText("2/5 filled");
 
   // Sync writes Verb's section and keeps the user's own text.
-  await page.locator('#view-project [data-action="sync-agents"]').click();
+  await openWorkspaceView(page, "Context");
+  await page.locator('#view-context button[data-action="sync-agents"]').click();
   await expect(page.locator('#agent-files li[data-state="current"]')).toHaveCount(2);
+  await expect(page.locator("#managed-context-git")).toContainText("Shared notes will be committed with AGENTS.md");
   const agents = readFileSync(join(repo, "AGENTS.md"), "utf8");
   expect(agents.startsWith("# Team rules\n\nUse tabs.\n")).toBe(true);
   expect(agents).toContain("**Problem:** Shops lose returning customers.");
@@ -391,17 +396,15 @@ test("host view: read-only machine health", async ({ page }) => {
   await page.goto(url);
   await expect(page.locator("#view-sessions")).toHaveClass(/active/);
   await page.keyboard.press("Alt+Digit7");
-  await expect(page.locator("#view-host")).toHaveClass(/active/);
+  await expect(page.locator("#settings-host")).toBeVisible();
   await expect(page.locator("#host-verb")).toContainText("Version");
   await expect(page.locator("#host-verb")).toContainText("Build");
   await expect(page.locator("#host-verb")).toContainText("Running for");
   await expect(page.locator("#host-memory .usage-number")).toContainText("%");
   await expect(page.locator("#host-storage .usage-bar")).toBeVisible();
   await expect(page.locator("#host-updated")).toContainText("Updated");
-  // The sidebar footer opens the same page.
-  await page.keyboard.press("Alt+Digit1");
-  await page.locator(".sidebar-bottom").click();
-  await expect(page.locator("#view-host")).toHaveClass(/active/);
+  await openWorkspaceView(page, "Host");
+  await expect(page.locator("#settings-host")).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -422,25 +425,13 @@ test("host supervisor visibility does not imply service outage", async ({ page, 
   await expect(services.locator("tr").filter({hasText:"worker"}).locator(".state-dot")).toHaveAttribute("data-state","bad");
 });
 
-test("the older views sit under More, on a desktop and on a phone", async ({ page }) => {
-  const errors = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto(url);
-  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
-  await page.locator(".nav-more > summary").click();
-  await page.locator('.nav-item[data-view="memory"]').click();
-  await expect(page.locator("#view-memory h1")).toHaveText("Shared notes");
-  await expect(page.locator("#breadcrumb-view")).toHaveText("Shared notes");
-  // On a phone, More is a menu: it must open, lead somewhere, and close behind the choice.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('.nav-item[data-view="specs"]').click();
-  await expect(page.locator("#nav-more")).not.toHaveAttribute("open", "");
-  await page.locator(".nav-more > summary").click();
-  await expect(page.locator('.nav-item[data-view="tasks"]')).toBeVisible();
-  await page.locator('.nav-item[data-view="tasks"]').click();
-  await expect(page.locator("#view-tasks")).toHaveClass(/active/);
-  await expect(page.locator("#nav-more")).not.toHaveAttribute("open", "");
-  expect(errors).toEqual([]);
+test("previous Context and Tasks destinations open their replacements", async ({ page }) => {
+  for (const [view, selector] of [["memory", "#view-context"], ["tasks", "#settings-tasks"]]) {
+    const linked = new URL(url);
+    linked.searchParams.set("view", view);
+    await page.goto(linked.href);
+    await expect(page.locator(selector)).toBeVisible();
+  }
 });
 
 test("ask verb answers from evidence and its sources open", async ({ page }) => {
@@ -486,7 +477,7 @@ test("session board and handoff with a written note", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await page.locator('.nav-item[data-view="specs"]').click();
+  await openWorkspaceView(page, "Specs");
   await expect(page.locator("#spec-title")).toBeVisible();
 
   // An earlier test opened a terminal from the spec; the board lists it from the audit trail.
@@ -526,12 +517,12 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
       ...(body ? { data: body } : {}),
     });
   await page.goto(url);
-  await page.locator('.nav-item[data-view="specs"]').click();
+  await openWorkspaceView(page, "Specs");
   await expect(page.locator("#spec-title")).toBeVisible();
 
   // Off until chosen, and it explains its boundaries before asking.
   await expect(page.locator("#observer-label")).toHaveText("Observer off");
-  await page.locator("#observer-pill").click();
+  await runPaletteCommand(page, "Open Observer");
   await expect(page.locator("#observer-panel")).toContainText("never acts on its own");
   await page.locator('[data-observer="enable"]').click();
   // Earlier tests left uncommitted work on main while spec 001 (in Build) has its own branch, so
@@ -547,10 +538,14 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await page.getByRole("button", { name: "Terminal", exact: true }).click();
   await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(before + 1);
   const tile = page.locator("#spec-work .terminal-tile.focused");
-  await tile.locator(".terminal-mount").click();
+  const input = tile.getByRole("textbox", { name: "Terminal input" });
   const fake = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
-  await page.keyboard.type(`echo ${fake}\n`);
-  for (let i = 0; i < 3; i += 1) await page.keyboard.type("ls /verb-e2e-missing\n");
+  await input.pressSequentially(`echo ${fake}`);
+  await input.press("Enter");
+  for (let i = 0; i < 3; i += 1) {
+    await input.pressSequentially("ls /verb-e2e-missing");
+    await input.press("Enter");
+  }
 
   await expect
     .poll(async () => (await (await api("api/observer")).json()).signals.map((s) => s.kind).sort(), { timeout: 15_000 })
@@ -567,7 +562,7 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   const raw = await (await api("api/observer")).text();
   expect(raw).not.toContain(fake.slice(4)); // the value never leaves the server
 
-  await page.locator("#observer-pill").click();
+  await runPaletteCommand(page, "Open Observer");
   await expect(page.locator("#observer-label")).toHaveText("3 to look at");
   await expect(page.locator(".observer-badge")).toHaveCount(3);
   await expect(page.locator('.observer-badge[data-kind="secret"]')).toContainText("Possible secret on screen");
@@ -606,6 +601,7 @@ test("terminal input stays hidden when the real PTY disables echo", async ({ pag
     await page.goto(url);
     await page.keyboard.press("Alt+Digit3");
     await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+    await openWorkspaceView(page, "Session history");
     await page.locator(`#session-list [data-session-id="${sessionId}"]`).click();
     const tile = page.locator(`#terminal-${sessionId}`);
     await expect(tile).toBeVisible();
@@ -678,9 +674,10 @@ test("real detached Git checkout is diagnosed without changing terminal availabi
     await expect.poll(async()=> (await (await page.request.get(`${origin}/api/state`,{headers:{"X-Verb-Token":TOKEN}})).json()).project.gitStatus).toBe("detached");
     await page.goto(url);
     await expect(page.locator("#top-branch")).toHaveText("Detached HEAD");
-    const launch=page.locator("#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty").filter({visible:true}).first();
-    await expect(launch).toBeVisible();
-    await launch.click();
+    const tabs = page.getByRole("tablist", { name: "Terminals", exact: true }).getByRole("tab");
+    const before = await tabs.count();
+    await runPaletteCommand(page, "New terminal");
+    await expect(tabs).toHaveCount(before + 1);
     const tile=page.locator(".terminal-tile.focused");
     await expect(tile).toBeVisible();
     const id=(await tile.getAttribute("id")).slice("terminal-".length);
@@ -708,7 +705,7 @@ test("two native sessions share project files and reattach to the same processes
     await input().press("Enter");
     await expect.poll(()=>output(ids[0])).toMatch(/first-session-ok:\d+/);
     const firstPid=(await output(ids[0])).match(/first-session-ok:(\d+)/)[1];
-    await page.locator("[data-terminal-new]").click();
+    await runPaletteCommand(page, "New terminal");
     const tabs=page.getByRole("tab",{name:/Terminal/});
     await expect(tabs).toHaveCount(2);
     ids.push(await tabs.last().getAttribute("data-tab-terminal"));
@@ -737,7 +734,7 @@ test("two native sessions share project files and reattach to the same processes
     await expect(page.locator(`#terminal-${ids[1]} .terminal-state`)).toContainText("Connected");
     await input().pressSequentially("printf '\\162eload-second:%s\\n' \"$$\"; exit");await input().press("Enter");
     await expect.poll(()=>output(ids[1])).toContain(`reload-second:${secondPid}`);
-    await expect(page.getByRole("button",{name:"Close terminal output",exact:true})).toBeVisible();
+    await expect(await terminalAction(page, "Close terminal output")).toBeVisible();
     await expect.poll(async()=> {
       const snapshot=await (await page.request.get(`${origin}/api/state`,{headers})).json();
       return snapshot.sessions.find(session=>session.id===ids[1])?.terminal.running;

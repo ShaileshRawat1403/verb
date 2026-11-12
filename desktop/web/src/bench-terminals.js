@@ -1,6 +1,6 @@
 import { readWithBusyRetry } from "./read-retry.js";
 
-export function initBenchTerminals({ $, api, ui, shell, workbench, showDialog, closeDialog, refreshState, toast, toggleSplit }) {
+export function initBenchTerminals({ $, api, ui, workbench, showDialog, closeDialog, refreshState, toast, toggleSplit }) {
   const noteOffers = new Set();
   const savedNotes = new Set();
   const focused = () => ui.state?.sessions.find(session => session.id === ui.focusedTerminal);
@@ -9,7 +9,7 @@ export function initBenchTerminals({ $, api, ui, shell, workbench, showDialog, c
   function render() {
     const strip = $("#bench-terminal-context");
     const session = focused();
-    strip.hidden = !shell.enabled() || ui.view !== "sessions" || !session;
+    strip.hidden = ui.view !== "sessions" || !session;
     if (strip.hidden) return;
     const terminal = ui.terminals.get(session.id);
     const ended = terminal?.ended || session.state === "ended";
@@ -37,7 +37,7 @@ export function initBenchTerminals({ $, api, ui, shell, workbench, showDialog, c
 
   function openLaunch(specId = "") {
     const form = $("#session-form");
-    $("#bench-launch-assignment").hidden = !shell.enabled();
+    $("#bench-launch-assignment").hidden = false;
     options(form.elements.specId, specId);
     form.elements.role.disabled = !form.elements.specId.value;
     $("#session-launch-error").hidden = true;
@@ -104,7 +104,7 @@ export function initBenchTerminals({ $, api, ui, shell, workbench, showDialog, c
   });
 
   async function offerNote(id, automatic = false) {
-    if (!shell.enabled() || !owner() || !id || savedNotes.has(id) || (automatic && noteOffers.has(id))) return;
+    if (!owner() || !id || savedNotes.has(id) || (automatic && noteOffers.has(id))) return;
     if (!ui.state?.sessions.some(session => session.id === id && session.specId)) return;
     const dialog = $("#bench-note-dialog");
     if (dialog.open) return;

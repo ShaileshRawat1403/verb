@@ -1,4 +1,4 @@
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, runPaletteCommand } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -42,7 +42,7 @@ test("shared list and board support keyboard selection, attention filters and re
   await page.goto(url); await page.keyboard.press("Alt+Digit1");
   await expect(page.locator("#spec-work-items article")).toHaveCount(2);
   await expect(page.locator("#spec-attention-list")).toContainText("Review requested");
-  const board = page.getByRole("button", { name: "Board", exact: true });
+  const board = page.locator("#spec-view-board");
   await board.focus(); await page.keyboard.press("Space");
   await expect(board).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".spec-board-column")).toHaveCount(6);
@@ -92,7 +92,7 @@ test("phone layout keeps named controls usable without dragging or motion", asyn
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(url); await page.keyboard.press("Alt+Digit1");
-  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await page.locator("#spec-view-board").click();
   await expect(page.locator("#spec-work-items article")).toHaveCount(2);
   const overflow = await page.evaluate(() => [...document.querySelectorAll("body *")]
     .filter(node => node.getBoundingClientRect().right > innerWidth && getComputedStyle(node).position !== "fixed")
@@ -111,7 +111,7 @@ test("phone layout keeps named controls usable without dragging or motion", asyn
   await page.getByLabel("Show stage", { exact: true }).selectOption("all");
   for (const theme of ["dark", "light"]) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    await page.getByRole("button", { name: "Board", exact: true }).hover();
+    await page.locator("#spec-view-board").hover();
     const contrasts = await page.evaluate(() => {
       const luminance = color => {
         const values = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(n => n / 255).map(n => n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4);
@@ -177,7 +177,7 @@ test("an unreadable individual Spec surfaces an error and refuses new IDs withou
 
 test("desktop board preserves stage order, scrolls by keyboard and remembers focused filters", async ({ page }) => {
   await page.goto(url); await page.keyboard.press("Alt+Digit1");
-  await page.getByRole("button", { name: "Board", exact: true }).click();
+  await page.locator("#spec-view-board").click();
   await expect(page.locator(".spec-board-column")).toHaveCount(6);
   const rows = await page.locator(".spec-board-column").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().top)));
   expect(new Set(rows).size).toBe(1);
@@ -198,7 +198,7 @@ test("desktop board preserves stage order, scrolls by keyboard and remembers foc
   await expect(page.locator("#spec-work-items article")).toHaveCount(2);
   await page.getByLabel("Show stage", { exact: true }).selectOption("review");
   await page.reload(); await page.keyboard.press("Alt+Digit1");
-  await expect(page.getByRole("button", { name: "Board", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#spec-view-board")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Show stage", { exact: true })).toHaveValue("review");
   await expect(page.locator("#spec-work-items article")).toHaveCount(1);
   await page.screenshot({ path: test.info().outputPath("stage-focused-board.png") });
@@ -220,7 +220,7 @@ test("overview controls and compact facts remain readable in both themes and lay
     if (await clear.isEnabled()) await clear.click();
     for (const theme of ["dark", "light"]) {
       for (let n = 0; n < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== theme; n++)
-        await page.getByRole("button", { name: "Change theme", exact: true }).click();
+        await runPaletteCommand(page, `Theme: ${theme}`);
       await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", theme);
       await page.getByRole("button", { name: "List", exact: true }).click();
       await expect(page.locator("#spec-work-items article")).toHaveCount(6);
@@ -243,7 +243,7 @@ test("overview controls and compact facts remain readable in both themes and lay
       samples.forEach(sample=>expect(sample.ratio,`${theme}: ${sample.text}`).toBeGreaterThanOrEqual(4.5));
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       await page.screenshot({path:test.info().outputPath(`work-list-${theme}-${width}.png`)});
-      await page.getByRole("button", { name: "Board", exact: true }).click();
+      await page.locator("#spec-view-board").click();
       await expect(page.locator("#spec-work-items article")).toHaveCount(6);
       expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
       await page.screenshot({path:test.info().outputPath(`work-board-${theme}-${width}.png`)});

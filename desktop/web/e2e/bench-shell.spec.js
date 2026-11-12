@@ -133,7 +133,7 @@ for (const width of [1440, 390]) {
       if (mobile) await navigation.click();
       const group = nav.locator('details[data-bench-group="001-bench-consolidation"]');
       await group.locator("summary").click({ position: { x: 6, y: 8 } });
-      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+12/);
+      await expect(group.locator("summary")).toHaveText(/Bench consolidation\s+13/);
       await expect(nav.locator('[data-bench-group="unlinked"]')).not.toHaveAttribute("open", "");
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
@@ -234,26 +234,24 @@ for (const width of [1440, 390]) {
       await shot("needs-you");
       await openSettings();
       await shot("settings");
-      const legacy = page.getByRole("checkbox", { name: "Use previous navigation" });
-      await legacy.check();
-      await expect(app).not.toHaveClass(/bench-layout/);
+      await expect(page.getByRole("checkbox", { name: "Use previous navigation" })).toHaveCount(0);
+      await expect(app).toHaveClass(/bench-layout/);
       const viewLinks = page.getByRole("navigation", { name: "Workspace views" });
       await viewLinks.getByRole("button", { name: "Studio" }).click();
       if (mobile) await page.locator("#studio-focus-work").click();
       const draft = page.locator("#studio-intent");
       const newChange = page.locator("#studio-new-change-toggle");
       if (await newChange.isVisible()) await newChange.click();
-      await draft.fill("Keep this draft through the layout switch");
+      await draft.fill("Keep this draft through navigation");
       await openSettings();
-      await legacy.uncheck();
       await expect(app).toHaveClass(/bench-layout/);
       await viewLinks.getByRole("button", { name: "Studio" }).click();
-      await expect(draft).toHaveValue("Keep this draft through the layout switch");
+      await expect(draft).toHaveValue("Keep this draft through navigation");
       await openSettings();
       await viewLinks.getByRole("button", { name: "Sessions" }).click();
       await expect(tile).toHaveAttribute("id", id);
       expect(await tile.evaluate((node, previous) => node === previous, domTile)).toBeTruthy();
-      await command("after-layout-switch");
+      await command("after-navigation");
       await terminalMenu.click();
       await page.getByRole("button", { name: "End session", exact: true }).click();
       await expect(page.locator("#end-session-dialog")).toBeVisible();
@@ -591,8 +589,8 @@ for (const width of [1440, 390]) {
       const id = String(94 + (mobile ? 2 : 0) + (theme === "dark" ? 1 : 0)).padStart(3, "0");
       const headers = { "X-Verb-Token": token };
       const project = join(fixture, "Bench workspace");
-      const shot = name => process.env.VERB_SLICE6_SCREEN_DIR
-        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE6_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
+      const shot = name => (process.env.VERB_SLICE7A_SCREEN_DIR || process.env.VERB_SLICE6_SCREEN_DIR)
+        ? page.screenshot({ animations: "disabled", path: join(process.env.VERB_SLICE7A_SCREEN_DIR || process.env.VERB_SLICE6_SCREEN_DIR, `${name}-${width}-${theme}.png`) })
         : Promise.resolve();
       await page.setViewportSize({ width, height: mobile ? 844 : 900 });
       await page.emulateMedia({ colorScheme: theme });
@@ -616,6 +614,8 @@ for (const width of [1440, 390]) {
       const unlinked = page.locator("[data-board-unlinked]");
       await expect(unlinked).not.toHaveAttribute("open", "");
       await expect(row.getByText("In progress", { exact: false })).toBeVisible();
+      await expect(row).toContainText("Standard");
+      await expect(row.locator("time")).toHaveAttribute("datetime", /^\d{4}-\d{2}-\d{2}T/);
       await expect(row.locator(".bench-stage-counts dt")).toHaveText(["Spec", "Plan", "Build", "Verify", "Review", "Ship"]);
       await shot("board");
       const brd = join(project, "work", "001-bench-consolidation", "brd.md");
@@ -623,13 +623,25 @@ for (const width of [1440, 390]) {
       await row.getByRole("button", { name: "Archive", exact: true }).click();
       await expect(row).toHaveCount(0);
       await page.getByLabel("Show archived").check();
-      await expect(row.getByText("Archived", { exact: true })).toBeVisible();
+      await expect(row.getByText(/\bArchived\b/)).toBeVisible();
       await shot("board-archived");
       await row.getByRole("button", { name: "Unarchive", exact: true }).click();
       await expect(row.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
       expect(readFileSync(brd, "utf8")).toBe(before);
 
-      await unlinked.locator("summary").click();
+      await expect(page.locator("#view-bench-board select")).toHaveCount(0);
+      const selectFixtureSpec = async () => {
+        if (mobile && !(await nav.isVisible())) {
+          if (await page.locator("#app").getAttribute("data-bench-overlay") === "details") await page.keyboard.press("Escape");
+          await page.locator("#bench-toggle-navigation").click();
+        }
+        const group = nav.locator('[data-bench-group="unlinked"]');
+        if (!(await group.evaluate(node => node.open))) await group.locator("summary").click();
+        await group.locator(`[data-bench-spec="${id}"]`).click();
+        if (mobile && !(await page.locator("#bench-right-panel").isVisible())) await page.locator("#bench-toggle-right").click();
+        await page.locator("#bench-tab-plan").click();
+      };
+      await selectFixtureSpec();
       const stage = page.getByLabel(`Stage for spec ${id}`);
       await stage.selectOption("ship");
       await expect(page.locator("#stage-warnings")).toBeVisible();
@@ -661,10 +673,18 @@ for (const width of [1440, 390]) {
       const gate = needs.locator("section").filter({ hasText: `Recorded gate warning · ${id}` });
       const waiting = needs.locator("section").filter({ hasText: "Waiting for you" });
       await expect(failed).toBeVisible();
-      await expect(gate).toBeVisible();
+      await expect(gate.getByText(/^Moved to Ship with \d+ warnings$/)).toBeVisible();
+      await expect(gate.locator("li").first()).toBeVisible();
+      await expect(gate).not.toContainText("SDLC readiness");
+      await expect(failed).toContainText("Clears when the check passes.");
       asking = [session];
       await expect(waiting).toBeVisible({ timeout: 10_000 });
+      await expect(waiting.getByRole("button", { name: "Mark handled" })).toHaveCount(0);
       await shot("needs-you");
+      await go("Board");
+      await expect(page.locator("#bench-board-attention-list")).toContainText(`Failed check · ${id}`);
+      await shot("board-attention");
+      await go(/Needs you/);
       await waiting.getByRole("button", { name: "Open session" }).click();
       await expect(page.locator("#view-sessions")).toBeVisible();
       await go(/Needs you/);
@@ -690,8 +710,7 @@ for (const width of [1440, 390]) {
         await shot("stale-proof");
       } finally { writeFileSync(html, saved); }
 
-      await go("Board");
-      if (!(await unlinked.evaluate(node => node.open))) await unlinked.locator("summary").click();
+      await selectFixtureSpec();
       await stage.selectOption("spec");
       await expect(page.locator("#stage-warnings")).toBeHidden();
       await page.locator("#stage-dialog-submit").click();
@@ -866,7 +885,7 @@ for (const width of [1440, 390]) {
       test.setTimeout(90_000);
       const mobile = width === 390;
       const headers = { "X-Verb-Token": token };
-      const dir = process.env.VERB_SLICE6_SCREEN_DIR || process.env.VERB_SLICE5_SCREEN_DIR;
+      const dir = process.env.VERB_SLICE7A_SCREEN_DIR || process.env.VERB_SLICE6_SCREEN_DIR || process.env.VERB_SLICE5_SCREEN_DIR;
       const shot = name => dir
         ? page.screenshot({ animations: "disabled", path: join(dir, `${name}-${width}-${theme}.png`) })
         : Promise.resolve();
@@ -887,6 +906,7 @@ for (const width of [1440, 390]) {
       await expect(panel.locator("#studio-document")).toContainText("A document in the project.");
       await shot("preview-document");
       await expect(panel.getByLabel("Canvas file", { exact: true })).toBeHidden();
+      await expect(panel.getByRole("button", { name: "Close current preview" })).toBeHidden();
       await expect(panel.getByRole("button", { name: "Refresh canvas", exact: true })).toBeHidden();
       const search = panel.locator("#studio-file-search");
       await search.fill("preview");
@@ -936,6 +956,86 @@ for (const width of [1440, 390]) {
       await terminals.getByRole("tab", { selected: false }).click();
       expect(await page.locator(".terminal-tile.focused").evaluate((node, previous) => node === previous, originalTile)).toBe(true);
       expect(readFileSync(join(fixture, "Bench workspace", "preview.html"), "utf8")).toContain("Bench preview app");
+    });
+  }
+}
+
+for (const width of [1440, 390]) {
+  for (const theme of ["light", "dark"]) {
+    test(`Context and Settings cutover at ${width} in ${theme}`, async ({ page, request }) => {
+      test.setTimeout(60_000);
+      const headers = { "X-Verb-Token": token };
+      const mobile = width === 390;
+      const project = join(fixture, "Bench workspace");
+      const dir = process.env.VERB_SLICE7A_SCREEN_DIR;
+      const shot = name => dir && page.screenshot({ animations: "disabled", path: join(dir, `${name}-${width}-${theme}.png`) });
+      const launched = await request.post(`${origin}/api/terminals`, { headers, data: { agent: "shell" } });
+      expect(launched.ok()).toBe(true);
+      const session = (await launched.json()).sessionId;
+      const title = `Cutover task ${width} ${theme}`;
+      const task = await request.post(`${origin}/api/tasks`, { headers, data: { title, brief: "Verify the full queue." } });
+      expect(task.ok()).toBe(true);
+      await page.setViewportSize({ width, height: mobile ? 844 : 900 });
+      await page.emulateMedia({ colorScheme: theme });
+      await page.addInitScript(() => localStorage.setItem("verb.layout.navigation", "legacy"));
+      await page.goto(`${origin}/?view=memory#${token}`);
+      const context = page.locator("#view-context");
+      await expect(context).toBeVisible();
+      await expect(page.locator("#app")).toHaveClass(/bench-layout/);
+      await expect(context.getByRole("heading", { name: "Shared notes", exact: true })).toBeVisible();
+      const brief = join(project, "docs", "project", "BRIEF.md");
+      mkdirSync(join(project, "docs", "project"), { recursive: true });
+      writeFileSync(brief, "# Project brief\n\n## Problem\n\nA shared place to plan.\n\n## Scope\n\nThis checkout.\n\n## Constraints\n\nBounded notes.\n");
+      const refresh = context.getByRole("button", { name: "Refresh context" });
+      await refresh.click();
+      await expect(context.locator("#context-brief-text")).toContainText("A shared place to plan.");
+      await expect(context.locator("#managed-context-size")).toContainText("/ 8192 bytes");
+      await expect(context.locator("#managed-context-preview")).toContainText("A shared place to plan.");
+      const sync = context.getByRole("button", { name: "Sync agent context", exact: true });
+      await sync.click();
+      await expect(context.locator("#agent-files [data-state=current]")).toHaveCount(2);
+      await expect(context.locator("#managed-context-git")).toContainText("Git");
+      expect(readFileSync(join(project, ".git", "info", "exclude"), "utf8")).toContain("/AGENTS.md");
+      await context.getByRole("heading", { name: "Context", exact: true }).scrollIntoViewIfNeeded();
+      await shot("context");
+      const instructions = join(project, "AGENTS.md");
+      writeFileSync(instructions, readFileSync(instructions, "utf8").replace("A shared place to plan.", "External edit."));
+      await refresh.click();
+      await expect(context.locator("#agent-files [data-state=outdated]")).toHaveCount(1);
+      await shot("context-stale");
+      await sync.click();
+      await expect(context.locator("#agent-files [data-state=current]")).toHaveCount(2);
+
+      const nav = page.locator("#bench-navigation");
+      if (mobile) await page.locator("#bench-toggle-navigation").click();
+      await nav.getByRole("button", { name: "Settings", exact: true }).click();
+      const settings = page.locator("#view-settings");
+      await expect(settings.locator("#host-verb")).toContainText("Version");
+      await shot("settings-host");
+      await settings.getByRole("button", { name: "Connections", exact: true }).click();
+      await expect(settings.locator("#settings-connections")).toBeVisible();
+      await shot("settings-connections");
+      await settings.getByRole("button", { name: "Tasks", exact: true }).click();
+      await expect(settings.getByRole("searchbox", { name: "Find a task" })).toBeVisible();
+      await expect(settings.locator("#task-list")).toContainText(title);
+      await shot("settings-tasks");
+      await settings.getByRole("button", { name: "Session history", exact: true }).click();
+      await expect(settings.locator(`#session-list [data-session-id="${session}"]`)).toBeVisible();
+      await shot("settings-session-history");
+      await settings.getByRole("button", { name: "Phone pairing", exact: true }).click();
+      await expect(settings.locator(`[data-phone-terminal="${session}"]`)).toBeVisible();
+      await shot("settings-phone");
+      // Use the real terminal-scoped pairing offer, renew it and revoke it.
+      await settings.locator(`[data-phone-terminal="${session}"]`).click();
+      const pairing = page.locator("#phone-dialog");
+      await expect(pairing).toBeVisible();
+      await expect(pairing.locator("#phone-qr")).toHaveAttribute("src", /^data:image\/png/);
+      const originalLink = await pairing.locator("#phone-link").inputValue();
+      await pairing.locator("#phone-renew").click();
+      await expect(pairing.locator("#phone-link")).not.toHaveValue(originalLink);
+      await pairing.locator("#phone-stop").click();
+      await expect(pairing).toBeHidden();
+      rmSync(brief);
     });
   }
 }

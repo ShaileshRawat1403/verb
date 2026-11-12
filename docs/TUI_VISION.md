@@ -473,4 +473,4 @@ If yes, the boundary is right.
 * `docs/PRODUCT_VISION.md` — why Verb exists.
 * `docs/PRD.md` — the problem, the pillars, the non-goals.
 * `docs/ROADMAP.md` — M1 is built and frozen for dogfooding.
-* `docs/DESKTOP_MVP.md` — what the desktop backend already provides.
+* `docs/history/DESKTOP_MVP.md` — what the desktop backend already provides.

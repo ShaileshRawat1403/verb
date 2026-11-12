@@ -74,8 +74,8 @@ export function attachStream(tile, session, terminal, deps) {
     if (b) setMode(b.dataset.viewMode);
   });
 
-  // Agent sessions open as chat when the project has the stream on; otherwise as the terminal.
-  deps.settings.get().then((enabled) => {
+  // Preserve the phone conversation when the project opted in. Desktop starts in the terminal.
+  if (deps.autoOpen) deps.settings.get().then((enabled) => {
     if (enabled && !terminal.closed) setMode("stream");
   });
 

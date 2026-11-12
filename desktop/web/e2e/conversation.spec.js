@@ -1,7 +1,7 @@
 // The conversation flow against the real `verb web` binary, with a scripted stand-in for Claude Code
 // (e2e/fixtures/fake-claude.mjs) that writes Claude Code's own log and status formats. Real Claude
 // Code is exercised separately; this suite makes every state reachable on demand.
-import { test, expect, useLegacyLayout } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView, terminalAction } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,9 +51,14 @@ async function startClaude(page) {
 }
 
 async function openChat(page, id) {
-  const tile = page.locator(`.terminal-tile[data-session="${id}"], [data-terminal="${id}"]`).first();
-  await page.getByRole("button", { name: "Chat", exact: true }).first().click();
-  return page.locator(".agent-stream:not([hidden])").first();
+  const tab = page.locator(`[data-tab-terminal="${id}"]`);
+  await expect(tab).toBeVisible();
+  if (await tab.getAttribute("aria-selected") !== "true") await tab.click();
+  const chat = page.locator(`#terminal-${id} .agent-stream`);
+  if (!(await chat.isVisible())) {
+    await (await terminalAction(page, "Open chat")).click();
+  }
+  return chat;
 }
 
 test.describe.configure({ mode: "serial" });
@@ -164,7 +169,7 @@ test("a permission prompt closes chat and is answered only in the terminal", asy
   // Raw terminal input is never gated by readiness: the person answers the provider's prompt.
   const typed = await call("POST", `/api/terminals/${session}/input`, { data: "1" });
   expect(typed.status).toBe(200);
-  await page.getByRole("button", { name: "Chat", exact: true }).first().click();
+  await openChat(page, session);
   await expect(chat.locator(".conv-agent").last()).toContainText("Record the approval step", { timeout: 15000 });
   await expect(chat.locator(".conv-chip")).toHaveText("Waiting for you", { timeout: 10000 });
 });
@@ -228,7 +233,6 @@ test("a resumed attempt names the same conversation and keeps the session", asyn
 
 test("turning the stream off clears at once, leaves the log, and reports each device", async ({ page, browser }) => {
   const other = await browser.newContext();
-  await useLegacyLayout(other);
   const second = await other.newPage();
   await second.goto(url);
   await openChat(second, session);
@@ -262,7 +266,7 @@ test("turning the stream off clears at once, leaves the log, and reports each de
 
 test("Studio reads the same conversation and opens the agent's files in the preview pane", async ({ page }) => {
   await page.goto(url);
-  await page.locator('.nav-item[data-view="studio"]').first().click();
+  await openWorkspaceView(page, "Studio");
   await page.locator("#studio-conversation-session").selectOption(session);
   const panel = page.locator("#studio-conversation-mount");
   await expect(panel.locator(".conv-agent").first()).toBeVisible();
@@ -293,11 +297,10 @@ test("Studio reads the same conversation and opens the agent's files in the prev
 
 test("phone Studio keeps chat primary and preserves a separate work draft", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-  await useLegacyLayout(context);
   const page = await context.newPage();
   try {
     await page.goto(url);
-    await page.locator('.nav-item[data-view="studio"]').first().click();
+    await openWorkspaceView(page, "Studio");
     await page.getByRole("button", { name: "Current work", exact: true }).click();
     await page.locator("#studio-conversation-session").selectOption(session);
     const panel = page.locator("#studio-conversation-mount");
@@ -319,7 +322,6 @@ test("phone Studio keeps chat primary and preserves a separate work draft", asyn
 
 test("phone width: one surface at a time, reachable controls, keyboard-only sending", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-  await useLegacyLayout(context);
   const page = await context.newPage();
   await page.goto(url);
   const chat = await openChat(page, session);
@@ -358,7 +360,7 @@ test("stream off in Studio clears hidden Sessions panels and stored sent text be
   await call("POST", "/api/stream", { enabled: true });
   const chat = await openChat(page, session);
   await expect(chat.locator(".conv-agent").first()).toBeVisible();
-  await page.locator('.nav-item[data-view="studio"]').first().click();
+  await openWorkspaceView(page, "Studio");
   await page.locator("#studio-conversation-session").selectOption(session);
   const studio = page.locator("#studio-conversation-mount");
   await expect(studio.locator(".conv-agent").first()).toBeVisible();

@@ -1,4 +1,4 @@
-import { test, expect, chromium } from "./legacy-layout.js";
+import { test, expect, chromium, openWorkspaceView } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -124,7 +124,7 @@ test("external hosts cannot start local Chromium and pairing is owner-only and o
       "--server",
       base,
       "--chromium",
-      chromium.executablePath(),
+      (process.env.VERB_TEST_CHROMIUM || chromium.executablePath()),
     ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -212,7 +212,7 @@ test("Studio pairs, discovers the Mac location and revokes a running browser", a
   page,
 }) => {
   await page.goto(base + "/#" + TOKEN);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await page.getByRole("button", { name: "Browser", exact: true }).click();
   await page.locator("#studio-browser-pairing summary").click();
   await page
@@ -231,7 +231,7 @@ test("Studio pairs, discovers the Mac location and revokes a running browser", a
       "--server",
       base,
       "--chromium",
-      chromium.executablePath(),
+      (process.env.VERB_TEST_CHROMIUM || chromium.executablePath()),
     ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -324,7 +324,7 @@ test("Studio recovers when the companion is revoked outside this tab", async ({
       "--server",
       base,
       "--chromium",
-      chromium.executablePath(),
+      (process.env.VERB_TEST_CHROMIUM || chromium.executablePath()),
     ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -335,7 +335,7 @@ test("Studio recovers when the companion is revoked outside this tab", async ({
     })
     .toBe(true);
   await page.goto(base + "/#" + TOKEN);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await page.getByRole("button", { name: "Browser", exact: true }).click();
   const start = page.getByRole("button", {
     name: "Start browser",

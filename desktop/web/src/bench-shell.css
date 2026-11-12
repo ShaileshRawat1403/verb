@@ -1,11 +1,9 @@
 #bench-navigation { display: grid; gap: 4px; min-height: 0; overflow: auto; }
 #bench-navigation .nav-item { justify-content: flex-start; width: 100%; height: auto; min-height: 40px; padding: 8px 10px; }
 #bench-navigation .nav-item::after { content: none; }
-#app.bench-layout .sidebar > :is(.main-nav, .sidebar-specs, .sidebar-bottom),
-.bench-layout #toggle-navigation,
+#app.bench-layout .sidebar > .sidebar-bottom,
 .bench-layout .git-indicator,
-.bench-layout #view-sessions :is(.sessions-list-panel, .terminal-toolbar, .page-heading),
-.bench-layout #terminal-grid :is(.stream-toggle, .agent-stream, .talk-tile, [data-bench-talk]) { display: none; }
+.bench-layout #view-sessions .page-heading { display: none; }
 .bench-layout #view-sessions .sessions-layout { grid-template-columns: minmax(0, 1fr); }
 .bench-layout {
   --bench-nav-w: var(--sidebar-w, 232px);
@@ -162,7 +160,6 @@
 }
 .bench-terminal-menu-items button:hover { background: var(--surface-2); }
 .bench-layout .terminal-tile > :is(.terminal-titlebar, .terminal-bottom),
-.bench-layout .terminal-tabs [data-bench-talk],
 .bench-connection,
 .bench-connection > span { display: none; }
 .bench-layout .terminal-tile:has([data-connection]) > .bench-connection {
@@ -234,7 +231,7 @@
 }
 #app.bench-layout #terminal-grid .terminal-tile.bench-split-hidden,
 #app.bench-layout #terminal-grid.focused .terminal-tile:not(.focused) { display: none; }
-#app.bench-layout #terminal-grid .terminal-mount {
+#app.bench-layout #view-sessions #terminal-grid .terminal-mount {
   height: auto;
   min-height: 0;
   max-height: none;
@@ -346,11 +343,8 @@
 .handoff-fields textarea { display: block; width: 100%; }
 #bench-board-rows { display: grid; gap: 10px; }
 .bench-board-row { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-1); }
-.bench-board-row header, .bench-board-row li { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.bench-board-row header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .bench-board-row h2 { font-size: 1rem; margin: 0; }
-.bench-board-row ul { list-style: none; padding: 0; margin: 4px 0; }
-.bench-board-row li { margin-block: 4px; }
-.bench-board-row li button { text-align: left; }
 .bench-stage-counts { display: flex; flex-wrap: wrap; gap: 10px; }
 .bench-stage-counts div { display: grid; gap: 2px; text-align: center; }
 .bench-stage-counts dd { margin: 0; }
@@ -362,3 +356,7 @@
 #bench-file-results button { text-align: left; overflow-wrap: anywhere; }
 #bench-preview-mount #studio-file-note:empty { display: none; }
 #bench-file-limit { grid-column: 1 / -1; margin: 0; color: var(--text-muted); }
+#bench-preview .studio-preview-actions { display: none; }
+#bench-board-attention { margin-bottom: 12px; }
+#bench-board-attention-list { display: grid; gap: 8px; }
+#bench-board-attention-list .bench-needs-entry { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }

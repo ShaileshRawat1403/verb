@@ -2384,9 +2384,6 @@ button:disabled {
   height: 16px;
   flex-shrink: 0;
 }
-#toggle-navigation {
-  width: 30px;
-}
 .page-heading {
   margin-bottom: 22px;
 }

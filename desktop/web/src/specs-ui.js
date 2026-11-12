@@ -1,3 +1,4 @@
+import { stageAudit, stageSummary } from "./bench-board.js";
 // The spec-driven workbench: specs list, stage bar, acceptance criteria with evidence, Git, audit
 // trail, command palette and keyboard shortcuts. Rules live in workbench.js (tested); this file
 // only talks to the DOM and the API.
@@ -53,6 +54,12 @@ export function initWorkbench(deps) {
     palette: [],
     paletteIndex: 0,
   };
+
+  function auditAction(action) {
+    const move = stageAudit(action);
+    if (!move?.warnings.length) return escapeHtml(action);
+    return `${escapeHtml(stageSummary(move.stage, move.warnings.length))}<ul>${move.warnings.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul>${move.note ? `<p>${escapeHtml(move.note)}</p>` : ""}`;
+  }
 
   function preference(key, allowed, fallback) {
     try { const value = localStorage.getItem(key); return allowed.includes(value) ? value : fallback; }
@@ -132,7 +139,6 @@ export function initWorkbench(deps) {
   // ----------------------------------------------------------------------------- render
 
   function render() {
-    $("#nav-spec-count").textContent = state.specs.filter((s) => s.stage !== "ship").length;
     renderList();
     renderOverview();
     renderDetail();
@@ -383,7 +389,7 @@ export function initWorkbench(deps) {
           .reverse()
           .map(
             (a) =>
-              `<li><time>${escapeHtml(a.at.replace("T", " ").slice(0, 16))}</time><span class="audit-actor">${escapeHtml(a.actor)}</span><span>${escapeHtml(a.action)}</span></li>`,
+              `<li><time>${escapeHtml(a.at.replace("T", " ").slice(0, 16))}</time><span class="audit-actor">${escapeHtml(a.actor)}</span><div>${auditAction(a.action)}</div></li>`,
           )
           .join("")
       : "";
@@ -492,7 +498,7 @@ export function initWorkbench(deps) {
   /** The live terminals belong to the spec you are working on: show them in its work area. */
   function placeTerminals() {
     const grid = $("#terminal-grid");
-    const inSpecs = deps.ui.view === "specs" && selected() && !$("#app").classList.contains("bench-layout");
+    const inSpecs = deps.ui.view === "specs" && selected();
     const target = inSpecs ? $("#spec-work") : $("#view-sessions .terminal-area");
     if (grid && target && grid.parentElement !== target) {
       target.append(grid);
@@ -878,9 +884,7 @@ export function initWorkbench(deps) {
       closeDialog("stage-dialog");
       replaceSpec(result.spec);
       toast(
-        result.warnings.length
-          ? `Moved to ${STAGE_GUIDE[result.spec.stage].label}. Warning recorded: ${result.warnings.join("; ")}`
-          : `Moved to ${STAGE_GUIDE[result.spec.stage].label}. Recorded in the audit trail.`,
+        stageSummary(result.spec.stage, result.warnings.length),
         result.warnings.length ? "error" : "info",
       );
       refreshGit();

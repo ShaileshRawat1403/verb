@@ -412,7 +412,7 @@ pub(crate) fn set_stage(
     note: &str,
     actor: &str,
     expected_revision: Option<&str>,
-    evidence_accepted: Option<usize>,
+    evidence: Option<(usize, &[String])>,
 ) -> Result<(Spec, Vec<String>), String> {
     let target = STAGES
         .iter()
@@ -427,13 +427,16 @@ pub(crate) fn set_stage(
         return Ok((spec, Vec::new()));
     }
     let mut gate_spec = spec.clone();
-    if let Some(count) = evidence_accepted {
+    if let Some((count, _)) = evidence {
         gate_spec.criteria_done = count.min(gate_spec.criteria.len());
     }
-    let warnings = stage_warnings(project, &gate_spec, target);
+    let mut warnings = stage_warnings(project, &gate_spec, target);
+    if let Some((_, extra)) = evidence {
+        warnings.extend_from_slice(extra);
+    }
     let mut action = format!("stage {} → {stage}", spec.stage);
     if !warnings.is_empty() {
-        action.push_str(&format!(" (warning: {})", warnings.join("; ")));
+        action.push_str(&format!(" (warnings: {})", serde_json::json!(warnings)));
     }
     if !note.trim().is_empty() {
         action.push_str(&format!(" — {}", note.trim()));

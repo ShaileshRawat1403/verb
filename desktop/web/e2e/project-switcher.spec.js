@@ -1,4 +1,4 @@
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView } from "./workspace-navigation.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -85,11 +85,12 @@ for (const width of [1440, 390]) {
     ).then((response) => response.json()).then((response) => Buffer.from(response.data, "base64").toString());
     await expect.poll(output).toContain("original-terminal");
 
-    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    await openWorkspaceView(page, "Studio");
     if (width === 390) await page.locator("#studio-focus-work").click();
     const draft = page.locator("#studio-intent");
     await draft.fill("Keep this draft in the source project");
 
+    if (width === 390) await page.locator("#bench-toggle-navigation").click();
     await page.getByRole("button", { name: "Open another project" }).click();
     const dialog = page.getByRole("dialog", { name: "Open another project" });
     const url = dialog.getByLabel("Project URL");
@@ -117,7 +118,8 @@ for (const width of [1440, 390]) {
     await expect(page.locator("#project-switch-url")).toHaveValue("");
     await expect(draft).toHaveValue("Keep this draft in the source project");
 
-    await page.getByRole("button", { name: "Sessions", exact: true }).click();
+    if (width === 390) await page.keyboard.press("Escape");
+    await openWorkspaceView(page, "Sessions");
     await expect(terminal).toHaveAttribute("id", originalId);
     await expect(input).toBeVisible();
     await input.pressSequentially("printf 'still-running\\n'");
@@ -146,6 +148,7 @@ for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
       await page.emulateMedia({ colorScheme: theme });
       await page.goto(source.url);
+      if (width === 390) await page.locator("#bench-toggle-navigation").click();
       const open = page.getByRole("button", { name: "Open another project" });
       await expect(open).toBeVisible();
       const directory = process.env.VERB_SWITCH_SCREEN_DIR;

@@ -1,5 +1,5 @@
 // Real Git, local bare remote, isolated home: no credentials or external network.
-import { test, expect } from "./legacy-layout.js";
+import { test, expect } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";

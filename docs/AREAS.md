@@ -10,7 +10,7 @@ it, how it ships, and what you must not touch while working on it.
 | Operations | `scripts/bench/` (device benchmark) | — | Private repo `pocketfabric-node1`: `ops/` (status, deploy, rollback) |
 | CI | `.github/workflows/android-ci.yml` | `.github/workflows/desktop-ci.yml` | Desktop CI covers the code |
 | Release | `release-full-cli.yml`, tag `vX.Y.Z`, signed APK, draft first | `release-desktop.yml`, tag `desktop-vX.Y.Z`, draft first | `ops/verb/deploy.sh` in `pocketfabric-node1`, logged in its `docs/deployments/verb.md` |
-| Current brief | `docs/perf/HANDOFF.md` (benchmark) | `docs/DESKTOP_TERMINALS_BRIEF.md` | `docs/runbook_verb.md` in `pocketfabric-node1` |
+| Current brief | `docs/history/perf/HANDOFF.md` (benchmark) | `docs/DESKTOP_TERMINALS_BRIEF.md` | `docs/runbook_verb.md` in `pocketfabric-node1` |
 | Test device | Vivo I2202 / iQOO over adb | The Mac | The OnePlus itself (`ops/status.sh` in `pocketfabric-node1`) |
 | Branch prefix | `android/…` | `desktop/…` | — (node changes are commits in `pocketfabric-node1`) |
 

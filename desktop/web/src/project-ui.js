@@ -2,6 +2,7 @@
 // project documents, nudges). Rules that can be tested live in workbench.js.
 
 import { buildTree, changeLabel, filterFiles, renderMarkdown } from "./workbench.js";
+import { readWithBusyRetry } from "./read-retry.js";
 import { fileIconName, icon } from "./icons.js";
 
 export function initProject(deps) {
@@ -28,10 +29,23 @@ export function initProject(deps) {
       $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
     }
   }
+  let hubRequest = 0;
   async function refreshHub() {
+    const request = ++hubRequest;
     try {
-      state.hub = await api("GET", "/api/hub");
+      const hub = await readWithBusyRetry(api, "/api/hub");
+      if (request !== hubRequest) return;
+      state.hub = hub;
       renderHub();
+      const brief = $("#context-brief-text");
+      brief.hidden = !hub.brief.exists;
+      brief.textContent = "";
+      if (hub.brief.exists) {
+        const result = await readWithBusyRetry(api, `/api/files/preview?path=${encodeURIComponent(hub.brief.path)}`);
+        if (request !== hubRequest) return;
+        if (result.text == null) brief.textContent = result.reason ?? "Brief unavailable.";
+        else brief.innerHTML = renderMarkdown(result.text, escapeHtml);
+      }
     } catch (error) {
       toast(error.message, "error");
     }
@@ -103,10 +117,7 @@ export function initProject(deps) {
   function renderHub() {
     const hub = state.hub;
     if (!hub) return;
-    $("#hub-title").textContent = deps.ui.state?.project?.name || "Project";
     const nudges = hub.nudges;
-    $("#nav-nudge-count").hidden = !nudges.length;
-    $("#nav-nudge-count").textContent = nudges.length;
     $("#hub-nudges").innerHTML = nudges
       .map(
         (n) =>
@@ -125,13 +136,18 @@ export function initProject(deps) {
     $("#brief-actions").innerHTML = hub.brief.exists
       ? `<button class="secondary-button" type="button" data-action="open-brief">Open brief</button>`
       : `<button class="primary-button" type="button" data-action="write-brief">Write the brief</button>`;
-    const label = { missing: "not created yet", "no-section": "no Verb section yet", outdated: "out of date", current: "up to date" };
+    const label = { missing: "not created yet", "no-section": "no Verb section yet", outdated: "stale", current: "up to date" };
     $("#agent-files").innerHTML = hub.agent_files
       .map(
         (f) =>
-          `<li data-state="${f.state}"><code>${escapeHtml(f.name)}</code><span>${label[f.state]}</span></li>`,
+          `<li data-state="${f.state}"><code>${escapeHtml(f.name)}</code><span>${escapeHtml(f.problem ?? label[f.state] ?? f.state)}</span></li>`,
       )
       .join("");
+    $("#managed-context-preview").textContent = hub.context_preview ?? "";
+    $("#managed-context-size").textContent = hub.context_bytes == null ? "Context size unavailable" : `${hub.context_bytes} / 8192 bytes`;
+    const warning = $("#managed-context-warning");
+    warning.textContent = hub.context_warning ?? "";
+    warning.hidden = !warning.textContent;
     // The next useful step leads: writing the brief first, then sharing it with the agents.
     const syncPending = hub.brief.exists && hub.agent_files.some((f) => f.state !== "current");
     const sync = document.querySelector('[data-action="sync-agents"]');
@@ -177,7 +193,10 @@ export function initProject(deps) {
   async function syncAgents() {
     try {
       const result = await api("POST", "/api/hub/sync");
-      toast(`${result.message}${result.changed.length ? ". Recorded in the brief's audit trail." : ""}`);
+      const notice = $("#managed-context-git");
+      notice.textContent = result.git_notice ?? "";
+      notice.hidden = !notice.textContent;
+      toast(result.message);
       await Promise.all([refreshHub(), refreshFiles()]);
       document.dispatchEvent(new CustomEvent("verb:git-changed"));
     } catch (error) {
@@ -218,6 +237,7 @@ export function initProject(deps) {
       "write-brief": writeBrief,
       "open-brief": openBrief,
       "sync-agents": syncAgents,
+      "refresh-context": refreshHub,
       "open-spec": () => deps.showView("specs"),
       "close-preview": () => {
         state.selected = null;
@@ -236,14 +256,11 @@ export function initProject(deps) {
     if (handlers[action]) handlers[action]();
   });
 
-  refreshHub();
-
   return {
     openFile,
     onShowView(view) {
-      if (view !== "project") return;
-      refreshHub();
-      if (Date.now() - state.loadedAt > 3000) refreshFiles();
+      if (view === "context") refreshHub();
+      if (view === "project" && Date.now() - state.loadedAt > 3000) refreshFiles();
     },
     /** Commands for the palette: hub actions always; files when the query looks for one. */
     commands(query) {

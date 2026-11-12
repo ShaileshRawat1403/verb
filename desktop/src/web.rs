@@ -2655,17 +2655,15 @@ impl WebHost {
                         return Err("The source or evidence changed while this move was open. Refresh and review it again.".into());
                     }
                     let extra = crate::sdlc::warnings(&flow, &input.stage);
-                    let note = if extra.is_empty() { input.note.clone() } else { format!("{}; SDLC readiness warnings: {}", input.note, extra.join("; ")) };
-                    let (spec, mut warnings) = crate::specs::set_stage(
+                    let (spec, warnings) = crate::specs::set_stage(
                         &project,
                         &id,
                         &input.stage,
-                        &note,
+                        &input.note,
                         &actor,
                         input.expected_revision.as_deref(),
-                        flow["accepted"].as_u64().map(|n| n as usize),
+                        Some((flow["accepted"].as_u64().unwrap_or(0) as usize, &extra)),
                     )?;
-                    warnings.extend(extra);
                     Ok(json!({"spec": spec, "warnings": warnings}))
                 }))
             }

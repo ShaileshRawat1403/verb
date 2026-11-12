@@ -140,9 +140,6 @@ kbd,
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.main-nav {
-  gap: 1px;
-}
 .nav-item {
   height: 32px;
   padding: 0 10px;
@@ -1199,9 +1196,6 @@ select:focus-visible,
   .workspace-switch {
     width: 44px;
     height: 44px;
-  }
-  .main-nav {
-    flex-direction: row;
   }
   .nav-item {
     width: 36px;
@@ -2627,57 +2621,6 @@ select:focus-visible,
   font: 12px var(--mono);
 }
 
-/* "More": the older views (Overview, Tasks, Shared notes), one click away, out of the main path. */
-.nav-more > summary {
-  list-style: none;
-  cursor: pointer;
-}
-.nav-more > summary::-webkit-details-marker {
-  display: none;
-}
-.nav-more[open] > summary {
-  color: var(--text);
-}
-.nav-more-items > .nav-item {
-  padding-left: 22px;
-}
-/* Phones: "More" is a ⋯ icon in the row that opens a small labelled menu below it. */
-@media (max-width: 640px) {
-  .sidebar {
-    overflow: visible; /* the More menu hangs below the bar */
-  }
-  .nav-more {
-    position: relative;
-  }
-  .nav-more[open] > summary {
-    background: var(--accent-bg);
-  }
-  .nav-more-items {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 40;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 180px;
-    padding: 6px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--surface);
-    box-shadow: var(--shadow-float);
-  }
-  .nav-more-items > .nav-item {
-    width: auto;
-    padding: 0 10px;
-    justify-content: flex-start;
-    gap: 10px;
-  }
-  .nav-more-items > .nav-item > span:not(.nav-icon) {
-    display: inline;
-  }
-}
-
 .host-events li.host-empty {
   border: 0;
   padding-left: 0;
@@ -3042,9 +2985,3 @@ label.not-installed {
 
 .commit-file-choice { flex-wrap: wrap; }
 .commit-file-choice small { flex-basis: 100%; padding-left: 26px; color: var(--text-muted); font-size: 12px; }
-
-/* A collapsed pane must always have a reachable restore control, even in compact headers. */
-#toggle-navigation, #toggle-sessions { display: inline-flex; flex-shrink: 0; }
-@media (max-width: 820px) {
-  #toggle-navigation, #toggle-sessions { min-width: 44px; min-height: 44px; }
-}

@@ -5,14 +5,13 @@ import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
 import { boardMarkup, specSignals } from "./bench-board.js";
 
-export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
+export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
   const app = $("#app");
   const panel = $("#bench-right-panel");
   const tree = $("#bench-work-tree");
   const toggleNavigation = $("#bench-toggle-navigation");
   const toggleDetails = $("#bench-toggle-right");
-  const legacy = $("#bench-legacy-layout");
   const narrow = matchMedia("(max-width: 760px)");
   const preference = (key) => {
     try { return localStorage.getItem(key); } catch { return null; }
@@ -21,7 +20,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     try { localStorage.setItem(key, value); } catch { /* Optional browser preference. */ }
   };
 
-  legacy.checked = preference("verb.layout.navigation") === "legacy";
   let detailsCollapsed = preference("verb.layout.details") === "collapsed";
   let mobileSurface = null;
   let activeTab = "plan";
@@ -33,7 +31,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   let request = 0;
   let lastTreeMarkup = "";
 
-  const enabled = () => !legacy.checked;
   const hostedSessions = () => (ui.state?.sessions ?? []).filter(session => session.hostedHere && session.terminal?.running);
   const openSessions = (spec) => hostedSessions().filter(session => session.specId === spec.id);
   const focusSpec = (id, tab) => {
@@ -68,7 +65,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     || item.id.replace(/^\d+-/, "").replaceAll("-", " ").replace(/^./, letter => letter.toUpperCase());
 
   function render() {
-    if (!enabled()) return;
     const { specs, error, loaded } = workbench.current();
     if (selectedId === null && !selectedWork && terminalId) {
       selectedId = specs.find(spec => openSessions(spec).some(session => session.id === terminalId))?.id ?? null;
@@ -129,7 +125,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   function renderTerminalEmpty(spec) {
     const start = $("#bench-start-selected");
     if (!start) return;
-    start.hidden = !enabled() || !spec;
+    start.hidden = !spec;
     start.textContent = spec ? `Start a terminal for ${spec.id} · ${spec.title}` : "";
     start.nextElementSibling.hidden = !start.hidden;
   }
@@ -140,6 +136,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     const proof = workbench.summaryFor(spec)?.sdlc;
     const evidence = proof?.criteria ?? [];
     return `<h3><button class="text-button" type="button" data-bench-document="${escapeHtml(spec.file)}">How (Spec)</button> <span class="bench-spec-stage">${escapeHtml(spec.stage)}</span></h3>
+      <label>Stage <select data-bench-stage aria-label="Stage for spec ${escapeHtml(spec.id)}">${["spec", "plan", "build", "verify", "review", "ship"].map(stage => `<option value="${stage}"${stage === spec.stage ? " selected" : ""}>${stage[0].toUpperCase() + stage.slice(1)}</option>`).join("")}</select></label>
       <h3>Done when</h3><ul class="bench-criteria">${spec.criteria.map(criterion => {
         const link = links.find(row => row.number === criterion.index + 1);
         const result = evidence.find(row => row.index === criterion.index);
@@ -190,27 +187,32 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   const handled = new Map();
 
   function renderNeeds() {
-    const waiting = hostedSessions().filter(session => ui.waitingTerminals.has(session.id));
+    const waits = hostedSessions().filter(session => ui.waitingTerminals.has(session.id));
     const planning = (ui.state?.sessions ?? []).filter(session => session.planningAttention);
     const receiptFor = (session, kind) => session[`${kind}Handled`] ?? handled.get(`${kind}:${session.id}`);
     const specs = workbench.current().specs;
     const attention = specs.flatMap(spec => specSignals(spec, workbench.boardSummaryFor(spec)));
-    const waits = waiting.filter(session => !receiptFor(session, "waiting"));
     $("#bench-needs-count").textContent = waits.length + attention.length;
     const sessionEntry = (session, kind) => {
-      const receipt = receiptFor(session, kind);
+      const receipt = kind === "planning" ? receiptFor(session, kind) : null;
       const paths = session.planningAttention?.paths ?? [];
       const key = `${kind}:${session.id}`;
       return `<section class="bench-needs-entry"><h3>${kind === "waiting" ? `${escapeHtml(agentDisplayName(session.agent))} · Waiting for you` : `Planning session · ${escapeHtml(session.workItemId)}`}</h3>
         ${kind === "planning" ? session.planningAttention.unavailable ? "<p>Verb could not compare Git status at session end.</p>" :
           `<p>Git changes outside the requested draft</p><ul>${paths.map(path => `<li><code>${escapeHtml(path)}</code> <button class="text-button" type="button" data-bench-open-path="${escapeHtml(path)}" aria-label="Open ${escapeHtml(path)}">Open</button></li>`).join("")}</ul>` : ""}
+        <p>${kind === "waiting" ? "Clears when the session stops waiting." : "Clears from your review queue when you mark it handled."}</p>
         <button type="button" class="secondary-button" data-bench-open-session="${escapeHtml(session.id)}">Open session</button>
         ${receipt ? `<small>Handled by ${escapeHtml(receipt.actor)} · ${escapeHtml(new Date(receipt.at).toLocaleString())}</small>`
-          : `<button type="button" class="secondary-button" data-bench-handle="${kind}" data-session="${escapeHtml(session.id)}"${handling.has(key) ? " disabled" : ""}>Mark handled</button>`}
+          : kind === "planning" ? `<button type="button" class="secondary-button" data-bench-handle="${kind}" data-session="${escapeHtml(session.id)}"${handling.has(key) ? " disabled" : ""}>Mark handled</button>` : ""}
       </section>`;
     };
+    const clears = {
+      "Failed check": "Clears when the check passes.",
+      "Stale proof": "Clears when the proof is refreshed.",
+      "Recorded gate warning": "Clears when the next stage move records no warnings.",
+    };
     const specEntries = attention.map(signal => `<section class="bench-needs-entry"><h3>${escapeHtml(signal.label)} · ${escapeHtml(signal.specId)} ${escapeHtml(signal.specTitle)}</h3>
-      <p>${escapeHtml(signal.detail ?? "")}</p><button class="secondary-button" type="button" data-bench-attention-spec="${escapeHtml(signal.specId)}" data-criterion-index="${signal.criterion ?? ""}">Open Review</button></section>`).join("");
+      <p>${escapeHtml(signal.detail ?? "")}</p>${signal.warnings ? `<ul>${signal.warnings.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}<p>${clears[signal.label]}</p><button class="secondary-button" type="button" data-bench-attention-spec="${escapeHtml(signal.specId)}" data-criterion-index="${signal.criterion ?? ""}">Open Review</button></section>`).join("");
     const paint = (node, markup) => {
       if (node._markup === markup) return;
       const expanded = node.querySelector("[data-board-unlinked]")?.open;
@@ -218,7 +220,10 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       node._markup = markup;
       if (expanded) node.querySelector("[data-board-unlinked]")?.setAttribute("open", "");
     };
-    paint($("#bench-needs-list"), waiting.map(session => sessionEntry(session, "waiting")).join("") + specEntries
+    const entries = waits.map(session => sessionEntry(session, "waiting")).join("") + specEntries;
+    $("#bench-board-attention").hidden = !entries;
+    paint($("#bench-board-attention-list"), entries);
+    paint($("#bench-needs-list"), entries
       || '<p class="muted">Nothing needs your attention.</p>');
     $("#bench-planning-reports").hidden = !planning.length;
     paint($("#bench-planning-list"), planning.map(session => sessionEntry(session, "planning")).join(""));
@@ -228,14 +233,12 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   }
 
   $("#bench-show-archived").addEventListener("change", renderNeeds);
-  $("#bench-board-rows").addEventListener("change", event => {
-    const control = event.target.closest("[data-bench-stage]");
-    if (!control) return;
-    const spec = workbench.current().specs.find(spec => spec.id === control.dataset.benchStage);
-    if (!spec) return;
-    const next = control.value;
-    control.value = spec.stage;
-    workbench.selectSpec(spec.id, { navigate: false });
+  $("#bench-plan-spec").addEventListener("change", event => {
+    const stage = event.target.closest("[data-bench-stage]");
+    const spec = workbench.current().specs.find(row => row.id === selectedId);
+    if (!stage || !spec) return;
+    const next = stage.value;
+    stage.value = spec.stage;
     workbench.openStage(next);
   });
 
@@ -414,23 +417,21 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   });
 
   function syncLayout() {
-    const isBench = enabled();
     const terminalView = ui.view === "sessions";
     const navVisible = narrow.matches ? mobileSurface === "navigation" : !ui.navigationCollapsed;
-    const detailsVisible = isBench && terminalView && (narrow.matches ? mobileSurface === "details" : !detailsCollapsed);
-    app.classList.toggle("bench-layout", isBench);
+    const detailsVisible = terminalView && (narrow.matches ? mobileSurface === "details" : !detailsCollapsed);
     app.classList.toggle("bench-details-open", detailsVisible);
-    app.dataset.benchOverlay = isBench && narrow.matches ? mobileSurface ?? "" : "";
-    $("#bench-navigation").hidden = !isBench;
-    toggleNavigation.hidden = !isBench;
-    toggleDetails.hidden = !isBench || !terminalView;
-    $("#bench-new-terminal").hidden = !isBench;
-    $("#bench-terminal-tabs").hidden = !isBench || !terminalView;
-    if (!isBench || !terminalView) $("#bench-terminal-menu").hidden = true;
+    app.dataset.benchOverlay = narrow.matches ? mobileSurface ?? "" : "";
+    $("#bench-navigation").hidden = false;
+    toggleNavigation.hidden = false;
+    toggleDetails.hidden = !terminalView;
+    $("#bench-new-terminal").hidden = false;
+    $("#bench-terminal-tabs").hidden = !terminalView;
+    if (!terminalView && ui.view !== "specs") $("#bench-terminal-menu").hidden = true;
     toggleNavigation.setAttribute("aria-expanded", String(navVisible));
     toggleDetails.setAttribute("aria-expanded", String(detailsVisible));
     panel.hidden = !detailsVisible;
-    studio.mountPreview(isBench && terminalView ? $("#bench-preview-mount") : null,
+    studio.mountPreview(terminalView ? $("#bench-preview-mount") : null,
       detailsVisible && activeTab === "preview");
     $("#bench-right-resize").hidden = !detailsVisible || narrow.matches;
     $(".bench-overlay-scrim").hidden = !app.dataset.benchOverlay;
@@ -443,7 +444,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     if (tab === "review" && activeTab !== tab) reviewTab.refreshChecks();
     if (tab === "preview" && $("#bench-tab-preview").hidden) return;
     activeTab = tab;
-    studio.mountPreview(enabled() && ui.view === "sessions" ? $("#bench-preview-mount") : null,
+    studio.mountPreview(ui.view === "sessions" ? $("#bench-preview-mount") : null,
       !panel.hidden && tab === "preview");
     for (const button of panel.querySelectorAll("[data-bench-tab]")) {
       const active = button.dataset.benchTab === tab;
@@ -463,21 +464,15 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     }
   }
 
-  legacy.addEventListener("change", () => {
-    remember("verb.layout.navigation", legacy.checked ? "legacy" : "bench");
-    mobileSurface = null;
-    syncLayout();
-    updateTerminalFocus();
-    if (enabled()) { refresh(); render(); }
-    else renderTerminalEmpty(null);
-  });
   toggleNavigation.addEventListener("click", () => {
     if (narrow.matches) {
       mobileSurface = "navigation";
       syncLayout();
       $("#bench-navigation [data-bench-overlay-close]").focus();
     } else {
-      $("#toggle-navigation").click();
+      ui.navigationCollapsed = !ui.navigationCollapsed;
+      app.classList.toggle("navigation-collapsed", ui.navigationCollapsed);
+      remember("verb-panel-navigation", ui.navigationCollapsed ? "collapsed" : "expanded");
       syncLayout();
     }
   });
@@ -585,11 +580,10 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     axis: "x", direction: -1, onChange: fitTerminals,
   });
   syncLayout();
-  if (enabled()) refresh();
+  refresh();
 
   return {
-    enabled,
-    refresh: () => { if (enabled()) refresh(); },
+    refresh,
     render,
     renderNeeds,
     reviewChecks: reviewTab.setChecks,
@@ -598,7 +592,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       if (["needs-you", "bench-board"].includes(ui.view)) { refreshState(); workbench.refreshSpecs(); }
     },
     terminalChanged(id) {
-      if (!enabled() || id === terminalId) return;
+      if (id === terminalId) return;
       terminalId = id;
       if (!id) return render();
       const session = ui.state?.sessions.find(session => session.id === id);

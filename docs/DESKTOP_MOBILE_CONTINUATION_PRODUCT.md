@@ -2,7 +2,7 @@
 
 Status: same-network live control implemented in the desktop web workbench, desktop CLI, and
 Verb Mobile. The broader cross-device work handoff below remains a product proposal.
-The click-through desktop/phone concept is `docs/mockups/desktop-phone-continuation.html`.
+The click-through desktop/phone concept is `docs/history/mockups/desktop-phone-continuation.html`.
 The desktop-local process contract is `docs/DESKTOP_MOBILE_BRIDGE_PROTOCOL.md`.
 
 ## The promise

@@ -1,4 +1,4 @@
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,7 +46,7 @@ test("Studio reviews a real project check before execution and keeps evidence ac
     if (r.method() === "POST" && r.url().endsWith(`/api/specs/${chosen.id}/sdlc`) && r.postDataJSON()?.action === "run") runs++;
   });
   await page.goto(url);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await page.locator("#studio-thread").selectOption(chosen.id);
   await expect(page.locator("#studio-checks")).toBeVisible();
   await page.getByRole("button", { name: "Run project check", exact: true }).click();
@@ -92,7 +92,7 @@ test("Studio reviews a real project check before execution and keeps evidence ac
   expect(result.criteria[0].evidence.binding.commit).toBe(git("rev-parse", "HEAD"));
   expect(JSON.stringify(result)).not.toContain("NO_RAW_LOG_SDLC_MARKER");
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await page.locator("#studio-focus-work").click();
   await expect(page.locator("#studio-checks")).toBeVisible();
   for (const button of await page.locator(".studio-check-actions button").all())

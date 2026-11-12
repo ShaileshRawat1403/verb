@@ -1,4 +1,4 @@
-import { test, expect } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,7 +79,7 @@ test.beforeAll(async () => {
 test.afterAll(() => server?.kill());
 async function openStudio(page) {
   await page.goto(url);
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await expect(page.locator("#studio-document h1")).toHaveText("Fieldnotes");
 }
 
@@ -140,7 +140,7 @@ test("Studio intent stays a draft until explicit Spec creation and shares the wo
     .getByRole("button", { name: "Cancel", exact: true })
     .click();
   await page.getByRole("button", { name: "Work board", exact: true }).click();
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await expect(page.locator("#studio-intent")).toHaveValue(intent);
   const before = await request.get(`${origin}/api/specs`, {
     headers: { "X-Verb-Token": TOKEN },
@@ -156,7 +156,7 @@ test("Studio intent stays a draft until explicit Spec creation and shares the wo
   await expect(page.locator("#spec-dialog")).not.toBeVisible();
   await expect(page.locator("#view-studio")).toHaveClass(/active/);
   await expect(page.locator("#studio-intent")).toHaveValue("");
-  await page.getByRole("button", { name: "Studio", exact: true }).click();
+  await openWorkspaceView(page, "Studio");
   await expect(page.locator("#studio-thread-title")).toHaveText(
     intent.split("\n")[0],
   );
@@ -340,45 +340,32 @@ test("selected document text attaches as reviewable context and survives cancell
 });
 
 for (const width of [1440, 900, 390]) {
-  test(`Studio fills the window when navigation is collapsed at ${width}px`, async ({
-    page,
-  }) => {
+  test(`Studio fills the window when navigation is collapsed at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(url);
-    const restore = page.getByRole("button", {
-      name: "Show navigation",
-      exact: true,
-    });
-    if (await restore.isVisible()) await restore.click();
-    await page.getByRole("button", { name: "Studio", exact: true }).click();
+    await openWorkspaceView(page, "Studio");
     await expect(page.locator("#studio-document h1")).toHaveText("Fieldnotes");
-    await page
-      .getByRole("button", { name: "Hide navigation", exact: true })
-      .click();
-    const main = await page.locator(".main-content").boundingBox();
-    expect(main.width).toBeGreaterThan(width - 20);
+    const sidebar = page.getByRole("button", { name: "Toggle sidebar", exact: true });
+    if (width === 390) {
+      await sidebar.click();
+      await expect(sidebar).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Escape");
+    } else {
+      await expect(sidebar).toHaveAttribute("aria-expanded", "true");
+      await sidebar.click();
+    }
+    await expect(sidebar).toHaveAttribute("aria-expanded", "false");
+    expect((await page.locator(".main-content").boundingBox()).width).toBeGreaterThan(width - 20);
     const canvas = await page.locator("#studio-canvas-panel").boundingBox();
     expect(canvas.width).toBeGreaterThan(300);
     expect(canvas.x + canvas.width).toBeLessThanOrEqual(width + 1);
+
     await page.reload();
-    await expect(
-      page.getByRole("button", { name: "Show navigation", exact: true }),
-    ).toBeVisible();
-    await page
-      .getByRole("button", { name: "Show navigation", exact: true })
-      .click();
-    await page.getByRole("button", { name: "Studio", exact: true }).click();
-    await page
-      .getByRole("button", { name: "Hide navigation", exact: true })
-      .click();
-    expect(
-      (await page.locator(".main-content").boundingBox()).width,
-    ).toBeGreaterThan(width - 20);
-    await page
-      .getByRole("button", { name: "Show navigation", exact: true })
-      .click();
-    expect(
-      (await page.locator("#studio-canvas-panel").boundingBox()).width,
-    ).toBeGreaterThan(250);
+    await expect(sidebar).toHaveAttribute("aria-expanded", "false");
+    await openWorkspaceView(page, "Studio");
+    await sidebar.click();
+    await expect(sidebar).toHaveAttribute("aria-expanded", "true");
+    if (width === 390) await page.keyboard.press("Escape");
+    expect((await page.locator("#studio-canvas-panel").boundingBox()).width).toBeGreaterThan(250);
   });
 }

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { boardRows, specSignals } from "../src/bench-board.js";
+import { boardRows, specSignals, stageAudit, stageSummary } from "../src/bench-board.js";
 
 test("Board prioritizes observed attention and orders other rows by audit or evidence", () => {
   const items = ["recent-audit", "recent-proof", "attention", "empty"].map(id => ({ id }));
@@ -34,4 +34,14 @@ test("Needs you uses current observed failures, stale recorded proof and the lat
   spec.audit.push({ action: "stage ship → spec" });
   summary.sdlc.criteria = [{ observedCheck: { result: "passed", freshness: "current" } }];
   assert.deepEqual(specSignals(spec, summary), []);
+});
+
+test("stage audit preserves structured warnings and formats old joined warnings", () => {
+  const move = stageAudit('stage review → ship (warnings: ["A warning; with detail.","Second warning."]) — Owner note');
+  assert.deepEqual(move, { stage: "ship", warnings: ["A warning; with detail.", "Second warning."], note: "Owner note" });
+  assert.equal(stageSummary(move.stage, move.warnings.length), "Moved to Ship with 2 warnings");
+  const legacy = stageAudit("stage review → ship (warning: One warning.) — owner note; SDLC readiness warnings: Second warning.; Third warning.");
+  assert.deepEqual(legacy, { stage: "ship", warnings: ["One warning.", "Second warning.", "Third warning."], note: "owner note" });
+  const olderGitWarning = stageAudit("stage review → ship (warning: Git readiness could not be established; release status is unknown; 2 uncommitted changes in the project)");
+  assert.equal(olderGitWarning.warnings.length, 2);
 });

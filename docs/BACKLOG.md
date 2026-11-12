@@ -22,9 +22,9 @@ assets, and the interaction/layout polish are included in the closeout commit. C
 Rust tests passed (248 passed, 2 existing ignored), web tests passed (11 passed), and web,
 desktop, and ARM64 Linux builds passed. The candidate was verified on the OnePlus using
 disposable project/state and temporary forwarding. Measurements and limits are preserved in
-[performance](WEB_UX_PERFORMANCE_REVIEW.md), [journey](WEB_UX_JOURNEY_REVIEW.md), and
-[polish](WEB_UX_POLISH_REVIEW.md) review snapshots. Production was subsequently deployed
-and verified through the real URL; see [the deployment record](WEB_UX_DEPLOYMENT.md).
+[performance](history/WEB_UX_PERFORMANCE_REVIEW.md), [journey](history/WEB_UX_JOURNEY_REVIEW.md), and
+[polish](history/WEB_UX_POLISH_REVIEW.md) review snapshots. Production was subsequently deployed
+and verified through the real URL; see [the deployment record](history/WEB_UX_DEPLOYMENT.md).
 
 **Remaining, in order.**
 
@@ -167,7 +167,7 @@ browser tests; its logic and the API it calls do.
 ## Terminal flicker during keyboard use — measured and fixed (2 September)
 
 Reported as "`agy` starts, then the terminal flickers during use". The hypothesis in
-`docs/BETA8_HANDOFF.md` was that layout height changes above the canvas resize the PTY, and each
+`docs/history/BETA8_HANDOFF.md` was that layout height changes above the canvas resize the PTY, and each
 resize is a SIGWINCH that a full-screen agent answers with a complete repaint. It was reached by
 reading code, so it was measured on the Vivo I2202 before anything was claimed.
 
@@ -259,7 +259,7 @@ terminal-observation claim.
 > typing stays one tap away, and every control survives the soft keyboard.**
 
 All items below are verified on the Vivo I2202 (Android 14) production `device` build; details and
-the hard-won constraints behind them live in `docs/HANDOFF_MOBILE_UX_SLICE.md`.
+the hard-won constraints behind them live in `docs/history/HANDOFF_MOBILE_UX_SLICE.md`.
 
 | # | Item | Status |
 | --- | --- | --- |
@@ -297,7 +297,7 @@ it cannot drift from what was sent.
 
 The E1 foreground service lowers the probability of a background kill and is not immunity: it owns
 nothing, follows the session (RUNNING holds the claim, a finished session releases it), and a
-force-stop still ends everything — exactly as `docs/DURABLE_SESSION.md` promised.
+force-stop still ends everything — exactly as `docs/history/DURABLE_SESSION.md` promised.
 
 ## M2 beta completion pass — 26 August, third pass
 
@@ -553,7 +553,7 @@ quietly invent a different shape.
 
 | # | Item |
 | --- | --- |
-| E1 | Foreground service for the background-kill gap `docs/DURABLE_SESSION.md` leaves open |
+| E1 | Foreground service for the background-kill gap `docs/history/DURABLE_SESSION.md` leaves open |
 | E2 | More than one concurrent agent session |
 | E3 | Codex runs under qemu because proot refuses its static non-PIE binary; needs a patched proot or an out-of-proot spawn |
 

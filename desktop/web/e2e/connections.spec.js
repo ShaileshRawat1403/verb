@@ -1,6 +1,6 @@
 // UI → owner API → official Rust MCP client → official TypeScript SDK server.
 // The HTTP loopback exception is compiled only in the synthetic test binary, never releases.
-import { test, expect, useLegacyLayout } from "./legacy-layout.js";
+import { test, expect, openWorkspaceView } from "./workspace-navigation.js";
 import {
   McpServer,
   WebStandardStreamableHTTPServerTransport,
@@ -218,11 +218,9 @@ test("a person connects, reviews a call, inspects the result and attaches a Stud
   browser,
 }, testInfo) => {
   context = await browser.newContext();
-  await useLegacyLayout(context);
   const page = await context.newPage();
   await page.goto(base + "/#" + TOKEN);
-  await page.locator("#nav-more").evaluate((el) => (el.open = true));
-  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await openWorkspaceView(page, "Connections");
   await page.getByText("Connect a service", { exact: true }).click();
   await page
     .getByLabel("Connection name", { exact: true })
@@ -334,8 +332,7 @@ test("SSE results work and the same approval can never run twice", async () => {
 
 test("resource selection reads the official SDK resource without invoking a tool", async () => {
   const page = context.pages()[0];
-  await page.locator("#nav-more").evaluate((el) => (el.open = true));
-  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await openWorkspaceView(page, "Connections");
   await page.locator("#connection-item").selectOption({ label: "Reference" });
   await expect(page.locator("#connection-arguments-wrap")).toBeHidden();
   const before = calls;
@@ -360,11 +357,9 @@ test("phone review remains usable and disconnect clears visible results", async 
   const phone = await browser.newContext({
     viewport: { width: 390, height: 844 },
   });
-  await useLegacyLayout(phone);
   const page = await phone.newPage();
   await page.goto(base + "/#" + TOKEN);
-  await page.locator("#nav-more").evaluate((el) => (el.open = true));
-  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await openWorkspaceView(page, "Connections");
   await page.getByRole("button", { name: /Documentation.*Connected/ }).click();
   await expect(page.locator("#connection-title")).toHaveText("Documentation");
   await page
@@ -415,11 +410,9 @@ test("in-flight inputs are locked and disconnect cannot restore a late result", 
   expect(connected.status).toBe(200);
   id = connected.body.id;
   const local = await browser.newContext();
-  await useLegacyLayout(local);
   const page = await local.newPage();
   await page.goto(base + "/#" + TOKEN);
-  await page.locator("#nav-more").evaluate((el) => (el.open = true));
-  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await openWorkspaceView(page, "Connections");
   await page.getByRole("button", { name: /Recovery.*Connected/ }).click();
   await page
     .getByRole("textbox", { name: "Text", exact: true })
@@ -458,11 +451,9 @@ test("lost replies show unknown delivery without automatically repeating the cal
   expect(connected.status).toBe(200);
   id = connected.body.id;
   const local = await browser.newContext();
-  await useLegacyLayout(local);
   const page = await local.newPage();
   await page.goto(base + "/#" + TOKEN);
-  await page.locator("#nav-more").evaluate((el) => (el.open = true));
-  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await openWorkspaceView(page, "Connections");
   await page
     .getByRole("button", { name: /Unknown delivery.*Connected/ })
     .click();
@@ -499,11 +490,9 @@ test("revoking from another device clears this view and releases its busy state"
   expect(connected.status).toBe(200);
   id = connected.body.id;
   const local = await browser.newContext();
-  await useLegacyLayout(local);
   const page = await local.newPage();
   await page.goto(base + "/#" + TOKEN);
-  await page.locator("#nav-more").evaluate((el) => (el.open = true));
-  await page.getByRole("button", { name: "Connections", exact: true }).click();
+  await openWorkspaceView(page, "Connections");
   await page.getByRole("button", { name: /Other device.*Connected/ }).click();
   await page
     .getByRole("textbox", { name: "Text", exact: true })

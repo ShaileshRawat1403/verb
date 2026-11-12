@@ -56,7 +56,7 @@ const token =
   location.hash.slice(1) || sessionStorage.getItem("verb-web-token");
 if (location.hash && token) {
   sessionStorage.setItem("verb-web-token", token);
-  history.replaceState(null, "", location.pathname);
+  history.replaceState(null, "", location.pathname + location.search);
 }
 
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
@@ -114,7 +114,6 @@ const ui = {
   splitTerminals: false,
   launchingTerminal: false,
   navigationCollapsed: panelPreference("navigation"),
-  sessionsCollapsed: panelPreference("sessions"),
   pairingExpiresAt: null,
   phoneStatus: null,
 };
@@ -123,44 +122,7 @@ const emptyTerminalTemplate = $("#terminal-grid .terminal-empty").cloneNode(
   true,
 );
 
-function applyPanelLayout() {
-  $("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
-  $("#view-sessions").classList.toggle(
-    "sessions-collapsed",
-    ui.sessionsCollapsed,
-  );
-  for (const [name, collapsed] of [
-    ["navigation", ui.navigationCollapsed],
-    ["sessions", ui.sessionsCollapsed],
-  ]) {
-    const button = $(`#toggle-${name}`);
-    const label = `${collapsed ? "Show" : "Hide"} ${name}`;
-    button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>${name === "sessions" ? "<span>Sessions</span>" : ""}`;
-    button.title = label;
-    button.setAttribute("aria-label", label);
-    button.setAttribute("aria-expanded", String(!collapsed));
-  }
-  requestAnimationFrame(() =>
-    ui.terminals.forEach(({ fit, mount }) => {
-      if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
-    }),
-  );
-}
-for (const name of ["navigation", "sessions"]) {
-  $(`#toggle-${name}`).addEventListener("click", () => {
-    const key =
-      name === "navigation" ? "navigationCollapsed" : "sessionsCollapsed";
-    ui[key] = !ui[key];
-    try {
-      localStorage.setItem(
-        `verb-panel-${name}`,
-        ui[key] ? "collapsed" : "expanded",
-      );
-    } catch {}
-    applyPanelLayout();
-  });
-}
-applyPanelLayout();
+$("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
 
 document.addEventListener("verb:observer", (event) => {
   const { enabled, signals, asking } = event.detail;
@@ -309,8 +271,15 @@ async function api(method, path, body) {
   return readApiResponse(response);
 }
 
-function showView(view) {
+function showView(destination) {
+  const settings = ["host", "connections", "tasks", "phone", "session-history"];
+  const section = settings.includes(destination) ? destination : "host";
+  const view = settings.includes(destination) ? "settings" : destination === "memory" ? "context" : destination;
   ui.view = view;
+  document.querySelectorAll("[data-settings-panel]").forEach(panel => {
+    panel.hidden = view !== "settings" || panel.dataset.settingsPanel !== section;
+  });
+  if (view === "settings" && section === "phone") renderPhoneSettings();
   $("#app").classList.toggle("studio-open", view === "studio");
   $("#app").classList.toggle("specs-open", view === "specs");
   document
@@ -324,18 +293,14 @@ function showView(view) {
     if (active) element.setAttribute("aria-current", "page");
     else element.removeAttribute("aria-current");
   });
-  // Overview, Tasks and Shared notes live under "More"; show the group open when one is in use.
-  // On phones "More" is a menu: close it once a choice is made.
-  if (["overview", "tasks", "memory", "connections"].includes(view)) $("#nav-more").open = !matchMedia("(max-width: 640px)").matches;
-  $("#breadcrumb-view").textContent =
-    view === "memory" ? "Shared notes" : view.charAt(0).toUpperCase() + view.slice(1);
+  $("#breadcrumb-view").textContent = view[0].toUpperCase() + view.slice(1);
   if (view === "overview") refreshChecks();
-  if (view === "tasks" || view === "memory") refreshState(true);
+  if (["tasks", "session-history"].includes(destination) || view === "context") refreshState();
   workbench?.onShowView(view);
   project?.onShowView(view);
-  host?.onShowView(view);
+  host?.onShowView(view === "settings" ? section : view);
   studio?.onShowView(view);
-  connections?.onShowView(view);
+  connections?.onShowView(view === "settings" ? section : view);
   shell?.onView();
   if (shell) renderTerminalTabs();
   benchTerminals?.render();
@@ -388,7 +353,21 @@ function emptyState(iconName, title, body, action) {
   return `<div class="list-empty"><span class="empty-glyph">${icon(iconName, { size: 18 })}</span><strong>${title}</strong><p>${body}</p>${action || ""}</div>`;
 }
 
+function renderPhoneSettings() {
+  const sessions = (ui.state?.sessions ?? []).filter(session => session.hostedHere && session.terminal?.running);
+  const owner = ui.accessScope === "owner";
+  const list = $("#settings-phone-sessions");
+  const markup = !owner ? "<p>Phone pairing requires owner access.</p>" : sessions.length
+    ? `<ul>${sessions.map(session => `<li><button class="secondary-button" type="button" data-phone-terminal="${escapeHtml(session.id)}">Pair ${escapeHtml(sessionLabel(session.id))}</button></li>`).join("")}</ul>`
+    : "<p>Start a terminal to pair a phone.</p>";
+  if (list.dataset.markup !== markup) {
+    list.innerHTML = markup;
+    list.dataset.markup = markup;
+  }
+}
+
 function render() {
+  if (ui.view === "settings" && !$("#settings-phone").hidden) renderPhoneSettings();
   const state = ui.state;
   if (!state) return;
   const { project, sessions, tasks, memory, deployment } = state;
@@ -412,10 +391,7 @@ function render() {
   $("#top-branch").textContent = git.branch;
   $("#top-branch").title = git.detail;
   $("#top-changes").textContent = git.changes;
-  $("#nav-session-count").textContent = activeCount;
-  $("#nav-task-count").textContent = tasks.filter(
-    (task) => task.status !== "done",
-  ).length;
+
   $("#stat-sessions").textContent = activeCount;
   $("#stat-tasks").textContent = tasks.filter(
     (task) => task.status !== "done",
@@ -977,6 +953,7 @@ function addTerminal(session) {
     agentDisplayName,
     agentMark,
     settings: streamSettings,
+    autoOpen: matchMedia("(max-width: 760px)").matches,
     workbench: () => workbench,
   });
   sendStreamAttach(session.id, term.rows, term.cols);
@@ -1338,23 +1315,24 @@ function renderTerminalTabs() {
     strip.setAttribute("aria-label", "Terminals");
     grid.prepend(strip);
   }
-  const bench = shell?.enabled();
-  const tabMount = bench ? $("#bench-terminal-tabs") : grid;
+  const tabMount = ui.view === "specs" ? grid : $("#bench-terminal-tabs");
   if (strip.parentElement !== tabMount) tabMount.prepend(strip);
-  strip.hidden = ui.terminals.size === 0 && (bench || ui.talks.size === 0);
+  strip.hidden = ui.terminals.size === 0 && ui.talks.size === 0;
   const menu = $("#bench-terminal-menu");
   $("#bench-terminal-id").textContent = ui.focusedTerminal ? `Session ${ui.focusedTerminal}` : "";
   const activeTerminal = ui.terminals.get(ui.focusedTerminal);
-  menu.hidden = !bench || ui.view !== "sessions" || !activeTerminal;
+  menu.hidden = !["sessions", "specs"].includes(ui.view) || !activeTerminal;
   if (menu.hidden) menu.open = false;
   menu.querySelector('[data-bench-terminal-action="search"]').setAttribute("aria-pressed",
     String(activeTerminal?.tile.querySelector(".terminal-search-bar").hidden === false));
   menu.querySelector('[data-bench-terminal-action="end"]').textContent = activeTerminal?.ended ? "Close terminal output" : "End session";
+  const chat = menu.querySelector('[data-bench-terminal-action="chat"]');
+  chat.hidden = !activeTerminal?.stream;
+  chat.textContent = activeTerminal?.tile.classList.contains("stream-mode") ? "Return to terminal" : "Open chat";
   for (const action of ["phone", "take"]) {
     menu.querySelector(`[data-bench-terminal-action="${action}"]`).hidden =
       activeTerminal?.tile.querySelector(`[data-${action}-terminal]`)?.hidden !== false;
   }
-  const split = ui.splitTerminals && ui.terminals.size > 1;
   const tabs = [...ui.terminals.entries()]
     .map(([id, terminal]) => {
       const status = terminalTabStatus(terminal, id);
@@ -1365,12 +1343,11 @@ function renderTerminalTabs() {
       const assignment = session?.specId ? `Spec ${session.specId}${role ? ` · ${role}` : ""}`
         : session?.role === "plan" && session.workItemId ? `Work item ${session.workItemId.split("-")[0]} · Plan` : "Scratch";
       const shortAgent = terminal.agent === "claude" ? "Claude" : terminal.agent === "agy" ? "AGY" : agent;
-      const title = `${agent} ${bench ? assignment : id.slice(0, 8)}: ${status.words}`;
-      const label = bench ? ` aria-label="${escapeHtml(title)}"` : "";
-      const details = bench && session?.specId
+      const title = `${agent} ${assignment}: ${status.words}`;
+      const details = session?.specId
         ? `<span class="bench-tab-spec-prefix">Spec </span>${escapeHtml(session.specId)}${role ? ` · ${escapeHtml(role)}` : ""}`
-        : escapeHtml(bench ? assignment : id.slice(0, 4));
-      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(title)}"${label}><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span class="bench-tab-agent">${escapeHtml(agent)}</span>${bench ? `<span class="bench-tab-short-agent">${escapeHtml(shortAgent)}</span>` : ""}<small>${details}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
+        : escapeHtml(assignment);
+      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span class="bench-tab-agent">${escapeHtml(agent)}</span><span class="bench-tab-short-agent">${escapeHtml(shortAgent)}</span><small>${details}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
   const talkTabs = [...ui.talks.entries()]
@@ -1381,11 +1358,7 @@ function renderTerminalTabs() {
       return `<button type="button" role="tab" class="terminal-tab" data-bench-talk data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  const markup = bench ? tabs : `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
-    ui.terminals.size > 1
-      ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
-      : ""
-  }<button type="button" class="tabs-action icon-only" data-terminal-new aria-label="New terminal" title="New terminal (Alt+T)">${icon("plus", { size: 14 })}</button>`;
+  const markup = talkTabs + tabs;
   // State polls should not discard keyboard focus or restart chrome transitions.
   if (strip._markup !== markup) {
     const focused = strip.contains(document.activeElement)
@@ -1399,7 +1372,7 @@ function renderTerminalTabs() {
         ?.focus({ preventScroll: true });
     }
   }
-  if (bench && strip._revealedTerminal !== ui.focusedTerminal && strip.clientWidth) {
+  if (strip._revealedTerminal !== ui.focusedTerminal && strip.clientWidth) {
     strip._revealedTerminal = ui.focusedTerminal;
     const active = strip.querySelector('[aria-selected="true"]');
     if (active && matchMedia("(max-width: 760px)").matches) {
@@ -1413,11 +1386,10 @@ function renderTerminalTabs() {
 
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
-  const bench = shell?.enabled();
   const primary = ui.focusedTerminal;
   const secondary = [...ui.terminals.keys()].find(id => id !== primary);
-  grid.classList.toggle("bench-split", Boolean(bench && ui.splitTerminals && secondary));
-  const talkVisible = !shell?.enabled() && ui.talks.size > 0;
+  grid.classList.toggle("bench-split", Boolean(ui.splitTerminals && secondary));
+  const talkVisible = ui.talks.size > 0;
   if (!ui.terminals.size && !talkVisible && !grid.querySelector(".terminal-empty"))
     grid.append(emptyTerminalTemplate.cloneNode(true));
   if (talkVisible) grid.querySelector(".terminal-empty")?.remove();
@@ -1442,9 +1414,9 @@ function updateTerminalFocus() {
   ui.terminals.forEach(({ tile, fit, mount }, id) => {
     const focused = id === ui.focusedTerminal && !ui.splitTerminals;
     tile.classList.toggle("focused", focused);
-    tile.classList.toggle("bench-split-secondary", Boolean(bench && ui.splitTerminals && id === secondary));
-    tile.classList.toggle("bench-split-active", Boolean(bench && ui.splitTerminals && id === primary));
-    tile.classList.toggle("bench-split-hidden", Boolean(bench && ui.splitTerminals && id !== primary && id !== secondary));
+    tile.classList.toggle("bench-split-secondary", Boolean(ui.splitTerminals && id === secondary));
+    tile.classList.toggle("bench-split-active", Boolean(ui.splitTerminals && id === primary));
+    tile.classList.toggle("bench-split-hidden", Boolean(ui.splitTerminals && id !== primary && id !== secondary));
     // The tab strip chooses and splits terminals now; the old per-pane button stays hidden.
     tile.querySelector("[data-focus-terminal]").hidden = true;
     requestAnimationFrame(() => {
@@ -1774,16 +1746,6 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
-  if (event.target.closest("[data-terminal-split]")) {
-    ui.splitTerminals = !ui.splitTerminals;
-    updateTerminalFocus();
-    return;
-  }
-  if (event.target.closest("[data-terminal-new]")) {
-    const inSpec = ui.view === "specs" && document.querySelector('[data-action="spec-terminal"]');
-    (inSpec || $("#quick-terminal-button")).click();
-    return;
-  }
   const focus = event.target.closest("[data-focus-terminal]");
   if (focus) {
     ui.splitTerminals =
@@ -1818,7 +1780,7 @@ document.addEventListener("click", async (event) => {
         : await api("POST", `/api/terminals/${id}/phone`);
       $("#phone-dialog").dataset.sessionId = id;
       phone.dataset.sharing = "true";
-      phone.textContent = "Phone access";
+      if (phone.closest(".terminal-tile")) phone.textContent = "Phone access";
       await showPhoneOffer(result);
       showDialog("phone-dialog");
     } catch (error) {
@@ -1834,8 +1796,13 @@ document.addEventListener("click", async (event) => {
     menu.open = false;
     menu.querySelector("summary").focus();
     const action = menuAction.dataset.benchTerminalAction;
+    const terminal = ui.terminals.get(ui.focusedTerminal);
+    if (action === "chat") {
+      terminal?.stream?.setMode(terminal.tile.classList.contains("stream-mode") ? "terminal" : "stream");
+      return;
+    }
     const control = action === "end" ? "close" : action;
-    ui.terminals.get(ui.focusedTerminal)?.tile.querySelector(`[data-${control}-terminal]`)?.click();
+    terminal?.tile.querySelector(`[data-${control}-terminal]`)?.click();
     return;
   }
   const terminalClose = event.target.closest("[data-close-terminal]");
@@ -1863,9 +1830,7 @@ document.addEventListener("click", async (event) => {
       $("#session-launch-error").hidden = true;
       updateLaunchForm();
       loadInstalledAgents();
-      if (shell?.enabled()) return benchTerminals?.openLaunch();
-      $("#bench-launch-assignment").hidden = true;
-      return showDialog("session-dialog");
+      return benchTerminals?.openLaunch();
     }
     if (actionButton.dataset.action === "new-task")
       return showDialog("task-dialog");
@@ -1997,9 +1962,7 @@ $("#phone-stop").addEventListener("click", async () => {
   const id = $("#phone-dialog").dataset.sessionId;
   try {
     await api("DELETE", `/api/terminals/${id}/phone`);
-    const button = document.querySelector(
-      `[data-phone-terminal="${CSS.escape(id)}"]`,
-    );
+    const button = ui.terminals.get(id)?.tile.querySelector("[data-phone-terminal]");
     if (button) {
       button.dataset.sharing = "false";
       button.textContent = "Phone";
@@ -2074,7 +2037,7 @@ $("#session-form").addEventListener("submit", async (event) => {
   const agent = form.elements.agent.value;
   const command = form.elements.command.value.trim();
   const isolated = form.elements.isolated.checked;
-  const specId = shell?.enabled() ? form.elements.specId.value : "";
+  const specId = form.elements.specId.value;
   const role = specId && !["shell", "custom"].includes(agent) ? form.elements.role.value : null;
   if (specId && agent === "custom") return launchError("Choose a named agent or terminal for a spec.");
   if (isolated && !isolatedCheckoutAvailability(ui.agentCapabilities).available)
@@ -2336,6 +2299,7 @@ async function showAccess() {
     const access = await api("GET", "/api/whoami");
     ui.accessScope = access.scope;
     shell?.renderNeeds();
+    if (ui.view === "settings" && !$("#settings-phone").hidden) renderPhoneSettings();
     benchTerminals?.render();
     $("#open-project-switch").hidden = access.scope !== "owner";
     const banner = $("#access-banner");
@@ -2402,18 +2366,23 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, updateTerminalFocus, openFile: project.openFile, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
+  shell = initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
     updateLaunchForm();
     loadInstalledAgents();
     benchTerminals?.openLaunch(id);
   } });
-  benchTerminals = initBenchTerminals({ $, api, ui, shell, workbench, showDialog, closeDialog, refreshState, toast,
+  benchTerminals = initBenchTerminals({ $, api, ui, workbench, showDialog, closeDialog, refreshState, toast,
     toggleSplit() { ui.splitTerminals = !ui.splitTerminals; updateTerminalFocus(); },
   });
   $("#bench-terminal-menu").addEventListener("toggle", event => {
     if (event.target.open) { renderTerminalTabs(); benchTerminals?.render(); }
   });
-  extras.shellCommands = () => shell.enabled() ? [
+  extras.shellCommands = () => [
+    ...Object.entries({ Studio: "studio", Specs: "specs", "Project files": "project", Overview: "overview", Host: "host",
+      Connections: "connections", Tasks: "tasks", "Phone pairing": "phone", "Session history": "session-history" }).map(([label, view]) => ({
+        title: `Open ${label}`, run: () => showView(view),
+      })),
+    { title: "Open Context", run: () => showView("context") },
     { title: "Open Settings", run: () => showView("settings") },
     { title: "Open Sessions", run: () => showView("sessions") },
     { title: "Refresh project", run: () => $("#refresh-button").click() },
@@ -2425,7 +2394,7 @@ async function bootstrap() {
       updateTerminalFocus();
     } }] : []),
     ...(!$("#top-commit").hidden ? [{ title: "Review commit", run: () => $("#top-commit").click() }] : []),
-  ] : [];
+  ];
   extras.onWorkbenchChange = () => {
     studio.render();
     shell.render();
@@ -2441,7 +2410,20 @@ async function bootstrap() {
   document.querySelectorAll("[data-ready-gate]").forEach((el) => (el.disabled = false));
   showAccess();
   loadInstalledAgents();
-  showView(ui.view);
+  const url = new URL(location.href);
+  const requestedView = url.searchParams.get("view");
+  const settingsSections = ["host", "connections", "tasks", "phone", "session-history"];
+  const requestedSection = url.searchParams.get("section");
+  const linkedView = requestedView === "settings" && settingsSections.includes(requestedSection)
+    ? requestedSection : requestedView;
+  if (requestedView === "memory" || settingsSections.includes(requestedView)) {
+    url.searchParams.set("view", requestedView === "memory" ? "context" : "settings");
+    if (requestedView !== "memory") url.searchParams.set("section", requestedView);
+    history.replaceState(null, "", url.pathname + url.search);
+  }
+  const views = ["sessions", "bench-board", "needs-you", "context", "memory", "settings",
+    "specs", "project", "studio", "overview", "host", "connections", "tasks", "phone", "session-history"];
+  showView(views.includes(linkedView) ? linkedView : ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);
   setInterval(() => {
@@ -2450,11 +2432,5 @@ async function bootstrap() {
   setInterval(updatePhoneStatus, 1000);
   setInterval(refreshPhoneStatus, 2500);
 }
-
-// The phone "More" menu closes on a tap anywhere else, like any menu.
-document.addEventListener("click", (event) => {
-  const more = $("#nav-more");
-  if (more.open && matchMedia("(max-width: 640px)").matches && !more.contains(event.target)) more.open = false;
-});
 
 bootstrap();
