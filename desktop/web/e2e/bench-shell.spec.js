@@ -1235,3 +1235,15 @@ test("Needs you shows observed agent questions and provider errors", async ({ pa
   await expect(page.locator("#bench-needs-list")).toContainText("Waiting for you");
   await expect(page.locator("#bench-needs-list")).toContainText("API or model error");
 });
+
+test("Plan publishes a small BRD with open questions without a format warning", async ({ page, request }) => {
+  const headers = { "X-Verb-Token": token };
+  const response = await request.post(`${origin}/api/work-items`, { headers, data: {
+    title: "Open questions sample", document: "brd", content: "# Open questions sample\nSize: small\nProblem: People lose access\nG1: Restore access\nDone when: Sign-in works\n\nOpen questions:\n- Which users?",
+  } });
+  expect(response.ok()).toBeTruthy();
+  const { id } = await response.json();
+  await page.goto(`${origin}/#${token}`);
+  await page.locator(`[data-bench-work="${id}"]`).click();
+  await expect(page.locator("#bench-plan-spec .bench-documents > li").first()).toContainText("Published");
+});

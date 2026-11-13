@@ -230,6 +230,7 @@ impl WorkItem {
             } else if size == Some("small")
                 && brd
                     .lines()
+                    .take_while(|line| line.trim() != "Open questions:")
                     .filter(|line| {
                         let line = line.trim();
                         !line.is_empty() && !line.starts_with("# ") && !line.starts_with("Size: ")
@@ -765,9 +766,9 @@ Size: {size}
 
 For a standard BRD, use the exact Markdown headings `## Problem`, `## Audience`, `## Goals`, `## Success measures`, and `## Scope`. Under Goals write one line per goal using `G<number>: goal text`, for example:
 G1: A returning customer can sign in
-Mark a retired goal with `G1 (retired): original goal text`. For a small BRD, use exactly three lines after the heading and size line:
+Mark a retired goal with `G1 (retired): original goal text`. For a small BRD, use these three content lines after the heading and size line:
 "Problem: ...", "G1: ...", and "Done when: ...".
-Record material unknowns as open questions.
+After the three lines, you may add an optional `Open questions:` block for material unknowns. In a standard BRD use a separate `## Open questions` section.
 
 Owner's brief:
 {brief}"#
@@ -1211,6 +1212,17 @@ pub(crate) fn linked_context(spec: &Spec, brd: Option<String>, prd: Option<Strin
 #[cfg(test)]
 mod planning_prompt_tests {
     use super::*;
+
+    #[test]
+    fn small_brd_allows_questions_after_the_three_content_lines() {
+        let item = WorkItem::validate(
+            "001-sign-in".into(),
+            Some("# Sign in\nSize: small\nProblem: Access\nG1: Sign in\nDone when: Users sign in\n\nOpen questions:\n- Which users?".into()),
+            None,
+            Vec::new(),
+        );
+        assert!(item.warnings.is_empty(), "{:?}", item.warnings);
+    }
 
     #[test]
     fn prd_prompt_example_validates_with_the_document_reader() {
