@@ -63,14 +63,17 @@ fn is_draft_publication(session: &crate::Session, path: &str) -> bool {
     let Ok(identity) = crate::project::identity(&project) else {
         return false;
     };
-    let Ok(receipt) = fs::read_to_string(publication_receipt(&identity.store, &project, path))
-    else {
+    matches_publication(&identity.store, &project, path, session.created_at)
+}
+
+fn matches_publication(store: &Path, project: &Path, path: &str, created_at: u128) -> bool {
+    let Ok(receipt) = fs::read_to_string(publication_receipt(store, project, path)) else {
         return false;
     };
     let Some((at, revision)) = receipt.split_once('\n') else {
         return false;
     };
-    at.parse::<u128>().is_ok_and(|at| at > session.created_at)
+    at.parse::<u128>().is_ok_and(|at| at > created_at)
         && read(&project.join(path), 200 * 1024)
             .ok()
             .flatten()
@@ -456,16 +459,14 @@ mod tests {
         let project = root.join("project");
         fs::create_dir_all(&project).unwrap();
         let project = project.canonicalize().unwrap();
-        let identity = crate::project::identity(&project).unwrap();
-        let mut session = crate::Session::new(project.clone(), crate::Agent::Claude);
-        session.created_at = 0;
+        let store = root.join("store");
         let path = "prd.md";
         fs::write(project.join(path), "published").unwrap();
-        assert!(!is_draft_publication(&session, path));
-        record_draft_publication(&identity.store, &project, path, &digest(b"published")).unwrap();
-        assert!(is_draft_publication(&session, path));
+        assert!(!matches_publication(&store, &project, path, 0));
+        record_draft_publication(&store, &project, path, &digest(b"published")).unwrap();
+        assert!(matches_publication(&store, &project, path, 0));
         fs::write(project.join(path), "changed by agent").unwrap();
-        assert!(!is_draft_publication(&session, path));
+        assert!(!matches_publication(&store, &project, path, 0));
         fs::remove_dir_all(root).unwrap();
     }
 
