@@ -1204,3 +1204,18 @@ test("proof sends uncommitted work to commit review and restores the form", asyn
   await expect(dialog).toBeVisible();
   await expect(dialog.locator("#sdlc-text")).toHaveValue("Evidence details to preserve");
 });
+
+test("Plan starts a terminal with the unlinked spec selected", async ({ page, request }) => {
+  const headers = { "X-Verb-Token": token };
+  const response = await request.post(`${origin}/api/specs`, { headers, data: { title: "Unlinked launch fixture" } });
+  expect(response.ok()).toBeTruthy();
+  const spec = await response.json();
+  await page.goto(`${origin}/#${token}`);
+  await page.locator('[data-bench-group="unlinked"] summary').click();
+  await page.locator(`[data-bench-spec="${spec.id}"]`).click();
+  await page.locator("#bench-plan").getByRole("button", { name: "Start terminal", exact: true }).click();
+  await expect(page.locator("#session-dialog")).toBeVisible();
+  await expect(page.locator('#session-form [name="specId"]')).toHaveValue(spec.id);
+  await page.locator('#session-form button[type="submit"]').click();
+  await expect(page.locator("#bench-terminal-context-summary")).toContainText(`Spec ${spec.id}`);
+});

@@ -504,6 +504,17 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       closeOverlay(true);
     }
   });
+  function startSelectedTerminal(event) {
+    if (!event.target.closest("[data-bench-start], #bench-start-selected")) return;
+    const specId = selectedId;
+    if (!specId) return;
+    closeOverlay();
+    openLaunch(specId);
+  }
+
+  panel.addEventListener("click", startSelectedTerminal);
+  $("#terminal-grid").addEventListener("click", startSelectedTerminal);
+
   document.addEventListener("click", event => {
     const target = event.target;
     if (target.closest("[data-bench-overlay-close]")) return closeOverlay(true);
@@ -553,11 +564,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     if (session) return openSession(session.dataset.benchOpenSession);
     const file = target.closest("[data-bench-open-path]");
     if (file) return openFile(file.dataset.benchOpenPath);
-    if (target.closest("[data-bench-start], #bench-start-selected")) {
-      closeOverlay();
-      workbench.selectSpec(selectedId, { navigate: false });
-      return openLaunch(selectedId);
-    }
     const archive = target.closest("[data-bench-archive]");
     if (archive) return archiveWork(archive);
     const attention = target.closest("[data-bench-attention-spec]");
