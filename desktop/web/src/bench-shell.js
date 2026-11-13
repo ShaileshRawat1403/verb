@@ -189,11 +189,12 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
 
   function renderNeeds() {
     const waits = hostedSessions().filter(session => ui.waitingTerminals.has(session.id));
+    const agentErrors = hostedSessions().filter(session => ui.agentErrors.has(session.id));
     const planning = (ui.state?.sessions ?? []).filter(session => session.planningAttention);
     const receiptFor = (session, kind) => session[`${kind}Handled`] ?? handled.get(`${kind}:${session.id}`);
     const specs = workbench.current().specs;
     const attention = specs.flatMap(spec => specSignals(spec, workbench.boardSummaryFor(spec)));
-    $("#bench-needs-count").textContent = waits.length + attention.length;
+    $("#bench-needs-count").textContent = waits.length + agentErrors.length + attention.length;
     const sessionEntry = (session, kind) => {
       const receipt = kind === "planning" ? receiptFor(session, kind) : null;
       const paths = session.planningAttention?.paths ?? [];
@@ -221,7 +222,12 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       node._markup = markup;
       if (expanded) node.querySelector("[data-board-unlinked]")?.setAttribute("open", "");
     };
-    const entries = waits.map(session => sessionEntry(session, "waiting")).join("") + specEntries;
+    const errors = agentErrors.map(session => `<section class="bench-needs-entry">
+      <h3>${escapeHtml(agentDisplayName(session.agent))} · API or model error</h3>
+      <p>Verb saw an error on the terminal screen. Clears when it leaves the recent screen output or the session ends.</p>
+      <button type="button" class="secondary-button" data-bench-open-session="${escapeHtml(session.id)}">Open session</button>
+      </section>`).join("");
+    const entries = waits.map(session => sessionEntry(session, "waiting")).join("") + errors + specEntries;
     $("#bench-board-attention").hidden = !entries;
     paint($("#bench-board-attention-list"), entries);
     paint($("#bench-needs-list"), entries

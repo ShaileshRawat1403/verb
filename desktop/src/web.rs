@@ -2305,6 +2305,14 @@ impl WebHost {
                 })
                 .collect();
             let asking = crate::observer::asking(&facts);
+            let agent_attention: Vec<_> = facts
+                .iter()
+                .filter(|fact| fact.is_agent)
+                .filter_map(|fact| {
+                    let kind = crate::observer::agent_attention(fact.screen, fact.idle_secs)?;
+                    Some(json!({"terminal": fact.id, "kind": kind}))
+                })
+                .collect();
             let signals = if settings.enabled {
                 crate::observer::evaluate(&facts, &settings.muted)
             } else {
@@ -2312,7 +2320,7 @@ impl WebHost {
             };
             return Ok(Reply::json(
                 200,
-                json!({"enabled": settings.enabled, "muted": settings.muted, "kinds": crate::observer::KINDS, "signals": signals, "asking": asking}),
+                json!({"enabled": settings.enabled, "muted": settings.muted, "kinds": crate::observer::KINDS, "signals": signals, "asking": asking, "agentAttention": agent_attention}),
             ));
         }
         if method == &Method::Get && path == "/api/meters" {

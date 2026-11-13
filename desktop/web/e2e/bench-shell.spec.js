@@ -1219,3 +1219,19 @@ test("Plan starts a terminal with the unlinked spec selected", async ({ page, re
   await page.locator('#session-form button[type="submit"]').click();
   await expect(page.locator("#bench-terminal-context-summary")).toContainText(`Spec ${spec.id}`);
 });
+
+test("Needs you shows observed agent questions and provider errors", async ({ page, request }) => {
+  const headers = { "X-Verb-Token": token };
+  const launch = await request.post(`${origin}/api/terminals`, { headers, data: { agent: "claude", args: [] } });
+  expect(launch.ok()).toBeTruthy();
+  const { sessionId } = await launch.json();
+  await page.route("**/api/observer", route => route.fulfill({ json: {
+    enabled: false, signals: [], asking: [], agentAttention: [
+      { terminal: sessionId, kind: "agent-question" },
+      { terminal: sessionId, kind: "agent-error" },
+    ],
+  } }));
+  await page.goto(`${origin}/?view=needs-you#${token}`);
+  await expect(page.locator("#bench-needs-list")).toContainText("Waiting for you");
+  await expect(page.locator("#bench-needs-list")).toContainText("API or model error");
+});

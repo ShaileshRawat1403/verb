@@ -182,6 +182,42 @@ pub(crate) fn asking(terminals: &[TerminalFacts]) -> Vec<String> {
         .collect()
 }
 
+/// A visible agent question followed by an empty input prompt, or an explicit provider error.
+pub(crate) fn agent_attention(screen: &str, idle_secs: u64) -> Option<&'static str> {
+    let recent = tail(screen, 14);
+    let lines: Vec<_> = recent.lines().map(str::trim).collect();
+    let error = lines.iter().rev().take(6).any(|line| {
+        let line = line
+            .trim_start_matches(['✕', '⎿', '•', ' '])
+            .to_ascii_lowercase();
+        [
+            "api error:",
+            "api request failed:",
+            "model error:",
+            "error: model ",
+            "error: api ",
+        ]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+    });
+    if error {
+        return Some("agent-error");
+    }
+    let prompt = lines
+        .iter()
+        .rposition(|line| matches!(*line, "❯" | "›" | ">"))?;
+    if idle_secs >= PERMISSION_AFTER_SECS
+        && lines[..prompt]
+            .iter()
+            .rev()
+            .take(5)
+            .any(|line| line.ends_with('?'))
+    {
+        return Some("agent-question");
+    }
+    None
+}
+
 pub(crate) fn evaluate(terminals: &[TerminalFacts], muted: &[String]) -> Vec<Signal> {
     let on = |kind: &str| !muted.iter().any(|m| m == kind);
     let mut out = Vec::new();
@@ -419,5 +455,31 @@ mod tests {
         save(&dir, &s).unwrap();
         assert_eq!(load(&dir), s);
         let _ = fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod agent_attention_tests {
+    use super::agent_attention;
+
+    #[test]
+    fn requires_observed_question_and_idle_prompt_or_explicit_error() {
+        assert_eq!(
+            agent_attention("Which users should this serve?\n❯", 3),
+            Some("agent-question")
+        );
+        assert_eq!(
+            agent_attention("Which users should this serve?\n❯", 1),
+            None
+        );
+        assert_eq!(agent_attention("Question?\nStill running", 90), None);
+        assert_eq!(
+            agent_attention("API Error: quota exceeded\n❯", 0),
+            Some("agent-error")
+        );
+        assert_eq!(
+            agent_attention("Discussed how to handle an API error: quota", 10),
+            None
+        );
     }
 }

@@ -106,6 +106,7 @@ const ui = {
   focusedTerminal: null,
   focusProject: null,
   waitingTerminals: new Set(),
+  agentErrors: new Set(),
   talks: new Map(),
   waitingTalkSpecs: new Set(),
   talkSpecs: new Set(),
@@ -124,12 +125,14 @@ const emptyTerminalTemplate = $("#terminal-grid .terminal-empty").cloneNode(
 $("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
 
 document.addEventListener("verb:observer", (event) => {
-  const { enabled, signals, asking } = event.detail;
+  const { enabled, signals, asking, agentAttention } = event.detail;
   ui.observerOn = enabled;
   ui.waitingTerminals = new Set([
     ...asking,
+    ...agentAttention.filter(signal => signal.kind === "agent-question").map(signal => signal.terminal),
     ...(enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : []),
   ]);
+  ui.agentErrors = new Set(agentAttention.filter(signal => signal.kind === "agent-error").map(signal => signal.terminal));
   // Seen from anywhere: the Sessions nav and the browser tab's title.
   updateNeedsYou();
   renderTerminalTabs();
