@@ -44,6 +44,9 @@ case "$draft" in
     printf '# %s\n\nSize: small\n\nProblem: Show work planning\nG1: Trace the outcome\nDone when: The owner publishes\n' "$item" > "$draft"
     printf 'Review this scope change\n' > plan-fixture-change.txt
     ;;
+  */prd.draft.md)
+    { printf '# Fixture PRD\n'; printf '%s\n' "$prompt" | grep '^- R1 · '; } > "$draft"
+    ;;
   *)
     printf '%s\n' "$prompt"
     exec cat
@@ -1168,4 +1171,19 @@ test("Plan links a legacy spec and creates a spec from its work item", async ({ 
   await page.locator('#spec-dialog-form button[type="submit"]').click();
   await expect(page.locator("#spec-dialog")).not.toBeVisible();
   await expect(page.locator("#bench-plan-spec")).toContainText("Why (BRD)");
+});
+
+test("planning agent can draft a PRD using the prompt example", async ({ page }) => {
+  await page.goto(`${origin}/#${token}`);
+  await page.locator('[data-bench-work="001-bench-consolidation"]').click();
+  const row = page.locator("#bench-plan-spec .bench-documents > li").nth(1);
+  await row.locator("summary").click();
+  await row.getByRole("button", { name: "Redraft with agent" }).click();
+  await page.locator("#bench-draft-form").getByRole("combobox", { name: "Agent" }).selectOption("codex");
+  await page.locator('#bench-draft-form button[type="submit"]').click();
+  await expect.poll(() => {
+    try {
+      return readFileSync(join(fixture, "Bench workspace/work/001-bench-consolidation/prd.draft.md"), "utf8");
+    } catch { return ""; }
+  }).toContain("- R1 · G1 · A returning customer");
 });

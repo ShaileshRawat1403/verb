@@ -657,14 +657,28 @@ pub(crate) fn start_draft(project: &Path, input: &StartDraft) -> Result<DraftLau
     }
     let _lock = crate::workbench::lock_project(&identity.store)?;
     let root = project.join("work");
-    let (id, dir, size) = if let Some(id) = &input.id {
+    let (id, dir, size, title) = if let Some(id) = &input.id {
         let dir = work_dir(&project, id)?;
         let item = WorkItem::read(id.clone(), &dir);
         let size = item.size.or(input.size.as_deref()).unwrap_or("standard");
         if matches!(input.document, Document::Prd) && item.brd.is_none() {
             return Err("Publish a readable BRD before drafting a PRD".into());
         }
-        (id.clone(), dir, size)
+        let title = item
+            .brd
+            .as_deref()
+            .and_then(|brd| {
+                document_body(brd)
+                    .lines()
+                    .find_map(|line| line.strip_prefix("# "))
+            })
+            .map(|heading| heading.trim().trim_end_matches(" BRD").to_owned())
+            .unwrap_or_else(|| {
+                id.split_once('-')
+                    .map_or(id.as_str(), |(_, slug)| slug)
+                    .replace('-', " ")
+            });
+        (id.clone(), dir, size, title)
     } else {
         let title = input
             .title
@@ -689,7 +703,7 @@ pub(crate) fn start_draft(project: &Path, input: &StartDraft) -> Result<DraftLau
             isolated,
         )?;
         let id = format!("{number:03}-{}", crate::specs::slug(title));
-        (id.clone(), root.join(id), size)
+        (id.clone(), root.join(id), size, title.to_owned())
     };
     if !matches!(size, "small" | "standard") {
         return Err("Choose small or standard".into());
@@ -723,7 +737,7 @@ pub(crate) fn start_draft(project: &Path, input: &StartDraft) -> Result<DraftLau
         document_at(&dir, input.document.draft_name())?.ok_or("Draft disappeared")?;
     }
     let path = format!("work/{id}/{}", input.document.draft_name());
-    let prompt = draft_prompt(input, &id, &path, size);
+    let prompt = draft_prompt(input, &id, &path, size, &title);
     Ok(DraftLaunch {
         id,
         path,
@@ -732,7 +746,7 @@ pub(crate) fn start_draft(project: &Path, input: &StartDraft) -> Result<DraftLau
     })
 }
 
-fn draft_prompt(input: &StartDraft, id: &str, path: &str, size: &str) -> String {
+fn draft_prompt(input: &StartDraft, id: &str, path: &str, size: &str, title: &str) -> String {
     let instruction = crate::specs::AssignmentRole::Plan.instruction();
     let brief = &input.brief;
     match input.document {
@@ -745,7 +759,13 @@ Size: {size}
 
 Draft the BRD using the owner's brief below and relevant project context. If a published BRD exists, use it as a reference. Preserve existing goal IDs and retired entries. Assign new goals the next unused G IDs.
 
-Use the work item title as the first heading and put "Size: {size}" near the top. For a standard BRD, include Problem, Audience, Goals, Success measures, and Scope. For a small BRD, use exactly three lines after the heading and size line:
+Start with these two lines:
+# {title}
+Size: {size}
+
+For a standard BRD, use the exact Markdown headings `## Problem`, `## Audience`, `## Goals`, `## Success measures`, and `## Scope`. Under Goals write one line per goal using `G<number>: goal text`, for example:
+G1: A returning customer can sign in
+Mark a retired goal with `G1 (retired): original goal text`. For a small BRD, use exactly three lines after the heading and size line:
 "Problem: ...", "G1: ...", and "Done when: ...".
 Record material unknowns as open questions.
 
@@ -761,7 +781,10 @@ Draft path: {path}
 
 Read the published BRD and use it as the source for goal IDs and work item size. If it is missing or unreadable, report that and stop before writing. If a published PRD exists, use it as a reference. Preserve existing requirement IDs and retired entries. Assign new requirements the next unused R IDs.
 
-Give each requirement an ID, one active BRD goal ID, requirement text, and a verification step. For a small work item, keep the PRD to at most five requirements and 60 lines. Record material unknowns as open questions.
+Write each requirement on one Markdown list line in this exact format, using the middle dot separator with one space on either side:
+- R1 · G1 · A returning customer can request a sign-in link · Request a link and check that the email arrives
+
+The fields in order are requirement ID, one active BRD goal ID, requirement text, and verification. Substitute the actual IDs and text. For a retired requirement use `R1 (retired)` in the first field. For a small work item, keep the PRD to at most five requirements and 60 lines. Record material unknowns as open questions.
 
 Add an "Out of scope" section. Do not add a requirement that serves no active BRD goal; put it under Out of scope or Open questions instead.
 
@@ -1183,4 +1206,41 @@ pub(crate) fn linked_context(spec: &Spec, brd: Option<String>, prd: Option<Strin
         }
     }
     context
+}
+
+#[cfg(test)]
+mod planning_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn prd_prompt_example_validates_with_the_document_reader() {
+        let input = StartDraft {
+            id: None,
+            title: Some("Sign in".into()),
+            size: Some("small".into()),
+            document: Document::Prd,
+            brief: String::new(),
+            spec_id: None,
+            agent: "codex".into(),
+        };
+        let prompt = draft_prompt(
+            &input,
+            "001-sign-in",
+            "work/001-sign-in/prd.draft.md",
+            "small",
+            "Sign in",
+        );
+        let requirement = prompt
+            .lines()
+            .find(|line| line.starts_with("- R1 · "))
+            .unwrap();
+        let item = WorkItem::validate(
+            "001-sign-in".into(),
+            Some("# Sign in\nSize: small\nProblem: Users lose access\nG1: Restore access\nDone when: Sign-in works".into()),
+            Some(format!("# Sign in PRD\n{requirement}")),
+            Vec::new(),
+        );
+        assert!(item.warnings.is_empty(), "{:?}", item.warnings);
+        assert_eq!(item.requirements["R1"].goal, "G1");
+    }
 }
