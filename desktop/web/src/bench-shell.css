@@ -237,7 +237,13 @@
   max-height: none;
   flex: 1 1 0;
 }
-#app.bench-layout #terminal-grid .terminal-empty { align-self: center; }
+/* The empty state fills its area and lays out from the top, so rows that appear once the project is
+   read (first-run actions) grow downward instead of moving the buttons someone may be clicking. */
+#app.bench-layout #terminal-grid .terminal-empty {
+  align-self: stretch;
+  justify-content: flex-start;
+  padding-top: clamp(32px, 16vh, 168px);
+}
 #app.bench-layout #bench-new-terminal {
   min-height: 34px;
   min-width: 40px;
