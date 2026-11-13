@@ -11,6 +11,7 @@ import { initStudioBrowser } from "./studio-browser.js";
 export function initStudio({
   $,
   api,
+  readProjectFiles,
   ui,
   workbench,
   showView,
@@ -234,7 +235,7 @@ export function initStudio({
 
   async function refreshFiles() {
     try {
-      const result = await readWithBusyRetry(api, "/api/files");
+      const result = await readProjectFiles();
       state.files = result.files ?? [];
       state.loaded = true;
       state.filesUnavailable = false;

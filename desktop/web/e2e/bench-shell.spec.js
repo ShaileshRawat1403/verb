@@ -1310,3 +1310,16 @@ test("session note prefills the agent’s final reported summary", async ({ page
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#bench-note-dialog [name=outcome]")).toHaveValue("Updated the sign-in form.");
 });
+
+test("Files and Preview share the file list while the host is busy", async ({ page }) => {
+  let requests = 0;
+  await page.route("**/api/files", async route => {
+    if (++requests === 1) {
+      return route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } });
+    }
+    return route.continue();
+  });
+  await page.goto(`${origin}/?view=project#${token}`);
+  await expect(page.locator('#file-tree [data-dir="specs"]')).toBeVisible();
+  expect(requests).toBe(2);
+});

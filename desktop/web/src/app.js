@@ -2332,7 +2332,13 @@ async function bootstrap() {
   // Late-bound cross-links between views (Ask Verb opens specs and files).
   const extras = {};
   host = initHost({ api, escapeHtml, $ });
-  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, openPreview: path => shell.openPreview(path), onBriefChange: () => shell?.render() });
+  let projectFilesRequest;
+  function readProjectFiles() {
+    projectFilesRequest ??= readWithBusyRetry(api, "/api/files")
+      .finally(() => { projectFilesRequest = null; });
+    return projectFilesRequest;
+  }
+  project = initProject({ api, readProjectFiles, toast, showDialog, closeDialog, showView, escapeHtml, $, openPreview: path => shell.openPreview(path), onBriefChange: () => shell?.render() });
   initProjectSwitcher({ $, showDialog, closeDialog });
   workbench = initWorkbench({
     refreshState,
@@ -2353,7 +2359,7 @@ async function bootstrap() {
     selectTerminal,
     theme,
   });
-  studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
+  studio = initStudio({ $, api, readProjectFiles, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
   shell = initBenchShell({ $, api, ui, workbench, studio, briefExists: project.briefExists, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, loadInstalledAgents, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
     benchTerminals?.openLaunch(id);

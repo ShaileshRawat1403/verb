@@ -20,13 +20,15 @@ export function initProject(deps) {
   async function refreshFiles() {
     const request = ++filesRequest;
     try {
-      const result = await readWithBusyRetry(api, "/api/files");
+      const result = await deps.readProjectFiles();
       if (request !== filesRequest) return;
       state.files = result.files;
       state.truncated = result.truncated;
       renderTree();
     } catch (error) {
-      if (request === filesRequest) $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+      if (request === filesRequest) {
+        $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p><button type="button" class="text-button" data-retry-files>Retry files</button>`;
+      }
     }
   }
   let hubRequest = 0;
@@ -184,6 +186,9 @@ export function initProject(deps) {
   });
 
   $("#file-filter").addEventListener("input", renderTree);
+  $("#file-tree").addEventListener("click", event => {
+    if (event.target.closest("[data-retry-files]")) refreshFiles();
+  });
   document.addEventListener("click", (event) => {
     const dir = event.target.closest("#file-tree [data-dir]");
     if (dir) {
