@@ -521,3 +521,6 @@
 .bench-evidence-source { display: inline-block; margin: 6px 0 2px; padding: 2px 8px; border-radius: 5px; font-size: .8rem; color: var(--text-muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
 .bench-evidence-source:not([data-source="observed"]) { box-shadow: none; outline: 1px dashed var(--line-strong); outline-offset: -1px; }
 .bench-failed-checks { margin: 8px 0; padding: 10px 12px; list-style: none; border-radius: 8px; background: var(--danger-bg); color: var(--danger-text); }
+/* One reading size for the Review panel; older rules left some text at 16 px. */
+#bench-review-body { font-size: 14px; }
+#bench-review-body .bench-failed-checks, #bench-review-body details > summary { font-size: 14px; }
