@@ -127,8 +127,9 @@ const emptyTerminalTemplate = $("#terminal-grid .terminal-empty").cloneNode(
 $("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
 
 document.addEventListener("verb:observer", (event) => {
-  const { enabled, signals, asking, agentAttention } = event.detail;
+  const { enabled, signals, asking, agentAttention, read } = event.detail;
   ui.observerOn = enabled;
+  ui.observerRead = read;
   ui.waitingTerminals = new Set([
     ...asking,
     ...agentAttention.filter(signal => signal.kind === "agent-question").map(signal => signal.terminal),

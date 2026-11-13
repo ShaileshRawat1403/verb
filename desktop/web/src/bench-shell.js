@@ -292,7 +292,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       const receipt = kind === "planning" ? receiptFor(session, kind) : null;
       const paths = session.planningAttention?.paths ?? [];
       const key = `${kind}:${session.id}`;
-      return `<section class="bench-needs-entry"><h3>${kind === "waiting" ? `${escapeHtml(agentDisplayName(session.agent))} · Waiting for you` : `Planning session · ${escapeHtml(session.workItemId)}`}</h3>
+      return `<section class="bench-needs-entry" data-tone="hold"><h3>${kind === "waiting" ? `${escapeHtml(agentDisplayName(session.agent))} · Waiting for you` : `Planning session · ${escapeHtml(session.workItemId)}`}</h3>
         ${kind === "planning" ? session.planningAttention.unavailable ? "<p>Verb could not compare Git status at session end.</p>" :
           `<p>Git changes outside the requested draft</p><ul>${paths.map(path => `<li><code>${escapeHtml(path)}</code> <button class="text-button" type="button" data-bench-open-path="${escapeHtml(path)}" aria-label="Open ${escapeHtml(path)}">Open</button></li>`).join("")}</ul>` : ""}
         <p>${kind === "waiting" ? "Clears when the session stops waiting." : "Clears from your review queue when you mark it handled."}</p>
@@ -306,7 +306,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       "Stale proof": "Clears when the proof is refreshed.",
       "Recorded gate warning": "Clears when the next stage move records no warnings.",
     };
-    const specEntries = attention.map(signal => `<section class="bench-needs-entry"><h3>${escapeHtml(signal.label)} · ${escapeHtml(signal.specId)} ${escapeHtml(signal.specTitle)}</h3>
+    const specEntries = attention.map(signal => `<section class="bench-needs-entry" data-tone="${signal.label === "Failed check" ? "fail" : "hold"}"><h3>${escapeHtml(signal.label)} · ${escapeHtml(signal.specId)} ${escapeHtml(signal.specTitle)}</h3>
       <p>${escapeHtml(signal.detail ?? "")}</p>${signal.warnings ? `<ul>${signal.warnings.map(line => `<li>${escapeHtml(line)}</li>`).join("")}</ul>` : ""}<p>${clears[signal.label]}</p><button class="secondary-button" type="button" data-bench-attention-spec="${escapeHtml(signal.specId)}" data-criterion-index="${signal.criterion ?? ""}">Open Review</button></section>`).join("");
     const paint = (node, markup) => {
       if (node._markup === markup) return;
@@ -315,7 +315,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       node._markup = markup;
       if (expanded) node.querySelector("[data-board-unlinked]")?.setAttribute("open", "");
     };
-    const errors = agentErrors.map(session => `<section class="bench-needs-entry">
+    const errors = agentErrors.map(session => `<section class="bench-needs-entry" data-tone="fail">
       <h3>${escapeHtml(agentDisplayName(session.agent))} · API or model error</h3>
       <p>Verb saw an error on the terminal screen. Clears when the error leaves the recent screen output or you close the terminal output.</p>
       <button type="button" class="secondary-button" data-bench-open-session="${escapeHtml(session.id)}">Open session</button>
@@ -323,13 +323,17 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     const entries = waits.map(session => sessionEntry(session, "waiting")).join("") + errors + specEntries;
     $("#bench-board-attention").hidden = !entries;
     paint($("#bench-board-attention-list"), entries);
+    // An empty list only means "nothing waiting" once the host's terminal signals have been read.
     paint($("#bench-needs-list"), entries
-      || '<p class="muted">Nothing needs your attention.</p>');
+      || (ui.observerRead === "read" ? '<p class="muted">Nothing needs your attention.</p>'
+        : ui.observerRead === "failed" ? '<p class="muted" role="status">Verb could not read terminal signals yet. It retries every few seconds.</p>'
+          : '<p class="muted" role="status">Checking terminals for anything waiting on you…</p>'));
     $("#bench-planning-reports").hidden = !planning.length;
     paint($("#bench-planning-list"), planning.map(session => sessionEntry(session, "planning")).join(""));
     const signals = [...attention, ...waits.map(session => ({ workItemId: specs.find(spec => spec.id === session.specId)?.work_item }))];
     paint($("#bench-board-rows"), boardMarkup({ data: workItems, specs, signals, summaries: workbench.boardSummaryFor, workTitle,
-      showArchived: $("#bench-show-archived").checked, error: workError, owner: ui.accessScope === "owner", esc: escapeHtml }));
+      showArchived: $("#bench-show-archived").checked, error: workError, owner: ui.accessScope === "owner", esc: escapeHtml,
+      documents: item => [["Why", "brd"], ["What", "prd"]].map(([name, kind]) => ({ name, ...documentState(item, kind) })) }));
   }
 
   $("#bench-show-archived").addEventListener("change", renderNeeds);

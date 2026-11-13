@@ -524,3 +524,47 @@
 /* One reading size for the Review panel; older rules left some text at 16 px. */
 #bench-review-body { font-size: 14px; }
 #bench-review-body .bench-failed-checks, #bench-review-body details > summary { font-size: 14px; }
+
+/* Board and Needs you (slice 7b-6). Waiting items are tags: a coloured edge and an eyelet,
+   yellow for a decision waiting on you, red for an observed failure or error. Board rows read
+   left to right: the BRD and PRD stamps, then specs counted by stage. */
+.bench-needs-entry {
+  position: relative; padding: 12px 14px 12px 28px; margin: 0 0 10px; border-radius: 4px 10px 10px 4px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line);
+}
+.bench-needs-entry::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 4px 0 0 4px; background: var(--warning); }
+.bench-needs-entry::after { content: ""; position: absolute; left: 11px; top: 17px; width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--warning); }
+.bench-needs-entry[data-tone="fail"]::before { background: var(--danger); }
+.bench-needs-entry[data-tone="fail"]::after { box-shadow: inset 0 0 0 2px var(--danger); }
+.bench-needs-entry h3 { margin: 0 0 4px; font-size: 14.5px; }
+.bench-needs-entry p { margin: 4px 0; color: var(--text-muted); font-size: 13px; }
+#bench-board-attention-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+#bench-board-attention-list .bench-needs-entry { margin: 0; }
+.bench-board-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 20px; align-items: center; }
+.bench-board-row > header, .bench-board-row > p { grid-column: 1; }
+.bench-board-row > .bench-board-track { grid-column: 2; grid-row: 1 / span 3; }
+.bench-board-row[data-board-unlinked] { display: block; }
+.bench-board-meta { color: var(--text-muted); }
+.bench-board-time { color: var(--text-dim); font-size: .8rem; }
+.bench-board-track { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bench-board-doc { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: .8rem; }
+.bench-board-track .bench-stage-counts { display: flex; gap: 3px; margin: 0; }
+.bench-board-track .bench-stage-counts > div { min-width: 46px; padding: 4px 6px; border-radius: 6px; text-align: center; background: var(--surface-2); }
+.bench-board-track .bench-stage-counts dt { font: 600 12px var(--font-cond); color: var(--text-dim); letter-spacing: .02em; }
+.bench-board-track .bench-stage-counts dd { margin: 0; font: 600 15px var(--font-cond); color: var(--text-faint); }
+.bench-board-track .bench-stage-counts > div:not([data-count="0"]) { background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.bench-board-track .bench-stage-counts > div:not([data-count="0"]) dd { color: var(--text-strong); }
+@media (max-width: 900px) {
+  .bench-board-row { grid-template-columns: minmax(0, 1fr); }
+  .bench-board-row > .bench-board-track { grid-column: 1; grid-row: auto; margin-top: 8px; }
+}
+#bench-board-attention-list .bench-needs-entry, #bench-needs-list .bench-needs-entry { padding: 12px 14px 12px 30px; }
+#bench-board-attention-list { align-items: start; }
+.bench-needs-entry li { font-size: 13px; line-height: 1.4; color: var(--text-muted); }
+.bench-needs-entry ul { margin: 6px 0; padding-left: 18px; }
+.bench-board-row > header { display: flex; align-items: center; gap: 10px; }
+.bench-board-row > header h2 { margin: 0; }
+.bench-board-row > header h2 .text-button { padding: 0; font-size: 16px; font-weight: 600; color: var(--text-strong); }
+.bench-board-row > header [data-bench-archive] { font-size: .78rem; color: var(--text-dim); }
+.bench-board-row .bench-board-meta { margin: 4px 0 0; font-size: 13px; }
+.bench-board-row .bench-board-time { margin: 2px 0 0; }

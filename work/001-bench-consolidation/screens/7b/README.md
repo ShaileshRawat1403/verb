@@ -35,7 +35,7 @@ terminal stays the hero and everything else stays quiet.
 | 3 | Sidebar: mini traveler, states as words, clipping fix | Done |
 | 4 | Terminal tab waiting flag, "This agent knows" strip | Done |
 | 5 | Review verdict, checks, changed files | Done |
-| 6 | Board as stations, Needs you as tags, no empty-state flash | |
+| 6 | Board as stations, Needs you as tags, no empty-state flash | Done |
 | 7 | First run with an empty traveler | |
 | 8 | Phone pass at 390 px | |
 
