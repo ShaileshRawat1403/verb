@@ -471,3 +471,27 @@
   100% { transform: rotate(-4deg); }
 }
 @media (prefers-reduced-motion: reduce) { .bench-stamp[data-fresh] { animation: none; } }
+
+/* Terminal tabs and the context strip (slice 7b-4). The terminal itself is untouched.
+   A tab waiting on you carries a yellow chip; its dot breathes slowly unless reduced motion
+   is on. The strip names what the agent was given, as chips. */
+#bench-terminal-tabs .terminal-tab small { font: 500 12px var(--font-ui); color: var(--text-dim); }
+#bench-terminal-tabs .terminal-tab .bench-tab-spec { font-size: 13px; color: var(--text-muted); }
+#bench-terminal-tabs .terminal-tab[aria-selected="true"] .bench-tab-spec { color: var(--text-strong); }
+#bench-terminal-tabs .tab-needs {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 5px;
+  background: var(--warning-bg); box-shadow: inset 0 0 0 1px var(--warning-line); color: var(--warning-text);
+  font-size: 11.5px; font-weight: 600;
+}
+#bench-terminal-tabs .tab-dot[data-tone="waiting"] { animation: tab-pulse 2.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #bench-terminal-tabs .tab-dot[data-tone="waiting"] { animation: none; } }
+.bench-terminal-context { gap: 6px 8px; padding: 8px 8px 2px; }
+#bench-terminal-context-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.bench-knows-label { color: var(--text-strong); font-weight: 600; margin-right: 2px; }
+.bench-knows-chip {
+  padding: 1px 8px; border-radius: 5px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--text-muted); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.bench-knows-chip:first-of-type { font-family: var(--font-cond); font-weight: 600; font-size: 13.5px; color: var(--text-strong); }
+.bench-terminal-context > .text-button { padding: 3px 9px; border-radius: 7px; box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--text); font-size: .8rem; }
+.bench-terminal-context > #bench-view-delivery { margin-left: auto; box-shadow: none; color: var(--text-muted); }
