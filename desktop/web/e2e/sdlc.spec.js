@@ -138,6 +138,7 @@ test("Review stops showing Ready after an implementation commit without a full-s
   }
 
   const implementation = join(repo, "feature.py");
+  const before = git("rev-parse", "HEAD");
   const original = readFileSync(implementation, "utf8");
   try {
     writeFileSync(implementation, original + "\n# Change the implementation after accepting proof.\n");
@@ -149,8 +150,9 @@ test("Review stops showing Ready after an implementation commit without a full-s
       route.fulfill({ status: 500, json: { error: "Proof source unavailable" } }));
     await expect(verdict).toHaveText("Not ready: proof freshness unavailable", { timeout: 15_000 });
   } finally {
-    writeFileSync(implementation, original);
-    git("commit", "-qam", "restore implementation fixture");
+    // The delivery journey uses this fixture's original upstream commit.
+    if (git("rev-parse", "HEAD") !== before) git("reset", "--keep", before);
+    else writeFileSync(implementation, original);
   }
 });
 
