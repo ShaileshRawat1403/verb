@@ -437,6 +437,51 @@ fn refusal_is_capacity_and_an_unconfirmed_exit_is_shown_without_a_start() {
 }
 
 #[test]
+fn approved_handoff_can_retry_the_same_revision_after_boundary_refusal() {
+    let host = Host::start("refuse");
+    let endpoint = format!("/api/specs/{}", host.spec());
+    let (_, original) = host.request("GET", &endpoint, None);
+    let submit = || {
+        host.request(
+            "POST",
+            &format!("{endpoint}/handoff"),
+            Some(json!({
+                "to": "shell", "note": "Only the fixture",
+                "approved": {
+                    "revision": original["revision"],
+                    "role": "review", "scope": "Check case.txt", "checks": ""
+                }
+            })),
+        )
+    };
+    assert_eq!(submit().0, 503);
+    assert_eq!(
+        host.request("GET", &endpoint, None).1["revision"],
+        original["revision"]
+    );
+
+    host.behave("fail");
+    let (status, failed) = submit();
+    assert_eq!(status, 201, "{failed}");
+    assert!(failed["warning"].is_string());
+    assert!(failed.get("note").is_none());
+    assert_eq!(
+        host.request("GET", &endpoint, None).1["revision"],
+        original["revision"]
+    );
+
+    host.behave("admit");
+    let (status, admitted) = submit();
+    assert_eq!(status, 201, "{admitted}");
+    assert!(admitted["note"]
+        .as_str()
+        .unwrap()
+        .contains("Only the fixture"));
+    assert_eq!(host.starts_recorded(), 1);
+    assert_eq!(submit().0, 409);
+}
+
+#[test]
 fn talks_cannot_reach_a_provider_through_the_boundary() {
     // A legacy boundary has no AGY runtime. A host-side override must never bypass its policy.
     let fixtures = std::env::temp_dir().join(format!(

@@ -20,7 +20,7 @@ export function escapeHtml(value) {
 export function sessionAction(session) {
   if (hasTerminalReplay(session)) return session.terminal?.running === false ? "View terminal output" : "Open terminal";
   if (session.canResume) return "Resume session";
-  return "View inbox";
+  return "View details";
 }
 
 export function stateName(state) {

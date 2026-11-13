@@ -160,7 +160,7 @@ pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
     )?;
     let tree = text_git(
         project,
-        &["ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+        &["ls-tree", "-r", "-z", "--full-tree", &commit],
         deadline,
     )?;
     let tree = tree
@@ -220,6 +220,14 @@ pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
         };
         break;
     }
+    if text_git(
+        project,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        deadline,
+    )? != commit
+    {
+        return Err("Source changed while proof freshness was being checked.".into());
+    }
     Ok(Snapshot {
         tree: digest(tree),
         commit,
@@ -269,7 +277,7 @@ fn load(root: &Path, project_id: &str, id: &str) -> Result<Ledger, String> {
 fn version(ledger: &Ledger) -> String {
     digest(serde_json::to_vec(ledger).unwrap_or_default())
 }
-fn criterion_key(spec: &Spec, index: usize) -> Option<String> {
+pub(crate) fn criterion_key(spec: &Spec, index: usize) -> Option<String> {
     spec.criteria
         .get(index)
         .map(|c| digest(format!("{index}\0{}", c.text)))
@@ -308,10 +316,13 @@ fn assemble(spec: &Spec, ledger: &Ledger, source: Option<&Snapshot>) -> Value {
     let criteria: Vec<_> = spec.criteria.iter().map(|c| {
         let key = criterion_key(spec, c.index).unwrap_or_default();
         let latest = ledger.records.iter().rev().find(|r| r.kind == Kind::Evidence && r.criterion.as_deref() == Some(&key));
+        let observed = ledger.records.iter().rev().find(|r| r.kind == Kind::Evidence
+            && r.source == Source::Observed && r.criterion.as_deref() == Some(&key));
         let freshness = latest.map(|r| fresh(r, source, &intent)).unwrap_or("unknown");
         let accepted = latest.is_some_and(|e| e.result == Some(Outcome::Passed) && freshness == "current" && ledger.records.iter().any(|a| a.kind == Kind::Acceptance && a.evidence_id.as_deref() == Some(&e.id)));
         json!({"index": c.index, "text": c.text, "claimed": c.done, "accepted": accepted, "freshness": freshness,
-            "result": latest.and_then(|r| r.result.as_ref()), "evidence": latest})
+            "result": latest.and_then(|r| r.result.as_ref()), "evidence": latest,
+            "observedCheck": observed.map(|r| json!({"result": r.result, "freshness": fresh(r, source, &intent), "label": r.label}))})
     }).collect();
     let accepted = criteria.iter().filter(|c| c["accepted"] == true).count();
     let all_accepted = !criteria.is_empty() && accepted == criteria.len();
@@ -407,7 +418,7 @@ fn assemble(spec: &Spec, ledger: &Ledger, source: Option<&Snapshot>) -> Value {
         intent,
         serde_json::to_string(&source).unwrap_or_default()
     ));
-    json!({"version": version(ledger), "context": context, "criteria": criteria, "accepted": accepted, "total": spec.criteria.len(),
+    json!({"specRevision": spec.revision, "version": version(ledger), "context": context, "criteria": criteria, "accepted": accepted, "total": spec.criteria.len(),
         "verification": verification, "reviewState": review_state, "review": review, "plan": plan,
         "goal": goal, "ready": ready, "uploaded": uploaded, "source": source, "proofVersion": proof_version,
         "deliveryFailed": delivery_failed,
@@ -470,7 +481,13 @@ pub(crate) fn enrich_all(
                     {
                         summary["attention"].as_array_mut().unwrap().push(json!({"reason": "Evidence, review or delivery needs attention", "sessionId": null, "source": "evidence ledger"}));
                     }
-                    summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"]});
+                    let criteria: Vec<_> = flow["criteria"].as_array().into_iter().flatten().map(|row| {
+                        json!({"index": row["index"], "accepted": row["accepted"], "freshness": row["freshness"],
+                            "result": row["result"], "recorded": !row["evidence"].is_null(),
+                            "evidenceId": row["evidence"]["id"], "label": row["evidence"]["label"],
+                            "source": row["evidence"]["source"], "observedCheck": row["observedCheck"]})
+                    }).collect();
+                    summary["sdlc"] = json!({"context": flow["context"], "verification": flow["verification"], "reviewState": flow["reviewState"], "accepted": flow["accepted"], "total": flow["total"], "ready": flow["ready"], "goal": flow["goal"], "criteria": criteria, "activityAt": ledger.records.last().map(|record| crate::iso8601(record.at))});
                 }
                 Err(error) => {
                     summary["sdlc"] = json!({"error": error});
@@ -541,12 +558,45 @@ pub(crate) fn implementation_diff(project: &Path) -> Result<Value, String> {
         args.extend(excludes);
         (text_git(project, &args, deadline)?, "Latest commit only. Use a terminal for a wider comparison. Spec Markdown and environment files are omitted.".into())
     };
+    Ok(diff_result(&output, &scope))
+}
+
+pub(crate) fn good_diff(project: &Path) -> Result<Value, String> {
+    let mark = crate::good::load(project)?.ok_or("No last-known-good mark for this checkout.")?;
+    let head = mark
+        .head
+        .as_deref()
+        .ok_or("The last-known-good mark has no Git commit to compare.")?;
+    let scope = format!(
+        "Tracked changes against marked commit {}. Untracked files and environment files are omitted. The mark stores no uncommitted file contents.",
+        mark.short_head().unwrap_or(head),
+    );
+    let output = text_git(
+        project,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            head,
+            "--",
+            ".",
+            ":(exclude).env*",
+            ":(glob,exclude)**/.env*",
+        ],
+        Instant::now() + Duration::from_secs(15),
+    )?;
+    Ok(diff_result(&output, &scope))
+}
+
+fn diff_result(output: &str, scope: &str) -> Value {
     let truncated = output.len() > 200_000;
     let mut limit = output.len().min(200_000);
     while !output.is_char_boundary(limit) {
         limit -= 1;
     }
-    Ok(json!({"scope": scope, "diff": &output[..limit], "truncated": truncated}))
+    json!({"scope": scope, "diff": &output[..limit], "truncated": truncated})
 }
 
 pub(crate) fn warnings(flow: &Value, stage: &str) -> Vec<String> {
@@ -874,6 +924,7 @@ mod tests {
             id: "1".into(),
             revision: "revision".into(),
             title: "Reliable answer".into(),
+            work_item: None,
             stage: "build".into(),
             branch: "main".into(),
             created: String::new(),

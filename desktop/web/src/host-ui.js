@@ -70,12 +70,7 @@ export function initHost(deps) {
           )
           .join("")
       : '<li class="muted host-empty">No restart history available on this machine.</li>';
-    const crashedRecently = r.events.some(
-      (e) => e.kind === "crash" && Date.now() - Date.parse(`${e.at.replace(" ", "T")}Z`) < 86400000,
-    );
-    const hot = r.temperatures.some((t) => temperatureTone(t.celsius) === "hot");
-    $("#nav-host-alert").hidden = !(crashedRecently || hot);
-    $("#nav-host-alert").title = crashedRecently ? "Verb crashed in the last 24 hours" : "Running hot";
+
   }
 
   async function refresh() {

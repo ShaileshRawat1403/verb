@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, terminalAction } from "./workspace-navigation.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -61,12 +61,13 @@ test("a stalled boundary stop closes the pane but reports cleanup as unconfirmed
   });
   const openTerminal = async () => {
     const before = await page.locator(".terminal-tile").count();
-    await page.locator("#quick-terminal-button, #quick-terminal-empty").first().click();
+    await page.keyboard.press("Alt+T");
     await expect(page.locator(".terminal-tile")).toHaveCount(before + 1, { timeout: 10_000 });
     return (await page.locator(".terminal-tile").last().getAttribute("id")).slice("terminal-".length);
   };
   const endTerminal = async (id) => {
-    await page.locator(`[data-close-terminal="${id}"]`).click();
+    await page.locator(`[data-tab-terminal="${id}"]`).click();
+    await (await terminalAction(page, "End session")).click();
     await page.locator("#end-session-confirm").click();
     await expect(page.locator(`#terminal-${id}`)).toHaveCount(0, { timeout: 15_000 });
   };

@@ -4,6 +4,7 @@ export function finishTerminalChrome(terminal, message) {
   terminal.tile.classList.add("ended");
   const state = terminal.tile.querySelector(".terminal-state");
   state.textContent = message;
+  delete state.dataset.connection;
   state.dataset.tone = "";
   const close = terminal.tile.querySelector("[data-close-terminal]");
   close.textContent = "Close output";

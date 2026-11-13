@@ -1,7 +1,7 @@
-// The Project view: file tree, read-only preview, and the context hub (brief, agent context sync,
-// project documents, nudges). Rules that can be tested live in workbench.js.
+// The Preview file tree and Context hub.
 
 import { buildTree, changeLabel, filterFiles, renderMarkdown } from "./workbench.js";
+import { readWithBusyRetry } from "./read-retry.js";
 import { fileIconName, icon } from "./icons.js";
 
 export function initProject(deps) {
@@ -12,26 +12,43 @@ export function initProject(deps) {
     open: new Set([""]),
     selected: null,
     hub: null,
-    loadedAt: 0,
   };
 
   // ------------------------------------------------------------------------------ data
 
+  let filesRequest = 0;
   async function refreshFiles() {
+    const request = ++filesRequest;
     try {
-      const result = await api("GET", "/api/files");
+      const result = await deps.readProjectFiles();
+      if (request !== filesRequest) return;
       state.files = result.files;
       state.truncated = result.truncated;
-      state.loadedAt = Date.now();
       renderTree();
     } catch (error) {
-      $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p>`;
+      if (request === filesRequest) {
+        $("#file-tree").innerHTML = `<p class="muted">${escapeHtml(error.message)}</p><button type="button" class="text-button" data-retry-files>Retry files</button>`;
+      }
     }
   }
+  let hubRequest = 0;
   async function refreshHub() {
+    const request = ++hubRequest;
     try {
-      state.hub = await api("GET", "/api/hub");
+      const hub = await readWithBusyRetry(api, "/api/hub");
+      if (request !== hubRequest) return;
+      state.hub = hub;
       renderHub();
+      deps.onBriefChange?.();
+      const brief = $("#context-brief-text");
+      brief.hidden = !hub.brief.exists;
+      brief.textContent = "";
+      if (hub.brief.exists) {
+        const result = await readWithBusyRetry(api, `/api/files/preview?path=${encodeURIComponent(hub.brief.path)}`);
+        if (request !== hubRequest) return;
+        if (result.text == null) brief.textContent = result.reason ?? "Brief unavailable.";
+        else brief.innerHTML = renderMarkdown(result.text, escapeHtml);
+      }
     } catch (error) {
       toast(error.message, "error");
     }
@@ -74,39 +91,19 @@ export function initProject(deps) {
       : renderDir(buildTree(state.files), 0);
   }
 
-  async function openFile(path) {
+  function openFile(path) {
     state.selected = path;
     renderTree();
-    $("#file-preview").hidden = false;
-    $("#preview-path").textContent = path;
-    $("#preview-meta").textContent = "Loading…";
-    $("#preview-body").innerHTML = "";
-    if (deps.ui.view !== "project") deps.showView("project");
-    try {
-      const preview = await api("GET", `/api/files/preview?path=${encodeURIComponent(path)}`);
-      $("#preview-meta").textContent = `${formatBytes(preview.bytes)} · read-only`;
-      if (preview.text == null) {
-        $("#preview-body").innerHTML = `<p class="muted preview-reason">Not shown: ${escapeHtml(preview.reason)}.</p>`;
-        return;
-      }
-      state.previewText = preview.text;
-      state.previewMarkdown = /\.(md|mdx|markdown)$/i.test(path);
-      state.previewRaw = false;
-      paintPreview();
-    } catch (error) {
-      $("#preview-meta").textContent = "";
-      $("#preview-body").innerHTML = `<p class="muted preview-reason">${escapeHtml(error.message)}</p>`;
-    }
+    $("#tree-selected-path").textContent = path;
+    $("#tree-selected-path").hidden = false;
+    $('[data-action="copy-file-path"]').hidden = false;
+    return deps.openPreview(path);
   }
-  const formatBytes = (n) => (n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`);
 
   function renderHub() {
     const hub = state.hub;
     if (!hub) return;
-    $("#hub-title").textContent = deps.ui.state?.project?.name || "Project";
     const nudges = hub.nudges;
-    $("#nav-nudge-count").hidden = !nudges.length;
-    $("#nav-nudge-count").textContent = nudges.length;
     $("#hub-nudges").innerHTML = nudges
       .map(
         (n) =>
@@ -125,13 +122,18 @@ export function initProject(deps) {
     $("#brief-actions").innerHTML = hub.brief.exists
       ? `<button class="secondary-button" type="button" data-action="open-brief">Open brief</button>`
       : `<button class="primary-button" type="button" data-action="write-brief">Write the brief</button>`;
-    const label = { missing: "not created yet", "no-section": "no Verb section yet", outdated: "out of date", current: "up to date" };
+    const label = { missing: "not created yet", "no-section": "no Verb section yet", outdated: "stale", current: "up to date" };
     $("#agent-files").innerHTML = hub.agent_files
       .map(
         (f) =>
-          `<li data-state="${f.state}"><code>${escapeHtml(f.name)}</code><span>${label[f.state]}</span></li>`,
+          `<li data-state="${f.state}"><code>${escapeHtml(f.name)}</code><span>${escapeHtml(f.problem ?? label[f.state] ?? f.state)}</span></li>`,
       )
       .join("");
+    $("#managed-context-preview").textContent = hub.context_preview ?? "";
+    $("#managed-context-size").textContent = hub.context_bytes == null ? "Context size unavailable" : `${hub.context_bytes} / 8192 bytes`;
+    const warning = $("#managed-context-warning");
+    warning.textContent = hub.context_warning ?? "";
+    warning.hidden = !warning.textContent;
     // The next useful step leads: writing the brief first, then sharing it with the agents.
     const syncPending = hub.brief.exists && hub.agent_files.some((f) => f.state !== "current");
     const sync = document.querySelector('[data-action="sync-agents"]');
@@ -153,31 +155,13 @@ export function initProject(deps) {
     showDialog("brief-dialog");
     $("#brief-problem").focus();
   }
-  /** Markdown reads formatted by default, with a Raw toggle; everything else shows its lines. */
-  function paintPreview() {
-    const formatted = state.previewMarkdown && !state.previewRaw;
-    $("#preview-mode").hidden = !state.previewMarkdown;
-    $("#preview-mode").textContent = formatted ? "Raw" : "Formatted";
-    if (formatted) {
-      $("#preview-body").innerHTML = `<div class="md-preview">${renderMarkdown(state.previewText, escapeHtml)}</div>`;
-      return;
-    }
-    const lines = state.previewText.split("\n");
-    if (lines.at(-1) === "") lines.pop();
-    $("#preview-body").innerHTML = `<ol class="code-lines">${lines
-      .map((line) => `<li><code>${escapeHtml(line) || " "}</code></li>`)
-      .join("")}</ol>`;
-  }
-  document.addEventListener("click", (event) => {
-    if (!event.target.closest('[data-action="preview-mode"]')) return;
-    state.previewRaw = !state.previewRaw;
-    paintPreview();
-  });
-
   async function syncAgents() {
     try {
       const result = await api("POST", "/api/hub/sync");
-      toast(`${result.message}${result.changed.length ? ". Recorded in the brief's audit trail." : ""}`);
+      const notice = $("#managed-context-git");
+      notice.textContent = result.git_notice ?? "";
+      notice.hidden = !notice.textContent;
+      toast(result.message);
       await Promise.all([refreshHub(), refreshFiles()]);
       document.dispatchEvent(new CustomEvent("verb:git-changed"));
     } catch (error) {
@@ -202,15 +186,18 @@ export function initProject(deps) {
   });
 
   $("#file-filter").addEventListener("input", renderTree);
+  $("#file-tree").addEventListener("click", event => {
+    if (event.target.closest("[data-retry-files]")) refreshFiles();
+  });
   document.addEventListener("click", (event) => {
-    const dir = event.target.closest("[data-dir]");
+    const dir = event.target.closest("#file-tree [data-dir]");
     if (dir) {
       const path = dir.dataset.dir;
       if (state.open.has(path)) state.open.delete(path);
       else state.open.add(path);
       return renderTree();
     }
-    const file = event.target.closest("[data-file]");
+    const file = event.target.closest("#file-tree [data-file], #hub-documents [data-file]");
     if (file) return openFile(file.dataset.file);
     const nudge = event.target.closest("[data-nudge]")?.dataset.nudge;
     const action = nudge ?? event.target.closest("[data-action]")?.dataset.action;
@@ -218,12 +205,8 @@ export function initProject(deps) {
       "write-brief": writeBrief,
       "open-brief": openBrief,
       "sync-agents": syncAgents,
+      "refresh-context": refreshHub,
       "open-spec": () => deps.showView("specs"),
-      "close-preview": () => {
-        state.selected = null;
-        $("#file-preview").hidden = true;
-        renderTree();
-      },
       "copy-file-path": async () => {
         try {
           await navigator.clipboard.writeText(state.selected);
@@ -236,14 +219,13 @@ export function initProject(deps) {
     if (handlers[action]) handlers[action]();
   });
 
-  refreshHub();
-
   return {
     openFile,
+    refreshFiles,
+    refreshHub,
+    briefExists: () => state.hub?.brief.exists,
     onShowView(view) {
-      if (view !== "project") return;
-      refreshHub();
-      if (Date.now() - state.loadedAt > 3000) refreshFiles();
+      if (view === "context") refreshHub();
     },
     /** Commands for the palette: hub actions always; files when the query looks for one. */
     commands(query) {
@@ -253,7 +235,9 @@ export function initProject(deps) {
         { title: "Sync agent context (AGENTS.md, CLAUDE.md)", run: syncAgents },
       ];
       if (query.trim().length >= 2) {
-        if (!state.files.length) refreshFiles();
+        if (!state.files.length && !state.loading) {
+          state.loading = refreshFiles().finally(() => { state.loading = null; });
+        }
         for (const file of filterFiles(state.files, query, 8)) {
           list.push({ title: `Open file ${file.path}`, hint: "file", run: () => openFile(file.path) });
         }

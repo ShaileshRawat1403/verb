@@ -300,10 +300,34 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
     let parts: Vec<&str> = path.trim_start_matches('/').split('/').collect();
     let owner_only = matches!(
         path,
-        "/api/browser" | "/api/browser/pairing" | "/api/connections"
+        "/api/browser" | "/api/browser/pairing" | "/api/connections" | "/api/work-items/draft"
     ) || path.starts_with("/api/tokens")
-        || (method != "GET" && (path == "/api/stream" || path == "/api/observer"))
-        || matches!(parts.as_slice(), ["api", "terminals", _, "phone", ..]);
+        || (method != "GET"
+            && matches!(
+                path,
+                "/api/stream"
+                    | "/api/observer"
+                    | "/api/work-items"
+                    | "/api/work-items/link"
+                    | "/api/hub/sync"
+            ))
+        || matches!(
+            parts.as_slice(),
+            ["api", "work-items", _, "draft", "brd" | "prd"]
+                | ["api", "work-items", _, "archive"]
+                | ["api", "terminals", _, "phone", ..]
+                | [
+                    "api",
+                    "terminals",
+                    _,
+                    "binding"
+                        | "handled"
+                        | "delivered-context"
+                        | "context-preview"
+                        | "resend-context"
+                        | "session-note"
+                ]
+        );
     if owner_only {
         return Scope::Owner;
     }
@@ -313,7 +337,9 @@ pub(crate) fn required_scope(method: &str, path: &str) -> Scope {
                 path,
                 "/api/state"
                     | "/api/workspace"
+                    | "/api/good/diff"
                     | "/api/specs"
+                    | "/api/work-items"
                     | "/api/git"
                     | "/api/git/diff"
                     | "/api/files"
@@ -475,6 +501,29 @@ mod tests {
             "screens can hold secrets"
         );
         assert_eq!(required_scope("POST", "/api/terminals"), Scope::Drive);
+        for action in [
+            "binding",
+            "session-note",
+            "resend-context",
+            "context-preview",
+            "delivered-context",
+        ] {
+            let path = format!("/api/terminals/abc/{action}");
+            assert_eq!(required_scope("GET", &path), Scope::Owner);
+            assert_eq!(required_scope("POST", &path), Scope::Owner);
+        }
+        assert_eq!(
+            required_scope("POST", "/api/work-items/draft"),
+            Scope::Owner
+        );
+        assert_eq!(
+            required_scope("GET", "/api/work-items/001-item/draft/brd"),
+            Scope::Owner
+        );
+        assert_eq!(
+            required_scope("POST", "/api/work-items/001-item/draft/prd"),
+            Scope::Owner
+        );
         assert_eq!(required_scope("POST", "/api/specs/001/stage"), Scope::Drive);
         assert_eq!(required_scope("POST", "/api/git/commit"), Scope::Drive);
         assert_eq!(

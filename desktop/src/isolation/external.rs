@@ -54,7 +54,7 @@ pub(super) fn programs() -> Vec<String> {
             return programs.clone();
         }
     }
-    let programs = probe_programs(&client).unwrap_or_else(|| {
+    let programs = probe_programs(&client).unwrap_or_else(|_| {
         LEGACY_PROGRAMS
             .iter()
             .map(|name| (*name).to_owned())
@@ -90,7 +90,30 @@ fn decode_programs(raw: &[u8]) -> Option<Vec<String>> {
     Some(programs)
 }
 
-fn probe_programs(client: &str) -> Option<Vec<String>> {
+#[derive(Debug)]
+enum ProbeError {
+    Spawn(std::io::Error),
+    Wait(std::io::Error),
+    ProcessTimeout,
+    OutputTimeout,
+    Exit,
+    Reply,
+}
+
+impl std::fmt::Display for ProbeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Spawn(error) => write!(f, "spawn: {error}"),
+            Self::Wait(error) => write!(f, "wait: {error}"),
+            Self::ProcessTimeout => f.write_str("process deadline elapsed"),
+            Self::OutputTimeout => f.write_str("stdout collection deadline elapsed"),
+            Self::Exit => f.write_str("unsuccessful exit"),
+            Self::Reply => f.write_str("missing or invalid reply"),
+        }
+    }
+}
+
+fn probe_programs(client: &str) -> Result<Vec<String>, ProbeError> {
     let mut child = Command::new(client)
         .arg("--capabilities")
         .env_clear()
@@ -99,8 +122,8 @@ fn probe_programs(client: &str) -> Option<Vec<String>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
+        .map_err(ProbeError::Spawn)?;
+    let stdout = child.stdout.take().ok_or(ProbeError::Reply)?;
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut raw = Vec::new();
@@ -111,17 +134,26 @@ fn probe_programs(client: &str) -> Option<Vec<String>> {
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                return status
-                    .success()
-                    .then(|| rx.recv_timeout(Duration::from_millis(100)).ok()?.ok())
-                    .flatten()
-                    .and_then(|raw| decode_programs(&raw))
+                if !status.success() {
+                    return Err(ProbeError::Exit);
+                }
+                let raw = rx
+                    .recv_timeout(Duration::from_millis(100))
+                    .map_err(|error| match error {
+                        std::sync::mpsc::RecvTimeoutError::Timeout => ProbeError::OutputTimeout,
+                        std::sync::mpsc::RecvTimeoutError::Disconnected => ProbeError::Reply,
+                    })?
+                    .map_err(|_| ProbeError::Reply)?;
+                return decode_programs(&raw).ok_or(ProbeError::Reply);
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
+            result => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return Err(match result {
+                    Err(error) => ProbeError::Wait(error),
+                    Ok(_) => ProbeError::ProcessTimeout,
+                });
             }
         }
     }
@@ -455,18 +487,38 @@ mod tests {
     fn capability_probe_is_bounded_and_requires_a_successful_versioned_reply() {
         use std::os::unix::fs::PermissionsExt;
         let root = Receipts::new();
-        let path = root.0.join("client");
-        std::fs::write(&path, "#!/bin/sh\nprintf '%s\\n' '{\"version\":1,\"restricted\":true,\"programs\":[\"bash\",\"agy\",\"opencode\"]}'\n").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let client = |name: &str, script: &str| {
+            let path = root.0.join(name);
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            path
+        };
+        let valid = client(
+            "valid",
+            r#"#!/bin/sh
+printf '%s\n' '{"version":1,"restricted":true,"programs":["bash","agy","opencode"]}'
+"#,
+        );
+        let rejected = client("rejected", "#!/bin/sh\nexit 2\n");
+        let slow = client("slow", "#!/bin/sh\nexec sleep 10\n");
         assert_eq!(
-            probe_programs(path.to_str().unwrap()).unwrap(),
+            probe_programs(valid.to_str().unwrap())
+                .unwrap_or_else(|error| panic!("valid capability probe failed: {error}")),
             ["bash", "agy", "opencode"]
         );
-        std::fs::write(&path, "#!/bin/sh\nexit 2\n").unwrap();
-        assert!(probe_programs(path.to_str().unwrap()).is_none());
-        std::fs::write(&path, "#!/bin/sh\nexec sleep 10\n").unwrap();
+        assert!(matches!(
+            probe_programs(rejected.to_str().unwrap()),
+            Err(ProbeError::Exit)
+        ));
+        assert!(matches!(
+            probe_programs(root.0.join("absent").to_str().unwrap()),
+            Err(ProbeError::Spawn(_))
+        ));
         let started = Instant::now();
-        assert!(probe_programs(path.to_str().unwrap()).is_none());
+        assert!(matches!(
+            probe_programs(slow.to_str().unwrap()),
+            Err(ProbeError::ProcessTimeout)
+        ));
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 

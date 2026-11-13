@@ -12,8 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 pub(crate) const STAGES: [&str; 6] = ["spec", "plan", "build", "verify", "review", "ship"];
 const CRITERIA_HEADING: &str = "## Acceptance criteria";
@@ -39,6 +41,8 @@ pub(crate) struct Spec {
     /// Derived from the file, never an additional durable store.
     pub revision: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_item: Option<String>,
     pub stage: String,
     pub branch: String,
     pub created: String,
@@ -53,6 +57,8 @@ pub(crate) struct Spec {
 pub(crate) struct Change {
     pub code: String,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
     /// Lines added and removed against the last commit; absent for binary files.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub added: Option<u32>,
@@ -107,7 +113,7 @@ fn front_matter(raw: &str) -> Option<(Vec<(String, String)>, &str)> {
 }
 
 /// Lines of the section that starts with `heading`, up to the next `## ` heading.
-fn section<'a>(body: &'a str, heading: &str) -> Vec<&'a str> {
+pub(crate) fn section<'a>(body: &'a str, heading: &str) -> Vec<&'a str> {
     let mut lines = body.lines();
     if !lines.any(|line| line.trim_end() == heading) {
         return Vec::new();
@@ -155,7 +161,7 @@ fn parse(file: &Path, project: &Path) -> Option<Spec> {
     parse_contents(file, project, &raw)
 }
 
-fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
+pub(crate) fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
     let (fields, body) = front_matter(raw)?;
     let field = |key: &str| {
         fields
@@ -172,6 +178,7 @@ fn parse_contents(file: &Path, project: &Path, raw: &str) -> Option<Spec> {
     Some(Spec {
         revision: format!("{:x}", Sha256::digest(raw.as_bytes())),
         title: field("title"),
+        work_item: Some(field("work-item")).filter(|value| !value.is_empty()),
         stage: Some(field("stage"))
             .filter(|stage| STAGES.contains(&stage.as_str()))
             .unwrap_or_else(|| "spec".to_owned()),
@@ -246,7 +253,7 @@ pub(crate) fn find(project: &Path, id: &str) -> Result<(PathBuf, Spec), String> 
 
 // --------------------------------------------------------------------------------------- writing
 
-fn slug(title: &str) -> String {
+pub(crate) fn slug(title: &str) -> String {
     let mut out = String::new();
     for c in title.to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -265,7 +272,7 @@ fn slug(title: &str) -> String {
     }
 }
 
-fn audit_line(actor: &str, action: &str) -> String {
+pub(crate) fn audit_line(actor: &str, action: &str) -> String {
     let at = crate::iso8601(crate::now_millis());
     // One line per entry; the separators must not be forged by the content itself.
     let clean = |s: &str| s.replace(['\n', '\r'], " ").replace(" · ", " - ");
@@ -313,7 +320,7 @@ fn set_field(raw: &str, key: &str, value: &str) -> String {
     out
 }
 
-fn append_audit(raw: &str, line: &str) -> String {
+pub(crate) fn append_audit(raw: &str, line: &str) -> String {
     let mut out = raw.trim_end().to_owned();
     if !raw.lines().any(|l| l.trim_end() == AUDIT_HEADING) {
         out.push_str(&format!(
@@ -405,7 +412,7 @@ pub(crate) fn set_stage(
     note: &str,
     actor: &str,
     expected_revision: Option<&str>,
-    evidence_accepted: Option<usize>,
+    evidence: Option<(usize, &[String])>,
 ) -> Result<(Spec, Vec<String>), String> {
     let target = STAGES
         .iter()
@@ -420,13 +427,16 @@ pub(crate) fn set_stage(
         return Ok((spec, Vec::new()));
     }
     let mut gate_spec = spec.clone();
-    if let Some(count) = evidence_accepted {
+    if let Some((count, _)) = evidence {
         gate_spec.criteria_done = count.min(gate_spec.criteria.len());
     }
-    let warnings = stage_warnings(project, &gate_spec, target);
+    let mut warnings = stage_warnings(project, &gate_spec, target);
+    if let Some((_, extra)) = evidence {
+        warnings.extend_from_slice(extra);
+    }
     let mut action = format!("stage {} → {stage}", spec.stage);
     if !warnings.is_empty() {
-        action.push_str(&format!(" (warning: {})", warnings.join("; ")));
+        action.push_str(&format!(" (warnings: {})", serde_json::json!(warnings)));
     }
     if !note.trim().is_empty() {
         action.push_str(&format!(" — {}", note.trim()));
@@ -646,7 +656,7 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
             Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
         }
     };
-    let status = read_git(&["status", "--porcelain=v1", "--branch", "-uall"])?;
+    let status = read_git(&["status", "--porcelain=v1", "--branch", "-z", "-uall"])?;
     let mut summary = GitSummary {
         branch: None,
         upstream: None,
@@ -655,7 +665,8 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
         changes: Vec::new(),
         recent: Vec::new(),
     };
-    for line in status.lines() {
+    let mut records = status.split_terminator('\0');
+    while let Some(line) = records.next() {
         if let Some(head) = line.strip_prefix("## ") {
             let (names, counts) = head.split_once(" [").unwrap_or((head, ""));
             let (branch, upstream) = names.split_once("...").unwrap_or((names, ""));
@@ -668,10 +679,21 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
                     summary.behind = n.parse().unwrap_or(0);
                 }
             }
-        } else if line.len() > 3 {
+        } else if let Some((code, path)) = line.get(..2).zip(line.get(3..)) {
+            let previous_path = if code.contains(['R', 'C']) {
+                Some(
+                    records
+                        .next()
+                        .ok_or("Git status omitted the source path")?
+                        .to_owned(),
+                )
+            } else {
+                None
+            };
             summary.changes.push(Change {
-                code: line[..2].trim().to_owned(),
-                path: line[3..].to_owned(),
+                code: code.trim().to_owned(),
+                path: path.to_owned(),
+                previous_path,
                 added: None,
                 removed: None,
             });
@@ -786,6 +808,116 @@ pub(crate) fn record(path: &Path, actor: &str, action: &str) -> Result<(), Strin
     write_atomic(path, &append_audit(&raw, &audit_line(actor, action)))
 }
 
+// Prevent two browser tabs from launching successors for the same reviewed spec concurrently.
+// The reservation is released on refusal, timeout, or completion of the post-admission record.
+static PENDING_HANDOFFS: LazyLock<Mutex<HashSet<(PathBuf, String)>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+pub(crate) struct HandoffReservation((PathBuf, String));
+
+impl HandoffReservation {
+    pub(crate) fn acquire(project: &Path, spec: &str) -> Result<Self, String> {
+        let key = (project.to_owned(), spec.to_owned());
+        if !PENDING_HANDOFFS.lock().unwrap().insert(key.clone()) {
+            return Err("Another handoff is starting for this spec. Try again shortly.".into());
+        }
+        Ok(Self(key))
+    }
+}
+
+impl Drop for HandoffReservation {
+    fn drop(&mut self) {
+        PENDING_HANDOFFS.lock().unwrap().remove(&self.0);
+    }
+}
+
+pub(crate) const HANDOFF_LINK_REVIEW: &str =
+    "The pending handoff needs a fresh review because the spec links changed.";
+
+/// Adds a work item and its legacy links without changing criterion text or order.
+pub(crate) fn link_work_item(
+    project: &Path,
+    spec_id: &str,
+    expected_revision: &str,
+    work_item: &str,
+    updates: &BTreeMap<usize, Option<String>>,
+    actor: &str,
+    warnings: &[String],
+) -> Result<bool, String> {
+    let _writing = writing();
+    let (path, spec) = find(project, spec_id)?;
+    if spec.revision != expected_revision {
+        return Err("The spec changed. Refresh before linking it.".into());
+    }
+    if spec
+        .work_item
+        .as_deref()
+        .is_some_and(|current| current != work_item)
+    {
+        return Err("The spec is already linked to another work item.".into());
+    }
+    let raw = fs::read_to_string(&path).map_err(|error| error.to_string())?;
+    if format!("{:x}", Sha256::digest(raw.as_bytes())) != expected_revision {
+        return Err("The spec changed. Refresh before linking it.".into());
+    }
+    let end = raw[4..]
+        .find("\n---\n")
+        .ok_or("Invalid spec front matter")?
+        + 5;
+    let raw = if spec.work_item.is_some() {
+        raw
+    } else {
+        format!("{}work-item: {work_item}\n{}", &raw[..end], &raw[end..])
+    };
+    let mut rows: Vec<_> = section(&raw, "## Traceability")
+        .into_iter()
+        .filter(|line| {
+            !crate::work_items::traceability_number(line)
+                .is_some_and(|number| updates.contains_key(&number))
+        })
+        .collect();
+    rows.extend(updates.values().filter_map(Option::as_deref));
+    let rows = rows.join("\n");
+    let has_traceability = raw.lines().any(|line| line.trim_end() == "## Traceability");
+    let mut lines = raw.split_inclusive('\n').peekable();
+    let mut updated = String::new();
+    let mut replaced = false;
+    while let Some(line) = lines.next() {
+        if line.trim_end() == "## Traceability" {
+            if replaced {
+                return Err("The spec has duplicate Traceability sections.".into());
+            }
+            while lines.peek().is_some_and(|line| !line.starts_with("## ")) {
+                lines.next();
+            }
+            replaced = true;
+            updated.push_str(&format!("## Traceability\n\n{rows}\n\n"));
+        } else if line.trim_end() == AUDIT_HEADING && !has_traceability && !replaced {
+            replaced = true;
+            updated.push_str(&format!("## Traceability\n\n{rows}\n\n"));
+            updated.push_str(line);
+        } else {
+            updated.push_str(line);
+        }
+    }
+    if !replaced {
+        updated.push_str(&format!("\n\n## Traceability\n\n{rows}\n"));
+    }
+    let reservations = PENDING_HANDOFFS.lock().unwrap();
+    let fresh_review = reservations.contains(&(project.to_owned(), spec_id.to_owned()));
+    let mut action = format!("linked work item {work_item}");
+    if fresh_review {
+        action.push_str(". ");
+        action.push_str(HANDOFF_LINK_REVIEW);
+    }
+    if !warnings.is_empty() {
+        action.push_str(&format!(" (warning: {})", warnings.join(" | ")));
+    }
+    write_atomic(&path, &append_audit(&updated, &audit_line(actor, &action)))?;
+    drop(reservations);
+    Ok(fresh_review)
+}
+
 /// The prompt given to an agent started on a spec: read it, work criterion by criterion, and stop
 /// at the acceptance criteria rather than inventing scope.
 pub(crate) fn agent_brief(spec: &Spec) -> String {
@@ -819,7 +951,100 @@ pub(crate) fn agent_brief(spec: &Spec) -> String {
     )
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AssignmentRole {
+    Implement,
+    Review,
+    Investigate,
+    Plan,
+}
+
+impl AssignmentRole {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Implement => "Implement",
+            Self::Review => "Review",
+            Self::Investigate => "Investigate",
+            Self::Plan => "Plan",
+        }
+    }
+
+    pub(crate) fn instruction(self) -> &'static str {
+        match self {
+            Self::Implement => {
+                "Implement only within the approved scope. Run the specified checks."
+            }
+            Self::Review => "Review independently within the assigned scope. Do not edit files.",
+            Self::Plan => "Read what you need to draft the requested document. If the owner's brief is too thin to draft responsibly, ask up to three questions in the terminal first and wait for the answers. Write only to the draft path named in the request. Do not change any other file, publish the draft, or stage, commit, or push it. When finished, report the draft path and any open questions. The owner reviews and publishes the draft from Plan.",
+            Self::Investigate => {
+                "Investigate the assigned question and report evidence. Do not edit files."
+            }
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApprovedHandoff {
+    pub revision: String,
+    pub role: AssignmentRole,
+    pub scope: String,
+    pub checks: String,
+    #[serde(default)]
+    pub result: WorkerResult,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorkerResult {
+    pub outcome: String,
+    pub files: String,
+    pub checks: String,
+}
+
+impl WorkerResult {
+    fn fields(&self) -> [(&'static str, &str); 3] {
+        [
+            ("Reported outcome", self.outcome.trim()),
+            ("Reported changed files", self.files.trim()),
+            ("Reported check results (unverified)", self.checks.trim()),
+        ]
+    }
+}
+
+pub(crate) fn approved_handoff_prompt(id: &str, note: &str, approved: &ApprovedHandoff) -> String {
+    let role = approved.role.instruction();
+    let mut prompt = format!(
+        "Assignment for spec {id} at approved revision {}. {role} Work only within the approved scope and checks below. \
+         Read what you need to understand the approved scope. Change only files within it, and run only the approved checks. If you need more access or context, ask first. \
+         Do not commit, push, or switch branches. Return the outcome, files, checks you ran, and what the next agent needs. \
+         Treat reported results as unverified evidence.\n\n\
+         Approved scope: {}\nApproved checks: {}\nApproved handoff: {}",
+        approved.revision, approved.scope.trim(), approved.checks.trim(), note.trim()
+    );
+    for (label, value) in approved.result.fields() {
+        if !value.is_empty() {
+            prompt.push_str(&format!("\n{label}: {value}"));
+        }
+    }
+    prompt
+}
+
 const HANDOFF_HEADING: &str = "## Handoff notes";
+pub(crate) const STALE_HANDOFF: &str =
+    "The spec changed. Review the current revision before handing off.";
+
+fn heading_offset(raw: &str, heading: &str) -> Option<usize> {
+    let mut offset = 0;
+    for line in raw.split_inclusive('\n') {
+        if line.trim_end() == heading {
+            return Some(offset);
+        }
+        offset += line.len();
+    }
+    None
+}
 
 /// The agent that most recently started on a spec, from its audit trail.
 pub(crate) fn last_agent(spec: &Spec) -> Option<String> {
@@ -834,12 +1059,25 @@ pub(crate) fn last_agent(spec: &Spec) -> Option<String> {
 /// Writes a handoff note into the spec (newest first, under `## Handoff notes`) and records the
 /// handoff in the audit trail. Returns the note. Starting the next agent is the caller's job, and
 /// the previous agent is never stopped here: that stays the person's decision.
+#[cfg(test)]
 pub(crate) fn handoff(
     project: &Path,
     id: &str,
     to: &str,
     note: &str,
     actor: &str,
+) -> Result<String, String> {
+    handoff_inner(project, id, to, note, actor, None, None)
+}
+
+pub(crate) fn handoff_inner(
+    project: &Path,
+    id: &str,
+    to: &str,
+    note: &str,
+    actor: &str,
+    approved: Option<&ApprovedHandoff>,
+    start: Option<&str>,
 ) -> Result<String, String> {
     let (path, spec) = find(project, id)?;
     let from = last_agent(&spec).unwrap_or_else(|| "nobody yet".to_owned());
@@ -849,51 +1087,66 @@ pub(crate) fn handoff(
         "### {} · {from} → {to}",
         &at[..16].replace('T', " ")
     )];
-    let open: Vec<_> = spec.criteria.iter().filter(|c| !c.done).collect();
-    lines.push(if open.is_empty() {
-        "- All acceptance criteria are proven.".to_owned()
+    if let Some(approved) = approved {
+        lines.push(format!("- Source revision: {}", approved.revision));
+        lines.push(format!("- Assignment: {}", approved.role.instruction()));
+        lines.push(format!("- Approved scope: {}", one_line(&approved.scope)));
+        lines.push(format!(
+            "- Approved checks (requested, not observed): {}",
+            one_line(&approved.checks)
+        ));
+        for (label, value) in approved.result.fields() {
+            if !value.is_empty() {
+                lines.push(format!("- {label}: {}", one_line(value)));
+            }
+        }
     } else {
-        format!(
-            "- Still to prove: {}",
-            open.iter()
-                .map(|c| format!("{}. {}", c.index + 1, c.text))
-                .collect::<Vec<_>>()
-                .join("; ")
-        )
-    });
-    let grep = format!("spec:{id}");
-    if let Ok(log) = git(
-        project,
-        &[
-            "log",
-            "-5",
-            "--fixed-strings",
-            "--grep",
-            &grep,
-            "--format=%h %s",
-        ],
-    ) {
-        let commits: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
-        if !commits.is_empty() {
-            lines.push(format!(
-                "- Recent commits for this spec: {}",
-                commits.join("; ")
-            ));
+        let open: Vec<_> = spec.criteria.iter().filter(|c| !c.done).collect();
+        lines.push(if open.is_empty() {
+            "- All acceptance criteria are proven.".to_owned()
+        } else {
+            format!(
+                "- Still to prove: {}",
+                open.iter()
+                    .map(|c| format!("{}. {}", c.index + 1, c.text))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        });
+        let grep = format!("spec:{id}");
+        if let Ok(log) = git(
+            project,
+            &[
+                "log",
+                "-5",
+                "--fixed-strings",
+                "--grep",
+                &grep,
+                "--format=%h %s",
+            ],
+        ) {
+            let commits: Vec<&str> = log.lines().filter(|l| !l.trim().is_empty()).collect();
+            if !commits.is_empty() {
+                lines.push(format!(
+                    "- Recent commits for this spec: {}",
+                    commits.join("; ")
+                ));
+            }
         }
-    }
-    if let Ok(summary) = git_summary(project) {
-        let files: Vec<&str> = summary
-            .changes
-            .iter()
-            .map(|c| c.path.as_str())
-            .filter(|p| *p != spec.file)
-            .take(12)
-            .collect();
-        if !files.is_empty() {
-            lines.push(format!("- Uncommitted changes: {}", files.join(", ")));
-        }
-        if let Some(branch) = &summary.branch {
-            lines.push(format!("- Branch: {branch}"));
+        if let Ok(summary) = git_summary(project) {
+            let files: Vec<&str> = summary
+                .changes
+                .iter()
+                .map(|c| c.path.as_str())
+                .filter(|p| *p != spec.file)
+                .take(12)
+                .collect();
+            if !files.is_empty() {
+                lines.push(format!("- Uncommitted changes: {}", files.join(", ")));
+            }
+            if let Some(branch) = &summary.branch {
+                lines.push(format!("- Branch: {branch}"));
+            }
         }
     }
     let note = one_line(note);
@@ -907,10 +1160,15 @@ pub(crate) fn handoff(
 
     let _writing = writing();
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let next = if let Some(at_heading) = raw.find(HANDOFF_HEADING) {
+    if let Some(approved) = approved {
+        if format!("{:x}", Sha256::digest(raw.as_bytes())) != approved.revision {
+            return Err(STALE_HANDOFF.into());
+        }
+    }
+    let next = if let Some(at_heading) = heading_offset(&raw, HANDOFF_HEADING) {
         let insert = at_heading + HANDOFF_HEADING.len();
         format!("{}\n\n{entry}{}", &raw[..insert], &raw[insert..])
-    } else if let Some(at_audit) = raw.find(AUDIT_HEADING) {
+    } else if let Some(at_audit) = heading_offset(&raw, AUDIT_HEADING) {
         format!(
             "{}{HANDOFF_HEADING}\n\n<!-- Written by Verb at each handoff, newest first. -->\n\n{entry}\n\n{}",
             &raw[..at_audit],
@@ -923,7 +1181,11 @@ pub(crate) fn handoff(
     if !note.is_empty() {
         action.push_str(&format!(" — {note}"));
     }
-    write_atomic(&path, &append_audit(&next, &audit_line(actor, &action)))?;
+    let mut next = append_audit(&next, &audit_line(actor, &action));
+    if let Some(start) = start {
+        next = append_audit(&next, &audit_line(actor, start));
+    }
+    write_atomic(&path, &next)?;
     Ok(entry)
 }
 
@@ -1239,6 +1501,77 @@ mod tests {
     }
 
     #[test]
+    fn approved_handoffs_bind_each_successor_to_the_reviewed_revision() {
+        let project = temp_repo();
+        let spec = new_spec(&project);
+        fs::write(project.join("unapproved-private-file"), "private").unwrap();
+        let approved = ApprovedHandoff {
+            revision: spec.revision,
+            role: AssignmentRole::Review,
+            scope: "Inspect parser.rs".into(),
+            checks: "cargo test parser".into(),
+            result: WorkerResult {
+                outcome: "Parser rejects empty input".into(),
+                files: "parser.rs".into(),
+                checks: "cargo test parser passed".into(),
+            },
+        };
+        let prompt = approved_handoff_prompt("001", "Reproduce the reported error.", &approved);
+        assert!(prompt.contains("Review independently"));
+        assert!(prompt.contains("Read what you need to understand the approved scope. Change only files within it, and run only the approved checks."));
+        assert!(prompt.contains("Reported check results (unverified): cargo test parser passed"));
+        assert!(prompt.contains(&approved.revision));
+        assert!(!prompt.contains("Bad email rejected"));
+        let first = handoff_inner(
+            &project,
+            "001",
+            "codex",
+            "Reproduce the reported error.",
+            "Owner",
+            Some(&approved),
+            None,
+        )
+        .unwrap();
+        assert!(first.contains("- Reported changed files: parser.rs"));
+        assert!(!first.contains("unapproved-private-file"));
+        assert!(!first.contains("Bad email rejected"));
+
+        // Reload from disk as a successor would after a process interruption.
+        let (path, after_review) = find(&project, "001").unwrap();
+        let recorded = fs::read(&path).unwrap();
+        assert!(handoff_inner(
+            &project,
+            "001",
+            "agy",
+            "A stale handoff",
+            "Owner",
+            Some(&approved),
+            None,
+        )
+        .is_err());
+        assert_eq!(fs::read(&path).unwrap(), recorded);
+        let successor = ApprovedHandoff {
+            revision: after_review.revision,
+            role: AssignmentRole::Implement,
+            ..approved
+        };
+        let prompt = approved_handoff_prompt("001", "Fix the verified parser error.", &successor);
+        assert!(prompt.contains(&successor.revision));
+        assert!(!prompt.contains("Reproduce the reported error."));
+        assert!(!prompt.contains("unapproved-private-file"));
+        handoff_inner(
+            &project,
+            "001",
+            "agy",
+            "Fix the verified parser error.",
+            "Owner",
+            Some(&successor),
+            None,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn handoff_writes_a_note_newest_first_and_audits_it() {
         let project = temp_repo();
         new_spec(&project);
@@ -1293,5 +1626,42 @@ mod tests {
     fn ids_must_be_digits() {
         let project = temp_repo();
         assert!(find(&project, "../etc").is_err());
+    }
+    #[test]
+    fn linking_a_spec_requires_a_fresh_review_for_a_pending_handoff() {
+        let project = temp_repo();
+        let original = new_spec(&project);
+        let pending = HandoffReservation::acquire(&project, &original.id).unwrap();
+        let updates = BTreeMap::from([(1, Some("- 1 · identity · R1".to_owned()))]);
+        let fresh_review = link_work_item(
+            &project,
+            &original.id,
+            &original.revision,
+            "001-example",
+            &updates,
+            "Owner",
+            &[],
+        )
+        .unwrap();
+        assert!(fresh_review);
+        let (_, current) = find(&project, &original.id).unwrap();
+        assert_ne!(current.revision, original.revision);
+        assert!(current
+            .audit
+            .last()
+            .unwrap()
+            .action
+            .contains(HANDOFF_LINK_REVIEW));
+        drop(pending);
+        assert!(!link_work_item(
+            &project,
+            &original.id,
+            &current.revision,
+            "001-example",
+            &updates,
+            "Owner",
+            &[],
+        )
+        .unwrap());
     }
 }

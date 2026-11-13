@@ -18,7 +18,7 @@ The desktop host in `desktop/` implements the same contract in Rust against the 
 (`desktop/src/agents.rs`), including the agent resume identity the schema defines -- one contract,
 two hosts, no second state machine.
 
-This is the shape from `docs/HANDOFF.md`'s "Durable Session, step 2", made precise enough to type
+This is the shape from `docs/history/HANDOFF.md`'s "Durable Session, step 2", made precise enough to type
 and to test against. It adds nothing conceptually new — it resolves the ambiguities that would
 otherwise get decided differently by whoever writes the Android code versus whoever writes the
 desktop code.
@@ -142,7 +142,7 @@ Claude's adapter knows how to check Claude's transcripts; Codex's adapter knows 
 only ever sees the `yes | no | unknown` result, the same way it only ever sees "present or absent"
 for `ProcessBinding`. `resume` returns `null` on failure -- no separate failure signal, deliberately:
 a caller branching only on null-vs-non-null cannot accidentally treat a failure as success.
-`ClaudeAgentAdapter` (`docs/HANDOFF.md`'s Claude-first slice) reads `canResume` from transcript
+`ClaudeAgentAdapter` (`docs/history/HANDOFF.md`'s Claude-first slice) reads `canResume` from transcript
 presence under `~/.claude/projects/<cwd, "/" replaced by "-">/` and from Claude's own session
 metadata under `~/.claude/sessions/`, whose filename is a PID and is therefore never used as
 identity. `CodexAgentAdapter` reads Codex's rollout files under
@@ -202,7 +202,7 @@ only the "start over from `ENDED`" path that mints a fresh identity, never the r
    broken it.
 2. **State is written by whoever owns the process**, never inferred by a screen from "is something
    drawn." Today that owner is the Activity-scoped ViewModel; later it may be a service. The UI
-   reads `state`, it does not compute it from side signals (this is the mistake `docs/DURABLE_SESSION.md`
+   reads `state`, it does not compute it from side signals (this is the mistake `docs/history/DURABLE_SESSION.md`
    already found once, where the UI's own lifetime got treated as the session's).
 3. **`lastKnownCwd` and `agent.resumeIdentity` remain valid with no live `process`.** They are what
    `RECOVERABLE` is built from, not values that go stale the moment the process dies — they just stop
@@ -211,7 +211,7 @@ only the "start over from `ENDED`" path that mints a fresh identity, never the r
    Project switch, runtime switch, and any future "reconnect the screen to a session" action operate
    on which `VerbSession` the UI is pointed at, and never rewrite an existing session's `projectId`
    or `runtime` (see "`projectId` and `runtime` are fixed at creation", above). (This is
-   `docs/DURABLE_SESSION.md`'s row 2, already diagnosed as self-inflicted, not fixed by this contract
+   `docs/history/DURABLE_SESSION.md`'s row 2, already diagnosed as self-inflicted, not fixed by this contract
    but no longer excusable once it exists.)
 5. **A lifecycle observer must never depend on mutable UI selection.**
    Every agent coordinator holds an explicit binding to the originating `terminalSessionId` and its
@@ -244,7 +244,7 @@ Kept out on purpose, per the steer against over-generalizing for hypothetical ne
 - **Persistence format.** Whether this is stored as a Room entity, a flat file, or in-memory only is
   an implementation choice for step 2, not part of the contract.
 - **Process supervision** (foreground service, `tmux`/`dtach`). Those are *consumers* of `state`
-  transitions, not definitions of them. `docs/DURABLE_SESSION.md` already argues for deciding the
+  transitions, not definitions of them. `docs/history/DURABLE_SESSION.md` already argues for deciding the
   multiplexer question last; this contract doesn't need it decided at all.
 
 ## The resulting mental model
@@ -290,4 +290,4 @@ Session recoverable
 Implement against Android only, replacing `onCleared() -> terminalRuntime.destroy()` and the
 project-switch destroy-and-restart with code that operates on `VerbSession.state` instead. Desktop
 is not touched until Android has proven the contract holds under the seven rows in
-`docs/DURABLE_SESSION.md`'s survivability table.
+`docs/history/DURABLE_SESSION.md`'s survivability table.

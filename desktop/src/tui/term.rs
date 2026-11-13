@@ -109,6 +109,7 @@ impl Hosted {
             }
             logger.process_started()?;
             session.state = crate::SessionState::Live;
+            session.assignment.terminal_ended_at = None;
             session.last_seen_at = crate::now_millis();
             crate::save_session(&session)?;
             Ok((reader, logger))
@@ -567,6 +568,16 @@ impl Hosted {
         pty::signal_group(self.pid, signal)
     }
 
+    fn capture_reported_outcome(&mut self) {
+        if self.session.assignment.spec_id.is_none() {
+            return;
+        }
+        let watched = self.watch.conversation_id();
+        self.session.assignment.reported_outcome = self.conversation.as_mut().and_then(|engine| {
+            engine.final_reported_outcome(&self.parser.screen().contents(), watched.as_deref())
+        });
+    }
+
     /// Closes the record out exactly as the CLI does: process ended, agent ended, state resolved
     /// from the agent's own evidence, session saved.
     pub fn finish(mut self, exit_code: i32) -> Result<Session, String> {
@@ -578,6 +589,7 @@ impl Hosted {
             }));
         }
         let _ = self.mobile.end();
+        self.capture_reported_outcome();
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
         Ok(self.session.clone())
@@ -597,6 +609,7 @@ impl Hosted {
                 "code": exit_code,
             }));
         }
+        self.capture_reported_outcome();
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
         Ok(self.session.clone())

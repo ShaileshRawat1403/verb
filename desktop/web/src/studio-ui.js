@@ -11,6 +11,7 @@ import { initStudioBrowser } from "./studio-browser.js";
 export function initStudio({
   $,
   api,
+  readProjectFiles,
   ui,
   workbench,
   showView,
@@ -21,9 +22,16 @@ export function initStudio({
   agentMark,
 }) {
   const root = $("#view-studio");
+  const canvas = $("#studio-canvas-panel");
+  const canvasHome = document.createComment("Studio preview canvas");
+  canvas.before(canvasHome);
+  let previewMounted = false;
+  let filesRequest;
+
   const state = {
     files: [],
     loaded: false,
+    filesUnavailable: false,
     selected: null,
     request: 0,
     mode: "document",
@@ -43,8 +51,14 @@ export function initStudio({
   const bridge = initStudioEditor({
     $,
     api,
+    inBench: () => previewMounted,
+    onCapability: renderPreviewLimit,
     onMode(next) {
-      root.dataset.canvasMode = next;
+      root.dataset.canvasMode = canvas.dataset.canvasMode = next;
+      if (previewMounted && next !== "edit") {
+        $("#studio-source").setAttribute("aria-pressed", String(next === "document" && state.mode === "source"));
+        $("#studio-show-document").setAttribute("aria-pressed", String(state.mode !== "source" || next === "app"));
+      }
       if (next === "document") renderDocument();
       else
         setText(
@@ -118,6 +132,17 @@ export function initStudio({
     const matches = state.files.filter((file) =>
       words.every((word) => file.path.toLowerCase().includes(word)),
     );
+    const results = $("#bench-file-results");
+    results.hidden = !previewMounted || !words.length;
+    if (!results.hidden) {
+      results.innerHTML = matches.slice(0, 100).map(file =>
+        `<li><button type="button" class="text-button" data-preview-file="${escapeHtml(file.path)}">${escapeHtml(file.path)}</button></li>`
+      ).join("");
+      setText("#studio-file-note", matches.length > 100 ? `Showing 100 of ${matches.length} matches. Narrow your search.` :
+        matches.length ? "" : "No matching files.");
+    } else if (previewMounted) {
+      setText("#studio-file-note", state.loaded ? "" : "Reading files…");
+    }
     const current = state.files.find((file) => file.path === state.selected);
     const options = matches.map((file) => new Option(file.path, file.path));
     if (current && !matches.includes(current))
@@ -130,6 +155,11 @@ export function initStudio({
       ...options,
     );
     $("#studio-file").value = state.selected || "";
+    if (state.filesUnavailable) {
+      setText("#studio-file-note", "Files unavailable. Refresh to retry.");
+      return;
+    }
+    if (previewMounted) return;
     setText(
       "#studio-file-note",
       words.length
@@ -164,13 +194,54 @@ export function initStudio({
       : intent;
   }
 
+  function loadFiles() {
+    filesRequest ??= refreshFiles().finally(() => { filesRequest = null; });
+    return filesRequest;
+  }
+
+  function renderPreviewLimit() {
+    const limit = $("#bench-file-limit");
+    limit.hidden = !previewMounted || !state.selected || state.preview?.text == null || !bridge.readOnly();
+    if (!limit.hidden) limit.textContent = "Read-only in this workspace.";
+  }
+
+  function setPreviewLabels(bench) {
+    $("#studio-show-document").textContent = bench ? "Preview" : dock.isImage(state.selected) ? "Image" : "Document";
+    $("#studio-edit-file").textContent = bench ? "Edit" : "Edit file";
+    $("label[for=studio-file-search]").textContent = bench ? "Find a file" : "Find a canvas file";
+    $("#studio-document-path").textContent = state.selected || (bench ? "Project files" : "Project canvas");
+    if (state.preview) renderDocument();
+    renderPreviewLimit();
+  }
+
+  function mountPreview(mount, visible) {
+    if (mount && canvas.parentElement !== mount) {
+      previewMounted = true;
+      browser.hide();
+      if (!$("#studio-changes-panel").hidden) $("#studio-toggle-changes").click();
+      mount.append(canvas);
+      setPreviewLabels(true);
+      renderFileOptions();
+      if (!state.loaded) loadFiles();
+    } else if (!mount && previewMounted) {
+      bridge.suspendPreview();
+      previewMounted = false;
+      canvasHome.after(canvas);
+      setPreviewLabels(false);
+      renderFileOptions();
+    }
+    if (!visible && previewMounted) bridge.suspendPreview();
+  }
+
   async function refreshFiles() {
     try {
-      const result = await readWithBusyRetry(api, "/api/files");
+      const result = await readProjectFiles();
       state.files = result.files ?? [];
       state.loaded = true;
+      state.filesUnavailable = false;
       state.truncated = result.truncated;
       renderFileOptions();
+      document.dispatchEvent(new Event("verb:preview-files"));
       // Background file discovery must not replace the browser the person just opened.
       if (!state.selected && $("#studio-browser").hidden) {
         const path =
@@ -182,8 +253,9 @@ export function initStudio({
         }
       }
     } catch (error) {
+      state.filesUnavailable = true;
       message(`Could not read files: ${error.message}`);
-      setText("#studio-file-note", "Files unavailable. Refresh to retry.");
+      renderFileOptions();
     }
   }
 
@@ -196,10 +268,12 @@ export function initStudio({
     bridge.select(path);
     state.mode = "document";
     $("#studio-source").setAttribute("aria-pressed", "false");
-    setText("#studio-document-path", path || "Project canvas");
+    setText("#studio-document-path", path || (previewMounted ? "Project files" : "Project canvas"));
+    if (previewMounted) $("#studio-show-document").textContent = "Preview";
     setText("#studio-document-meta", "Reading file…");
     $("#studio-document").textContent = "";
     state.preview = null;
+    renderPreviewLimit();
     $("#studio-source").disabled = true;
     $("#studio-use-selection").disabled = true;
     if (!path) {
@@ -231,10 +305,11 @@ export function initStudio({
   function renderDocument() {
     const preview = state.preview;
     if (!preview) return;
+    renderPreviewLimit();
     if (bridge.mode() === "document")
       setText("#studio-document-meta", `${preview.bytes} bytes · read-only`);
     $("#studio-source").disabled =
-      preview.text == null || !/\.(md|mdx|markdown)$/i.test(state.selected);
+      preview.text == null || (!previewMounted && !/\.(md|mdx|markdown)$/i.test(state.selected));
     if (preview.text == null) {
       $("#studio-document").textContent =
         `Not shown: ${preview.reason || "preview unavailable"}.`;
@@ -500,6 +575,26 @@ export function initStudio({
     $("#studio-changes-panel").scrollIntoView({ block: "nearest" });
     message("Inspect the changed files first. Commit changes opens a separate review; nothing is uploaded.");
   });
+  $("#bench-file-results").addEventListener("click", async event => {
+    const button = event.target.closest("[data-preview-file]");
+    if (!button) return;
+    $("#studio-file-search").value = "";
+    const path = button.dataset.previewFile;
+    await openFile(path);
+    if (previewMounted && !$("#bench-preview").hidden && !$("#bench-right-panel").hidden && state.selected === path && /\.html?$/i.test(path)) {
+      bridge.showPreview();
+    }
+  });
+  $("#studio-show-document").addEventListener("pointerdown", () => {
+    if (previewMounted) state.mode = "document";
+  });
+  $("#studio-show-document").addEventListener("click", () => {
+    if (!previewMounted) return;
+    state.mode = "document";
+    $("#studio-source").setAttribute("aria-pressed", "false");
+    $("#studio-show-document").setAttribute("aria-pressed", "true");
+    if (bridge.mode() === "document") renderDocument();
+  });
   $("#studio-file-search").addEventListener("input", renderFileOptions);
   document.addEventListener("selectionchange", () => {
     $("#studio-use-selection").disabled = !selectedContext();
@@ -542,7 +637,8 @@ export function initStudio({
   });
   $("#studio-source").addEventListener("click", () => {
     bridge.document();
-    state.mode = state.mode === "source" ? "document" : "source";
+    state.mode = previewMounted || state.mode !== "source" ? "source" : "document";
+    if (previewMounted) $("#studio-show-document").setAttribute("aria-pressed", "false");
     $("#studio-source").setAttribute(
       "aria-pressed",
       String(state.mode === "source"),
@@ -606,11 +702,14 @@ export function initStudio({
   });
   return {
     render,
+    mountPreview,
+    openPreviewFile: openFile,
+    hasPreviewFiles: () => state.files.length > 0,
     acceptExternalResult({ source, text }) {
       if (state.context) { toast('A context is already attached to the Studio draft. Remove it before adding another result.'); return false; }
       state.context = { path: `MCP · ${source}`, text: `External, untrusted connector result:\n${text.slice(0, 3800)}${text.length > 3800 ? '\n[Result truncated for this draft]' : ''}` };
-      showView('studio'); renderContext(); showChangeDraft(true, { user: true });
-      focusSurface('work'); $('#studio-intent').focus();
+      renderContext(); showChangeDraft(true, { user: true });
+      toast('Attached to the Studio draft. Open Studio from the command palette.');
       message('Connector result attached to your draft. Nothing was sent to an agent.');
       return true;
     },
@@ -630,13 +729,13 @@ export function initStudio({
     onShowView(view) {
       if (view !== "studio") {
         browser.hide();
-        bridge.document(); // Stop app code on navigation; retain file drafts.
+        if (view !== "sessions" || !previewMounted) bridge.document();
         conversation.panel?.stop();
         return;
       }
       conversation.panel?.start();
       render();
-      if (!state.loaded) refreshFiles();
+      if (!state.loaded) loadFiles();
     },
   };
 }

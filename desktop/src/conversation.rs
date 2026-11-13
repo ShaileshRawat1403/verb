@@ -1003,6 +1003,21 @@ impl Engine {
         }
     }
 
+    pub(crate) fn final_reported_outcome(
+        &mut self,
+        screen: &str,
+        conversation: Option<&str>,
+    ) -> Option<String> {
+        self.update(Instant::now(), screen, conversation, false, true);
+        self.view(transcript::MAX_ITEMS)
+            .items
+            .into_iter()
+            .rev()
+            .filter(|row| row.item.kind == "agent")
+            .filter_map(|row| row.item.text.as_deref())
+            .find_map(crate::session_context::reported_outcome)
+    }
+
     /// Re-reads the log now and reports what it shows about one message.
     pub(crate) fn check(
         &mut self,

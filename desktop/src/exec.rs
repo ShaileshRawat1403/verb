@@ -36,6 +36,22 @@ pub(crate) fn read_output(command: &mut Command) -> std::io::Result<std::process
     bounded::output(command, Duration::from_secs(15), 8 * 1024 * 1024)
 }
 
+pub(crate) fn read_output_stream(
+    command: &mut Command,
+    limit: usize,
+    sink: &mut dyn FnMut(&[u8]),
+) -> std::io::Result<std::process::Output> {
+    bounded::stream(command, Duration::from_secs(15), limit, sink)
+}
+
+#[cfg(unix)]
+pub(crate) fn read_output_with_input(
+    command: &mut Command,
+    input: &[u8],
+) -> std::io::Result<std::process::Output> {
+    bounded::exchange(command, Duration::from_secs(15), 8 * 1024 * 1024, input)
+}
+
 pub(crate) fn read_output_before(
     command: &mut Command,
     deadline: std::time::Instant,

@@ -34,11 +34,7 @@ struct Location {
 }
 
 fn git_output(project: &Path, args: &[&str]) -> Option<String> {
-    let output = crate::exec::git(project)?
-        .args(args)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
+    let output = crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()?;
     if !output.status.success() {
         return None;
     }

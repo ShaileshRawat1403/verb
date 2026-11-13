@@ -2,6 +2,9 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+#[path = "support/git_paths.rs"]
+mod git_paths;
+
 fn git(root: &Path, args: &[&str]) {
     assert!(Command::new("git")
         .current_dir(root)
@@ -96,5 +99,16 @@ fn project_reads_are_batched_but_never_run_repo_hooks_or_preview_ignored_files()
     ] {
         assert!(!helper(&root, args).status.success(), "{args:?}");
     }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn guest_git_paths_preserve_rename_copy_and_literal_arrow() {
+    let root = std::env::temp_dir().join(format!("verb-guest-git-paths-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    git_paths::fixture(&root);
+    let result = helper(&root, &["git"]);
+    assert!(result.status.success(), "{:?}", result);
+    git_paths::assert_summary(&serde_json::from_slice(&result.stdout).unwrap());
     std::fs::remove_dir_all(root).unwrap();
 }

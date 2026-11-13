@@ -1,4 +1,6 @@
 import { projectGitPresentation } from "./project-git.js";
+import { readApiResponse } from "./api-response.js";
+import { readWithBusyRetry } from "./read-retry.js";
 import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
@@ -19,8 +21,12 @@ import "./motion.css";
 import "./studio.css";
 import "./conversation.css";
 import { initStudio } from "./studio-ui.js";
+import { initBenchTerminals } from "./bench-terminals.js";
+import { initBenchShell } from "./bench-shell.js";
+import "./bench-shell.css";
 import { initWorkbench } from "./specs-ui.js";
 import { initProject } from "./project-ui.js";
+import { initProjectSwitcher } from "./project-switcher.js";
 import "./connections.css";
 import { initConnections } from "./connections-ui.js";
 import { initHost } from "./host-ui.js";
@@ -37,7 +43,6 @@ import {
   takeInputChunk,
   agentDisplayName,
   agentMark,
-  checksHtml,
   escapeHtml,
   filterSessions,
   filterTasks,
@@ -51,14 +56,16 @@ const token =
   location.hash.slice(1) || sessionStorage.getItem("verb-web-token");
 if (location.hash && token) {
   sessionStorage.setItem("verb-web-token", token);
-  history.replaceState(null, "", location.pathname);
+  history.replaceState(null, "", location.pathname + location.search);
 }
 
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
+let shell = null;
+let benchTerminals = null;
 let studio = null;
 let connections = null;
-// The Project view (project-ui.js): file tree, preview and context hub.
+// Preview file tree and Context hub (project-ui.js).
 let project = null;
 // The Host view (host-ui.js): read-only machine health.
 let host = null;
@@ -100,6 +107,7 @@ const ui = {
   focusedTerminal: null,
   focusProject: null,
   waitingTerminals: new Set(),
+  agentErrors: new Set(),
   talks: new Map(),
   waitingTalkSpecs: new Set(),
   talkSpecs: new Set(),
@@ -107,7 +115,6 @@ const ui = {
   splitTerminals: false,
   launchingTerminal: false,
   navigationCollapsed: panelPreference("navigation"),
-  sessionsCollapsed: panelPreference("sessions"),
   pairingExpiresAt: null,
   phoneStatus: null,
 };
@@ -116,52 +123,17 @@ const emptyTerminalTemplate = $("#terminal-grid .terminal-empty").cloneNode(
   true,
 );
 
-function applyPanelLayout() {
-  $("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
-  $("#view-sessions").classList.toggle(
-    "sessions-collapsed",
-    ui.sessionsCollapsed,
-  );
-  for (const [name, collapsed] of [
-    ["navigation", ui.navigationCollapsed],
-    ["sessions", ui.sessionsCollapsed],
-  ]) {
-    const button = $(`#toggle-${name}`);
-    const label = `${collapsed ? "Show" : "Hide"} ${name}`;
-    button.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg>${name === "sessions" ? "<span>Sessions</span>" : ""}`;
-    button.title = label;
-    button.setAttribute("aria-label", label);
-    button.setAttribute("aria-expanded", String(!collapsed));
-  }
-  requestAnimationFrame(() =>
-    ui.terminals.forEach(({ fit, mount }) => {
-      if (mount.clientWidth > 0 && mount.clientHeight > 0) fit.fit();
-    }),
-  );
-}
-for (const name of ["navigation", "sessions"]) {
-  $(`#toggle-${name}`).addEventListener("click", () => {
-    const key =
-      name === "navigation" ? "navigationCollapsed" : "sessionsCollapsed";
-    ui[key] = !ui[key];
-    try {
-      localStorage.setItem(
-        `verb-panel-${name}`,
-        ui[key] ? "collapsed" : "expanded",
-      );
-    } catch {}
-    applyPanelLayout();
-  });
-}
-applyPanelLayout();
+$("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
 
 document.addEventListener("verb:observer", (event) => {
-  const { enabled, signals, asking } = event.detail;
+  const { enabled, signals, asking, agentAttention } = event.detail;
   ui.observerOn = enabled;
   ui.waitingTerminals = new Set([
     ...asking,
+    ...agentAttention.filter(signal => signal.kind === "agent-question").map(signal => signal.terminal),
     ...(enabled ? signals.filter((s) => s.kind === "waiting" && s.terminal).map((s) => s.terminal) : []),
   ]);
+  ui.agentErrors = new Set(agentAttention.filter(signal => signal.kind === "agent-error").map(signal => signal.terminal));
   // Seen from anywhere: the Sessions nav and the browser tab's title.
   updateNeedsYou();
   renderTerminalTabs();
@@ -171,7 +143,7 @@ document.addEventListener("verb:observer", (event) => {
 document.addEventListener("keydown", (event) => {
   const tab = event.target.closest?.(".terminal-tab");
   if (!tab || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-  const tabs = [...tab.parentElement.querySelectorAll(".terminal-tab")];
+  const tabs = [...tab.parentElement.querySelectorAll(".terminal-tab")].filter(button => button.getClientRects().length);
   const i = tabs.indexOf(tab);
   const next =
     event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (i + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
@@ -179,7 +151,7 @@ document.addEventListener("keydown", (event) => {
   ui.focusedTerminal = tabs[next].dataset.tabTerminal;
   updateTerminalFocus();
   renderListResults();
-  $("#terminal-grid").querySelector(`[data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
+  document.querySelector(`.terminal-tabs [data-tab-terminal="${CSS.escape(ui.focusedTerminal)}"]`)?.focus();
 });
 
 /** Mounts the conversation tile for an Antigravity talk (src/talk-ui.js). */
@@ -243,6 +215,7 @@ function refreshTalkSignals() {
 function updateNeedsYou() {
   const waiting = ui.waitingTerminals.size + (ui.waitingTalks ?? 0);
   $('.nav-item[data-view="sessions"]')?.classList.toggle("needs-you", waiting > 0);
+  shell?.renderNeeds();
   const base = document.title.replace(/^\(\d+\) Needs you · /, "");
   document.title = waiting ? `(${waiting}) Needs you · ${base}` : base;
 }
@@ -294,24 +267,26 @@ async function api(method, path, body) {
     method,
     cache: "no-store",
     credentials: "same-origin",
+    redirect: "manual",
     headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  const value = await response.json();
-  if (!response.ok) {
-    const error = new Error(value.error || `Request failed (${response.status})`);
-    // `code: "capacity"` marks temporary execution-boundary congestion, not a failed request.
-    error.status = response.status;
-    error.code = value.code;
-    throw error;
-  }
-  return value;
+  return readApiResponse(response);
 }
 
-function showView(view) {
+function showView(destination) {
+  if (destination === "specs") destination = "bench-board";
+  if (destination === "project" && shell) return shell.openFiles();
+  if (destination === "overview" && shell) return shell.openReview();
+  const settings = ["host", "connections", "tasks", "phone", "session-history"];
+  const section = settings.includes(destination) ? destination : "host";
+  const view = settings.includes(destination) ? "settings" : destination === "memory" ? "context" : destination;
   ui.view = view;
+  document.querySelectorAll("[data-settings-panel]").forEach(panel => {
+    panel.hidden = view !== "settings" || panel.dataset.settingsPanel !== section;
+  });
+  if (view === "settings" && section === "phone") renderPhoneSettings();
   $("#app").classList.toggle("studio-open", view === "studio");
-  $("#app").classList.toggle("specs-open", view === "specs");
   document
     .querySelectorAll(".view")
     .forEach((element) =>
@@ -323,19 +298,17 @@ function showView(view) {
     if (active) element.setAttribute("aria-current", "page");
     else element.removeAttribute("aria-current");
   });
-  // Overview, Tasks and Shared notes live under "More"; show the group open when one is in use.
-  // On phones "More" is a menu: close it once a choice is made.
-  if (["overview", "tasks", "memory", "connections"].includes(view)) $("#nav-more").open = !matchMedia("(max-width: 640px)").matches;
-  $("#breadcrumb-view").textContent =
-    view === "memory" ? "Shared notes" : view.charAt(0).toUpperCase() + view.slice(1);
-  if (view === "overview") refreshChecks();
-  if (view === "tasks" || view === "memory") refreshState(true);
+  $("#breadcrumb-view").textContent = view[0].toUpperCase() + view.slice(1);
+  if (["tasks", "session-history"].includes(destination) || view === "context") refreshState();
   workbench?.onShowView(view);
   project?.onShowView(view);
-  host?.onShowView(view);
+  host?.onShowView(view === "settings" ? section : view);
   studio?.onShowView(view);
-  connections?.onShowView(view);
-  if (view === "sessions" || view === "specs") {
+  connections?.onShowView(view === "settings" ? section : view);
+  shell?.onView();
+  if (shell) renderTerminalTabs();
+  benchTerminals?.render();
+  if (view === "sessions") {
     requestAnimationFrame(() => {
       syncHostedTerminals();
       fitTerminals();
@@ -384,7 +357,21 @@ function emptyState(iconName, title, body, action) {
   return `<div class="list-empty"><span class="empty-glyph">${icon(iconName, { size: 18 })}</span><strong>${title}</strong><p>${body}</p>${action || ""}</div>`;
 }
 
+function renderPhoneSettings() {
+  const sessions = (ui.state?.sessions ?? []).filter(session => session.hostedHere && session.terminal?.running);
+  const owner = ui.accessScope === "owner";
+  const list = $("#settings-phone-sessions");
+  const markup = !owner ? "<p>Phone pairing requires owner access.</p>" : sessions.length
+    ? `<ul>${sessions.map(session => `<li><button class="secondary-button" type="button" data-phone-terminal="${escapeHtml(session.id)}">Pair ${escapeHtml(sessionLabel(session.id))}</button></li>`).join("")}</ul>`
+    : "<p>Start a terminal to pair a phone.</p>";
+  if (list.dataset.markup !== markup) {
+    list.innerHTML = markup;
+    list.dataset.markup = markup;
+  }
+}
+
 function render() {
+  if (ui.view === "settings" && !$("#settings-phone").hidden) renderPhoneSettings();
   const state = ui.state;
   if (!state) return;
   const { project, sessions, tasks, memory, deployment } = state;
@@ -394,9 +381,6 @@ function render() {
   }
   const activeCount = sessions.filter(isActiveSession).length;
   $("#view-sessions").classList.toggle("has-sessions", activeCount > 0);
-  const attention = tasks.filter(
-    (task) => task.needsHelp || task.status === "needs review",
-  ).length;
   $("#sidebar-project").textContent = project.name || "Project";
   $(".ws-mark").textContent = (project.name || "v").trim().charAt(0).toLowerCase() || "v";
   $(".workspace-head").title =
@@ -408,46 +392,9 @@ function render() {
   $("#top-branch").textContent = git.branch;
   $("#top-branch").title = git.detail;
   $("#top-changes").textContent = git.changes;
-  $("#nav-session-count").textContent = activeCount;
-  $("#nav-task-count").textContent = tasks.filter(
-    (task) => task.status !== "done",
-  ).length;
-  $("#stat-sessions").textContent = activeCount;
-  $("#stat-tasks").textContent = tasks.filter(
-    (task) => task.status !== "done",
-  ).length;
-  $("#stat-attention").textContent = attention;
+
   $("#session-count").textContent = activeCount;
   $("#task-count").textContent = tasks.length;
-
-  const activeSessions = sessions.filter(isActiveSession);
-  $("#overview-sessions").innerHTML = activeSessions.length
-    ? activeSessions
-        .slice(0, 3)
-        .map((session) => sessionItem(session, true))
-        .join("")
-    : emptyState(
-        "terminal",
-        "Nothing running",
-        "Open a terminal or start an agent from a spec.",
-      );
-  $("#overview-tasks").innerHTML = tasks.length
-    ? tasks
-        .filter((task) => task.status !== "done")
-        .slice(0, 3)
-        .map((task) => taskItem(task, true))
-        .join("") ||
-      emptyState(
-        "check",
-        "All caught up",
-        "Completed tasks remain in the task history.",
-      )
-    : emptyState(
-        "list",
-        "Nothing to track yet",
-        "Give an agent a task that can survive a handoff.",
-        '<button class="text-button" type="button" data-action="new-task">Create a task →</button>',
-      );
   renderListResults();
   // One note per line (that is how they are appended); each keeps its own inline Markdown.
   const notes = (memory || "").split("\n").filter((line) => line.trim());
@@ -469,6 +416,7 @@ function render() {
   renderTaskDetail();
   syncHostedTerminals();
   studio?.render();
+  shell?.render();
 }
 
 function renderListResults() {
@@ -674,12 +622,13 @@ async function refreshState(silent = false) {
 }
 
 async function refreshWorkspace() {
-  if (ui.workspaceRefreshing) return ui.workspaceRefreshing;
+  if (ui.workspaceRefreshing) return;
   const request = api("GET", "/api/workspace");
   ui.workspaceRefreshing = request;
   const revision = ui.sessionRevision;
   try {
     const workspace = await request;
+    ui.workspaceAccessInterrupted = false;
     if (revision !== ui.sessionRevision) return;
     const previous = ui.state;
     const ids = new Set(workspace.sessions.map((session) => session.id));
@@ -712,7 +661,11 @@ async function refreshWorkspace() {
       render();
     }
   } catch (error) {
-    if (!ui.state) toast(error.message, "error");
+    if (ui.state && error.code === "access_redirect" && !ui.workspaceAccessInterrupted) {
+      ui.workspaceAccessInterrupted = true;
+      toast(error.message, "error");
+    }
+    return error;
   } finally {
     ui.workspaceRefreshing = null;
   }
@@ -728,14 +681,13 @@ function mountLaunchedSession(session) {
   }
   addTerminal(session);
   selectTerminal(session.id);
-  // The spec workbench shows terminals in place; stay there rather than jumping to Sessions.
-  showView(ui.view === "specs" ? "specs" : "sessions");
+  showView("sessions");
   render();
   refreshState(true);
 }
 
 function renderChecks(report) {
-  $("#checks-list").innerHTML = checksHtml(report);
+  shell?.reviewChecks(report);
 }
 
 async function refreshChecks(silent = true, attempt = 0) {
@@ -756,16 +708,18 @@ async function refreshChecks(silent = true, attempt = 0) {
   }
 }
 
-async function activateSession(id) {
+let sessionDetailRequest = 0;
+async function activateSession(id, { resume = true } = {}) {
   const session = ui.state?.sessions.find((item) => item.id === id);
   if (!session) return;
+  const detailRequest = ++sessionDetailRequest;
   if (hasTerminalReplay(session)) {
     showView("sessions");
     if (!ui.terminals.has(id)) addTerminal(session);
     selectTerminal(id);
     return;
   }
-  if (session.canResume) {
+  if (resume && session.canResume) {
     try {
       const result = await api("POST", "/api/terminals", {
         agent: "resume",
@@ -786,12 +740,13 @@ async function activateSession(id) {
     return;
   }
   try {
-    const inbox = await api("GET", `/api/inbox/${encodeURIComponent(id)}`);
+    const inbox = session.agent === "shell" ? { items: [] } : await api("GET", `/api/inbox/${encodeURIComponent(id)}`);
+    if (detailRequest !== sessionDetailRequest) return;
     const name = agentDisplayName(session.agent);
     $("#inbox-title").textContent = `${name} session ${id.slice(0, 8)}`;
     $("#inbox-subtitle").textContent =
       session.state === "interrupted"
-        ? "It stopped when Verb last restarted, so its terminal is gone."
+        ? "Recovery is unconfirmed. There is no terminal replay."
         : "This session has ended.";
     const items = inbox.items.length
       ? `<p class="inbox-lead">It left these for you:</p>${inbox.items
@@ -817,7 +772,10 @@ async function activateSession(id) {
       (notHere
         ? `<p class="inbox-note">${escapeHtml(name)} is unavailable in this execution environment, so this conversation cannot be continued here. Ask the host operator to provision it, or continue on the machine where it ran.</p>`
         : actions);
-    showDialog("inbox-dialog");
+    showView("session-history");
+    const detail = $("#session-history-detail");
+    detail.hidden = false;
+    detail.focus();
   } catch (error) {
     toast(error.message, "error");
   }
@@ -835,7 +793,7 @@ $("#inbox-content")?.addEventListener("click", async (event) => {
   if (!button) return;
   const agent = button.dataset.inboxLaunch;
   const args = button.dataset.inboxContinue ? CONTINUE_ARGS[agent] : [];
-  closeDialog("inbox-dialog");
+  $("#session-history-detail").hidden = true;
   try {
     const result = await api("POST", "/api/terminals", { agent, isolated: false, args });
     mountLaunchedSession({
@@ -858,7 +816,7 @@ function addTerminal(session) {
   const tile = document.createElement("div");
   tile.className = "terminal-tile";
   tile.id = `terminal-${session.id}`;
-  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${terminalTransport.ready ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div>`;
+  tile.innerHTML = `<div class="terminal-titlebar"><span class="pane-agent" aria-hidden="true">${agentMark(session.agent)}</span><span class="terminal-title">${escapeHtml(agentDisplayName(session.agent))} <small>${escapeHtml(session.id.slice(0, 6))}</small></span><span class="terminal-checkout"${session.isolated ? "" : " hidden"}>Isolated</span><button class="terminal-phone" type="button" data-phone-terminal="${escapeHtml(session.id)}" hidden>Phone</button><button class="terminal-phone" type="button" data-take-terminal="${escapeHtml(session.id)}" hidden>Take back</button><button class="terminal-search-toggle" type="button" data-search-terminal="${escapeHtml(session.id)}" aria-label="Search terminal" title="Search output (Cmd+F / Ctrl+F)">${icon("search", { size: 14 })}</button><button class="terminal-focus" type="button" data-focus-terminal="${escapeHtml(session.id)}" aria-label="Focus terminal" aria-pressed="false" title="Focus this terminal">⤢</button><button class="terminal-close" type="button" data-close-terminal="${escapeHtml(session.id)}" aria-label="End session" title="End this session and stop its running commands">End</button></div><div class="terminal-search-bar" data-search-bar="${escapeHtml(session.id)}" hidden><input type="search" class="search-input" placeholder="Find in terminal…" aria-label="Find text" /><button type="button" class="search-btn search-prev" title="Previous match (Shift+Enter)">↑</button><button type="button" class="search-btn search-next" title="Next match (Enter)">↓</button><button type="button" class="search-btn search-case" title="Match Case" aria-pressed="false">Aa</button><button type="button" class="search-btn search-regex" title="Use Regular Expression" aria-pressed="false">.*</button><button type="button" class="search-btn search-close" title="Close search (Escape)">×</button></div><div class="terminal-mount"></div><p class="terminal-silent" role="status" hidden></p><div class="terminal-bottom"><span class="terminal-state">${terminalTransport.ready ? "Connected to Verb (streaming)" : "Connected to Verb"}</span><span>PTY · ${escapeHtml(session.isolated ? "isolated checkout" : "project checkout")}</span></div><p class="bench-connection" role="status"><span class="bench-reconnecting">Reconnecting…</span><span class="bench-disconnected">Disconnected</span></p>`;
   grid.append(tile);
   const mount = tile.querySelector(".terminal-mount");
   const term = new Terminal({
@@ -966,6 +924,7 @@ function addTerminal(session) {
     agentDisplayName,
     agentMark,
     settings: streamSettings,
+    autoOpen: matchMedia("(max-width: 760px)").matches,
     workbench: () => workbench,
   });
   sendStreamAttach(session.id, term.rows, term.cols);
@@ -1111,6 +1070,7 @@ function addTerminal(session) {
   const openSearch = () => {
     searchBar.hidden = false;
     searchToggle.setAttribute("aria-pressed", "true");
+    renderTerminalTabs();
     searchInput.focus();
     searchInput.select();
     if (searchInput.value) runSearch(true);
@@ -1118,6 +1078,7 @@ function addTerminal(session) {
   const closeSearch = () => {
     searchBar.hidden = true;
     searchToggle.setAttribute("aria-pressed", "false");
+    renderTerminalTabs();
     try {
       search?.clearDecorations?.();
     } catch {}
@@ -1316,7 +1277,7 @@ function terminalTabStatus(terminal, id) {
 
 function renderTerminalTabs() {
   const grid = $("#terminal-grid");
-  let strip = grid.querySelector(".terminal-tabs");
+  let strip = document.querySelector(".terminal-tabs");
   if (!strip) {
     // Not a div: the grid's CSS uses `.terminal-tile:only-of-type` to mean "the only terminal".
     strip = document.createElement("nav");
@@ -1325,13 +1286,39 @@ function renderTerminalTabs() {
     strip.setAttribute("aria-label", "Terminals");
     grid.prepend(strip);
   }
+  const tabMount = $("#bench-terminal-tabs");
+  if (strip.parentElement !== tabMount) tabMount.prepend(strip);
   strip.hidden = ui.terminals.size === 0 && ui.talks.size === 0;
-  const split = ui.splitTerminals && ui.terminals.size > 1;
+  const menu = $("#bench-terminal-menu");
+  $("#bench-terminal-id").textContent = ui.focusedTerminal ? `Session ${ui.focusedTerminal}` : "";
+  const activeTerminal = ui.terminals.get(ui.focusedTerminal);
+  menu.hidden = ui.view !== "sessions" || !activeTerminal;
+  if (menu.hidden) menu.open = false;
+  menu.querySelector('[data-bench-terminal-action="search"]').setAttribute("aria-pressed",
+    String(activeTerminal?.tile.querySelector(".terminal-search-bar").hidden === false));
+  menu.querySelector('[data-bench-terminal-action="end"]').textContent = activeTerminal?.ended ? "Close terminal output" : "End session";
+  const chat = menu.querySelector('[data-bench-terminal-action="chat"]');
+  chat.hidden = !activeTerminal?.stream;
+  chat.textContent = activeTerminal?.tile.classList.contains("stream-mode") ? "Return to terminal" : "Open chat";
+  for (const action of ["phone", "take"]) {
+    menu.querySelector(`[data-bench-terminal-action="${action}"]`).hidden =
+      activeTerminal?.tile.querySelector(`[data-${action}-terminal]`)?.hidden !== false;
+  }
   const tabs = [...ui.terminals.entries()]
     .map(([id, terminal]) => {
       const status = terminalTabStatus(terminal, id);
       const selected = id === ui.focusedTerminal;
-      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`${agentDisplayName(terminal.agent)} ${id.slice(0, 8)}: ${status.words}`)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span>${escapeHtml(agentDisplayName(terminal.agent))}</span><small>${escapeHtml(id.slice(0, 4))}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
+      const session = ui.state?.sessions.find(item => item.id === id);
+      const agent = agentDisplayName(terminal.agent);
+      const role = session?.role ? session.role[0].toUpperCase() + session.role.slice(1) : "";
+      const assignment = session?.specId ? `Spec ${session.specId}${role ? ` · ${role}` : ""}`
+        : session?.role === "plan" && session.workItemId ? `Work item ${session.workItemId.split("-")[0]} · Plan` : "Scratch";
+      const shortAgent = terminal.agent === "claude" ? "Claude" : terminal.agent === "agy" ? "AGY" : agent;
+      const title = `${agent} ${assignment}: ${status.words}`;
+      const details = session?.specId
+        ? `<span class="bench-tab-spec-prefix">Spec </span>${escapeHtml(session.specId)}${role ? ` · ${escapeHtml(role)}` : ""}`
+        : escapeHtml(assignment);
+      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span class="bench-tab-agent">${escapeHtml(agent)}</span><span class="bench-tab-short-agent">${escapeHtml(shortAgent)}</span><small>${details}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
   const talkTabs = [...ui.talks.entries()]
@@ -1339,14 +1326,10 @@ function renderTerminalTabs() {
       const tone = talkTone(talk.data());
       const words = tone === "running" ? "answering" : tone === "waiting" ? "wants permission: continue in its terminal" : "ready";
       const selected = id === ui.focusedTerminal;
-      return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
+      return `<button type="button" role="tab" class="terminal-tab" data-bench-talk data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(`Antigravity talk: ${words}`)}"><i class="tab-dot" data-tone="${tone}" aria-hidden="true"></i><span>Antigravity</span><small>Talk</small>${tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })
     .join("");
-  const markup = `${talkTabs}${tabs}<span class="tabs-spacer"></span>${
-    ui.terminals.size > 1
-      ? `<button type="button" class="tabs-action" data-terminal-split aria-pressed="${split}" title="${split ? "Show one terminal at a time" : "Show terminals side by side"}">${icon("split", { size: 14 })}<span>${split ? "Single" : "Split"}</span></button>`
-      : ""
-  }<button type="button" class="tabs-action icon-only" data-terminal-new aria-label="New terminal" title="New terminal (Alt+T)">${icon("plus", { size: 14 })}</button>`;
+  const markup = talkTabs + tabs;
   // State polls should not discard keyboard focus or restart chrome transitions.
   if (strip._markup !== markup) {
     const focused = strip.contains(document.activeElement)
@@ -1360,15 +1343,29 @@ function renderTerminalTabs() {
         ?.focus({ preventScroll: true });
     }
   }
+  if (strip._revealedTerminal !== ui.focusedTerminal && strip.clientWidth) {
+    strip._revealedTerminal = ui.focusedTerminal;
+    const active = strip.querySelector('[aria-selected="true"]');
+    if (active) {
+      const bounds = strip.getBoundingClientRect();
+      const tab = active.getBoundingClientRect();
+      if (tab.right > bounds.right) strip.scrollLeft += Math.ceil(tab.right - bounds.right);
+      else if (tab.left < bounds.left) strip.scrollLeft -= Math.ceil(bounds.left - tab.left);
+    }
+  }
 }
 
 function updateTerminalFocus() {
   const grid = $("#terminal-grid");
-  if (!ui.terminals.size && !ui.talks.size && !grid.querySelector(".terminal-empty"))
+  const primary = ui.focusedTerminal;
+  const secondary = [...ui.terminals.keys()].find(id => id !== primary);
+  grid.classList.toggle("bench-split", Boolean(ui.splitTerminals && secondary));
+  const talkVisible = ui.talks.size > 0;
+  if (!ui.terminals.size && !talkVisible && !grid.querySelector(".terminal-empty"))
     grid.append(emptyTerminalTemplate.cloneNode(true));
-  if (ui.talks.size) grid.querySelector(".terminal-empty")?.remove();
-  if (!ui.focusedTerminal || (!ui.terminals.has(ui.focusedTerminal) && !ui.talks.has(ui.focusedTerminal)))
-    ui.focusedTerminal = ui.terminals.keys().next().value || ui.talks.keys().next().value || null;
+  if (talkVisible) grid.querySelector(".terminal-empty")?.remove();
+  if (!ui.terminals.has(ui.focusedTerminal) && !(talkVisible && ui.talks.has(ui.focusedTerminal)))
+    ui.focusedTerminal = ui.terminals.keys().next().value || (talkVisible ? ui.talks.keys().next().value : null);
   if (ui.focusProject) {
     try {
       const key = `verb.terminal-focus.${ui.focusProject}`;
@@ -1388,6 +1385,9 @@ function updateTerminalFocus() {
   ui.terminals.forEach(({ tile, fit, mount }, id) => {
     const focused = id === ui.focusedTerminal && !ui.splitTerminals;
     tile.classList.toggle("focused", focused);
+    tile.classList.toggle("bench-split-secondary", Boolean(ui.splitTerminals && id === secondary));
+    tile.classList.toggle("bench-split-active", Boolean(ui.splitTerminals && id === primary));
+    tile.classList.toggle("bench-split-hidden", Boolean(ui.splitTerminals && id !== primary && id !== secondary));
     // The tab strip chooses and splits terminals now; the old per-pane button stays hidden.
     tile.querySelector("[data-focus-terminal]").hidden = true;
     requestAnimationFrame(() => {
@@ -1395,6 +1395,8 @@ function updateTerminalFocus() {
     });
   });
   renderTerminalTabs();
+  shell?.terminalChanged(ui.focusedTerminal);
+  benchTerminals?.render();
 }
 
 async function pollTerminal(id) {
@@ -1427,6 +1429,7 @@ async function pollTerminal(id) {
     if (terminal.closed || terminal.ending || terminal.streaming) return;
     terminal.cursor = output.cursor;
     if (output.running) {
+      delete terminal.tile.querySelector(".terminal-state").dataset.connection;
       terminal.tile.querySelector(".terminal-state").dataset.tone = "";
       terminal.reportedError = false;
       const phoneControls = output.controller === "phone";
@@ -1458,6 +1461,7 @@ async function pollTerminal(id) {
   } catch (error) {
     if (terminal.closed || terminal.ending || terminal.streaming) return;
     terminal.tile.querySelector(".terminal-state").textContent = "Connection interrupted";
+    terminal.tile.querySelector(".terminal-state").dataset.connection = "disconnected";
     terminal.tile.querySelector(".terminal-state").dataset.tone = "warn";
     if (!terminal.reportedError) toast(error.message, "error");
     terminal.reportedError = true;
@@ -1587,8 +1591,10 @@ $("#end-session-confirm").addEventListener("click", async () => {
   const button = $("#end-session-confirm");
   button.disabled = true;
   try {
-    await endTerminal($("#end-session-dialog").dataset.sessionId);
+    const id = $("#end-session-dialog").dataset.sessionId;
+    await endTerminal(id);
     closeDialog("end-session-dialog");
+    benchTerminals?.offerNote(id, true);
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -1636,6 +1642,8 @@ async function launchQuickTerminal() {
 }
 
 document.addEventListener("click", async (event) => {
+  const terminalMenu = $("#bench-terminal-menu");
+  if (terminalMenu.open && !terminalMenu.contains(event.target)) terminalMenu.open = false;
   const quickTerm = event.target.closest(
     "#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty",
   );
@@ -1709,16 +1717,6 @@ document.addEventListener("click", async (event) => {
     }
     return;
   }
-  if (event.target.closest("[data-terminal-split]")) {
-    ui.splitTerminals = !ui.splitTerminals;
-    updateTerminalFocus();
-    return;
-  }
-  if (event.target.closest("[data-terminal-new]")) {
-    const inSpec = ui.view === "specs" && document.querySelector('[data-action="spec-terminal"]');
-    (inSpec || $("#quick-terminal-button")).click();
-    return;
-  }
   const focus = event.target.closest("[data-focus-terminal]");
   if (focus) {
     ui.splitTerminals =
@@ -1753,7 +1751,7 @@ document.addEventListener("click", async (event) => {
         : await api("POST", `/api/terminals/${id}/phone`);
       $("#phone-dialog").dataset.sessionId = id;
       phone.dataset.sharing = "true";
-      phone.textContent = "Phone access";
+      if (phone.closest(".terminal-tile")) phone.textContent = "Phone access";
       await showPhoneOffer(result);
       showDialog("phone-dialog");
     } catch (error) {
@@ -1761,6 +1759,21 @@ document.addEventListener("click", async (event) => {
     } finally {
       phone.disabled = false;
     }
+    return;
+  }
+  const menuAction = event.target.closest("[data-bench-terminal-action]");
+  if (menuAction) {
+    const menu = $("#bench-terminal-menu");
+    menu.open = false;
+    menu.querySelector("summary").focus();
+    const action = menuAction.dataset.benchTerminalAction;
+    const terminal = ui.terminals.get(ui.focusedTerminal);
+    if (action === "chat") {
+      terminal?.stream?.setMode(terminal.tile.classList.contains("stream-mode") ? "terminal" : "stream");
+      return;
+    }
+    const control = action === "end" ? "close" : action;
+    terminal?.tile.querySelector(`[data-${control}-terminal]`)?.click();
     return;
   }
   const terminalClose = event.target.closest("[data-close-terminal]");
@@ -1771,6 +1784,7 @@ document.addEventListener("click", async (event) => {
     if (terminal.tile.classList.contains("ended")) {
       try {
         await endTerminal(id);
+        benchTerminals?.offerNote(id, true);
       } catch (error) {
         toast(error.message, "error");
       }
@@ -1785,12 +1799,13 @@ document.addEventListener("click", async (event) => {
   if (actionButton) {
     if (actionButton.dataset.action === "new-session") {
       $("#session-launch-error").hidden = true;
+      benchTerminals?.openLaunch();
       updateLaunchForm();
       loadInstalledAgents();
-      return showDialog("session-dialog");
+      return;
     }
     if (actionButton.dataset.action === "new-task")
-      return showDialog("task-dialog");
+      return openTask();
     if (actionButton.dataset.action === "add-note")
       return showDialog("note-dialog");
     if (actionButton.dataset.action === "refresh-checks")
@@ -1919,9 +1934,7 @@ $("#phone-stop").addEventListener("click", async () => {
   const id = $("#phone-dialog").dataset.sessionId;
   try {
     await api("DELETE", `/api/terminals/${id}/phone`);
-    const button = document.querySelector(
-      `[data-phone-terminal="${CSS.escape(id)}"]`,
-    );
+    const button = ui.terminals.get(id)?.tile.querySelector("[data-phone-terminal]");
     if (button) {
       button.dataset.sharing = "false";
       button.textContent = "Phone";
@@ -1936,7 +1949,10 @@ $("#phone-stop").addEventListener("click", async () => {
   }
 });
 
-$("#refresh-button").addEventListener("click", () => refreshState());
+$("#refresh-button").addEventListener("click", () => {
+  refreshState();
+  shell?.refresh();
+});
 function updateLaunchForm() {
   const form = $("#session-form");
   const checkout = isolatedCheckoutAvailability(ui.agentCapabilities);
@@ -1962,6 +1978,13 @@ function updateLaunchForm() {
     form.querySelector('input[value="shell"]').checked = true;
   }
   const agent = form.elements.agent.value;
+  const talk = form.elements.talk;
+  const talkAvailable = agent === "agy" && !!form.elements.specId.value;
+  $("#bench-launch-talk").hidden = !talkAvailable;
+  talk.disabled = !talkAvailable;
+  if (!talkAvailable) talk.checked = false;
+  if (talk.checked) { isolated.checked = false; isolated.disabled = true; }
+  $("#bench-launch-role").hidden = talk.checked || ["shell", "custom"].includes(agent);
   $("#custom-command-fields").hidden = agent !== "custom";
   $("#launch-project").textContent =
     ui.state?.project.name || "Current project";
@@ -1971,7 +1994,7 @@ function updateLaunchForm() {
       ? `Runs on ${deployment.name}`
       : "Runs on this computer";
   form.querySelector('[type="submit"]').textContent =
-    agent === "custom" ? "Open CLI →" : `Open ${agentDisplayName(agent)} →`;
+    talk.checked ? "Open Antigravity Talk →" : agent === "custom" ? "Open CLI →" : `Open ${agentDisplayName(agent)} →`;
 }
 document
   .querySelectorAll('#session-dialog input[name="agent"]')
@@ -1979,6 +2002,9 @@ document
     $("#session-launch-error").hidden = true;
     updateLaunchForm();
   }));
+
+$("#session-form").elements.specId.addEventListener("change", updateLaunchForm);
+$("#session-form").elements.talk.addEventListener("change", updateLaunchForm);
 
 function launchError(message) {
   const error = $("#session-launch-error");
@@ -1992,6 +2018,9 @@ $("#session-form").addEventListener("submit", async (event) => {
   const agent = form.elements.agent.value;
   const command = form.elements.command.value.trim();
   const isolated = form.elements.isolated.checked;
+  const specId = form.elements.specId.value;
+  const role = specId && !["shell", "custom"].includes(agent) ? form.elements.role.value : null;
+  if (specId && agent === "custom") return launchError("Choose a named agent or terminal for a spec.");
   if (isolated && !isolatedCheckoutAvailability(ui.agentCapabilities).available)
     return launchError(isolatedCheckoutAvailability(ui.agentCapabilities).reason);
   if (!agentAvailability(ui.agentCapabilities, agent).available)
@@ -2005,7 +2034,18 @@ $("#session-form").addEventListener("submit", async (event) => {
   button.disabled = true;
   button.textContent = "Opening…";
   try {
-    const result = await api("POST", "/api/terminals", {
+    if (agent === "agy" && specId && form.elements.talk.checked) {
+      const { talkId } = await api("POST", `/api/specs/${specId}/talk`);
+      closeDialog("session-dialog");
+      form.reset();
+      showView("sessions");
+      mountTalk(talkId, { focus: true });
+      await workbench.refreshSpecs();
+      return;
+    }
+    const result = specId
+      ? await api("POST", `/api/specs/${specId}/agent`, { agent, role, isolated })
+      : await api("POST", "/api/terminals", {
       agent,
       isolated,
       command: agent === "custom" ? command : null,
@@ -2022,6 +2062,8 @@ $("#session-form").addEventListener("submit", async (event) => {
     $("#custom-command-fields").hidden = true;
     const sessionObj = {
       id: result.sessionId,
+      specId: specId || null,
+      role,
       agent: agent === "custom" ? command || "custom" : agent,
       isolated,
       state: "live",
@@ -2029,6 +2071,7 @@ $("#session-form").addEventListener("submit", async (event) => {
       terminal: { running: true, replayAvailable: true }, hostedHere: true,
     };
     mountLaunchedSession(sessionObj);
+    if (result.warning || result.contextWarning) toast(result.warning || result.contextWarning, "error");
   } catch (error) {
     launchError(error.message);
   } finally {
@@ -2037,11 +2080,25 @@ $("#session-form").addEventListener("submit", async (event) => {
   }
 });
 
+function openTask(specId = "") {
+  const form = $("#task-form");
+  form.reset();
+  form.elements.specId.value = specId;
+  $("#task-spec-label").hidden = !specId;
+  $("#task-spec-label").textContent = specId ? `Linked to spec ${specId}` : "";
+  showDialog("task-dialog");
+}
+
 $("#task-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  const specId = form.elements.specId.value;
+  const button = form.querySelector("[type=submit]");
+  if (button.disabled) return;
+  button.disabled = true;
   try {
     const result = await api("POST", "/api/tasks", {
+      ...(specId ? { specId } : {}),
       title: form.elements.title.value,
       brief: form.elements.brief.value,
     });
@@ -2049,11 +2106,11 @@ $("#task-form").addEventListener("submit", async (event) => {
     form.reset();
     ui.selectedTask = result.id;
     await refreshState();
-    showView("tasks");
+    if (!specId) showView("tasks");
     toast(result.message);
   } catch (error) {
     toast(error.message, "error");
-  }
+  } finally { button.disabled = false; }
 });
 
 $("#note-form").addEventListener("submit", async (event) => {
@@ -2149,17 +2206,6 @@ function initResizers() {
     initial: () => $(".sidebar").getBoundingClientRect().width,
     axis: "x",
   });
-  makeResizer({
-    handle: $("#resize-proof"),
-    target: $(".specs-layout"),
-    name: "--proof-w",
-    key: "verb.layout.proof",
-    min: 240,
-    max: 520,
-    initial: () => $(".spec-proof").getBoundingClientRect().width,
-    axis: "x",
-    direction: -1,
-  });
   const grid = $("#terminal-grid");
   const termHandle = document.createElement("span");
   termHandle.className = "resize-handle term-resize";
@@ -2216,34 +2262,35 @@ function watchSilence(terminal) {
   }, 15000);
 }
 /** Which agents this execution environment can start. Unknown stays unavailable. */
+let agentCapabilityRequest;
 async function loadInstalledAgents() {
-  try {
-    ui.agentCapabilities = await api("GET", "/api/agents");
-    ui.installed = ui.agentCapabilities.installed;
-  } catch {
-    ui.installed = {};
-    ui.agentCapabilities = { unavailable: true };
-  }
-  const missing = (agent) => !agentAvailability(ui.agentCapabilities, agent).available;
-  document.querySelectorAll("#spec-agent option, #talk-agent option").forEach((option) => {
-    option.disabled = missing(option.value);
-    option.dataset.originalText ??= option.textContent;
-    option.textContent = option.dataset.originalText + (option.disabled ? " · unavailable here" : "");
-  });
-  for (const selector of ["#spec-agent", "#talk-agent"]) {
-    const picker = $(selector);
-    if (picker?.selectedOptions[0]?.disabled) {
-      const first = [...picker.options].find((o) => !o.disabled);
-      if (first) picker.value = first.value;
+  if (agentCapabilityRequest) return agentCapabilityRequest;
+  agentCapabilityRequest = (async () => {
+    try {
+      ui.agentCapabilities = await readWithBusyRetry(api, "/api/agents");
+      ui.installed = ui.agentCapabilities.installed;
+    } catch {
+      ui.installed = {};
+      ui.agentCapabilities = { unavailable: true };
     }
+    updateLaunchForm();
+  })();
+  try {
+    await agentCapabilityRequest;
+  } finally {
+    agentCapabilityRequest = null;
   }
-  updateLaunchForm();
 }
 
 /** Driven with an access token (an agent, a script): say so on every page, with its scope and expiry. */
 async function showAccess() {
   try {
     const access = await api("GET", "/api/whoami");
+    ui.accessScope = access.scope;
+    shell?.renderNeeds();
+    if (ui.view === "settings" && !$("#settings-phone").hidden) renderPhoneSettings();
+    benchTerminals?.render();
+    $("#open-project-switch").hidden = access.scope !== "owner";
     const banner = $("#access-banner");
     banner.hidden = !access.token;
     if (!access.token) return;
@@ -2255,13 +2302,16 @@ async function showAccess() {
 }
 
 async function bootstrap() {
-  await refreshWorkspace();
+  const workspaceError = await refreshWorkspace();
   if (!ui.state) {
-    if (!token) {
+    if (!token && workspaceError?.status === 403 && location.protocol === "http:") {
       $("#app").innerHTML =
         '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Open Verb from its local URL</h1><p>Run <code>verb web</code> in your project and open the URL printed in that terminal. It contains this browser session’s local access key.</p></div>';
     } else {
-      toast("Could not connect to Verb session", "error");
+      $("#app").innerHTML =
+        '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Could not open Verb</h1><p></p><button class="primary-button" type="button">Reload Verb</button></div>';
+      $("#app .locked p").textContent = workspaceError?.message || "Reload the page to try again.";
+      $("#app .locked button").addEventListener("click", () => location.reload());
     }
     return;
   }
@@ -2282,7 +2332,14 @@ async function bootstrap() {
   // Late-bound cross-links between views (Ask Verb opens specs and files).
   const extras = {};
   host = initHost({ api, escapeHtml, $ });
-  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, ui });
+  let projectFilesRequest;
+  function readProjectFiles() {
+    projectFilesRequest ??= readWithBusyRetry(api, "/api/files")
+      .finally(() => { projectFilesRequest = null; });
+    return projectFilesRequest;
+  }
+  project = initProject({ api, readProjectFiles, toast, showDialog, closeDialog, showView, escapeHtml, $, openPreview: path => shell.openPreview(path), onBriefChange: () => shell?.render() });
+  initProjectSwitcher({ $, showDialog, closeDialog });
   workbench = initWorkbench({
     refreshState,
     extras,
@@ -2302,9 +2359,48 @@ async function bootstrap() {
     selectTerminal,
     theme,
   });
-  studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
+  studio = initStudio({ $, api, readProjectFiles, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  extras.onWorkbenchChange = () => studio.render();
+  shell = initBenchShell({ $, api, ui, workbench, studio, briefExists: project.briefExists, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, loadInstalledAgents, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
+    benchTerminals?.openLaunch(id);
+    updateLaunchForm();
+    loadInstalledAgents();
+  } });
+  benchTerminals = initBenchTerminals({ $, api, ui, workbench, showDialog, closeDialog, refreshState, toast,
+    toggleSplit() { ui.splitTerminals = !ui.splitTerminals; updateTerminalFocus(); },
+  });
+  $("#bench-terminal-menu").addEventListener("toggle", event => {
+    if (event.target.open) { renderTerminalTabs(); benchTerminals?.render(); }
+  });
+  project.refreshHub();
+  extras.openBenchSpec = shell.focusSpec;
+  extras.linkableWorkItems = shell.linkableWorkItems;
+  extras.selectedWorkItem = shell.selectedWorkItem;
+  extras.refreshBenchWork = shell.refresh;
+  extras.openBenchLaunch = id => { benchTerminals.openLaunch(id); updateLaunchForm(); };
+  extras.shellCommands = () => [
+    ...connections.commands(),
+    ...Object.entries({ Studio: "studio", Board: "bench-board", "Project files": "project", Review: "overview", Host: "host",
+      Connections: "connections", Tasks: "tasks", "Phone pairing": "phone", "Session history": "session-history" }).map(([label, view]) => ({
+        title: `Open ${label}`, run: () => showView(view),
+      })),
+    { title: "Open Context", run: () => showView("context") },
+    { title: "Open Settings", run: () => showView("settings") },
+    { title: "Open Sessions", run: () => showView("sessions") },
+    { title: "Refresh project", run: () => $("#refresh-button").click() },
+    { title: "Open Observer", run: () => $("#observer-pill").click() },
+    { title: "Ask Verb", run: () => $('[data-action="ask"]').click() },
+    { title: "Open plain terminal", run: launchQuickTerminal },
+    ...(ui.terminals.size > 1 ? [{ title: "Toggle terminal split", run: () => {
+      ui.splitTerminals = !ui.splitTerminals;
+      updateTerminalFocus();
+    } }] : []),
+    ...(!$("#top-commit").hidden ? [{ title: "Review commit", run: () => $("#top-commit").click() }] : []),
+  ];
+  extras.onWorkbenchChange = () => {
+    studio.render();
+    shell.render();
+  };
   extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
   extras.selectSpec = workbench.selectSpec;
@@ -2316,20 +2412,24 @@ async function bootstrap() {
   document.querySelectorAll("[data-ready-gate]").forEach((el) => (el.disabled = false));
   showAccess();
   loadInstalledAgents();
-  showView(ui.view);
+  const url = new URL(location.href);
+  const requestedView = url.searchParams.get("view");
+  const settingsSections = ["host", "connections", "tasks", "phone", "session-history"];
+  const requestedSection = url.searchParams.get("section");
+  const linkedView = requestedView === "settings" && settingsSections.includes(requestedSection)
+    ? requestedSection : requestedView;
+  if (requestedView === "memory" || settingsSections.includes(requestedView)) {
+    url.searchParams.set("view", requestedView === "memory" ? "context" : "settings");
+    if (requestedView !== "memory") url.searchParams.set("section", requestedView);
+    history.replaceState(null, "", url.pathname + url.search);
+  }
+  const views = ["sessions", "bench-board", "needs-you", "context", "memory", "settings",
+    "specs", "project", "overview", "host", "connections", "tasks", "phone", "session-history"];
+  showView(views.includes(linkedView) ? linkedView : ui.view);
   setInterval(refreshWorkspace, 4000);
   setInterval(() => refreshState(true), 30000);
-  setInterval(() => {
-    if (ui.view === "overview") refreshChecks();
-  }, 60000);
   setInterval(updatePhoneStatus, 1000);
   setInterval(refreshPhoneStatus, 2500);
 }
-
-// The phone "More" menu closes on a tap anywhere else, like any menu.
-document.addEventListener("click", (event) => {
-  const more = $("#nav-more");
-  if (more.open && matchMedia("(max-width: 640px)").matches && !more.contains(event.target)) more.open = false;
-});
 
 bootstrap();

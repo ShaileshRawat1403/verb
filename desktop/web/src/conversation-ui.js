@@ -297,7 +297,7 @@ export function mountConversation(container, terminalId, deps) {
     const spec = wb?.current()?.spec;
     const criterion = claim && spec?.criteria?.[claim.number - 1];
     if (!criterion || criterion.done || state.dismissedClaims.has(`${spec.id}:${claim.number}`)) return "";
-    return `<div class="conv-suggest" data-claim="${claim.number}" data-sentence="${esc(claim.sentence)}">${icon("check", { size: 16 })}<span><b>${esc(name)} says criterion ${claim.number} is met.</b> ${esc(criterion.text)} <small>A claim, not proof: review the evidence before recording it.</small></span><button type="button" class="secondary-button small" data-prove>Review as evidence</button><button type="button" class="text-button" data-dismiss-claim>Not yet</button></div>`;
+    return `<div class="conv-suggest" data-claim="${claim.number}" data-sentence="${esc(claim.sentence)}">${icon("check", { size: 16 })}<span><b>${esc(name)} says criterion ${claim.number} is met.</b> ${esc(criterion.text)} <small>Completion claims and accepted proof are recorded separately.</small></span><button type="button" class="secondary-button small" data-prove>Review completion claim</button><button type="button" class="text-button" data-dismiss-claim>Not yet</button></div>`;
   }
 
   function streamOffCard() {

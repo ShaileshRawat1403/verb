@@ -20,6 +20,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static NEXT_SERVER_ID: AtomicU64 = AtomicU64::new(0);
 
+#[path = "support/git_paths.rs"]
+mod git_paths;
+
 struct WebServer {
     child: Child,
     port: u16,
@@ -2310,4 +2313,1117 @@ fn a_rejected_body_retires_keep_alive_without_draining_or_poisoning_another_requ
         result => panic!("rejected connection was not closed: {result:?}"),
     }
     assert_eq!(server.request("GET", "/api/state", None, true).0, 200);
+}
+
+#[test]
+fn approved_agent_handoff_survives_host_interruption() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let bin = server.root.join("handoff-bin");
+    fs::create_dir(&bin).unwrap();
+    let fixture = server.root.join("project");
+    fs::write(fixture.join("unapproved-private-file"), "unapproved").unwrap();
+    for (agent, script) in [
+        ("claude", "printf 'reported-defect\\n' > issue.txt"),
+        (
+            "codex",
+            "grep -qx reported-defect issue.txt && printf 'verified\\n' > review.txt",
+        ),
+        (
+            "agy",
+            "grep -qx verified review.txt && printf 'continued\\n' > successor.txt",
+        ),
+    ] {
+        let path = bin.join(agent);
+        let capture = server.root.join(format!("{agent}-args"));
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nset -e\nprintf '%s\\n' \"$@\" > '{}'\n{script}\nexec sleep 30\n",
+                capture.display(),
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let env = [("PATH", path.as_str())];
+    let server = server.restart_with_env(&env);
+    let spec = server.json(
+        "POST",
+        "/api/specs",
+        Some(json!({
+            "title": "Handoff fixture", "problem": "unapproved-problem-marker",
+            "criteria": ["The successor can continue from checked evidence"]
+        })),
+    );
+    let endpoint = format!("/api/specs/{}", spec["id"].as_str().unwrap());
+    let start = server.json(
+        "POST",
+        &format!("{endpoint}/agent"),
+        Some(json!({
+            "agent": "claude", "role": "implement"
+        })),
+    );
+    let wait_for = |name: &str, expected: &str| {
+        let path = fixture.join(name);
+        for _ in 0..100 {
+            if fs::read_to_string(&path).ok().as_deref() == Some(expected) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("{name} did not contain the expected evidence");
+    };
+    wait_for("issue.txt", "reported-defect\n");
+    server.json(
+        "DELETE",
+        &format!("/api/terminals/{}", start["sessionId"].as_str().unwrap()),
+        None,
+    );
+    let current = server.json("GET", &endpoint, None);
+    let handoff = |server: &WebServer, to: &str, revision: &Value, role: &str, note: &str| {
+        server.request("POST", &format!("{endpoint}/handoff"), Some(json!({
+            "to": to, "note": note,
+            "approved": {"revision": revision, "role": role, "scope": "Inspect issue.txt", "checks": ""}
+        })), true)
+    };
+    let (status, body) = handoff(
+        &server,
+        "codex",
+        &current["revision"],
+        "review",
+        "approved-review-marker",
+    );
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    wait_for("review.txt", "verified\n");
+    let args = fs::read_to_string(server.root.join("codex-args")).unwrap();
+    assert!(args.contains("Review independently") && args.contains("approved-review-marker"));
+    assert!(args.contains("Work only within the approved scope and checks below"));
+    assert!(!args.contains("Inspect the assigned changes"));
+    assert!(
+        !args.contains("unapproved-problem-marker") && !args.contains("unapproved-private-file")
+    );
+
+    let reviewed = server.json("GET", &endpoint, None);
+    let server = server.restart_with_env(&env);
+    let (status, body) = handoff(&server, "agy", &current["revision"], "implement", "stale");
+    assert_eq!(status, 409, "{}", String::from_utf8_lossy(&body));
+    assert!(!server.root.join("agy-args").exists());
+    let (status, body) = handoff(
+        &server,
+        "agy",
+        &reviewed["revision"],
+        "implement",
+        "approved-successor-marker",
+    );
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+    wait_for("successor.txt", "continued\n");
+    let args = fs::read_to_string(server.root.join("agy-args")).unwrap();
+    assert!(args.contains(reviewed["revision"].as_str().unwrap()));
+    assert!(args.contains("approved-successor-marker"));
+    assert!(
+        !args.contains("approved-review-marker") && !args.contains("unapproved-problem-marker")
+    );
+    let result: Value = serde_json::from_slice(&body).unwrap();
+    server.json(
+        "DELETE",
+        &format!("/api/terminals/{}", result["sessionId"].as_str().unwrap()),
+        None,
+    );
+}
+
+fn assert_git_paths(server: &WebServer) {
+    let request = |path: &str| {
+        let (status, body) = server.request("GET", path, None, true);
+        (status, serde_json::from_slice(&body).unwrap())
+    };
+    let (status, summary) = request("/api/git");
+    assert_eq!(status, 200, "{summary}");
+    git_paths::assert_summary(&summary);
+    git_paths::assert_previews(request);
+}
+
+#[test]
+fn local_git_paths_preserve_rename_copy_and_literal_arrow() {
+    let server = WebServer::start();
+    git_paths::fixture(&server.root.join("project"));
+    assert_git_paths(&server);
+}
+
+#[cfg(all(unix, feature = "synthetic-boundary"))]
+#[test]
+fn external_git_paths_preserve_rename_copy_and_literal_arrow() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let root = std::env::temp_dir().join(format!("verb-external-git-paths-{}", std::process::id()));
+    let checkout = root.join("0f1e2d3c4b5a69788796a5b4c3d2e1f0");
+    fs::create_dir_all(&checkout).unwrap();
+    fs::create_dir(root.join("home")).unwrap();
+    let boundary = root.join("boundary");
+    fs::create_dir_all(boundary.join("receipts")).unwrap();
+    symlink(&checkout, root.join("project")).unwrap();
+    git_paths::fixture(&checkout);
+    fs::write(boundary.join("fixture-binary"), env!("CARGO_BIN_EXE_verb")).unwrap();
+    let client = boundary.join("client");
+    fs::write(
+        &client,
+        r#"#!/bin/sh
+[ "$1" = --capabilities ] && exit 2
+[ "$5" = --mode ] && [ "$6" = pipes ] && [ "$7" = --program ] || exit 64
+program=$8
+shift 9
+if [ "$program" = git ]; then
+    exec /usr/bin/git "$@"
+fi
+case "$*" in
+    *"__project-read git")
+        exec env -u VERB_SYNTHETIC_BOUNDARY "$(cat "${0%/*}/fixture-binary")" __project-read git
+        ;;
+esac
+exit 64
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&client, fs::Permissions::from_mode(0o755)).unwrap();
+    let server = WebServer::start_in_root(
+        root,
+        &[
+            ("PATH", "/usr/bin:/bin"),
+            ("VERB_SYNTHETIC_BOUNDARY", boundary.to_str().unwrap()),
+        ],
+    );
+    assert_git_paths(&server);
+}
+
+#[test]
+fn work_item_reader_validates_links_and_preserves_legacy_spec_reads() {
+    use sha2::{Digest, Sha256};
+
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let work = project.join("work");
+    let standard = work.join("001-standard");
+    let small = work.join("002-small");
+    let draft = work.join("003-draft");
+    let malformed = work.join("004-malformed");
+    for dir in [
+        &standard,
+        &small,
+        &draft,
+        &malformed,
+        &work.join("001-duplicate"),
+    ] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(
+        standard.join("brd.md"),
+        "# Standard\nSize: standard\n## Problem\nProblem\n## Audience\nOwner\n## Goals\n| G1 | Trace work |\n| G1 | Duplicate |\n## Success measures\nObserve links\n## Scope\nProject work\n",
+    )
+    .unwrap();
+    fs::write(
+        standard.join("prd.md"),
+        "| R1 | G1 | Read items | Open the item |\n| R2 (retired) | G1 | Old rule | |\n| R3 | G9 | Missing goal | |\n| R3 | G9 | Duplicate | |\n",
+    )
+    .unwrap();
+    let small_brd = "Size: small\nProblem and audience: Owner needs a reader\nGoal: G1 · Read a work item\nSuccess and boundary: Read without publishing\n";
+    fs::write(small.join("brd.md"), small_brd).unwrap();
+    fs::write(draft.join("brd.md"), small_brd).unwrap();
+    fs::write(
+        small.join("prd.md"),
+        (1..=6)
+            .map(|id| format!("- R{id} · G1 · Read · Verify"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    fs::write(
+        malformed.join("brd.md"),
+        "Size: standard\n## Goals\n- G1 · Goal\n",
+    )
+    .unwrap();
+    fs::write(malformed.join("prd.md"), [0xff]).unwrap();
+    let specs = project.join("specs");
+    fs::create_dir_all(&specs).unwrap();
+    let legacy = "---\nid: 010\ntitle: Legacy\nstage: plan\n---\n## Acceptance criteria\n- [ ] unchanged legacy text\n";
+    fs::write(specs.join("010-legacy.md"), legacy).unwrap();
+    let identity = format!("{:x}", Sha256::digest(b"1\0Stable legacy criterion"));
+    let linked = format!(
+        "---\nid: 011\ntitle: Linked\nstage: plan\nwork-item: 001-standard\n---\n## Acceptance criteria\n- [ ] New (R1, R2, R9)\n- [ ] Stable legacy criterion\n- [ ] Edited legacy criterion\n- [ ] Cache hits (Redis)\n- [ ] Mixed prose (R1, Redis)\n## Traceability\n- 2 · {identity} · R1\n- 3 · old-identity · R2\n"
+    );
+    fs::write(specs.join("011-linked.md"), &linked).unwrap();
+
+    let (status, body) = server.request("GET", "/api/work-items", None, false);
+    assert_eq!(status, 403, "{}", String::from_utf8_lossy(&body));
+    let (status, body) = server.request("GET", "/api/work-items", None, true);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let data: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(data["unlinkedSpecs"], json!(["010"]));
+    assert!(data["warnings"]
+        .to_string()
+        .contains("Duplicate work item number"));
+    let items = data["items"].as_array().unwrap();
+    let item = items
+        .iter()
+        .find(|item| item["id"] == "001-standard")
+        .unwrap();
+    assert_eq!(item["size"], "standard");
+    let warnings = item["warnings"].to_string();
+    for message in [
+        "Duplicate BRD goal G1",
+        "Duplicate PRD requirement R3",
+        "references missing goal",
+        "missing verification",
+        "references retired requirement R2",
+        "references missing requirement",
+        "stale Traceability link",
+    ] {
+        assert!(warnings.contains(message), "{message}: {warnings}");
+    }
+    let criteria = &item["specs"][0]["criteria"];
+    assert_eq!(criteria[0]["requirements"], json!(["R1", "R2", "R9"]));
+    assert_eq!(criteria[1]["stale"], false);
+    assert_eq!(criteria[2]["stale"], true);
+    assert_eq!(criteria[3]["requirements"], json!([]));
+    assert_eq!(criteria[4]["requirements"], json!([]));
+    assert!(!warnings.contains("Redis"));
+    let small = items.iter().find(|item| item["id"] == "002-small").unwrap();
+    assert_eq!(small["goals"]["G1"], false);
+    assert_eq!(
+        small["warnings"],
+        json!(["Small PRD exceeds five requirements or 60 lines"])
+    );
+    let draft = items.iter().find(|item| item["id"] == "003-draft").unwrap();
+    assert!(draft["prd"].is_null());
+    assert_eq!(draft["warnings"], json!([]));
+    let malformed = items
+        .iter()
+        .find(|item| item["id"] == "004-malformed")
+        .unwrap();
+    assert!(malformed["prd"].is_null());
+    let warnings = malformed["warnings"].to_string();
+    assert!(warnings.contains("prd.md"));
+    assert!(warnings.contains("missing content in Problem"));
+
+    let (status, body) = server.request("GET", "/api/specs", None, true);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let data: Value = serde_json::from_slice(&body).unwrap();
+    let legacy_spec = data["specs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|spec| spec["id"] == "010")
+        .unwrap();
+    assert_eq!(legacy_spec["criteria"][0]["text"], "unchanged legacy text");
+    assert!(legacy_spec.get("work_item").is_none());
+    assert_eq!(
+        fs::read_to_string(specs.join("010-legacy.md")).unwrap(),
+        legacy
+    );
+    assert_eq!(
+        fs::read_to_string(specs.join("011-linked.md")).unwrap(),
+        linked
+    );
+}
+
+#[test]
+fn publishes_and_links_work_items_without_reusing_ids_or_changing_evidence_keys() {
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let request = |method: &str, path: &str, payload| {
+        let (status, body) = server.request(method, path, payload, true);
+        (status, serde_json::from_slice::<Value>(&body).unwrap())
+    };
+    let post = |path, payload| request("POST", path, Some(payload));
+    let brd = "Size: small\nProblem and audience: Owner needs a reader\nGoal: G1 · Read work\nSuccess and boundary: Read without publishing";
+    let create = || {
+        post(
+            "/api/work-items",
+            json!({
+                "title": "Sample work", "document": "brd", "content": brd
+            }),
+        )
+    };
+    let (status, first) = create();
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["id"], "001-sample-work");
+    fs::remove_dir_all(project.join("work/001-sample-work")).unwrap();
+    let (status, second) = create();
+    assert_eq!(status, 200, "{second}");
+    assert_eq!(second["id"], "002-sample-work");
+    let id = second["id"].as_str().unwrap();
+    assert_eq!(
+        fs::read_dir(server.root.join("state/work"))
+            .unwrap()
+            .flatten()
+            .find_map(|entry| fs::read_to_string(entry.path().join("work-item-next-id")).ok())
+            .unwrap(),
+        "3\n"
+    );
+
+    let (status, prd) = post(
+        "/api/work-items",
+        json!({
+            "id": id, "document": "prd", "content": "- R1 · G1 · Read · Verify\n- R2 (retired) · G1 · Old rule · Old check"
+        }),
+    );
+    assert_eq!(status, 200, "{prd}");
+    let (status, updated) = post(
+        "/api/work-items",
+        json!({
+            "id": id, "document": "prd", "expectedRevision": prd["revision"],
+            "content": "- R1 · G1 · Read · Verify\n- R2 (retired) · G1 · Old rule · Old check\n- R3 · G9 · Missing goal · Verify"
+        }),
+    );
+    assert_eq!(status, 200, "{updated}");
+    assert!(updated["warnings"].to_string().contains("missing goal"));
+    let (_, stale) = post(
+        "/api/work-items",
+        json!({
+            "id": id, "document": "prd", "expectedRevision": prd["revision"], "content": "stale"
+        }),
+    );
+    assert!(stale["error"].as_str().unwrap().contains("changed"));
+    let raw = fs::read_to_string(project.join("work").join(id).join("prd.md")).unwrap();
+    assert_eq!(raw.matches("published prd.md").count(), 2);
+
+    fs::create_dir(project.join("specs")).unwrap();
+    let path = project.join("specs/004-legacy.md");
+    let criteria = "## Acceptance criteria\n\n- [x] Keep my text\n- [ ] Second criterion\n";
+    fs::write(&path, format!("---\nid: 004\ntitle: Legacy\nstage: plan\n---\n{criteria}\n## Audit trail\n\n- date · Owner · existing audit\n")).unwrap();
+    let (_, specs) = request("GET", "/api/specs", None);
+    let expected = &specs["specs"][0]["revision"];
+    let (status, linked) = post(
+        "/api/work-items/link",
+        json!({
+            "workItem": id, "specId": "004", "expectedRevision": expected, "criteria": {"1": ["R1", "R2"]}
+        }),
+    );
+    assert_eq!(status, 200, "{linked}");
+    let raw = fs::read_to_string(&path).unwrap();
+    assert!(raw.contains(criteria));
+    assert!(raw.contains("- date · Owner · existing audit"));
+    assert!(raw.contains("links to retired R2"));
+    let (_, items) = request("GET", "/api/work-items", None);
+    assert_eq!(items["items"][0]["specs"][0]["criteria"][0]["stale"], false);
+    assert_eq!(
+        items["items"][0]["specs"][0]["criteria"][0]["requirements"],
+        json!(["R1", "R2"])
+    );
+    let current_revision = || {
+        let (_, specs) = request("GET", "/api/specs", None);
+        specs["specs"][0]["revision"].clone()
+    };
+    let (status, linked) = post(
+        "/api/work-items/link",
+        json!({
+            "workItem": id, "specId": "004", "expectedRevision": current_revision(),
+            "criteria": {"2": ["R1"]}
+        }),
+    );
+    assert_eq!(status, 200, "{linked}");
+    let (_, items) = request("GET", "/api/work-items", None);
+    let links = &items["items"][0]["specs"][0]["criteria"];
+    assert_eq!(links[0]["requirements"], json!(["R1", "R2"]));
+    assert_eq!(links[1]["requirements"], json!(["R1"]));
+
+    let (status, removed) = post(
+        "/api/work-items/link",
+        json!({
+            "workItem": id, "specId": "004", "expectedRevision": current_revision(),
+            "removeCriteria": [1]
+        }),
+    );
+    assert_eq!(status, 200, "{removed}");
+    let (_, items) = request("GET", "/api/work-items", None);
+    let links = &items["items"][0]["specs"][0]["criteria"];
+    assert_eq!(links[0]["requirements"], json!([]));
+    assert_eq!(links[1]["requirements"], json!(["R1"]));
+    std::thread::scope(|scope| {
+        let one = scope.spawn(create);
+        let two = scope.spawn(create);
+        let mut ids = [one.join().unwrap(), two.join().unwrap()].map(|(status, body)| {
+            assert_eq!(status, 200, "{body}");
+            body["id"].as_str().unwrap().to_owned()
+        });
+        ids.sort();
+        assert_eq!(ids, ["003-sample-work", "004-sample-work"]);
+    });
+}
+
+#[test]
+fn shared_cli_projects_only_visible_context_and_checkout_read_uses_no_ledger() {
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    assert!(Command::new("git")
+        .current_dir(&project)
+        .arg("init")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    fs::create_dir(project.join("specs")).unwrap();
+    fs::write(project.join(".gitignore"), "specs/002-private.md\n").unwrap();
+    fs::write(
+        project.join("specs/001-visible.md"),
+        "---\nid: 001\ntitle: Visible\nstage: plan\nwork-item: 001-visible\n---\n# Visible\n## Acceptance criteria\n- [ ] Works (R1)\n",
+    ).unwrap();
+    fs::write(
+        project.join("specs/002-private.md"),
+        "---\nid: 002\ntitle: Private marker\nstage: plan\n---\n# Private marker\n",
+    )
+    .unwrap();
+    let work = project.join("work/001-visible");
+    fs::create_dir_all(&work).unwrap();
+    fs::write(work.join("brd.md"), "Size: small\nProblem and audience: owner\nGoal: G1 · Target goal\nSuccess and boundary: useful\n").unwrap();
+    fs::write(
+        work.join("prd.md"),
+        "- R1 · G1 · Target requirement · Verify\n- R2 · G1 · Unrelated requirement · Verify\n",
+    )
+    .unwrap();
+
+    for note in ["First note", "Latest note"] {
+        let (status, body) =
+            server.request("POST", "/api/memory", Some(json!({"note": note})), true);
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    }
+    let (status, body) = server.request("POST", "/api/hub/sync", None, true);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let cli = |args: &[&str], checkout_only: bool| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_verb"));
+        cmd.current_dir(&project)
+            .env("VERB_STATE_DIR", server.root.join("state"))
+            .arg("shared")
+            .args(args);
+        if checkout_only {
+            cmd.env("VERB_SESSION_ID", "nonexistent-session")
+                .env("VERB_PROJECT_ROOT", &project);
+        }
+        let result = cmd.output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let shared = cli(&["full"], false);
+    assert!(shared.contains("001-visible"));
+    assert!(!shared.contains("Private marker"));
+    assert!(shared.find("Latest note").unwrap() < shared.find("First note").unwrap());
+    let spec = cli(&["spec", "001"], false);
+    assert!(spec.contains("Target goal"));
+    assert!(spec.contains("Target requirement"));
+    assert!(!spec.contains("Unrelated requirement"));
+    let checkout = cli(&["read", "--checkout"], true);
+    assert!(checkout.contains("Latest note"));
+    assert!(!checkout.contains("Private marker"));
+    assert!(checkout.len() <= 8192);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
+        let bin = server.root.join("context-bin");
+        fs::create_dir(&bin).unwrap();
+        let capture = server.root.join("context-prompt");
+        let launcher = bin.join("claude");
+        fs::write(
+            &launcher,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nexec sleep 30\n",
+                capture.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(launcher, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let server = server.restart_with_env(&[("PATH", &path)]);
+        let (status, body) = server.request(
+            "POST",
+            "/api/specs/001/agent",
+            Some(json!({"agent": "claude"})),
+            true,
+        );
+        assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let prompt = loop {
+            if let Ok(text) = fs::read_to_string(&capture) {
+                if !text.is_empty() {
+                    break text;
+                }
+            }
+            assert!(Instant::now() < deadline, "no captured prompt");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(prompt.contains("Target goal"));
+        assert!(prompt.contains("Target requirement"));
+        assert!(prompt.contains("shared read"));
+        assert!(!prompt.contains("Private marker"));
+        let launch: Value = serde_json::from_slice(&body).unwrap();
+        let session = launch["sessionId"].as_str().unwrap();
+        let (status, body) = server.request(
+            "POST",
+            &format!("/api/hub/sync?session={session}"),
+            None,
+            true,
+        );
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+
+        for args in [
+            &["add", ".gitignore", "specs", "work"][..],
+            &[
+                "-c",
+                "user.name=Context Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "-qm",
+                "Fixture",
+            ],
+        ] {
+            let result = Command::new("git")
+                .current_dir(&project)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+        let (status, body) = server.request(
+            "POST",
+            "/api/terminals",
+            Some(json!({"agent": "shell", "isolated": true})),
+            true,
+        );
+        assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
+        let launch: Value = serde_json::from_slice(&body).unwrap();
+        let id = launch["sessionId"].as_str().unwrap();
+        let (_, body) = server.request("GET", "/api/state", None, true);
+        let state: Value = serde_json::from_slice(&body).unwrap();
+        let session = state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == id)
+            .unwrap();
+        let workspace = Path::new(session["workspace"].as_str().unwrap());
+        assert!(session["isolated"].as_bool().unwrap());
+        assert!(!workspace.join("AGENTS.md").exists());
+        let original = fs::read(project.join("AGENTS.md")).unwrap();
+        let (status, body) =
+            server.request("POST", &format!("/api/hub/sync?session={id}"), None, true);
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        assert_eq!(fs::read(project.join("AGENTS.md")).unwrap(), original);
+        let published = fs::read_to_string(workspace.join("AGENTS.md")).unwrap();
+        assert!(published.contains("Latest note"));
+        assert!(!published.contains("Private marker"));
+    }
+}
+
+#[test]
+fn work_item_numbers_are_shared_by_git_checkouts_and_require_the_main_store() {
+    let main = WebServer::start();
+    let project = main.root.join("project");
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .current_dir(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{:?}", result);
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "Start",
+    ]);
+    fs::create_dir(project.join("work")).unwrap();
+    fs::write(project.join("work/.next-id"), "7\n").unwrap();
+    let input = json!({"title":"Shared", "document":"brd", "content":"Size: standard"});
+    let publish = |server: &WebServer| {
+        let (status, body) = server.request("POST", "/api/work-items", Some(input.clone()), true);
+        (status, serde_json::from_slice::<Value>(&body).unwrap())
+    };
+    let (status, first) = publish(&main);
+    assert_eq!(status, 200, "{first}");
+    assert_eq!(first["id"], "007-shared");
+
+    let root = std::env::temp_dir().join(format!(
+        "verb-shared-allocation-{}",
+        NEXT_SERVER_ID.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(root.join("home")).unwrap();
+    let checkout = root.join("project");
+    git(&["worktree", "add", "--detach", checkout.to_str().unwrap()]);
+    let isolated = WebServer::start_in_root(root, &[]);
+    let (status, refused) = publish(&isolated);
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused["error"]
+        .as_str()
+        .unwrap()
+        .contains("allocation store"));
+    let state = main.root.join("state");
+    let isolated = isolated.restart_with_env(&[("VERB_STATE_DIR", state.to_str().unwrap())]);
+    let (status, second) = publish(&isolated);
+    assert_eq!(status, 200, "{second}");
+    assert_eq!(second["id"], "008-shared");
+    let (status, third) = publish(&main);
+    assert_eq!(status, 200, "{third}");
+    assert_eq!(third["id"], "009-shared");
+    assert_eq!(
+        fs::read_to_string(project.join("work/.next-id")).unwrap(),
+        "7\n"
+    );
+}
+
+#[test]
+fn spec_terminal_deliveries_and_notes_keep_the_reviewed_revision() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let git = |args: &[&str]| {
+        let result = Command::new("git")
+            .current_dir(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{:?}", result);
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "Start",
+    ]);
+    let bin = server.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let capture = server.root.join("prompt");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nprintf '\\033[?2004h'\nexec sleep 30\n",
+        capture.display()
+    );
+    fs::write(bin.join("claude"), &script).unwrap();
+    fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(bin.join("codex"), &script).unwrap();
+    fs::set_permissions(bin.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let server = server.restart_with_env(&[("PATH", &path)]);
+    let item = project.join("work/001-delivery");
+    fs::create_dir_all(&item).unwrap();
+    fs::write(item.join("brd.md"), "Size: small\nProblem: Test the route\nGoal: G1 · Verify delivery\nSuccess: Observed context").unwrap();
+    fs::write(
+        item.join("prd.md"),
+        "| R1 | G1 | Include the note | Test the prompt |\n",
+    )
+    .unwrap();
+    let spec = server.json(
+        "POST",
+        "/api/specs",
+        Some(json!({"title":"Delivery fixture","criteria":["Observe the note (R1)"]})),
+    );
+    let spec_id = spec["id"].as_str().unwrap();
+    let route = format!("/api/specs/{spec_id}");
+    server.json("POST", "/api/work-items/link", Some(json!({
+        "workItem":"001-delivery", "specId":spec_id, "expectedRevision":spec["revision"], "criteria":{"1":["R1"]}
+    })));
+    let started = server.json(
+        "POST",
+        &format!("{route}/agent"),
+        Some(json!({"agent":"claude","role":"implement"})),
+    );
+    let id = started["sessionId"].as_str().unwrap();
+    let terminal = format!("/api/terminals/{id}");
+    let snapshot = server.json("GET", "/api/workspace", None);
+    let row = snapshot["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["specId"], spec_id);
+    assert_eq!(row["role"], "implement");
+    assert_eq!(row["workItemId"], "001-delivery");
+    let delivery = server.json("GET", &format!("{terminal}/delivered-context"), None);
+    assert_eq!(delivery["delivery"]["trigger"], "launch");
+    assert_eq!(delivery["delivery"]["requirements"], json!(["R1"]));
+    assert_eq!(delivery["delivery"]["goals"], json!(["G1"]));
+    assert_eq!(
+        delivery["delivery"]["bytes"].as_u64().unwrap() as usize,
+        delivery["text"].as_str().unwrap().len()
+    );
+    for _ in 0..100 {
+        if fs::read_to_string(&capture)
+            .is_ok_and(|text| text.contains(delivery["text"].as_str().unwrap()))
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(fs::read_to_string(&capture)
+        .unwrap()
+        .contains(delivery["text"].as_str().unwrap()));
+    assert!(!project
+        .join(format!(
+            "delivered-context-{}.txt",
+            delivery["delivery"]["hash"].as_str().unwrap()
+        ))
+        .exists());
+
+    let preview = server.json("GET", &format!("{terminal}/context-preview"), None);
+    let resend = |hash: &Value| {
+        server.request("POST", &format!("{terminal}/resend-context"), Some(json!({
+        "hash": hash, "specRevision": preview["delivery"]["specRevision"], "deliveryCount": preview["deliveryCount"]
+    })), true)
+    };
+    assert_eq!(resend(&json!("different text")).0, 400);
+    let mut sent = (400, Vec::new());
+    for _ in 0..100 {
+        sent = resend(&preview["delivery"]["hash"]);
+        if sent.0 == 200 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert_eq!(sent.0, 200, "{}", String::from_utf8_lossy(&sent.1));
+    assert_eq!(resend(&preview["delivery"]["hash"]).0, 400);
+    let resent = server.json("GET", &format!("{terminal}/delivered-context"), None);
+    assert_eq!(resent["text"], preview["text"]);
+    assert_eq!(resent["delivery"]["trigger"], "resend");
+    server.json(
+        "POST",
+        &format!("{terminal}/binding"),
+        Some(json!({"specId":spec_id,"role":"review"})),
+    );
+    let current = server.json("GET", "/api/workspace", None);
+    let bound = current["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(bound["role"], "review");
+    let encoded: String = id.bytes().map(|byte| format!("{byte:02x}")).collect();
+    let record = fs::read_to_string(
+        server
+            .root
+            .join(format!("state/sessions/s-{encoded}.session")),
+    )
+    .unwrap();
+    assert!(record.contains("changed session binding from"));
+    assert!(record.contains("resend"));
+    assert!(!record.contains("Project context (maintained by Verb)"));
+
+    fs::write(project.join("changed.txt"), "after launch").unwrap();
+    server.json("DELETE", &terminal, None);
+    let revision = server.json("GET", &route, None)["revision"].clone();
+    let note = server.json("GET", &format!("{terminal}/session-note"), None);
+    assert!(note["files"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .any(|path| path == "changed.txt"));
+    let secret = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
+    let note_body = json!({"outcome":format!("Second agent should verify marker {secret}"),"files":note["files"],"checks":"Manual review"});
+    server.json(
+        "POST",
+        &format!("{terminal}/session-note"),
+        Some(note_body.clone()),
+    );
+    assert_eq!(
+        server
+            .request(
+                "POST",
+                &format!("{terminal}/session-note"),
+                Some(note_body),
+                true
+            )
+            .0,
+        400
+    );
+    let notes = fs::read_to_string(project.join(format!("specs/sessions/{spec_id}.md"))).unwrap();
+    assert!(
+        notes.contains("reported, unverified")
+            && notes.contains("observed by Verb")
+            && notes.contains("[redacted]")
+    );
+    assert!(!notes.contains(secret));
+    assert_eq!(server.json("GET", &route, None)["revision"], revision);
+    let listing = server.json("GET", "/api/specs", None);
+    assert_eq!(listing["specs"].as_array().unwrap().len(), 1);
+    let (status, response) = server.request("POST", &format!("{route}/handoff"), Some(json!({
+        "to":"codex", "approved":{"revision":revision,"role":"review","scope":"Review changed.txt","checks":""}
+    })), true);
+    assert_eq!(status, 201, "{}", String::from_utf8_lossy(&response));
+    let next = server.json(
+        "POST",
+        &format!("{route}/agent"),
+        Some(json!({"agent":"claude","role":"investigate"})),
+    );
+    let next_context = server.json(
+        "GET",
+        &format!(
+            "/api/terminals/{}/delivered-context",
+            next["sessionId"].as_str().unwrap()
+        ),
+        None,
+    );
+    let text = next_context["text"].as_str().unwrap();
+    assert!(
+        text.contains("Session notes (newest first)")
+            && text.contains("Second agent should verify marker [redacted]")
+    );
+    assert_eq!(next_context["delivery"]["noteCount"], 1);
+    assert!(!text.contains(secret));
+    let mut received = false;
+    for _ in 0..100 {
+        if fs::read_to_string(&capture).is_ok_and(|prompt| prompt.contains(text)) {
+            received = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        received,
+        "The next agent must receive the exact recorded context"
+    );
+}
+
+#[test]
+fn plan_drafts_are_private_until_published_and_surface_unexpected_git_changes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = WebServer::start();
+    let project = server.root.join("project");
+    let git = |args: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(&project)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    fs::create_dir(project.join("specs")).unwrap();
+    fs::write(project.join("specs/001-plan.md"),
+        "---\nid: 001\ntitle: Plan sample\nstage: plan\n---\n\n# 001 · Plan sample\n\n## Problem\nRead [the plan](../docs/Plan%20Notes.md#overview).\n\n## Acceptance criteria\n- [ ] Review (R1)\n").unwrap();
+    let bin = server.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let agent = bin.join("claude");
+    fs::write(&agent, r#"#!/bin/sh
+for prompt do :; done
+draft=$(printf '%s\n' "$prompt" | sed -n 's/^Draft path: //p' | head -n 1)
+case "$draft" in
+  */brd.draft.md)
+    printf '%s' "$prompt" | grep -Fq 'ask up to three questions in the terminal first and wait for the answers.' || exit 1
+    printf '%s' "$prompt" | grep -Fq '"Problem: ...", "G1: ...", and "Done when: ...".' || exit 1
+    printf '# First draft\n\nSize: small\n\nProblem: Need a place to plan\nG1: Draft marker for review\nDone when: Owner publishes\n' > "$draft"
+    ;;
+  */prd.draft.md)
+    printf '%s' "$prompt" | grep -Fq 'Add an "Out of scope" section.' || exit 1
+    printf '# PRD draft\n\n- R1 · G1 · Read draft · Open Plan\n\n## Out of scope\n\nShipping\n' > "$draft"
+    ;;
+esac
+case "$prompt" in *touch-other*) printf 'Unexpected change\n' > outside.txt;; esac
+"#).unwrap();
+    fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let server = server.restart_with_env(&[("PATH", &path)]);
+    let start = |id: Option<&str>, brief: &str| {
+        server.json(
+            "POST",
+            "/api/work-items/draft",
+            Some(json!({
+                "id": id, "title": "Planning draft", "document": "brd", "size": "small",
+                "agent": "claude", "brief": brief
+            })),
+        )
+    };
+    let created = start(None, "touch-other");
+    let id = created["workItemId"].as_str().unwrap();
+    assert_eq!(id, "001-planning-draft");
+    assert!(created["message"]
+        .as_str()
+        .unwrap()
+        .contains("info/exclude"));
+    let draft_path = format!("/api/work-items/{id}/draft/brd");
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let draft = loop {
+        let draft = server.json("GET", &draft_path, None);
+        if draft["content"]
+            .as_str()
+            .is_some_and(|text| !text.is_empty())
+        {
+            break draft;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "agent did not write its draft"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(draft["stale"], false);
+    assert_eq!(draft["publishedRevision"], Value::Null);
+    assert!(
+        git(&["check-ignore", "work/001-planning-draft/brd.draft.md"]).contains("brd.draft.md")
+    );
+    assert!(!project.join(".gitignore").exists());
+    let items = server.json("GET", "/api/work-items", None);
+    assert_eq!(items["items"][0]["draft"], true);
+    assert_eq!(items["items"][0]["warnings"], json!([]));
+    assert_eq!(items["items"][0]["brd"], Value::Null);
+
+    loop {
+        let workspace = server.json("GET", "/api/state", None);
+        let session = workspace["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == created["sessionId"]);
+        if let Some(session) = session.filter(|session| !session["planningAttention"].is_null()) {
+            assert_eq!(session["role"], "plan");
+            assert_eq!(
+                session["planningAttention"]["paths"],
+                json!(["outside.txt"])
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "planning attention not recorded: {workspace}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let spec_path = project.join("specs/001-plan.md");
+    let spec = fs::read_to_string(&spec_path).unwrap();
+    fs::write(
+        &spec_path,
+        spec.replacen(
+            "stage: plan",
+            "stage: plan\nwork-item: 001-planning-draft",
+            1,
+        ),
+    )
+    .unwrap();
+    let read_context = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_verb"))
+            .current_dir(&project)
+            .env("VERB_STATE_DIR", server.root.join("state"))
+            .env("HOME", server.root.join("home"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for command in [&["shared", "full"][..], &["shared", "spec", "001"][..]] {
+        assert!(!read_context(command).contains("Draft marker for review"));
+    }
+
+    assert!(project.join("outside.txt").exists());
+    let approved = |draft: &Value, accept_stale: bool| {
+        json!({
+            "expectedRevision": draft["publishedRevision"], "draftRevision": draft["revision"],
+            "acceptStale": accept_stale
+        })
+    };
+    let published = server.json("POST", &draft_path, Some(approved(&draft, false)));
+    assert_eq!(published["warnings"], json!([]));
+    assert!(project.join(format!("work/{id}/brd.md")).exists());
+    assert!(!project.join(format!("work/{id}/brd.draft.md")).exists());
+
+    start(Some(id), "Reconsider the published BRD");
+    let item_dir = project.join("work").join(id);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while fs::metadata(item_dir.join("brd.draft.md")).map_or(0, |metadata| metadata.len()) == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "second draft not written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let replacement = "# Updated\nSize: small\nProblem: New baseline\nG1: Keep the base visible\nDone when: Reviewed";
+    server.json(
+        "POST",
+        "/api/work-items",
+        Some(json!({
+            "id": id, "document": "brd", "content": replacement,
+            "expectedRevision": published["revision"]
+        })),
+    );
+    let draft = server.json("GET", &draft_path, None);
+    assert_eq!(draft["stale"], true);
+    assert!(draft["publishedContent"]
+        .as_str()
+        .unwrap()
+        .contains("New baseline"));
+    let (status, body) = server.request("POST", &draft_path, Some(approved(&draft, false)), true);
+    assert_eq!(status, 400);
+    assert!(String::from_utf8_lossy(&body).contains("since drafting began"));
+    assert!(item_dir.join("brd.draft.md").exists());
+    server.json("POST", &draft_path, Some(approved(&draft, true)));
+    assert!(!item_dir.join("brd.draft.md").exists());
+
+    server.json("POST", "/api/work-items/draft", Some(json!({
+        "id": id, "document": "prd", "agent": "claude", "brief": "Write requirements for the published BRD"
+    })));
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let path = format!("/api/work-items/{id}/draft/prd");
+    let draft = loop {
+        let draft = server.json("GET", &path, None);
+        if draft["content"]
+            .as_str()
+            .is_some_and(|text| text.contains("Out of scope"))
+        {
+            break draft;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "PRD draft not written"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(!item_dir.join("prd.md").exists());
+    assert_eq!(
+        server.json("POST", &path, Some(approved(&draft, false)))["warnings"],
+        json!([])
+    );
+    assert!(item_dir.join("prd.md").exists());
+    assert!(!item_dir.join("prd.draft.md").exists());
 }

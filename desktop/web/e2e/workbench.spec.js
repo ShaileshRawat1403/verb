@@ -1,5 +1,5 @@
 // The spec-driven workbench, driven like a person would: through the browser, against the real host.
-import { test, expect } from "@playwright/test";
+import { test, expect, openWorkspaceView, runPaletteCommand, terminalAction } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -64,7 +64,7 @@ test("agent chooser explains isolated availability before a launch", async ({ pa
       restricted: true, programs: ["bash", "claude", "codex", "git"] },
   }));
   await page.goto(url);
-  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("button", { name: "New terminal", exact: true }).click();
   const dialog = page.locator("#session-dialog");
   await expect(dialog.locator('input[value="agy"]')).toBeDisabled();
   await expect(dialog.locator('input[value="opencode"]')).toBeDisabled();
@@ -92,7 +92,7 @@ test("provisioned OpenCode has its own choice and launch errors stay inside the 
     return route.fulfill({ status: 503, json: { error: "All terminal slots on this host are in use." } });
   });
   await page.goto(url);
-  await page.getByRole("button", { name: "New session", exact: true }).click();
+  await page.getByRole("button", { name: "New terminal", exact: true }).click();
   const dialog = page.locator("#session-dialog");
   await expect(dialog.locator('input[value="opencode"]')).toBeEnabled();
   await dialog.locator('label:has(input[value="opencode"])').click();
@@ -121,7 +121,7 @@ test("a fresh project opens directly into a native terminal", async ({ page }) =
       { headers: { "X-Verb-Token": TOKEN } });
     return Buffer.from((await result.json()).data, "base64").toString();
   }).toContain("terminal-first-ok");
-  await page.locator("[data-close-terminal]").click();
+  await (await terminalAction(page, "End session")).click();
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
   expect(errors).toEqual([]);
@@ -132,7 +132,8 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(url);
   await page.locator("#quick-terminal-empty").click();
-  await page.locator("[data-terminal-new]").click();
+  await expect(page.getByRole("tab", { name: /Terminal/ })).toHaveCount(1);
+  await runPaletteCommand(page, "New terminal");
   const tabs = page.getByRole("tab", { name: /Terminal/ });
   await expect(tabs).toHaveCount(2);
   await tabs.last().focus();
@@ -145,7 +146,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   const input = page.getByRole("textbox", { name: "Terminal input" }).filter({ visible: true });
   await input.pressSequentially("exit");
   await input.press("Enter");
-  const close = page.getByRole("button", { name: "Close terminal output", exact: true });
+  const close = await terminalAction(page, "Close terminal output");
   await expect(close).toBeVisible();
   await page.waitForTimeout(4500); // Includes the lightweight workspace refresh after exit.
   await expect(close).toBeVisible();
@@ -159,7 +160,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   await expect(page.locator("#toast")).toHaveText(/Temporarily unavailable/);
   await expect(tabs).toHaveCount(2);
   await page.unroute("**/api/terminals/*");
-  await close.click();
+  await (await terminalAction(page, "Close terminal output")).click();
   await expect(page.locator("#end-session-dialog")).not.toBeVisible();
   await expect(tabs).toHaveCount(1);
   await page.waitForTimeout(2500); // A closed output buffer must stay closed after refresh.
@@ -169,7 +170,7 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
   const record = (await state.json()).sessions.find((session) => session.id === closedId);
   expect(record).toBeDefined();
   expect(record.hasTerminal).toBe(false);
-  await page.locator("[data-close-terminal]:visible").click();
+  await (await terminalAction(page, "End session")).click();
   await page.locator("#end-session-confirm").click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
   expect(errors).toEqual([]);
@@ -178,7 +179,8 @@ test("terminal tabs keep keyboard focus and finished output stays readable", asy
 test("refresh restores the selected terminal and ignores stale saved selections", async ({ page }) => {
   await page.goto(url);
   await page.locator("#quick-terminal-empty").click();
-  await page.locator("[data-terminal-new]").click();
+  await expect(page.getByRole("tab", { name: /Terminal/ })).toHaveCount(1);
+  await runPaletteCommand(page, "New terminal");
   const tabs = page.getByRole("tab", { name: /Terminal/ });
   await expect(tabs).toHaveCount(2);
   const ids = await tabs.evaluateAll((items) => items.map((item) => item.dataset.tabTerminal));
@@ -221,7 +223,7 @@ test("reduced motion preserves an immediate terminal surface", async ({ page }) 
   const input = page.getByRole("textbox", { name: "Terminal input" });
   await input.pressSequentially("exit");
   await input.press("Enter");
-  await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
+  await (await terminalAction(page, "Close terminal output")).click();
 });
 
 test("a late polling failure cannot overwrite a connected stream", async ({ page }) => {
@@ -247,7 +249,7 @@ test("a late polling failure cannot overwrite a connected stream", async ({ page
   const input = page.getByRole("textbox", { name: "Terminal input" });
   await input.pressSequentially("exit");
   await input.press("Enter");
-  await page.getByRole("button", { name: "Close terminal output", exact: true }).click();
+  await (await terminalAction(page, "Close terminal output")).click();
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
 });
 
@@ -258,47 +260,38 @@ test("a spec goes from idea to a committed, audited change", async ({ page }) =>
 
   // The default workspace is a terminal; specs remain an explicit optional workflow.
   await expect(page.locator("#view-sessions")).toHaveClass(/active/);
-  await page.locator('.nav-item[data-view="specs"]').click();
-  await expect(page.getByRole("heading", { name: "Start with a spec" })).toBeVisible();
+
 
   // Create a spec through the guided form.
-  await page.getByRole("button", { name: "Write your first spec" }).click();
+  await runPaletteCommand(page, "New spec");
   await page.locator("#spec-title-input").fill("Let people sign in with email");
   await page.locator("#spec-problem").fill("Returning customers cannot sign in.");
   await page.locator("#spec-criteria").fill("A sign-in link arrives\nA bad email shows a message");
   await page.getByRole("button", { name: "Create spec" }).click();
-  await expect(page.locator("#spec-title")).toHaveText("Let people sign in with email");
-  await expect(page.locator(".spec-item.current")).toContainText("0/2 recorded complete");
+  await expect(page.locator("#bench-plan-spec h2")).toContainText("Let people sign in with email");
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
+  const criterion = page.locator(".bench-proof-list > li").filter({ hasText: "A bad email shows a message" });
+  await criterion.getByRole("button", { name: "Record completion claim" }).click();
+  await page.locator("#sdlc-text").fill("unit test rejects a@");
+  await page.getByRole("button", { name: "Record claim" }).click();
+  await expect(criterion).toContainText("Proof still needed");
 
-  // Prove a criterion: Verb asks for evidence and records it.
-  await page.locator('[data-criterion="1"]').click({ force: true });
-  await expect(page.getByRole("heading", { name: "How do you know it works?" })).toBeVisible();
-  await page.locator("#evidence-text").fill("unit test rejects a@");
-  await page.getByRole("button", { name: "Record as complete" }).click();
-  await expect(page.locator(".spec-item.current")).toContainText("1/2 recorded complete");
-  await expect(page.locator("#audit-list li").first()).toContainText("evidence: unit test rejects a@");
+  await page.getByRole("tab", { name: "Plan" }).click();
+  await page.getByLabel("Stage for spec 001").selectOption("build");
+  await expect(page.locator("#stage-warnings")).toContainText(/plan/i);
+  await page.locator("#stage-dialog-submit").click();
+  await expect(page.getByLabel("Stage for spec 001")).toHaveValue("build");
 
-  // Skipping stages is allowed, warned about, and shown as skipped.
-  await page.locator('#stage-bar [data-stage="build"]').click();
-  await expect(page.locator("#stage-warnings")).toContainText("skipped plan");
-  await page.getByRole("button", { name: "Move to Build" }).click();
-  await expect(page.locator("#stage-bar li.skipped")).toHaveCount(1);
-
-  // The new spec file is reviewable as a diff before committing: every line added.
-  const card = page.locator('.diff-card[data-diff-path="specs/001-let-people-sign-in-with-email.md"]');
-  await card.locator("summary").click();
-  await expect(card.locator(".diff-line.add").first()).toBeVisible();
-  await expect(card.locator(".diff-line.del")).toHaveCount(0);
-
-  // Commit from the dialog; the audit line lands in the same commit.
+  // Review the untracked spec in the commit dialog before saving it.
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-dialog-sub")).toContainText("does not upload your work");
   await expect(page.locator("#commit-scope")).toContainText("Only selected files");
   await expect(page.locator("#commit-message")).toHaveValue(/^spec:001 /);
+  await page.locator('[data-commit-diff="specs/001-let-people-sign-in-with-email.md"]').click();
+  await expect(page.locator("#commit-diff-text")).toContainText("+# 001 · Let people sign in with email");
   await page.locator("#commit-message").fill("spec:001 add the sign-in spec");
   await page.getByRole("button", { name: "Commit", exact: true }).click();
-  await expect(page.locator("#git-status")).toHaveText("No uncommitted changes");
-  await expect(page.locator("#git-remote")).toContainText("No remote branch is linked");
+  await expect(page.locator("#commit-dialog")).toBeHidden();
   expect(git("log", "-1", "--format=%s").trim()).toBe("spec:001 add the sign-in spec");
   const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
   expect(file).toContain("committed: spec:001 add the sign-in spec");
@@ -311,28 +304,29 @@ test("palette, theme and a terminal in the spec", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await page.locator('.nav-item[data-view="specs"]').click();
-  await expect(page.locator("#spec-title")).toBeVisible();
+  await runPaletteCommand(page, "Open spec 001 · Let people sign in with email");
+  await expect(page.locator("#bench-plan-spec h2")).toBeVisible();
 
   // The command palette finds and runs actions.
   await page.locator(".palette-hint").click();
-  await page.locator("#palette-input").fill("go to overview");
+  await page.locator("#palette-input").fill("Open Review");
   await page.keyboard.press("Enter");
-  await expect(page.locator("#view-overview")).toHaveClass(/active/);
+  await expect(page.locator("#bench-review")).toBeVisible();
   await page.keyboard.press("Alt+Digit1");
-  await expect(page.locator("#view-specs")).toHaveClass(/active/);
+  await expect(page.locator("#view-bench-board")).toHaveClass(/active/);
 
   // The theme toggle cycles and the page follows.
   const resolved = () => page.evaluate(() => document.documentElement.dataset.resolvedTheme);
-  await page.locator("#theme-toggle").click(); // system → light
+  await runPaletteCommand(page, "Theme: light");
   expect(await resolved()).toBe("light");
-  await page.locator("#theme-toggle").click(); // light → dark
+  await runPaletteCommand(page, "Theme: dark");
   expect(await resolved()).toBe("dark");
 
   // A terminal opened from the spec appears in the spec's work area.
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
-  await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
-  await expect(page.locator("#spec-work .work-hint")).toBeHidden();
+  await runPaletteCommand(page, "Start agent on spec 001");
+  await expect(page.locator('#session-form [name="agent"][value="shell"]')).toBeChecked();
+  await page.locator('#session-dialog button[type="submit"]').click();
+  await expect(page.locator("#terminal-grid .terminal-tile")).toHaveCount(1, { timeout: 15_000 });
   // A terminal must start without page errors (it once threw a CSP error compiling the image
   // addon's WebAssembly decoder, which silently disabled inline images).
   await page.waitForTimeout(500);
@@ -344,7 +338,7 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
   await page.keyboard.press("Alt+Digit2");
-  await expect(page.locator("#view-project")).toHaveClass(/active/);
+  await expect(page.locator("#bench-files-panel")).toBeVisible();
 
   // The tree shows what Git tracks or would track, and never ignored files.
   await expect(page.locator('#file-tree [data-file="README.md"]')).toBeVisible();
@@ -353,25 +347,27 @@ test("project view: files, preview, brief, and agent context sync", async ({ pag
   await expect(page.locator('#file-tree [data-file=".env"]')).toHaveCount(0);
   await page.locator("#file-filter").fill("");
 
-  // Markdown reads formatted, with Raw for the exact lines; everything stays read-only.
+  // The file opens in Preview and Source shows the exact Markdown.
   await page.locator('#file-tree [data-file="README.md"]').click();
-  await expect(page.locator("#preview-path")).toHaveText("README.md");
-  await expect(page.locator(".md-preview h1")).toHaveText("e2e");
-  await page.locator("#preview-mode").click();
-  await expect(page.locator(".code-lines li")).toHaveText(["# e2e"]);
+  await expect(page.locator("#studio-document-path")).toHaveText("README.md");
+  await expect(page.locator("#studio-document h1")).toHaveText("e2e");
+  await page.locator("#studio-source").click();
+  await expect(page.locator("#studio-document")).toContainText("# e2e");
 
+  await openWorkspaceView(page, "Context");
   // Nudges point at the next useful step; nothing is forced.
   await expect(page.locator("#hub-nudges")).toContainText("project brief");
   await page.locator('[data-nudge="write-brief"]').click();
   await page.locator("#brief-problem").fill("Shops lose returning customers.");
   await page.locator("#brief-users").fill("Returning shoppers");
   await page.getByRole("button", { name: "Create brief" }).click();
-  await expect(page.locator("#preview-path")).toHaveText("docs/project/BRIEF.md");
-  await expect(page.locator("#brief-progress")).toHaveText("2/5 filled");
+  await expect(page.locator("#studio-document-path")).toHaveText("docs/project/BRIEF.md");
 
   // Sync writes Verb's section and keeps the user's own text.
-  await page.locator('#view-project [data-action="sync-agents"]').click();
+  await openWorkspaceView(page, "Context");
+  await page.locator('#view-context button[data-action="sync-agents"]').click();
   await expect(page.locator('#agent-files li[data-state="current"]')).toHaveCount(2);
+  await expect(page.locator("#managed-context-git")).toContainText("Shared notes will be committed with AGENTS.md");
   const agents = readFileSync(join(repo, "AGENTS.md"), "utf8");
   expect(agents.startsWith("# Team rules\n\nUse tabs.\n")).toBe(true);
   expect(agents).toContain("**Problem:** Shops lose returning customers.");
@@ -391,17 +387,15 @@ test("host view: read-only machine health", async ({ page }) => {
   await page.goto(url);
   await expect(page.locator("#view-sessions")).toHaveClass(/active/);
   await page.keyboard.press("Alt+Digit7");
-  await expect(page.locator("#view-host")).toHaveClass(/active/);
+  await expect(page.locator("#settings-host")).toBeVisible();
   await expect(page.locator("#host-verb")).toContainText("Version");
   await expect(page.locator("#host-verb")).toContainText("Build");
   await expect(page.locator("#host-verb")).toContainText("Running for");
   await expect(page.locator("#host-memory .usage-number")).toContainText("%");
   await expect(page.locator("#host-storage .usage-bar")).toBeVisible();
   await expect(page.locator("#host-updated")).toContainText("Updated");
-  // The sidebar footer opens the same page.
-  await page.keyboard.press("Alt+Digit1");
-  await page.locator(".sidebar-bottom").click();
-  await expect(page.locator("#view-host")).toHaveClass(/active/);
+  await openWorkspaceView(page, "Host");
+  await expect(page.locator("#settings-host")).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -422,25 +416,13 @@ test("host supervisor visibility does not imply service outage", async ({ page, 
   await expect(services.locator("tr").filter({hasText:"worker"}).locator(".state-dot")).toHaveAttribute("data-state","bad");
 });
 
-test("the older views sit under More, on a desktop and on a phone", async ({ page }) => {
-  const errors = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto(url);
-  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
-  await page.locator(".nav-more > summary").click();
-  await page.locator('.nav-item[data-view="memory"]').click();
-  await expect(page.locator("#view-memory h1")).toHaveText("Shared notes");
-  await expect(page.locator("#breadcrumb-view")).toHaveText("Shared notes");
-  // On a phone, More is a menu: it must open, lead somewhere, and close behind the choice.
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('.nav-item[data-view="specs"]').click();
-  await expect(page.locator("#nav-more")).not.toHaveAttribute("open", "");
-  await page.locator(".nav-more > summary").click();
-  await expect(page.locator('.nav-item[data-view="tasks"]')).toBeVisible();
-  await page.locator('.nav-item[data-view="tasks"]').click();
-  await expect(page.locator("#view-tasks")).toHaveClass(/active/);
-  await expect(page.locator("#nav-more")).not.toHaveAttribute("open", "");
-  expect(errors).toEqual([]);
+test("previous Context and Tasks destinations open their replacements", async ({ page }) => {
+  for (const [view, selector] of [["memory", "#view-context"], ["tasks", "#settings-tasks"]]) {
+    const linked = new URL(url);
+    linked.searchParams.set("view", view);
+    await page.goto(linked.href);
+    await expect(page.locator(selector)).toBeVisible();
+  }
 });
 
 test("ask verb answers from evidence and its sources open", async ({ page }) => {
@@ -465,8 +447,8 @@ test("ask verb answers from evidence and its sources open", async ({ page }) => 
   // A source opens the spec it cites.
   await answer.locator('[data-source-kind="spec"]').click();
   await expect(page.locator("#ask-dialog")).toBeHidden();
-  await expect(page.locator("#view-specs")).toHaveClass(/active/);
-  await expect(page.locator("#spec-title")).toHaveText("Let people sign in with email");
+  await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+  await expect(page.locator("#bench-plan-spec h2")).toContainText("Let people sign in with email");
 
   // A question typed in the palette is offered to Ask Verb first.
   await page.locator(".palette-hint").click();
@@ -482,25 +464,21 @@ test("ask verb answers from evidence and its sources open", async ({ page }) => 
   expect(errors).toEqual([]);
 });
 
-test("session board and handoff with a written note", async ({ page }) => {
+test("spec terminal handoff with a written note", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(url);
-  await page.locator('.nav-item[data-view="specs"]').click();
-  await expect(page.locator("#spec-title")).toBeVisible();
+  await runPaletteCommand(page, "Open spec 001 · Let people sign in with email");
+  await expect(page.locator("#bench-plan-spec h2")).toBeVisible();
 
-  // An earlier test opened a terminal from the spec; the board lists it from the audit trail.
-  await expect(page.locator("#spec-sessions")).toBeVisible();
-  await expect(page.locator("#spec-sessions .board-row").first()).toContainText("Terminal");
-
-  // Hand off (to a plain terminal here: CI has no agent CLIs installed).
-  await page.locator('[data-action="handoff"]').click();
+  // This shortcut exercises the existing written-note handoff.
+  await runPaletteCommand(page, "Hand off spec 001 to another agent");
   await expect(page.locator("#handoff-from")).toHaveText("Terminal");
   await page.locator("#handoff-to").selectOption("shell");
   await page.locator("#handoff-note").fill("Validation is done; persistence is next.");
   await page.locator("#handoff-submit").click();
   await expect(page.locator("#handoff-dialog")).toBeHidden();
-  await expect(page.locator("#spec-sessions .board-row.live")).toHaveCount(2, { timeout: 15_000 });
+  await expect(page.locator("#terminal-grid .terminal-tile")).toHaveCount(2, { timeout: 15_000 });
 
   const file = readFileSync(join(repo, "specs/001-let-people-sign-in-with-email.md"), "utf8");
   expect(file).toContain("## Handoff notes");
@@ -508,7 +486,7 @@ test("session board and handoff with a written note", async ({ page }) => {
   expect(file).toContain("- Note from E2E Person: Validation is done; persistence is next.");
   expect(file).toContain("handed off from shell to shell — Validation is done; persistence is next.");
   expect(file.indexOf("## Handoff notes")).toBeLessThan(file.indexOf("## Audit trail"));
-  await expect(page.locator("#audit-list li").first()).toContainText("started shell on this spec");
+  expect(file).toContain("started shell on this spec");
 
   // Context meters cover running Claude/Codex sessions only; plain terminals have none.
   const meters = await page.request.get(url.replace(/#.*/, "api/meters"), { headers: { "X-Verb-Token": TOKEN } });
@@ -526,12 +504,12 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
       ...(body ? { data: body } : {}),
     });
   await page.goto(url);
-  await page.locator('.nav-item[data-view="specs"]').click();
-  await expect(page.locator("#spec-title")).toBeVisible();
+  await runPaletteCommand(page, "Open spec 001 · Let people sign in with email");
+  await expect(page.locator("#bench-plan-spec h2")).toBeVisible();
 
   // Off until chosen, and it explains its boundaries before asking.
   await expect(page.locator("#observer-label")).toHaveText("Observer off");
-  await page.locator("#observer-pill").click();
+  await runPaletteCommand(page, "Open Observer");
   await expect(page.locator("#observer-panel")).toContainText("never acts on its own");
   await page.locator('[data-observer="enable"]').click();
   // Earlier tests left uncommitted work on main while spec 001 (in Build) has its own branch, so
@@ -543,14 +521,20 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   // Real terminal activity: a fake token on screen, and the same command failing three times.
   // Terminals still running from earlier tests come back with the page, so "the new one" is the
   // selected tab once one more terminal exists, not necessarily the last in the page.
-  const before = await page.locator("#spec-work .terminal-tile").count();
-  await page.getByRole("button", { name: "Terminal", exact: true }).click();
-  await expect(page.locator("#spec-work .terminal-tile")).toHaveCount(before + 1);
-  const tile = page.locator("#spec-work .terminal-tile.focused");
-  await tile.locator(".terminal-mount").click();
+  const before = await page.locator("#terminal-grid .terminal-tile").count();
+  await runPaletteCommand(page, "Start agent on spec 001");
+  await expect(page.locator('#session-form [name="agent"][value="shell"]')).toBeChecked();
+  await page.locator('#session-dialog button[type="submit"]').click();
+  await expect(page.locator("#terminal-grid .terminal-tile")).toHaveCount(before + 1);
+  const tile = page.locator("#terminal-grid .terminal-tile.focused");
+  const input = tile.getByRole("textbox", { name: "Terminal input" });
   const fake = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
-  await page.keyboard.type(`echo ${fake}\n`);
-  for (let i = 0; i < 3; i += 1) await page.keyboard.type("ls /verb-e2e-missing\n");
+  await input.pressSequentially(`echo ${fake}`);
+  await input.press("Enter");
+  for (let i = 0; i < 3; i += 1) {
+    await input.pressSequentially("ls /verb-e2e-missing");
+    await input.press("Enter");
+  }
 
   await expect
     .poll(async () => (await (await api("api/observer")).json()).signals.map((s) => s.kind).sort(), { timeout: 15_000 })
@@ -562,12 +546,12 @@ test("observer: opt-in badges from real terminal activity, secrets by kind only"
   await expect(tile.locator(".cmd-meta.failed").first().getByRole("button", { name: "Copy" })).toBeVisible();
   await expect(tile.getByRole("button", { name: "Ask agent" })).toHaveCount(0);
   // Its tab shows the failure too, and is the selected one.
-  const selectedTab = page.locator('#spec-work .terminal-tab[aria-selected="true"]');
+  const selectedTab = page.locator('#bench-terminal-tabs .terminal-tab[aria-selected="true"]');
   await expect(selectedTab.locator(".tab-dot")).toHaveAttribute("data-tone", "failed");
   const raw = await (await api("api/observer")).text();
   expect(raw).not.toContain(fake.slice(4)); // the value never leaves the server
 
-  await page.locator("#observer-pill").click();
+  await runPaletteCommand(page, "Open Observer");
   await expect(page.locator("#observer-label")).toHaveText("3 to look at");
   await expect(page.locator(".observer-badge")).toHaveCount(3);
   await expect(page.locator('.observer-badge[data-kind="secret"]')).toContainText("Possible secret on screen");
@@ -606,6 +590,7 @@ test("terminal input stays hidden when the real PTY disables echo", async ({ pag
     await page.goto(url);
     await page.keyboard.press("Alt+Digit3");
     await expect(page.locator("#view-sessions")).toHaveClass(/active/);
+    await openWorkspaceView(page, "Session history");
     await page.locator(`#session-list [data-session-id="${sessionId}"]`).click();
     const tile = page.locator(`#terminal-${sessionId}`);
     await expect(tile).toBeVisible();
@@ -627,14 +612,15 @@ test("terminal input stays hidden when the real PTY disables echo", async ({ pag
 });
 
 test("commit review lists every file and explains local versus remote history", async ({ page }) => {
-  await page.route("**/api/git", route => route.fulfill({ json: {
-    branch: "main", upstream: "origin/main", ahead: 2, behind: 1,
-    changes: Array.from({ length: 41 }, (_, i) => ({ code: "??", path: `new-file-${i}.txt` })),
-    recent: [],
+  await page.route("**/api/git/transfer", route => route.fulfill({ json: {
+    branch: "main", remote: "origin", remote_ref: "refs/heads/main", server: "fixture",
+    ahead: 2, behind: 1, outgoing: ["First local commit", "Second local commit"], incoming: ["Remote commit"],
   } }));
   await page.route("**/api/git/commit-review", route => route.fulfill({ json: { version: "fixture", files: Array.from({ length: 41 }, (_, i) => `new-file-${i}.txt`), blocked: null } }));
   await page.goto(url);
-  await expect(page.locator("#git-remote")).toContainText("2 local commits to upload; 1 remote commit to bring in");
+  await runPaletteCommand(page, "Review Git upload / download");
+  await expect(page.locator("#git-transfer-status")).toContainText("2 local commits to upload; 1 remote commit to download");
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Alt+KeyC");
   await expect(page.locator("#commit-files li")).toHaveCount(41);
   await expect(page.locator("#commit-files li").last()).toContainText("new-file-40.txt");
@@ -643,10 +629,13 @@ test("commit review lists every file and explains local versus remote history", 
   // A failed observation must not offer an empty commit as if the checkout were clean.
   await page.keyboard.press("Escape");
   await page.route("**/api/git/commit-review", route => route.fulfill({ status: 500, json: { error: "Git review failed" } }));
-  await page.route("**/api/git", route => route.fulfill({ status: 500, json: { error: "Git read failed" } }));
-  await page.reload();
-  await expect(page.locator("#git-remote")).toHaveText("Remote comparison unavailable.");
+  await page.route("**/api/git/transfer", route => route.fulfill({ status: 500, json: { error: "Remote comparison unavailable." } }));
+  await runPaletteCommand(page, "Review Git upload / download");
+  await expect(page.locator("#git-transfer-status")).toHaveText("Remote comparison unavailable.");
+  await expect(page.locator("#git-transfer-check")).toBeDisabled();
+  await page.keyboard.press("Escape");
   await page.keyboard.press("Alt+KeyC");
+  await expect(page.locator("#commit-scope")).toContainText("Commit review unavailable: Git review failed");
   await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
 });
 
@@ -678,9 +667,10 @@ test("real detached Git checkout is diagnosed without changing terminal availabi
     await expect.poll(async()=> (await (await page.request.get(`${origin}/api/state`,{headers:{"X-Verb-Token":TOKEN}})).json()).project.gitStatus).toBe("detached");
     await page.goto(url);
     await expect(page.locator("#top-branch")).toHaveText("Detached HEAD");
-    const launch=page.locator("#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty").filter({visible:true}).first();
-    await expect(launch).toBeVisible();
-    await launch.click();
+    const tabs = page.getByRole("tablist", { name: "Terminals", exact: true }).getByRole("tab");
+    const before = await tabs.count();
+    await runPaletteCommand(page, "New terminal");
+    await expect(tabs).toHaveCount(before + 1);
     const tile=page.locator(".terminal-tile.focused");
     await expect(tile).toBeVisible();
     const id=(await tile.getAttribute("id")).slice("terminal-".length);
@@ -708,7 +698,7 @@ test("two native sessions share project files and reattach to the same processes
     await input().press("Enter");
     await expect.poll(()=>output(ids[0])).toMatch(/first-session-ok:\d+/);
     const firstPid=(await output(ids[0])).match(/first-session-ok:(\d+)/)[1];
-    await page.locator("[data-terminal-new]").click();
+    await runPaletteCommand(page, "New terminal");
     const tabs=page.getByRole("tab",{name:/Terminal/});
     await expect(tabs).toHaveCount(2);
     ids.push(await tabs.last().getAttribute("data-tab-terminal"));
@@ -737,7 +727,7 @@ test("two native sessions share project files and reattach to the same processes
     await expect(page.locator(`#terminal-${ids[1]} .terminal-state`)).toContainText("Connected");
     await input().pressSequentially("printf '\\162eload-second:%s\\n' \"$$\"; exit");await input().press("Enter");
     await expect.poll(()=>output(ids[1])).toContain(`reload-second:${secondPid}`);
-    await expect(page.getByRole("button",{name:"Close terminal output",exact:true})).toBeVisible();
+    await expect(await terminalAction(page, "Close terminal output")).toBeVisible();
     await expect.poll(async()=> {
       const snapshot=await (await page.request.get(`${origin}/api/state`,{headers})).json();
       return snapshot.sessions.find(session=>session.id===ids[1])?.terminal.running;

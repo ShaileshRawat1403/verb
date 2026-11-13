@@ -1,7 +1,7 @@
 // The conversation flow against the real `verb web` binary, with a scripted stand-in for Claude Code
 // (e2e/fixtures/fake-claude.mjs) that writes Claude Code's own log and status formats. Real Claude
 // Code is exercised separately; this suite makes every state reachable on demand.
-import { test, expect } from "@playwright/test";
+import { test, expect, openWorkspaceView, terminalAction } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -51,9 +51,14 @@ async function startClaude(page) {
 }
 
 async function openChat(page, id) {
-  const tile = page.locator(`.terminal-tile[data-session="${id}"], [data-terminal="${id}"]`).first();
-  await page.getByRole("button", { name: "Chat", exact: true }).first().click();
-  return page.locator(".agent-stream:not([hidden])").first();
+  const tab = page.locator(`[data-tab-terminal="${id}"]`);
+  await expect(tab).toBeVisible();
+  if (await tab.getAttribute("aria-selected") !== "true") await tab.click();
+  const chat = page.locator(`#terminal-${id} .agent-stream`);
+  if (!(await chat.isVisible())) {
+    await (await terminalAction(page, "Open chat")).click();
+  }
+  return chat;
 }
 
 test.describe.configure({ mode: "serial" });
@@ -141,8 +146,10 @@ test("one message id is typed at most once, and a second message cannot overtake
   await expect
     .poll(async () => (await call("GET", `/api/terminals/${session}/conversation`)).body.deliveries.find((d) => d.id === "m-dup-000000000001")?.state, { timeout: 15000 })
     .toBe("received");
-  const log = claudeLogs().map((f) => readFileSync(f, "utf8")).join("");
-  expect(log.split("count me once").length - 1).toBe(2); // the user turn and the agent's reply, once each
+  const log = () => claudeLogs().map(f => readFileSync(f, "utf8")).join("");
+  // The delivery can be received as soon as the user turn is logged. Wait for the reply too.
+  await expect.poll(log).toContain("Done. I noted: [slow] count me once");
+  expect(log().split("count me once").length - 1).toBe(2); // the user turn and the agent's reply, once each
 });
 
 test("a permission prompt closes chat and is answered only in the terminal", async ({ page }) => {
@@ -162,7 +169,7 @@ test("a permission prompt closes chat and is answered only in the terminal", asy
   // Raw terminal input is never gated by readiness: the person answers the provider's prompt.
   const typed = await call("POST", `/api/terminals/${session}/input`, { data: "1" });
   expect(typed.status).toBe(200);
-  await page.getByRole("button", { name: "Chat", exact: true }).first().click();
+  await openChat(page, session);
   await expect(chat.locator(".conv-agent").last()).toContainText("Record the approval step", { timeout: 15000 });
   await expect(chat.locator(".conv-chip")).toHaveText("Waiting for you", { timeout: 10000 });
 });
@@ -225,7 +232,7 @@ test("a resumed attempt names the same conversation and keeps the session", asyn
 });
 
 test("turning the stream off clears at once, leaves the log, and reports each device", async ({ page, browser }) => {
-  const other = await browser.newContext();
+  const other = await browser.newContext({ userAgent: "Firefox/123.0 (Linux)" });
   const second = await other.newPage();
   await second.goto(url);
   await openChat(second, session);
@@ -241,7 +248,8 @@ test("turning the stream off clears at once, leaves the log, and reports each de
   await expect(chat.locator(".conv-devices")).toContainText("Stream turned off on this device");
   await expect(chat.locator(".conv-devices")).toContainText("not yet confirmed cleared");
   await expect(chat.locator(".conv-devices")).toContainText("last seen");
-  const waiting = await chat.locator(".conv-devices li[data-state='not_confirmed']").count();
+  const otherDevice = chat.locator(".conv-devices li").filter({ hasText: "Firefox on Linux" });
+  await expect(otherDevice).toHaveAttribute("data-state", "not_confirmed");
   expect(claudeLogs().map((f) => readFileSync(f))).toEqual(logs);
   const view = (await call("GET", `/api/terminals/${session}/conversation`)).body;
   expect(view.items).toEqual([]);
@@ -250,8 +258,7 @@ test("turning the stream off clears at once, leaves the log, and reports each de
 
   await other.setOffline(false);
   await expect(second.locator(".conv-agent")).toHaveCount(0, { timeout: 10000 });
-  // The reconnected browser cleared and said so; tabs closed earlier can never say so.
-  await expect(chat.locator(".conv-devices li[data-state='not_confirmed']")).toHaveCount(waiting - 1, { timeout: 15000 });
+  await expect(otherDevice).toHaveAttribute("data-state", "acknowledged", { timeout: 15000 });
   await other.close();
   await chat.getByRole("button", { name: "Turn on for this project" }).click();
   await expect(chat.locator(".conv-agent").first()).toBeVisible();
@@ -259,7 +266,7 @@ test("turning the stream off clears at once, leaves the log, and reports each de
 
 test("Studio reads the same conversation and opens the agent's files in the preview pane", async ({ page }) => {
   await page.goto(url);
-  await page.locator('.nav-item[data-view="studio"]').first().click();
+  await openWorkspaceView(page, "Studio");
   await page.locator("#studio-conversation-session").selectOption(session);
   const panel = page.locator("#studio-conversation-mount");
   await expect(panel.locator(".conv-agent").first()).toBeVisible();
@@ -293,7 +300,7 @@ test("phone Studio keeps chat primary and preserves a separate work draft", asyn
   const page = await context.newPage();
   try {
     await page.goto(url);
-    await page.locator('.nav-item[data-view="studio"]').first().click();
+    await openWorkspaceView(page, "Studio");
     await page.getByRole("button", { name: "Current work", exact: true }).click();
     await page.locator("#studio-conversation-session").selectOption(session);
     const panel = page.locator("#studio-conversation-mount");
@@ -353,7 +360,7 @@ test("stream off in Studio clears hidden Sessions panels and stored sent text be
   await call("POST", "/api/stream", { enabled: true });
   const chat = await openChat(page, session);
   await expect(chat.locator(".conv-agent").first()).toBeVisible();
-  await page.locator('.nav-item[data-view="studio"]').first().click();
+  await openWorkspaceView(page, "Studio");
   await page.locator("#studio-conversation-session").selectOption(session);
   const studio = page.locator("#studio-conversation-mount");
   await expect(studio.locator(".conv-agent").first()).toBeVisible();

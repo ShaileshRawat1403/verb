@@ -1,5 +1,5 @@
 // A real Chromium worker behind Verb, with HTTP fixtures that refuse all iframe embedding.
-import {test, expect, chromium} from '@playwright/test';
+import {test, expect, chromium, openWorkspaceView} from './workspace-navigation.js';
 import {spawn, execFileSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -35,7 +35,7 @@ test.beforeAll(async()=>{
   res.end(`<!doctype html><meta name="viewport" content="width=device-width"><title>${req.url==='/second'?'Second page':'Browser fixture'}</title><style>body{margin:0;font:18px system-ui;background:#f8f5ef;padding:20px}h1{font-size:26px;line-height:1.2;margin:0;max-width:320px}button{position:absolute;left:20px;top:90px;padding:12px;border:0;border-radius:8px;background:#2d634a;color:white}input{position:absolute;left:20px;top:150px;padding:10px;border:1px solid #ccc;border-radius:8px}#scope{position:absolute;left:20px;top:235px;margin:0;max-width:320px}#typed{position:absolute;top:195px}img{display:none}</style><h1>${req.url==='/second'?'Second page':'Real browser fixture'}</h1><button onclick="this.textContent='Count '+(++window.count)">Count 0</button><input aria-label="Fixture text" oninput="document.querySelector('#typed').textContent=this.value"><p id="typed"></p><p id="scope"></p><img src="${other}/pixel"><script>window.count=0;document.querySelector('#scope').textContent='Top-level page: '+(window.top===window)+'; stored: '+(localStorage.getItem('probe')||'none');localStorage.setItem('probe','present');</script>`);
  });site=await listen(target);
  const port=await freePort();base=`http://127.0.0.1:${port}`;url=`${base}/#${TOKEN}`;
- host=spawn(resolve(process.env.VERB_BIN??'../target/debug/verb'),['web','--port',String(port)],{cwd:repo,env:{PATH:process.env.PATH,HOME:home,VERB_STATE_DIR:join(root,'state'),VERB_TOKEN:TOKEN,VERB_BROWSER_NODE:process.execPath,VERB_BROWSER_WORKER:resolve('runtime/browser-worker.mjs'),VERB_BROWSER_EXECUTABLE:chromium.executablePath()},stdio:['ignore','pipe','pipe']});
+ host=spawn(resolve(process.env.VERB_BIN??'../target/debug/verb'),['web','--port',String(port)],{cwd:repo,env:{PATH:process.env.PATH,HOME:home,VERB_STATE_DIR:join(root,'state'),VERB_TOKEN:TOKEN,VERB_BROWSER_NODE:process.execPath,VERB_BROWSER_WORKER:resolve('runtime/browser-worker.mjs'),VERB_BROWSER_EXECUTABLE:(process.env.VERB_TEST_CHROMIUM || chromium.executablePath())},stdio:['ignore','pipe','pipe']});
  await new Promise((ok,fail)=>{const timer=setTimeout(()=>fail(Error('Verb did not start')),20000);host.stdout.on('data',c=>{if(String(c).includes('Verb web UI')){clearTimeout(timer);ok();}});host.on('error',fail);host.on('exit',code=>fail(Error(`Verb ended ${code}`)));});
 });
 test.afterAll(async()=>{await call({op:'stop'}).catch(()=>{});host?.kill();target?.closeAllConnections();target?.close();second?.close();});
@@ -127,7 +127,7 @@ test('bounded browser resource and cleanup sample',async()=>{
 test('Studio browser shows pixels, page text, responsive view and teardown without embedding site code',async({page})=>{
  let releaseFiles; const filesReady=new Promise(resolve=>{releaseFiles=resolve;});
  await page.route('**/api/files',async route=>{await filesReady;await route.continue();});
- await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.goto(url);await openWorkspaceView(page, "Studio");await page.getByRole('button',{name:'Browser',exact:true}).click();
  releaseFiles();await expect(page.locator('#studio-browser')).toBeVisible();
  await expect(page.locator('#studio-show-document')).toHaveAttribute('aria-pressed','false');
  await expect(page.locator('#studio-show-browser')).toHaveAttribute('aria-pressed','true');
@@ -201,7 +201,7 @@ test('failed navigation is explicit, errors stay with their tab and successful n
 });
 
 test('address drafts survive refresh and tab switches clear old inspection and synchronize viewport',async({page})=>{
- await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.goto(url);await openWorkspaceView(page, "Studio");
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();
  const address=page.getByRole('textbox',{name:'Website address',exact:true});
@@ -232,7 +232,7 @@ test('closing during browser startup stops only the returned runtime',async({pag
   }
   await route.continue();
  });
- await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.goto(url);await openWorkspaceView(page, "Studio");
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();await ready;
  await page.getByRole('button',{name:'Browser',exact:true}).click();release();
@@ -250,7 +250,7 @@ test('unavailable browser cannot be started and delayed availability cannot over
   }
   await route.continue();
  });
- await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.goto(url);await openWorkspaceView(page, "Studio");
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'Browser',exact:true}).click();
@@ -263,7 +263,7 @@ test('unavailable browser cannot be started and delayed availability cannot over
 
 
 test('one deliberate action waits for an in-flight screenshot and is never duplicated',async({page})=>{
- await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.goto(url);await openWorkspaceView(page, "Studio");
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();
  await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});
@@ -285,7 +285,7 @@ test('one deliberate action waits for an in-flight screenshot and is never dupli
 
 
 test('stopping during a held refresh cancels waiting input instead of replaying it',async({page})=>{
- await page.goto(url);await page.getByRole('button',{name:'Studio',exact:true}).click();
+ await page.goto(url);await openWorkspaceView(page, "Studio");
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();
  await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});

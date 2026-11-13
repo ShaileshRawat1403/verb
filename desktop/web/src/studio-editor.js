@@ -4,7 +4,7 @@ import { initEditorFind } from "./studio-find.js";
 import { initEditorNavigation } from "./studio-navigation.js";
 // Local text editing is an adapter, not a replacement for the full IDE foundation.
 // File drafts live in this tab only. No writes, app code, or server commands run on entry.
-export function initStudioEditor({ $, api, onMode, onSaved }) {
+export function initStudioEditor({ $, api, onMode, onSaved, inBench, onCapability }) {
   let capability = null,
     path = null,
     mode = "document",
@@ -69,7 +69,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     $("#studio-document").hidden = next !== "document";
     $("#studio-show-document").setAttribute(
       "aria-pressed",
-      String(next === "document"),
+      String(next === "document" || (inBench() && next === "app")),
     );
     $("#studio-edit-file").setAttribute(
       "aria-pressed",
@@ -225,9 +225,12 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       if (generation === request) status(error.message);
     }
   }
+  let previewVisibility = 0;
   async function preview() {
     const wanted = path,
-      generation = ++request;
+      generation = ++request,
+      visibility = ++previewVisibility;
+    const stillVisible = () => visibility === previewVisibility;
     if (dirty(current())) {
       status("Save your draft first. App preview uses a saved file.");
       return;
@@ -235,13 +238,13 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     status("Preparing isolated preview of the saved file…");
     try {
       const doc = await load(wanted);
-      if (generation !== request || wanted !== path || dirty(current())) return;
+      if (!stillVisible() || generation !== request || wanted !== path || dirty(current())) return;
       const result = await api("POST", "/api/studio/preview", {
         workspaceId: capability.workspaceId,
         path: wanted,
         expectedRevision: doc.revision,
       });
-      if (generation !== request || wanted !== path || dirty(current())) return;
+      if (!stillVisible() || generation !== request || wanted !== path || dirty(current())) return;
       if (
         result.workspaceId !== capability.workspaceId ||
         result.revision !== doc.revision ||
@@ -281,7 +284,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
       setMode("app");
       status("Loading the saved file in an isolated preview…");
     } catch (error) {
-      if (generation === request) status(error.message);
+      if (stillVisible() && generation === request) status(error.message);
     }
   }
   editor.addEventListener("input", () => {
@@ -338,9 +341,11 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   });
   $("#studio-preview-app").addEventListener("click", preview);
   $("#studio-refresh-app").addEventListener("click", preview);
-  $("#studio-show-document").addEventListener("click", () =>
-    setMode("document"),
-  );
+  function showPreview() {
+    if (inBench() && !$("#studio-preview-app").disabled) return preview();
+    setMode("document");
+  }
+  $("#studio-show-document").addEventListener("click", showPreview);
   $("#studio-stop-app").addEventListener("click", () => {
     setMode("document");
     status("Preview stopped.");
@@ -353,6 +358,8 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
   });
   return {
     mode: () => mode,
+    showPreview,
+    readOnly: () => !capability?.editing.available,
     hasUnsaved: (wanted) => {
       const d = drafts.get(wanted);
       return Boolean(d && (dirty(d) || d.saving || d.recovery != null));
@@ -365,6 +372,10 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
     },
     document() {
       setMode("document");
+    },
+    suspendPreview() {
+      ++previewVisibility;
+      if (mode === "app") setMode("document");
     },
     async connect() {
       try {
@@ -380,6 +391,7 @@ export function initStudioEditor({ $, api, onMode, onSaved }) {
           "Workspace bridge unavailable. Project documents remain read-only.";
       }
       update();
+      onCapability();
     },
   };
 }

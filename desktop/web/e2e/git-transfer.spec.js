@@ -1,5 +1,5 @@
 // Real Git, local bare remote, isolated home: no credentials or external network.
-import { test, expect } from "@playwright/test";
+import { test, expect, runPaletteCommand } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -54,8 +54,7 @@ test("a person checks, reviews, uploads and downloads without losing diverged wo
     if (request.method() === "POST" && request.url().endsWith("/api/git/transfer")) actions.push(request.postDataJSON().action);
   });
   await page.goto(url);
-  await page.keyboard.press("Alt+Digit2");
-  const open = () => page.getByRole("button", { name: "Upload / download…", exact: true }).click();
+  const open = () => runPaletteCommand(page, "Review Git upload / download");
   const status = page.locator("#git-transfer-status");
   const upload = page.locator("#git-transfer-upload");
   const download = page.locator("#git-transfer-download");
@@ -67,6 +66,7 @@ test("a person checks, reviews, uploads and downloads without losing diverged wo
   await expect(download).toBeDisabled();
   expect(actions).toEqual([]); // Opening a review never contacts the remote.
   await check.click();
+  await expect(status).toContainText("Remote checked.", { timeout: 30_000 });
   await expect(upload).toBeEnabled();
   await upload.click();
   await expect(status).toContainText("Git transfer completed.", { timeout: 30_000 });
@@ -77,6 +77,7 @@ test("a person checks, reviews, uploads and downloads without losing diverged wo
   writeFileSync(join(other, "work.txt"), "remote contribution\n");
   git(other, "commit", "-qam", "remote contribution"); git(other, "push", "-q");
   await open(); await check.click();
+  await expect(status).toContainText("Remote checked.", { timeout: 30_000 });
   await expect(download).toBeEnabled();
   await expect(page.locator("#git-transfer-commits")).toContainText("remote contribution");
   await download.click();
@@ -89,7 +90,7 @@ test("a person checks, reviews, uploads and downloads without losing diverged wo
   writeFileSync(join(other, "work.txt"), "remote divergent work\n");
   git(other, "commit", "-qam", "remote divergent work"); git(other, "push", "-q");
   await open(); await check.click();
-  await expect(status).toContainText("Both this branch and its remote have new commits");
+  await expect(status).toContainText("Both this branch and its remote have new commits", { timeout: 30_000 });
   await expect(upload).toBeDisabled(); await expect(download).toBeDisabled();
   expect(readFileSync(join(local, "work.txt"), "utf8")).toBe("local divergent work\n");
   expect(git(local, "status", "--porcelain")).toBe("");

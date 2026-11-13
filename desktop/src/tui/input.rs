@@ -80,6 +80,7 @@ impl App {
                         &self.project,
                         &draft.title,
                         &draft.brief,
+                        None,
                     ) {
                         Ok(id) => {
                             self.message = Some(format!("Created task: {}", draft.title.trim()));

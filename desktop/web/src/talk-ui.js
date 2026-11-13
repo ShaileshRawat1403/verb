@@ -70,7 +70,7 @@ export function createTalk(id, deps) {
           const criterion = claim && spec && spec.id === data.spec_id ? spec.criteria?.[claim.number - 1] : null;
           const suggest =
             criterion && !criterion.done && !dismissed.has(claim.number)
-              ? `<div class="stream-suggest" data-claim="${claim.number}" data-sentence="${escapeHtml(claim.sentence)}">${icon("check", { size: 16 })}<span><b>Antigravity says criterion ${claim.number} is met.</b> ${escapeHtml(criterion.text)}</span><button type="button" class="secondary-button small" data-prove>Mark proven</button><button type="button" class="text-button" data-dismiss-claim>Not yet</button></div>`
+              ? `<div class="stream-suggest" data-claim="${claim.number}" data-sentence="${escapeHtml(claim.sentence)}">${icon("check", { size: 16 })}<span><b>Antigravity says criterion ${claim.number} is met.</b> ${escapeHtml(criterion.text)}</span><button type="button" class="secondary-button small" data-prove>Review completion claim</button><button type="button" class="text-button" data-dismiss-claim>Not yet</button></div>`
               : "";
           return `<div class="stream-agent"><span class="stream-avatar" aria-hidden="true">AG</span><div class="stream-body"><div class="stream-who"><b>Antigravity</b></div>${renderProse(b.item.text ?? "", escapeHtml)}</div></div>${suggest}`;
         }

@@ -113,8 +113,7 @@ fn git(project: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = crate::exec::git(project).ok_or("could not prepare read-only git")?;
     crate::exec::git_text(crate::exec::read_output(
         command
-            .env("GIT_LITERAL_PATHSPECS", "1")
-            .args(["-c", "core.quotepath=off"])
+            .args(["--literal-pathspecs", "-c", "core.quotepath=off"])
             .args(args),
     ))
 }
@@ -211,21 +210,20 @@ pub(crate) fn file_diff(project: &Path, path: &str) -> Result<FileDiff, String> 
         return Ok(diff);
     }
 
-    // A rename is listed as "old -> new"; Git needs both paths to show it as one change.
-    let paths: Vec<&str> = match path.split_once(" -> ") {
-        Some((from, to)) => vec![from, to],
+    // Porcelain status supplies the source separately, so each path stays literal.
+    let paths: Vec<&str> = match change.previous_path.as_deref() {
+        Some(from) => vec![from, path],
         None => vec![path],
     };
-    let mut args = vec![
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "-M",
-        "-U3",
-        "HEAD",
-        "--",
-    ];
+    let copied = change.code.contains('C');
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv"];
+    if copied {
+        // The copy source may also have unrelated changes. Show only the destination.
+        args.extend(["-C", "--diff-filter=AC"]);
+    } else {
+        args.push("-M");
+    }
+    args.extend(["-U3", "HEAD", "--"]);
     args.extend(paths);
     let text = git(project, &args)?;
     if text.len() > MAX_DIFF_BYTES {
@@ -253,7 +251,12 @@ pub(crate) fn file_diff(project: &Path, path: &str) -> Result<FileDiff, String> 
     }
     diff.hunks = hunks;
     if diff.hunks.is_empty() && diff.reason.is_none() {
-        diff.reason = Some("no line changes (a mode or permission change)".to_owned());
+        let reason = if change.previous_path.is_some() {
+            "no line changes in this rename or copy"
+        } else {
+            "no line changes (a mode or permission change)"
+        };
+        diff.reason = Some(reason.to_owned());
     }
     Ok(diff)
 }

@@ -32,6 +32,8 @@ struct Task {
     #[serde(default)]
     verb_project_id: Option<String>,
     title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec_id: Option<String>,
     brief: String,
     created_at: u128,
     events: Vec<TaskEvent>,
@@ -85,6 +87,7 @@ impl TaskAction {
 pub(crate) struct TaskSnapshot {
     pub id: String,
     pub title: String,
+    pub spec_id: Option<String>,
     pub brief: String,
     pub status: &'static str,
     pub owner: Option<String>,
@@ -121,6 +124,7 @@ pub(crate) fn snapshots_for_identity(
             TaskSnapshot {
                 id: task.id,
                 title: task.title,
+                spec_id: task.spec_id,
                 brief: task.brief,
                 status: status.label(),
                 owner: status.owner().map(str::to_owned),
@@ -158,7 +162,10 @@ pub(crate) fn append_ui_memory(project: &Path, note: &str) -> Result<String, Str
     let root = project_root(project)?;
     let _lock = lock_project(&root)?;
     let mut current = read_memory(project)?;
-    if !current.is_empty() && !current.ends_with('\n') {
+    if !current.is_empty() && !current.ends_with("\n\n") {
+        if !current.ends_with('\n') {
+            current.push('\n');
+        }
         current.push('\n');
     }
     current.push_str(note);
@@ -172,8 +179,13 @@ pub(crate) fn append_ui_memory(project: &Path, note: &str) -> Result<String, Str
     Ok("Shared project memory saved.".to_owned())
 }
 
-pub(crate) fn create_ui_task(project: &Path, title: &str, brief: &str) -> Result<String, String> {
-    create_task_record(project, title, brief)
+pub(crate) fn create_ui_task(
+    project: &Path,
+    title: &str,
+    brief: &str,
+    spec_id: Option<String>,
+) -> Result<String, String> {
+    create_task_record(project, title, brief, spec_id)
 }
 
 pub(crate) fn apply_ui_action(
@@ -381,6 +393,15 @@ pub(crate) fn shared_command(
     args: &[String],
     json_output: bool,
 ) -> Result<(), String> {
+    // This mode reads only the explicitly published projection. It never authenticates
+    // against the private session ledger or records a fetch receipt.
+    if matches!(args, [read, checkout] if read == "read" && checkout == "--checkout") {
+        if json_output {
+            return Err("Checkout context is plain text".into());
+        }
+        print!("{}", crate::hub::checkout_context(project)?);
+        return Ok(());
+    }
     // An agent can move to a subdirectory or another working directory during its conversation.
     // The project inherited from its Verb host remains the collaboration scope.
     let hosted_project = match (
@@ -396,9 +417,17 @@ pub(crate) fn shared_command(
     };
     match args {
         [action] if action == "read" => shared_read(&hosted_project, json_output),
+        [action] if action == "full" && !json_output => {
+            print!("{}", crate::hub::full_context(&hosted_project, None)?);
+            Ok(())
+        }
+        [action, id] if action == "spec" && !json_output => {
+            print!("{}", crate::hub::full_context(&hosted_project, Some(id))?);
+            Ok(())
+        }
         [action] if action == "status" => shared_status(&hosted_project, json_output),
         [action, source] if action == "publish" => shared_publish(&hosted_project, source),
-        _ => Err("usage: verb shared read|status [--json] | publish FILE".to_owned()),
+        _ => Err("usage: verb shared read [--json|--checkout] | status [--json] | full | spec SPEC-ID | publish FILE".to_owned()),
     }
 }
 
@@ -1002,11 +1031,19 @@ fn create_task(project: &Path, title: &str, brief: &str) -> Result<(), String> {
 }
 
 fn create_task_inner(project: &Path, title: &str, brief: &str) -> Result<String, String> {
-    let id = create_task_record(project, title, brief)?;
+    let id = create_task_record(project, title, brief, None)?;
     Ok(format!("Created task {id}: {}", title.trim()))
 }
 
-fn create_task_record(project: &Path, title: &str, brief: &str) -> Result<String, String> {
+fn create_task_record(
+    project: &Path,
+    title: &str,
+    brief: &str,
+    spec_id: Option<String>,
+) -> Result<String, String> {
+    if let Some(id) = spec_id.as_deref() {
+        crate::specs::find(project, id)?;
+    }
     if title.trim().is_empty() || title.len() > MAX_TITLE || title.chars().any(char::is_control) {
         return Err(format!(
             "task title must be one line and at most {MAX_TITLE} bytes"
@@ -1028,6 +1065,7 @@ fn create_task_record(project: &Path, title: &str, brief: &str) -> Result<String
         project_id: identity.anchor,
         verb_project_id: Some(identity.id),
         title: title.trim().to_owned(),
+        spec_id,
         brief: brief.to_owned(),
         created_at: now_millis(),
         events: Vec::new(),
@@ -1331,7 +1369,7 @@ pub(crate) fn memory_path(project: &Path) -> Result<PathBuf, String> {
     Ok(project_root(project)?.join("memory.md"))
 }
 
-fn lock_project(root: &Path) -> Result<File, String> {
+pub(crate) fn lock_project(root: &Path) -> Result<File, String> {
     fs::create_dir_all(root)
         .map_err(|error| format!("could not create project work store: {error}"))?;
     let lock = OpenOptions::new()

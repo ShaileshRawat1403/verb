@@ -1,4 +1,4 @@
-#view-connections {
+#settings-connections {
   max-width: 1200px;
   margin-inline: auto;
   width: 100%;
@@ -52,13 +52,13 @@
   gap: 12px;
   margin-top: 16px;
 }
-#view-connections label {
+#settings-connections label {
   display: grid;
   gap: 7px;
 }
-#view-connections input,
-#view-connections select,
-#view-connections textarea {
+#settings-connections input,
+#settings-connections select,
+#settings-connections textarea {
   width: 100%;
   min-height: 42px;
   padding: 10px;
@@ -68,12 +68,12 @@
   border-radius: 6px;
   font: inherit;
 }
-#view-connections textarea {
+#settings-connections textarea {
   min-height: 120px;
   font-family: ui-monospace, monospace;
   resize: vertical;
 }
-#view-connections pre {
+#settings-connections pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 340px;
@@ -84,7 +84,7 @@
   border-radius: 6px;
   font-size: 13px;
 }
-#view-connections summary {
+#settings-connections summary {
   cursor: pointer;
   min-height: 40px;
   padding-block: 10px;
@@ -113,7 +113,7 @@
     grid-template-columns: 1fr;
     gap: 20px;
   }
-  #view-connections pre {
+  #settings-connections pre {
     max-height: 260px;
   }
 }
@@ -123,12 +123,12 @@
   gap: 14px;
   margin-block: 16px;
 }
-#view-connections input[type="checkbox"] {
+#settings-connections input[type="checkbox"] {
   width: 20px;
   min-height: 20px;
   height: 20px;
 }
-#view-connections .connection-json-choice {
+#settings-connections .connection-json-choice {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -137,11 +137,11 @@
 }
 
 @media (max-width: 760px) {
-  #view-connections button,
-  #view-connections input:not([type="checkbox"]),
-  #view-connections select,
-  #view-connections summary,
-  #view-connections .connection-json-choice {
+  #settings-connections button,
+  #settings-connections input:not([type="checkbox"]),
+  #settings-connections select,
+  #settings-connections summary,
+  #settings-connections .connection-json-choice {
     min-height: 44px;
   }
 }

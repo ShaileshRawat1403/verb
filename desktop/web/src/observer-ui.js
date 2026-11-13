@@ -117,7 +117,7 @@ export function initObserver(deps) {
     // Terminal tabs show "Needs you" from the same signals; they are not a second watcher.
     document.dispatchEvent(
       new CustomEvent("verb:observer", {
-        detail: { enabled: state.enabled, signals: visibleSignals(), asking: state.asking ?? [] },
+        detail: { enabled: state.enabled, signals: visibleSignals(), asking: state.asking ?? [], agentAttention: state.agentAttention ?? [] },
       }),
     );
   }
