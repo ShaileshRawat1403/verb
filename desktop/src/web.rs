@@ -3196,7 +3196,7 @@ impl WebHost {
                         crate::session_context::save_note(&launcher.project, &launcher.identity.store, &session, note, files.as_deref())?;
                         return Ok(json!({"saved": true}));
                     }
-                    Ok(json!({"specId": session.assignment.spec_id, "files": files, "agent": session.display_agent(), "role": session.assignment.role}))
+                    Ok(json!({"specId": session.assignment.spec_id, "files": files, "outcome": session.assignment.reported_outcome, "agent": session.display_agent(), "role": session.assignment.role}))
                 }))
             }
             ["api", "terminals", id, "output"] if method == &Method::Get => {

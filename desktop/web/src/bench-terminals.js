@@ -115,6 +115,7 @@ export function initBenchTerminals({ $, api, ui, workbench, showDialog, closeDia
       form.reset();
       form.dataset.id = id;
       form.elements.files.value = preview.files ?? "";
+      form.elements.outcome.value = preview.outcome ?? "";
       $("#bench-note-detail").textContent = preview.files == null
         ? `Spec ${preview.specId} · Git comparison unavailable. Files you enter are reported and unverified.`
         : `Spec ${preview.specId} · Verb prefilled files from Git. Edits to that list are reported and unverified.`;

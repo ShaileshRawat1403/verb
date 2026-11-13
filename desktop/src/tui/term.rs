@@ -568,6 +568,33 @@ impl Hosted {
         pty::signal_group(self.pid, signal)
     }
 
+    fn capture_reported_outcome(&mut self) {
+        if self.session.assignment.spec_id.is_none() {
+            return;
+        }
+        let Ok(store) = crate::project::identity(&self.session.project_id) else {
+            return;
+        };
+        let settings = crate::transcript::load(&store.store);
+        if !settings.enabled {
+            self.session.assignment.reported_outcome = None;
+            return;
+        }
+        let Some(engine) = self.conversation.as_ref() else {
+            return;
+        };
+        let view = engine.view(crate::transcript::MAX_ITEMS);
+        if view.stream.generation == settings.generation {
+            self.session.assignment.reported_outcome = view
+                .items
+                .iter()
+                .rev()
+                .filter(|row| row.item.kind == "agent")
+                .filter_map(|row| row.item.text.as_deref())
+                .find_map(crate::session_context::reported_outcome);
+        }
+    }
+
     /// Closes the record out exactly as the CLI does: process ended, agent ended, state resolved
     /// from the agent's own evidence, session saved.
     pub fn finish(mut self, exit_code: i32) -> Result<Session, String> {
@@ -579,6 +606,7 @@ impl Hosted {
             }));
         }
         let _ = self.mobile.end();
+        self.capture_reported_outcome();
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
         Ok(self.session.clone())
@@ -598,6 +626,7 @@ impl Hosted {
                 "code": exit_code,
             }));
         }
+        self.capture_reported_outcome();
         crate::finish_session_quietly(&mut self.session, exit_code)?;
         self.closed = true;
         Ok(self.session.clone())

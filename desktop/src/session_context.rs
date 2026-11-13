@@ -24,6 +24,7 @@ pub(crate) struct Assignment {
     pub planning_attention: Option<PlanningAttention>,
     pub planning_handled: Option<Handled>,
     pub waiting_handled: Option<Handled>,
+    pub reported_outcome: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -76,6 +77,30 @@ pub(crate) struct Delivery {
     pub bytes: usize,
     pub omission: Option<String>,
     pub hash: String,
+}
+
+pub(crate) fn reported_outcome(text: &str) -> Option<String> {
+    let lines: Vec<_> = text.lines().collect();
+    let (index, rest) = lines.iter().enumerate().rev().find_map(|(index, line)| {
+        let line = line.trim().trim_start_matches('#').trim().trim_matches('*');
+        let (label, rest) = line.split_once(':').unwrap_or((line, ""));
+        matches!(
+            label.trim().to_ascii_lowercase().as_str(),
+            "summary" | "outcome"
+        )
+        .then_some((index, rest.trim_matches('*').trim()))
+    })?;
+    let details = std::iter::once(rest)
+        .chain(
+            lines[index + 1..]
+                .iter()
+                .copied()
+                .take_while(|line| !line.starts_with('#')),
+        )
+        .collect::<Vec<_>>()
+        .join("\n");
+    let redacted = crate::transcript::redact(details.trim());
+    (!redacted.is_empty()).then(|| redacted.chars().take(1000).collect())
 }
 
 pub(crate) fn digest(bytes: &[u8]) -> String {
@@ -432,5 +457,18 @@ mod tests {
         assert!(save_note(&project, &store, &session, draft("another outcome"), None).is_err());
         assert_eq!(fs::metadata(&path).unwrap().len(), NOTE_BYTES as u64);
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    #[test]
+    fn prefill_uses_only_explicit_reports() {
+        assert_eq!(super::reported_outcome("Working on it now."), None);
+        assert_eq!(
+            super::reported_outcome("## Summary\nUpdated the form.\n## Checks\nTests passed")
+                .as_deref(),
+            Some("Updated the form.")
+        );
     }
 }

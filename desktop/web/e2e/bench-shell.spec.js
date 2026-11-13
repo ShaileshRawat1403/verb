@@ -423,6 +423,7 @@ for (const width of [1440, 390]) {
       await page.locator("#end-session-confirm").click();
       const note = page.locator("#bench-note-dialog");
       await expect(note).toBeVisible();
+      await expect(note.getByText("Outcome (reported, unverified)", { exact: true })).toBeVisible();
       const marker = `Reviewed note ${width} ${theme}`;
       await note.locator("[name=outcome]").fill(marker);
       await shot("note");
