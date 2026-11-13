@@ -495,3 +495,29 @@
 .bench-knows-chip:first-of-type { font-family: var(--font-cond); font-weight: 600; font-size: 13.5px; color: var(--text-strong); }
 .bench-terminal-context > .text-button { padding: 3px 9px; border-radius: 7px; box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--text); font-size: .8rem; }
 .bench-terminal-context > #bench-view-delivery { margin-left: auto; box-shadow: none; color: var(--text-muted); }
+
+/* Review (slice 7b-5): a verdict card with a stamp, then checks, proof and changes. Verdict
+   words are unchanged; the stamp repeats them at a glance and is hidden from screen readers. */
+.bench-verdict { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; padding: 12px 14px; border-radius: 9px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); }
+.bench-verdict .bench-review-verdict { margin: 0; color: var(--text); font-weight: 500; line-height: 1.4; }
+.bench-verdict[data-state="done"] { background: var(--success-bg); box-shadow: inset 0 0 0 1px var(--success-line); }
+.bench-verdict[data-state="hold"] { background: var(--warning-bg); box-shadow: inset 0 0 0 1px var(--warning-line); }
+.bench-verdict[data-state="fail"] { background: var(--danger-bg); box-shadow: inset 0 0 0 1px var(--danger-line); }
+.bench-stamp[data-state="fail"] { color: var(--danger); }
+#bench-review-body h2 .bench-spec-id { color: var(--text-dim); }
+#bench-review-body h3 { font-size: .9rem; margin: 18px 0 6px; }
+.bench-proof-list { list-style: none; margin: 0; padding: 0; }
+.bench-proof-list > li { padding: 10px 0; border-top: 1px solid var(--line); }
+.bench-proof-list > li:first-child { border-top: 0; }
+.bench-criterion-number { color: var(--text-dim); font-size: 13px; margin-right: 6px; }
+.bench-proof-state { font-weight: 600; }
+.bench-proof-state[data-proof-state="accepted"] { color: var(--success); }
+.bench-proof-state[data-proof-state="pending"] { color: var(--success-text); }
+.bench-proof-state[data-proof-state="failed"] { color: var(--danger); }
+.bench-proof-state[data-proof-state="stale"] { color: var(--warning); }
+.bench-proof-state:is([data-proof-state="unproven"], [data-proof-state="unknown"]) { color: var(--text-dim); }
+/* Who observed the evidence: Verb's own observation reads solid; a report from a person or an
+   agent reads dashed, because it is reported, not verified by Verb. */
+.bench-evidence-source { display: inline-block; margin: 6px 0 2px; padding: 2px 8px; border-radius: 5px; font-size: .8rem; color: var(--text-muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.bench-evidence-source:not([data-source="observed"]) { box-shadow: none; outline: 1px dashed var(--line-strong); outline-offset: -1px; }
+.bench-failed-checks { margin: 8px 0; padding: 10px 12px; list-style: none; border-radius: 8px; background: var(--danger-bg); color: var(--danger-text); }

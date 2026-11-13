@@ -34,6 +34,15 @@ export function reviewVerdict(rows) {
   return reasons.length ? "Not ready: " + reasons.join(", ") : "Ready to ship: all checks passed, all criteria proven";
 }
 
+// The verdict keeps its exact words; the stamp beside it carries the same reading at a glance.
+// Red only for an observed failure, yellow for work still needed, dim when freshness is unknown.
+function verdictCard(verdict, failed) {
+  const [state, word] = verdict.startsWith("Ready to ship") ? ["done", "Ready"]
+    : verdict.includes("freshness unavailable") ? ["open", "Unknown"]
+      : failed ? ["fail", "On hold"] : ["hold", "On hold"];
+  return `<div class="bench-verdict" data-state="${state}"><small class="bench-stamp" data-state="${state}" aria-hidden="true">${word}</small><p class="bench-review-verdict" role="status">${verdict.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</p></div>`;
+}
+
 export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog, toast, refreshChecks }) {
   const body = $("#bench-review-body");
   let selected;
@@ -137,8 +146,8 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
       ${spec ? '<button class="secondary-button" type="button" data-bench-review-action="run">Run a check</button>' : ""}
     </section>`;
     const markup = spec ? `
-      ${verdict ? `<p class="bench-review-verdict" role="status">${esc(verdict)}</p>` : ""}
-      <h2>${esc(spec.id)} · ${esc(spec.title)}</h2>
+      ${verdict ? verdictCard(verdict, failed.length > 0) : ""}
+      <h2><span class="type-cond bench-spec-id">${esc(spec.id)}</span> · ${esc(spec.title)}</h2>
       <div class="bench-review-actions">
         <button class="primary-button" type="button" data-bench-review-action="handoff" data-role="${failedForHandoff ? "implement" : "review"}">${failedForHandoff ? "Hand fix to an agent" : "Hand off for review"}</button>
         <button class="secondary-button" type="button" data-bench-review-action="changes">Changes</button>
@@ -162,12 +171,12 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
       <section aria-labelledby="bench-proof-heading">
         <h3 id="bench-proof-heading">Criterion proof</h3>
         <ul class="bench-proof-list">${rows.map(({ criterion, record, state, label }) => `<li>
-          <small class="bench-criterion-number">Criterion ${criterion.index + 1}</small>
+          <small class="bench-criterion-number type-cond">Criterion ${criterion.index + 1}</small>
           <strong class="bench-proof-state" data-proof-state="${state}">${label}</strong>
           <div>${esc(criterion.text)}</div>
           ${criterion.done ? `<small>${state === "accepted" ? "Completion claim recorded." : "Marked complete in the spec. Proof still needed."}</small>` : ""}
           <button class="text-button" type="button" data-bench-review-action="${criterion.done ? "reopen" : "claim"}" data-claim-index="${criterion.index}">${criterion.done ? "Reopen criterion" : "Record completion claim"}</button>
-          ${record?.evidence ? `<p>${record.evidence.source === "observed" ? "Verb-observed" : record.evidence.source === "agent" ? "Agent-reported" : "Person-reported"} · ${esc(record.evidence.label || "")}</p>` : ""}
+          ${record?.evidence ? `<p class="bench-evidence-source" data-source="${esc(record.evidence.source)}">${record.evidence.source === "observed" ? "Verb-observed" : record.evidence.source === "agent" ? "Agent-reported" : "Person-reported"} · ${esc(record.evidence.label || "")}</p>` : ""}
           <button class="text-button" type="button" data-bench-review-action="report" data-criterion="${criterion.index}">Record proof</button>
           ${state === "pending" ? `<button class="text-button" type="button" data-bench-review-action="accept" data-criterion="${criterion.index}" data-evidence="${esc(record.evidence.id)}">Accept evidence</button>` : ""}
         </li>`).join("")}</ul>
