@@ -5,7 +5,7 @@ import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
 import { boardMarkup, specSignals } from "./bench-board.js";
 
-export function initBenchShell({ $, api, ui, workbench, studio, briefExists, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, refreshFiles, openTask, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
+export function initBenchShell({ $, api, ui, workbench, studio, briefExists, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, refreshFiles, openTask, openLaunch, loadInstalledAgents, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
   const app = $("#app");
   const panel = $("#bench-right-panel");
@@ -298,7 +298,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
   let reviewing;
   let reviewGeneration = 0;
   let publishingDraft = false;
-  function draftForm(button) {
+  async function draftForm(button) {
     const form = $("#bench-draft-form");
     form.reset();
     const id = button.dataset.work ?? null;
@@ -310,12 +310,18 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     form.elements.title.required = !id;
     form.querySelector("[data-draft-size]").hidden = document !== "brd" || Boolean(item?.size);
     if (item?.size) form.elements.size.value = item.size;
+    form.elements.agent.replaceChildren();
+    form.querySelector("[type=submit]").disabled = true;
+    formError(form, "");
+    showDialog("bench-draft-dialog");
+    const requestedDraft = drafting;
+    await loadInstalledAgents();
+    if (drafting !== requestedDraft || !form.closest("dialog").open) return;
     form.elements.agent.replaceChildren(...["claude", "codex", "agy", "opencode", "gemini"]
       .filter(agent => agentAvailability(ui.agentCapabilities, agent).available)
       .map(agent => new Option(agentDisplayName(agent), agent)));
     form.querySelector("[type=submit]").disabled = !form.elements.agent.options.length;
     formError(form, form.elements.agent.options.length ? "" : "No planning agent is available on this host.");
-    showDialog("bench-draft-dialog");
   }
 
   function formError(form, message) {

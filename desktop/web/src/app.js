@@ -2355,7 +2355,7 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, studio, briefExists: project.briefExists, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
+  shell = initBenchShell({ $, api, ui, workbench, studio, briefExists: project.briefExists, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, loadInstalledAgents, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
     benchTerminals?.openLaunch(id);
     updateLaunchForm();
     loadInstalledAgents();
