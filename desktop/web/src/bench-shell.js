@@ -4,6 +4,7 @@ import { agentAvailability } from "./agent-availability.js";
 import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
 import { boardMarkup, specSignals } from "./bench-board.js";
+import { createStamp, documentState, itemStations, emptyStations, miniTravelerMarkup, travelerStripMarkup } from "./traveler.js";
 
 export function initBenchShell({ $, api, ui, workbench, studio, briefExists, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, refreshFiles, openTask, openLaunch, loadInstalledAgents, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
@@ -120,7 +121,12 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
         ${spec ? specPlan(spec, item) : ""}
       </section>
       ${spec ? specExtras(spec) : ""}`
-      : '<p class="muted">Select a spec or work item from the work tree.</p>';
+      : workItems?.items.length === 0
+        ? `<section class="bench-plan-empty"><h2>No work items yet</h2>
+            <p>A work item carries one change from why it matters to shipped.</p>
+            ${travelerStripMarkup(emptyStations(), escapeHtml)}
+            <button type="button" class="secondary-button" data-bench-draft="brd">Start a work item</button></section>`
+        : '<p class="muted">Select a spec or work item from the work tree.</p>';
     const planBody = $("#bench-plan-spec");
     if (planBody._markup !== plan) {
       const expanded = new Set([...planBody.querySelectorAll("details[open]")].map(row => row.dataset.criterion));
@@ -137,8 +143,15 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     start.hidden = !spec;
     start.textContent = spec ? `Start a terminal for ${spec.id} · ${spec.title}` : "";
     start.nextElementSibling.hidden = !start.hidden;
-    const actions = start.nextElementSibling.querySelector("[data-first-run]");
-    actions.hidden = briefExists() !== false || workItems?.items.length !== 0;
+    // Shown only once the host has listed work items and there are none. The brief button appears
+    // only when the host reports no project brief.
+    const firstRun = start.nextElementSibling.querySelector("[data-first-run]");
+    firstRun.hidden = workItems?.items.length !== 0;
+    if (firstRun.hidden) return;
+    firstRun.querySelector("[data-first-run-brief]").hidden = briefExists() !== false;
+    const strip = firstRun.querySelector("[data-first-run-traveler]");
+    const markup = travelerStripMarkup(emptyStations(), escapeHtml);
+    if (strip._markup !== markup) { strip.innerHTML = markup; strip._markup = markup; }
   }
 
   function specPlan(spec, item) {
@@ -216,50 +229,9 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       <button type="button" class="secondary-button" data-bench-open-review>Open Review</button></div>`;
   }
 
-  // Stamps mark a station's state with a word. A station that becomes done while the panel is
-  // open presses its stamp in once; first renders and reduced motion stay still.
-  const stampMemory = new Map();
-  function stamp(key, state, word, attributes = "") {
-    const before = stampMemory.get(key);
-    stampMemory.set(key, state);
-    const fresh = before !== undefined && before !== "done" && state === "done";
-    return `<small class="bench-stamp" data-state="${state}"${fresh ? " data-fresh" : ""}${attributes}>${escapeHtml(word)}</small>`;
-  }
-
-  // The state of a work item's BRD or PRD, as the host reports it: content, draft and warnings.
-  function documentState(item, kind) {
-    const content = item[kind];
-    const draft = item[`${kind}Draft`];
-    const warnings = item.warnings.filter(warning => kind === "brd"
-      ? /^(?:BRD|Small BRD|Duplicate BRD)\b/.test(warning)
-      : /^(?:PRD|Small PRD|Requirement|Duplicate PRD)\b/.test(warning));
-    const word = content == null ? draft ? "Draft" : "Missing" : warnings.length ? "Warnings" : "Published";
-    return { content, draft, warnings, word, state: word === "Published" ? "done" : word === "Missing" ? "open" : "hold" };
-  }
-
-  // Five segments under a work item. Why and What are the document states. How, Proof and Ship
-  // only aggregate per-spec facts the host resolves: a segment is done when every linked spec has
-  // reached it and current when at least one has. Nothing here is inferred beyond that.
-  function miniTraveler(item, specs) {
-    const known = specs.filter(Boolean);
-    const after = stage => spec => STAGES.indexOf(spec.stage) >= STAGES.indexOf(stage);
-    const accepted = spec => {
-      const proof = workbench.summaryFor(spec)?.sdlc;
-      return Boolean(proof && !proof.error && spec.criteria.length
-        && spec.criteria.every(c => (proof.criteria ?? []).find(row => row.index === c.index)?.accepted));
-    };
-    const across = (reached, started) => !known.length ? "open"
-      : known.every(reached) ? "done" : known.some(started ?? reached) ? "current" : "open";
-    const segments = [
-      ["Why", documentState(item, "brd").state],
-      ["What", documentState(item, "prd").state],
-      ["How", across(after("verify"), () => true)],
-      ["Proof", across(accepted, after("verify"))],
-      ["Ship", across(after("ship"))],
-    ];
-    const words = { done: "done", current: "in progress", hold: "needs a decision", open: "not started" };
-    return `<span class="bench-mini" role="img" aria-label="${escapeHtml(segments.map(([name, state]) => `${name} ${words[state]}`).join(", "))}">${segments.map(([, state]) => `<i data-state="${state}"></i>`).join("")}</span>`;
-  }
+  const stamp = createStamp(escapeHtml);
+  const miniTraveler = (item, specs) =>
+    miniTravelerMarkup(itemStations(item, specs, spec => workbench.summaryFor(spec)?.sdlc), escapeHtml);
 
   function documentRow(item, kind, title) {
     const { content, warnings, word, state } = documentState(item, kind);

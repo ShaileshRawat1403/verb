@@ -1304,6 +1304,10 @@ test("sign-in is centered and a fresh project offers planning actions", async ({
   await expect(empty.getByRole("button", { name: "Open Terminal", exact: true })).toBeVisible();
   await expect(empty.getByRole("button", { name: "Write the project brief" })).toBeVisible();
   await expect(empty.getByRole("button", { name: "Start a work item" })).toBeVisible();
+  await expect(empty.getByRole("list", { name: /^Traveler: Why in progress, What not started, How not started, Proof not started, Ship not started$/ })).toBeVisible();
+  const plan = page.locator("#bench-plan-spec");
+  await expect(plan.getByRole("heading", { name: "No work items yet" })).toBeVisible();
+  await expect(plan.getByRole("list", { name: /^Traveler: Why in progress/ })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("first-run-1440.png") });
   await empty.getByRole("button", { name: "Write the project brief" }).click();
   await expect(page.locator("#brief-dialog")).toBeVisible();

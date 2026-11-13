@@ -36,7 +36,7 @@ terminal stays the hero and everything else stays quiet.
 | 4 | Terminal tab waiting flag, "This agent knows" strip | Done |
 | 5 | Review verdict, checks, changed files | Done |
 | 6 | Board as stations, Needs you as tags, no empty-state flash | Done |
-| 7 | First run with an empty traveler | |
+| 7 | First run with an empty traveler, shared traveler model | Done |
 | 8 | Phone pass at 390 px | |
 
 "Write it myself" and bulk clearing of planning reports change behaviour and follow in 7c.

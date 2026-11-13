@@ -444,10 +444,14 @@
                         Choose an agent
                       </button>
                     </div>
-                    <div class="empty-actions" data-first-run hidden>
-                      <button class="secondary-button" type="button" data-action="write-brief">Write the project brief</button>
-                      <button class="secondary-button" type="button" data-bench-draft="brd">Start a work item</button>
-                    </div>
+                    <section class="bench-first-run" data-first-run hidden aria-label="First work item">
+                      <div data-first-run-traveler></div>
+                      <p>Every change in Verb starts with why it matters, then what to build and how.</p>
+                      <div class="empty-actions">
+                        <button class="secondary-button" type="button" data-bench-draft="brd">Start a work item</button>
+                      </div>
+                      <button class="text-button" type="button" data-action="write-brief" data-first-run-brief hidden>Write the project brief</button>
+                    </section>
                     <p class="terminal-shortcuts"><kbd>Alt T</kbd> New terminal <span aria-hidden="true">·</span> <kbd>Ctrl / ⌘ K</kbd> Commands</p>
                     </div>
                   </div>

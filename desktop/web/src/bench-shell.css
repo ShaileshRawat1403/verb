@@ -311,7 +311,9 @@
   position: absolute; inset: 100% 0 auto auto; z-index: 1; white-space: nowrap;
   border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2);
 }
-.terminal-empty-default { text-align: center; }
+.terminal-empty-default { text-align: center; width: min(100%, 520px); }
+#terminal-grid .terminal-empty-default > p { margin-inline: auto; }
+.terminal-empty-default > .empty-actions { justify-content: center; }
 #bench-start-selected { max-width: 100%; white-space: normal; }
 #bench-review-body > section { margin-block: 14px; }
 #bench-review-body h2 { font-size: 1.1rem; }
@@ -574,3 +576,34 @@
 .bench-board-row > header [data-bench-archive] { font-size: .78rem; color: var(--text-dim); }
 .bench-board-row .bench-board-meta { margin: 4px 0 0; font-size: 13px; }
 .bench-board-row .bench-board-time { margin: 2px 0 0; }
+
+/* Traveler strip: the five stations in a row, for a project with no work items yet. Open stations sit
+   under a dashed rail; the next station is solid ink. It reuses the stamp, so states read the same
+   everywhere the traveler appears. */
+.bench-strip {
+  list-style: none; margin: 0; padding: 0; width: min(100%, 440px);
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px;
+}
+.bench-strip > li {
+  display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0;
+  padding-top: 10px; border-top: 2px dashed var(--line-strong);
+}
+.bench-strip > li[data-state="current"] { border-top-style: solid; border-top-color: var(--text-strong); }
+.bench-strip > li[data-state="done"] { border-top-style: solid; border-top-color: var(--success); }
+.bench-strip .type-cond { font-size: 15px; color: var(--text-strong); }
+.bench-strip > li[data-state="open"] .type-cond { color: var(--text-muted); }
+.bench-strip-doc { min-height: 1.4em; font-size: 11px; line-height: 1.4; color: var(--text-dim); }
+.bench-strip .bench-stamp { margin-top: 4px; }
+
+.bench-first-run {
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  margin: 28px auto 0; padding-top: 22px; border-top: 1px solid var(--line); width: min(100%, 460px);
+}
+.terminal-empty .bench-first-run > p { margin: 0; max-width: 340px; font-size: 13px; }
+.bench-first-run .empty-actions { margin: 0; }
+.bench-first-run [data-first-run-traveler] { align-self: stretch; display: flex; justify-content: center; }
+.bench-first-run [data-first-run-brief] { font-size: 13px; }
+
+.bench-plan-empty { display: grid; gap: 14px; justify-items: start; }
+.bench-plan-empty h2 { margin: 0; }
+.bench-plan-empty p { margin: 0; color: var(--text-muted); }
