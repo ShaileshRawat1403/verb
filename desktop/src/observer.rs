@@ -186,21 +186,7 @@ pub(crate) fn asking(terminals: &[TerminalFacts]) -> Vec<String> {
 pub(crate) fn agent_attention(screen: &str, idle_secs: u64) -> Option<&'static str> {
     let recent = tail(screen, 14);
     let lines: Vec<_> = recent.lines().map(str::trim).collect();
-    let error = lines.iter().rev().take(6).any(|line| {
-        let line = line
-            .trim_start_matches(['✕', '⎿', '•', ' '])
-            .to_ascii_lowercase();
-        [
-            "api error:",
-            "api request failed:",
-            "model error:",
-            "error: model ",
-            "error: api ",
-        ]
-        .iter()
-        .any(|prefix| line.starts_with(prefix))
-    });
-    if error {
+    if agent_error(screen) {
         return Some("agent-error");
     }
     let prompt = lines
@@ -216,6 +202,24 @@ pub(crate) fn agent_attention(screen: &str, idle_secs: u64) -> Option<&'static s
         return Some("agent-question");
     }
     None
+}
+
+pub(crate) fn agent_error(screen: &str) -> bool {
+    tail(screen, 6).lines().any(|line| {
+        let line = line
+            .trim()
+            .trim_start_matches(['✕', '⎿', '•', ' '])
+            .to_ascii_lowercase();
+        [
+            "api error:",
+            "api request failed:",
+            "model error:",
+            "error: model ",
+            "error: api ",
+        ]
+        .iter()
+        .any(|prefix| line.starts_with(prefix))
+    })
 }
 
 pub(crate) fn evaluate(terminals: &[TerminalFacts], muted: &[String]) -> Vec<Signal> {

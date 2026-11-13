@@ -32,7 +32,23 @@ test.beforeAll(async () => {
   const bin = join(fixture, "bin");
   mkdirSync(bin);
   writeFileSync(join(bin, "agy"), "#!/bin/sh\nprintf '%s\\n' '{}'\n", { mode: 0o755 });
-  writeFileSync(join(bin, "claude"), "#!/bin/sh\nprintf '\\033[?2004hAgent ready\\n'\nexec cat\n", { mode: 0o755 });
+  writeFileSync(join(bin, "claude"), String.raw`#!/bin/sh
+case "$*" in
+  *fixture-question*) printf 'Which users should this serve?\n❯\n' ;;
+  *fixture-error*) printf 'API Error: fixture rate limit\n❯\n'; sleep 1; exit 1 ;;
+  *fixture-summary*|*"Review sample 097"*)
+    conversation=49b965f2-2838-4452-999a-0aee9676a890
+    project=$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')
+    mkdir -p "$HOME/.claude/projects/$project" "$HOME/.claude/sessions"
+    printf '{"pid":%s,"sessionId":"%s","cwd":"%s","status":"idle"}\n' "$$" "$conversation" "$PWD" > "$HOME/.claude/sessions/$$.json"
+    printf '%s\n' '{"type":"assistant","sessionId":"49b965f2-2838-4452-999a-0aee9676a890","uuid":"89b965f2-2838-4452-999a-0aee9676a890","message":{"content":[{"type":"text","text":"## Summary\nUpdated the sign-in form."}]}}' > "$HOME/.claude/projects/$project/$conversation.jsonl"
+    printf 'Summary ready\n'
+    ;;
+
+  *) printf '\033[?2004hAgent ready\n' ;;
+esac
+exec cat
+`, { mode: 0o755 });
   writeFileSync(join(project, "specs/099-legacy.md"),
     "---\nid: 099\ntitle: Legacy sample\nstage: plan\n---\n## Acceptance criteria\n- [ ] A legacy criterion\n");
   writeFileSync(join(bin, "codex"), String.raw`#!/bin/sh
@@ -1176,7 +1192,7 @@ test("Plan links a legacy spec and creates a spec from its work item", async ({ 
 
 test("planning agent can draft a PRD using the prompt example", async ({ page }) => {
   await page.goto(`${origin}/#${token}`);
-  await page.locator('[data-bench-work="001-bench-consolidation"]').click();
+  await page.locator('#bench-work-tree [data-bench-work="001-bench-consolidation"]').click();
   const row = page.locator("#bench-plan-spec .bench-documents > li").nth(1);
   await row.locator("summary").click();
   await row.getByRole("button", { name: "Redraft with agent" }).click();
@@ -1194,10 +1210,10 @@ test("planning agent can draft a PRD using the prompt example", async ({ page })
 });
 
 test("proof sends uncommitted work to commit review and restores the form", async ({ page }) => {
+  writeFileSync(join(fixture, "Bench workspace/proof-commit-fixture.txt"), "Uncommitted implementation");
   await page.goto(`${origin}/#${token}`);
-  await page.keyboard.press("ControlOrMeta+k");
-  await page.locator("#palette-input").fill("Open spec 097");
-  await page.keyboard.press("Enter");
+  await page.locator('[data-bench-group="unlinked"] summary').click();
+  await page.locator('[data-bench-spec="097"]').click();
   await page.getByRole("tab", { name: "Review", exact: true }).click();
   await page.locator(".bench-proof-list").getByRole("button", { name: "Record proof", exact: true }).first().click();
   const dialog = page.locator("#sdlc-dialog");
@@ -1208,6 +1224,7 @@ test("proof sends uncommitted work to commit review and restores the form", asyn
   await page.keyboard.press("Escape");
   await expect(dialog).toBeVisible();
   await expect(dialog.locator("#sdlc-text")).toHaveValue("Evidence details to preserve");
+  rmSync(join(fixture, "Bench workspace/proof-commit-fixture.txt"));
 });
 
 test("Plan starts a terminal with the unlinked spec selected", async ({ page, request }) => {
@@ -1227,15 +1244,10 @@ test("Plan starts a terminal with the unlinked spec selected", async ({ page, re
 
 test("Needs you shows observed agent questions and provider errors", async ({ page, request }) => {
   const headers = { "X-Verb-Token": token };
-  const launch = await request.post(`${origin}/api/terminals`, { headers, data: { agent: "claude", args: [] } });
-  expect(launch.ok()).toBeTruthy();
-  const { sessionId } = await launch.json();
-  await page.route("**/api/observer", route => route.fulfill({ json: {
-    enabled: false, signals: [], asking: [], agentAttention: [
-      { terminal: sessionId, kind: "agent-question" },
-      { terminal: sessionId, kind: "agent-error" },
-    ],
-  } }));
+  for (const marker of ["fixture-question", "fixture-error"]) {
+    const launch = await request.post(`${origin}/api/terminals`, { headers, data: { agent: "claude", args: [marker] } });
+    expect(launch.ok()).toBeTruthy();
+  }
   await page.goto(`${origin}/?view=needs-you#${token}`);
   await expect(page.locator("#bench-needs-list")).toContainText("Waiting for you");
   await expect(page.locator("#bench-needs-list")).toContainText("API or model error");
@@ -1249,7 +1261,7 @@ test("Plan publishes a small BRD with open questions without a format warning", 
   expect(response.ok()).toBeTruthy();
   const { id } = await response.json();
   await page.goto(`${origin}/#${token}`);
-  await page.locator(`[data-bench-work="${id}"]`).click();
+  await page.locator(`#bench-work-tree [data-bench-work="${id}"]`).click();
   await expect(page.locator("#bench-plan-spec .bench-documents > li").first()).toContainText("Published");
 });
 
@@ -1257,10 +1269,12 @@ test("sign-in is centered and a fresh project offers planning actions", async ({
   await page.goto(origin);
   const locked = page.locator(".locked");
   await expect(locked).toBeVisible();
-  expect((await locked.boundingBox()).width).toBe(1440);
+  const box = await locked.boundingBox();
+  expect(box.width).toBeGreaterThan(1400);
+  expect(box.x + box.width / 2).toBeCloseTo(720, 0);
   await page.screenshot({ path: test.info().outputPath("sign-in-1440.png") });
   await page.route("**/api/work-items", route => route.fulfill({ json: { items: [], unlinkedSpecs: [], warnings: [] } }));
-  await page.goto(`${origin}/#${token}`);
+  await page.goto(`${origin}/?view=sessions#${token}`);
   const empty = page.locator(".terminal-empty");
   await expect(empty.getByRole("button", { name: "Open Terminal", exact: true })).toBeVisible();
   await expect(empty.getByRole("button", { name: "Write the project brief" })).toBeVisible();
@@ -1271,4 +1285,28 @@ test("sign-in is centered and a fresh project offers planning actions", async ({
   await page.keyboard.press("Escape");
   await empty.getByRole("button", { name: "Start a work item" }).click();
   await expect(page.locator("#bench-draft-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(empty.getByRole("button", { name: "Start a work item" })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("first-run-390.png") });
+});
+
+test("session note prefills the agent’s final reported summary", async ({ page, request }) => {
+  const headers = { "X-Verb-Token": token };
+  const enabled = await request.post(`${origin}/api/stream`, { headers, data: { enabled: true } });
+  expect(enabled.ok()).toBeTruthy();
+  const launch = await request.post(`${origin}/api/specs/097/agent`, { headers, data: {
+    agent: "claude", role: "implement",
+  } });
+  expect(launch.ok(), await launch.text()).toBeTruthy();
+  const { sessionId } = await launch.json();
+  await page.goto(`${origin}/#${token}`);
+  await expect.poll(async () => {
+    const response = await request.get(`${origin}/api/terminals/${sessionId}/conversation`, { headers });
+    return JSON.stringify(await response.json());
+  }).toContain("Updated the sign-in form.");
+  await page.locator("#bench-terminal-menu summary").click();
+  await page.getByRole("button", { name: "End session", exact: true }).click();
+  await page.locator("#end-session-confirm").click();
+  await expect(page.locator("#bench-note-dialog [name=outcome]")).toHaveValue("Updated the sign-in form.");
 });

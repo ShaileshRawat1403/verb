@@ -191,7 +191,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
 
   function renderNeeds() {
     const waits = hostedSessions().filter(session => ui.waitingTerminals.has(session.id));
-    const agentErrors = hostedSessions().filter(session => ui.agentErrors.has(session.id));
+    const agentErrors = (ui.state?.sessions ?? []).filter(session => ui.agentErrors.has(session.id));
     const planning = (ui.state?.sessions ?? []).filter(session => session.planningAttention);
     const receiptFor = (session, kind) => session[`${kind}Handled`] ?? handled.get(`${kind}:${session.id}`);
     const specs = workbench.current().specs;
@@ -226,7 +226,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     };
     const errors = agentErrors.map(session => `<section class="bench-needs-entry">
       <h3>${escapeHtml(agentDisplayName(session.agent))} · API or model error</h3>
-      <p>Verb saw an error on the terminal screen. Clears when it leaves the recent screen output or the session ends.</p>
+      <p>Verb saw an error on the terminal screen. Clears when the error leaves the recent screen output or you close the terminal output.</p>
       <button type="button" class="secondary-button" data-bench-open-session="${escapeHtml(session.id)}">Open session</button>
       </section>`).join("");
     const entries = waits.map(session => sessionEntry(session, "waiting")).join("") + errors + specEntries;

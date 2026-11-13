@@ -336,6 +336,7 @@ struct WebTerminal {
     next: u64,
     buffered: usize,
     final_screen: Vec<u8>,
+    ended_agent_error: bool,
     exit_seen_at: Option<Instant>,
     /// Exit status once the process has ended, kept for the launch acknowledgement.
     exit_code: Option<i32>,
@@ -365,6 +366,7 @@ impl WebTerminal {
             next: 0,
             buffered: 0,
             final_screen: Vec::new(),
+            ended_agent_error: false,
             exit_seen_at: None,
             exit_code: None,
             launch_delivery: None,
@@ -445,6 +447,11 @@ impl WebTerminal {
                 || seen.elapsed() >= Duration::from_secs(2)
             {
                 let hosted = self.hosted.take().ok_or("terminal host disappeared")?;
+                self.ended_agent_error =
+                    !matches!(
+                        hosted.session.agent.as_ref(),
+                        None | Some(Agent::Shell) | Some(Agent::Custom(_))
+                    ) && crate::observer::agent_error(&hosted.screen().contents());
                 self.final_screen = hosted.screen().contents_formatted();
                 hosted.finish(code)?;
             }
@@ -2257,13 +2264,16 @@ impl WebHost {
                 }
                 crate::observer::save(&store, &settings)?;
             }
-            // Facts are gathered for every terminal, but only one thing is reported without the
-            // observer: which agents are explicitly asking permission ("Needs you" on their tab).
-            // That is the agent addressing the person, not Verb watching; every other signal still
-            // needs the observer turned on.
-            let owned: Vec<_> = {
+            // Needs you gets visible agent questions and errors even with the optional observer
+            // off. The observer's other terminal heuristics still require the observer setting.
+            let (owned, mut agent_attention) = {
                 let terminals = self.terminals.lock().unwrap();
-                terminals
+                let ended: Vec<_> = terminals
+                    .iter()
+                    .filter(|(_, terminal)| terminal.ended_agent_error)
+                    .map(|(id, _)| json!({"terminal": id, "kind": "agent-error"}))
+                    .collect();
+                let live: Vec<_> = terminals
                     .iter()
                     .filter_map(|(id, terminal)| {
                         let hosted = terminal.hosted.as_ref()?;
@@ -2289,7 +2299,8 @@ impl WebHost {
                             failures,
                         ))
                     })
-                    .collect()
+                    .collect();
+                (live, ended)
             };
             let facts: Vec<crate::observer::TerminalFacts> = owned
                 .iter()
@@ -2305,14 +2316,15 @@ impl WebHost {
                 })
                 .collect();
             let asking = crate::observer::asking(&facts);
-            let agent_attention: Vec<_> = facts
-                .iter()
-                .filter(|fact| fact.is_agent)
-                .filter_map(|fact| {
-                    let kind = crate::observer::agent_attention(fact.screen, fact.idle_secs)?;
-                    Some(json!({"terminal": fact.id, "kind": kind}))
-                })
-                .collect();
+            agent_attention.extend(
+                facts
+                    .iter()
+                    .filter(|fact| fact.is_agent)
+                    .filter_map(|fact| {
+                        let kind = crate::observer::agent_attention(fact.screen, fact.idle_secs)?;
+                        Some(json!({"terminal": fact.id, "kind": kind}))
+                    }),
+            );
             let signals = if settings.enabled {
                 crate::observer::evaluate(&facts, &settings.muted)
             } else {
@@ -3196,7 +3208,9 @@ impl WebHost {
                         crate::session_context::save_note(&launcher.project, &launcher.identity.store, &session, note, files.as_deref())?;
                         return Ok(json!({"saved": true}));
                     }
-                    Ok(json!({"specId": session.assignment.spec_id, "files": files, "outcome": session.assignment.reported_outcome, "agent": session.display_agent(), "role": session.assignment.role}))
+                    let outcome = crate::transcript::load(&launcher.identity.store).enabled
+                        .then_some(session.assignment.reported_outcome.as_deref()).flatten();
+                    Ok(json!({"specId": session.assignment.spec_id, "files": files, "outcome": outcome, "agent": session.display_agent(), "role": session.assignment.role}))
                 }))
             }
             ["api", "terminals", id, "output"] if method == &Method::Get => {
@@ -4493,6 +4507,7 @@ mod tests {
             next: 0,
             buffered: 0,
             final_screen: Vec::new(),
+            ended_agent_error: false,
             exit_seen_at: None,
             exit_code,
             launch_delivery: None,
@@ -4685,6 +4700,7 @@ mod tests {
             next: 0,
             buffered: 0,
             final_screen: b"last screen".to_vec(),
+            ended_agent_error: false,
             exit_seen_at: None,
             exit_code: None,
             launch_delivery: None,

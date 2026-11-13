@@ -1345,7 +1345,7 @@ function renderTerminalTabs() {
   if (strip._revealedTerminal !== ui.focusedTerminal && strip.clientWidth) {
     strip._revealedTerminal = ui.focusedTerminal;
     const active = strip.querySelector('[aria-selected="true"]');
-    if (active && matchMedia("(max-width: 760px)").matches) {
+    if (active) {
       const bounds = strip.getBoundingClientRect();
       const tab = active.getBoundingClientRect();
       if (tab.right > bounds.right) strip.scrollLeft += Math.ceil(tab.right - bounds.right);
