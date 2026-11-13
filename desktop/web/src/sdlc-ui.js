@@ -33,7 +33,7 @@ export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDial
   function open(action, evidenceId, index, prefill) {
     if (running || !spec || (action !== "claim" && (!flow || flow.error))) return;
     pendingSpecId = spec.id;
-    pending = { action, expectedRevision: spec.revision, expectedVersion: flow?.version, expectedContext: flow?.context, ...(evidenceId ? { evidenceId } : {}) };
+    pending = { action, expectedRevision: action === "claim" ? spec.revision : flow.specRevision, expectedVersion: flow?.version, expectedContext: flow?.context, ...(evidenceId ? { evidenceId } : {}) };
     const criterion = `<label for="sdlc-criterion">Criterion this evidence supports</label><select id="sdlc-criterion" name="criterion">${(flow?.criteria ?? []).map(c => `<option value="${c.index}">${esc(c.text)}</option>`).join("")}</select>`;
     const result = '<label for="sdlc-result">Reported result</label><select id="sdlc-result" name="result"><option value="passed">Passed</option><option value="failed">Failed</option><option value="inconclusive">Inconclusive</option></select>';
     const target = '<label for="sdlc-target">Device, environment or release target</label><input id="sdlc-target" name="target" maxlength="200" placeholder="e.g. phone server / staging" />';

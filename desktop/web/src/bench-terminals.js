@@ -18,7 +18,7 @@ export function initBenchTerminals({ $, api, ui, workbench, showDialog, closeDia
       : session.role === "plan" ? `Work item ${session.workItemId}` : "Scratch";
     const deliveryLabel = delivered?.specId && delivered.specId !== session.specId ? `Delivered for spec ${delivered.specId}` : "Delivered";
     $("#bench-terminal-context-summary").textContent = delivered
-      ? `${assignment} · ${deliveryLabel} · ${delivered.requirements.join(", ") || "no requirement IDs"} · ${delivered.noteCount} ${delivered.noteCount === 1 ? "note" : "notes"}`
+      ? `${assignment} · ${deliveryLabel} · ${delivered.requirements.join(", ") || "no requirement IDs delivered"} · ${delivered.noteCount} ${delivered.noteCount === 1 ? "note" : "notes"}`
       : `${assignment} · No recorded context delivery`;
     $("#bench-view-delivery").hidden = !owner() || !delivered;
     $("#bench-resend-context").hidden = !owner() || ended || !session.specId || !terminal || session.agent === "shell";

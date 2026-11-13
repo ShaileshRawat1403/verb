@@ -189,6 +189,14 @@ pub(crate) fn agent_attention(screen: &str, idle_secs: u64) -> Option<&'static s
     if agent_error(screen) {
         return Some("agent-error");
     }
+    let controls = lines.join(" ").to_lowercase();
+    if idle_secs >= PERMISSION_AFTER_SECS
+        && controls.contains("enter to select")
+        && controls.contains("to navigate")
+        && controls.contains("esc to cancel")
+    {
+        return Some("agent-question");
+    }
     let prompt = lines
         .iter()
         .rposition(|line| matches!(*line, "❯" | "›" | ">"))?;

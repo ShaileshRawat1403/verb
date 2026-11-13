@@ -34,7 +34,7 @@ test.beforeAll(async () => {
   writeFileSync(join(bin, "agy"), "#!/bin/sh\nprintf '%s\\n' '{}'\n", { mode: 0o755 });
   writeFileSync(join(bin, "claude"), String.raw`#!/bin/sh
 case "$*" in
-  *fixture-question*) printf 'Which users should this serve?\n❯\n' ;;
+  *fixture-question*) printf 'Enter to select · ↑/↓ to navigate · Esc to cancel\n' ;;
   *fixture-error*) printf 'API Error: fixture rate limit\n❯\n'; sleep 1; exit 1 ;;
   *fixture-summary*|*"Review sample 097"*)
     conversation=49b965f2-2838-4452-999a-0aee9676a890
@@ -1210,6 +1210,9 @@ test("planning agent can draft a PRD using the prompt example", async ({ page })
 });
 
 test("proof sends uncommitted work to commit review and restores the form", async ({ page }) => {
+  const project = join(fixture, "Bench workspace");
+  execFileSync("git", ["-C", project, "config", "user.name", "Fixture"]);
+  execFileSync("git", ["-C", project, "config", "user.email", "fixture@example.invalid"]);
   writeFileSync(join(fixture, "Bench workspace/proof-commit-fixture.txt"), "Uncommitted implementation");
   await page.goto(`${origin}/#${token}`);
   await page.locator('[data-bench-group="unlinked"] summary').click();
@@ -1221,10 +1224,14 @@ test("proof sends uncommitted work to commit review and restores the form", asyn
   await dialog.locator("#sdlc-text").fill("Evidence details to preserve");
   await dialog.getByRole("button", { name: "Commit changes", exact: true }).click();
   await expect(page.locator("#commit-dialog")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await page.locator("#commit-dialog-submit").click();
   await expect(dialog).toBeVisible();
   await expect(dialog.locator("#sdlc-text")).toHaveValue("Evidence details to preserve");
-  rmSync(join(fixture, "Bench workspace/proof-commit-fixture.txt"));
+  const saved = page.waitForResponse(response =>
+    response.url().endsWith("/api/specs/097/sdlc") && response.request().method() === "POST");
+  await dialog.locator("#sdlc-submit").click();
+  expect((await saved).ok()).toBeTruthy();
+  await expect(dialog).toBeHidden();
 });
 
 test("Plan starts a terminal with the unlinked spec selected", async ({ page, request }) => {
@@ -1249,7 +1256,8 @@ test("Needs you shows observed agent questions and provider errors", async ({ pa
     expect(launch.ok()).toBeTruthy();
   }
   await page.goto(`${origin}/?view=needs-you#${token}`);
-  await expect(page.locator("#bench-needs-list")).toContainText("Waiting for you");
+  const waiting = page.locator("#bench-needs-list .bench-needs-entry").filter({ hasText: "Waiting for you" });
+  await expect(waiting.getByRole("button", { name: "Open session" })).toBeVisible();
   await expect(page.locator("#bench-needs-list")).toContainText("API or model error");
 });
 
