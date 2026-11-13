@@ -15,6 +15,8 @@ import { SearchAddon } from "@xterm/addon-search";
 import { ImageAddon } from "@xterm/addon-image";
 import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
+import "./fonts.css";
+import "./tap-targets.css";
 import "./style.css";
 import "./workbench.css";
 import "./motion.css";
@@ -126,8 +128,9 @@ const emptyTerminalTemplate = $("#terminal-grid .terminal-empty").cloneNode(
 $("#app").classList.toggle("navigation-collapsed", ui.navigationCollapsed);
 
 document.addEventListener("verb:observer", (event) => {
-  const { enabled, signals, asking, agentAttention } = event.detail;
+  const { enabled, signals, asking, agentAttention, read } = event.detail;
   ui.observerOn = enabled;
+  ui.observerRead = read;
   ui.waitingTerminals = new Set([
     ...asking,
     ...agentAttention.filter(signal => signal.kind === "agent-question").map(signal => signal.terminal),
@@ -1316,7 +1319,7 @@ function renderTerminalTabs() {
       const shortAgent = terminal.agent === "claude" ? "Claude" : terminal.agent === "agy" ? "AGY" : agent;
       const title = `${agent} ${assignment}: ${status.words}`;
       const details = session?.specId
-        ? `<span class="bench-tab-spec-prefix">Spec </span>${escapeHtml(session.specId)}${role ? ` · ${escapeHtml(role)}` : ""}`
+        ? `<span class="bench-tab-spec-prefix">Spec </span><span class="type-cond bench-tab-spec">${escapeHtml(session.specId)}</span>${role ? ` · ${escapeHtml(role)}` : ""}`
         : escapeHtml(assignment);
       return `<button type="button" role="tab" class="terminal-tab" data-tab-terminal="${escapeHtml(id)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"><i class="tab-dot" data-tone="${status.tone}" aria-hidden="true"></i><span class="bench-tab-agent">${escapeHtml(agent)}</span><span class="bench-tab-short-agent">${escapeHtml(shortAgent)}</span><small>${details}</small>${status.tone === "waiting" ? '<em class="tab-needs">Needs you</em>' : ""}</button>`;
     })

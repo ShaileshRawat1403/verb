@@ -4,12 +4,7 @@
    boxes. Only what needs your eyes gets a surface: a dialog, the terminal, the one primary action. */
 
 :root {
-  font-family:
-    Inter,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--font-ui);
   font-feature-settings: "cv11", "ss01", "ss03", "calt" 1;
   -webkit-font-smoothing: antialiased;
   background: var(--canvas);
@@ -119,7 +114,7 @@ kbd,
   color: var(--on-accent);
   display: grid;
   place-items: center;
-  font: 600 13px/1 Inter, -apple-system, sans-serif;
+  font: 600 13px/1 var(--font-ui);
 }
 .workspace-head .project-copy {
   display: grid;
@@ -290,7 +285,7 @@ kbd,
 }
 .git-changes {
   color: var(--text-dim);
-  font-family: Inter, -apple-system, sans-serif;
+  font-family: var(--font-ui);
 }
 .ask-button .icon,
 .observer-eye,
@@ -348,6 +343,11 @@ kbd {
   white-space: nowrap;
   box-shadow: none;
   transform: none;
+}
+/* On touch, the base buttons meet the 40 px floor from tap-targets.css. Rules loaded later, such as
+   the chat's 44 px send button, can still go larger. */
+@media (pointer: coarse) {
+  .primary-button, .secondary-button, .danger-button, .subtle-button { min-height: 40px; }
 }
 .primary-button {
   background: var(--accent);
@@ -1283,7 +1283,7 @@ select:focus-visible,
   justify-content: flex-end;
   gap: 4px;
   padding-left: 18px;
-  font: 500 11px/1 Inter, -apple-system, sans-serif;
+  font: 500 11px/1 var(--font-ui);
   color: var(--text-faint);
   background: linear-gradient(to right, transparent, var(--term-bg) 16px);
   white-space: nowrap;
@@ -1299,7 +1299,7 @@ select:focus-visible,
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--line-strong);
   color: var(--text-muted);
-  font: 500 11px/1 Inter, -apple-system, sans-serif;
+  font: 500 11px/1 var(--font-ui);
   cursor: pointer;
 }
 .cmd-meta button:hover {
@@ -1802,7 +1802,7 @@ select:focus-visible,
   outline: none;
   background: transparent;
   color: var(--text-strong);
-  font: 14.5px/1.5 Inter, -apple-system, sans-serif;
+  font: 14.5px/1.5 var(--font-ui);
   min-height: 24px;
   max-height: 160px;
   padding: 0;

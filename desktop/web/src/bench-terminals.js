@@ -17,9 +17,33 @@ export function initBenchTerminals({ $, api, ui, workbench, showDialog, closeDia
     const assignment = session.specId ? `Spec ${session.specId}`
       : session.role === "plan" ? `Work item ${session.workItemId}` : "Scratch";
     const deliveryLabel = delivered?.specId && delivered.specId !== session.specId ? `Delivered for spec ${delivered.specId}` : "Delivered";
-    $("#bench-terminal-context-summary").textContent = delivered
-      ? `${assignment} · ${deliveryLabel} · ${delivered.requirements.join(", ") || "no requirement IDs delivered"} · ${delivered.noteCount} ${delivered.noteCount === 1 ? "note" : "notes"}`
-      : `${assignment} · No recorded context delivery`;
+    // What the agent was given, as chips. Hidden separators keep the plain-text reading
+    // ("Spec 001 · Delivered · R1, R2 · 1 note") for screen readers and copy.
+    const parts = delivered
+      ? [assignment, deliveryLabel, delivered.requirements.join(", ") || "no requirement IDs delivered",
+        `${delivered.noteCount} ${delivered.noteCount === 1 ? "note" : "notes"}`]
+      : [assignment, "No recorded context delivery"];
+    const summary = $("#bench-terminal-context-summary");
+    const nodes = [];
+    if (delivered) {
+      const label = document.createElement("b");
+      label.className = "bench-knows-label";
+      label.textContent = "This agent knows";
+      nodes.push(label, document.createTextNode(" "));
+    }
+    parts.forEach((part, index) => {
+      if (index) {
+        const separator = document.createElement("span");
+        separator.className = "visually-hidden";
+        separator.textContent = " · ";
+        nodes.push(separator);
+      }
+      const chip = document.createElement("span");
+      chip.className = "bench-knows-chip";
+      chip.textContent = part;
+      nodes.push(chip);
+    });
+    summary.replaceChildren(...nodes);
     $("#bench-view-delivery").hidden = !owner() || !delivered;
     $("#bench-resend-context").hidden = !owner() || ended || !session.specId || !terminal || session.agent === "shell";
     $("#bench-handoff").hidden = !owner() || !session.specId;

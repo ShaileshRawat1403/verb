@@ -2123,6 +2123,34 @@ fn host_identifies_running_executable_after_atomic_file_replacement() {
 }
 
 #[test]
+fn interface_fonts_are_served_locally_as_woff2() {
+    let server = WebServer::start();
+    for name in [
+        "barlow-400",
+        "barlow-500",
+        "barlow-600",
+        "barlow-condensed-600",
+        "barlow-condensed-700",
+    ] {
+        let path = format!("/fonts/{name}.woff2");
+        let (status, headers, body) =
+            server.request_with_headers_full("GET", &path, None, false, "");
+        assert_eq!(status, 200, "{path}");
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("content-type: font/woff2"),
+            "{path}: {headers}"
+        );
+        assert_eq!(&body[..4], b"wOF2", "{path} is not WOFF2");
+    }
+    let (status, headers, _) =
+        server.request_with_headers_full("GET", "/fonts/unknown.woff2", None, false, "");
+    assert_ne!(status, 200);
+    assert!(!headers.to_ascii_lowercase().contains("font/woff2"));
+}
+
+#[test]
 fn readiness_is_minimal_without_granting_api_access() {
     let server = WebServer::start();
     let (status, body) = server.request("GET", "/healthz", None, false);

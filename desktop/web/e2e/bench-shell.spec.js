@@ -160,6 +160,14 @@ for (const width of [1440, 390]) {
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
       await expect(panel.getByRole("heading", { name: /Terminal-first Shell/ })).toBeVisible();
+      if (!mobile) {
+        // The work tree fits the sidebar: no row is wider than it, so focusing a spec cannot
+        // scroll the navigation sideways and clip "Work" or "New spec". (On a phone the
+        // navigation overlay closes once a spec is chosen.)
+        expect(await nav.evaluate(node => ({ left: node.scrollLeft, over: node.scrollWidth - node.clientWidth })))
+          .toEqual({ left: 0, over: 0 });
+        await expect(group.locator(".bench-mini")).toHaveAttribute("aria-label", /^Why done, What done, How /);
+      }
       await expect(panel.locator(".bench-documents > li > div")).toHaveText(["Why (BRD)Published", "What (PRD)Published"]);
       await shot("plan");
       for (const [label, file] of [["Why (BRD)", "brd.md"], ["What (PRD)", "prd.md"]]) {
@@ -670,6 +678,13 @@ for (const width of [1440, 390]) {
       await shot("stage-warning");
       await page.locator("#stage-dialog-submit").click();
       await expect(stage).toHaveValue("ship");
+      // A stage move is not proof: gates warn and record but do not block, so the traveler
+      // reaches Ship while Proof stays open until every criterion has accepted proof.
+      const traveler = page.locator("#bench-plan-spec .bench-traveler");
+      await expect(traveler.locator('[data-station="ship"]')).toHaveAttribute("data-state", "done");
+      await expect(traveler.locator('[data-station="proof"]')).not.toHaveAttribute("data-state", "done");
+      await expect(traveler.locator('[data-station="proof"] .bench-stamp')).not.toHaveText("Accepted");
+      await expect(traveler.locator('[data-station="ship"]')).toContainText("Spec stage is Ship with proof still open.");
 
       const ledger = `${origin}/api/specs/${id}/sdlc`;
       const spec = `${origin}/api/specs/${id}`;
@@ -1289,6 +1304,10 @@ test("sign-in is centered and a fresh project offers planning actions", async ({
   await expect(empty.getByRole("button", { name: "Open Terminal", exact: true })).toBeVisible();
   await expect(empty.getByRole("button", { name: "Write the project brief" })).toBeVisible();
   await expect(empty.getByRole("button", { name: "Start a work item" })).toBeVisible();
+  await expect(empty.getByRole("list", { name: /^Traveler: Why in progress, What not started, How not started, Proof not started, Ship not started$/ })).toBeVisible();
+  const plan = page.locator("#bench-plan-spec");
+  await expect(plan.getByRole("heading", { name: "No work items yet" })).toBeVisible();
+  await expect(plan.getByRole("list", { name: /^Traveler: Why in progress/ })).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("first-run-1440.png") });
   await empty.getByRole("button", { name: "Write the project brief" }).click();
   await expect(page.locator("#brief-dialog")).toBeVisible();
@@ -1332,4 +1351,52 @@ test("Files and Preview share the file list while the host is busy", async ({ pa
   await page.goto(`${origin}/?view=project#${token}`);
   await expect(page.locator('#file-tree [data-dir="specs"]')).toBeVisible();
   expect(requests).toBe(2);
+});
+
+// WCAG 2.2 asks for targets of at least 24 by 24 px. On a touch screen Verb aims for 40 px, about the
+// width of a thumb pad. This walks the main phone screens with touch on and lists every visible
+// control under that size, so a new screen cannot quietly bring back small targets.
+test("phone screens keep every control large enough to tap", async ({ browser }) => {
+  test.setTimeout(90_000);
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const TOUCH = 40;
+  const tooSmall = () => page.evaluate(min => [...document.querySelectorAll("button, a[href], select, summary, input, [role=tab]")]
+    .map(el => el.matches("input[type=checkbox], input[type=radio]") && el.closest("label") ? el.closest("label") : el)
+    .filter(el => {
+      if (el.closest(".xterm, .terminal-mount, dialog:not([open])")) return false;
+      const box = el.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== "hidden";
+    })
+    .filter(el => { const box = el.getBoundingClientRect(); return box.height < min - 0.5 || box.width < min - 0.5; })
+    .map(el => { const box = el.getBoundingClientRect(); return `${Math.round(box.width)}x${Math.round(box.height)} ${(el.getAttribute("aria-label") || el.textContent).trim().replace(/\s+/g, " ").slice(0, 40)}`; }), TOUCH);
+  const found = {};
+  try {
+    await page.goto(`${origin}/#${token}`);
+    await expect(page.locator("#quick-terminal-empty")).toBeVisible();
+    found.terminals = await tooSmall();
+    await page.locator("#bench-toggle-navigation").click();
+    const group = page.locator('[data-bench-group="001-bench-consolidation"]');
+    await group.locator("summary").click({ position: { x: 6, y: 8 } });
+    await expect(group.locator('[data-bench-spec="006"]')).toBeVisible();
+    found.navigation = await tooSmall();
+    await group.locator('[data-bench-spec="006"]').click();
+    await expect(page.locator("#bench-plan-spec .bench-station").first()).toBeVisible();
+    found.plan = await tooSmall();
+    await page.getByRole("tab", { name: "Review", exact: true }).click();
+    await expect(page.locator("#bench-review-body h2")).toBeVisible();
+    found.review = await tooSmall();
+    await page.keyboard.press("Escape");
+    await page.locator("#bench-toggle-navigation").click();
+    await page.locator('[data-view="bench-board"]').click();
+    await expect(page.locator(".bench-board-row").first()).toBeVisible();
+    found.board = await tooSmall();
+    await page.locator("#bench-toggle-navigation").click();
+    await page.locator('[data-view="needs-you"]').click();
+    await expect(page.locator("#bench-needs-list")).toBeVisible();
+    found.needs = await tooSmall();
+  } finally {
+    await context.close();
+  }
+  expect(found).toEqual({ terminals: [], navigation: [], plan: [], review: [], board: [], needs: [] });
 });

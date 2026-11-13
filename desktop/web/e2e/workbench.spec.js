@@ -226,6 +226,30 @@ test("reduced motion preserves an immediate terminal surface", async ({ page }) 
   await (await terminalAction(page, "Close terminal output")).click();
 });
 
+// Found in CI: the first-run row appeared while a click was landing on Open Terminal, the centred
+// block moved up, and the click fell between the buttons. Rows that arrive late must not move it.
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
+  test(`late first-run actions do not move Open Terminal at ${viewport.width} px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route("**/api/work-items", async (route) => { await held; await route.continue(); });
+    await page.goto(url);
+    const open = page.locator("#quick-terminal-empty");
+    const settled = async () => {
+      await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
+      return open.boundingBox();
+    };
+    await expect(open).toBeVisible();
+    const before = await settled();
+    release();
+    await expect(page.locator("#terminal-grid [data-first-run]")).toBeVisible();
+    const after = await settled();
+    expect(Math.abs(after.y - before.y)).toBeLessThan(1);
+    expect(Math.abs(after.x - before.x)).toBeLessThan(1);
+  });
+}
+
 test("a late polling failure cannot overwrite a connected stream", async ({ page }) => {
   let releasePoll;
   let pollStarted;

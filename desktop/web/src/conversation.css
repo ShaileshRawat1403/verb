@@ -379,7 +379,7 @@
   display: inline-block;
   padding: 1px 6px;
   border-radius: 4px;
-  font: 600 10px/1.5 Inter, -apple-system, sans-serif;
+  font: 600 10px/1.5 var(--font-ui);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   background: var(--accent-bg);
@@ -398,7 +398,7 @@
   outline: none;
   background: transparent;
   color: var(--text-strong);
-  font: 14.5px/1.5 Inter, -apple-system, sans-serif;
+  font: 14.5px/1.5 var(--font-ui);
   min-height: 44px;
   max-height: 180px;
   padding: 4px 0;

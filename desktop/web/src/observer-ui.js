@@ -111,13 +111,15 @@ export function initObserver(deps) {
     <button class="text-button" type="button" data-observer="disable">Turn the observer off</button>`;
   }
 
+  // Whether the host's terminal signals have been read yet: "pending", "read" or "failed".
+  let readState = "pending";
   function render() {
     renderPill();
     if ($("#observer-panel").open) renderPanel();
     // Terminal tabs show "Needs you" from the same signals; they are not a second watcher.
     document.dispatchEvent(
       new CustomEvent("verb:observer", {
-        detail: { enabled: state.enabled, signals: visibleSignals(), asking: state.asking ?? [], agentAttention: state.agentAttention ?? [] },
+        detail: { enabled: state.enabled, signals: visibleSignals(), asking: state.asking ?? [], agentAttention: state.agentAttention ?? [], read: readState },
       }),
     );
   }
@@ -125,7 +127,13 @@ export function initObserver(deps) {
   async function refresh() {
     try {
       state = await api("GET", "/api/observer");
+      readState = "read";
     } catch {
+      // Say so instead of letting an empty list read as "nothing waiting".
+      if (readState !== "read") {
+        readState = "failed";
+        render();
+      }
       return;
     }
     render();

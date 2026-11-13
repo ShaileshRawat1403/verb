@@ -65,7 +65,7 @@ export function boardRows(items, specs, signals, summaries) {
   return { rows, unlinked };
 }
 
-export function boardMarkup({ data, specs, signals, summaries, workTitle, showArchived, error, owner, esc }) {
+export function boardMarkup({ data, specs, signals, summaries, workTitle, showArchived, error, owner, esc, documents = () => [] }) {
   if (error) return `<p role="alert">${esc(error)}</p><button class="secondary-button" type="button" data-bench-retry>Retry</button>`;
   if (!data) return '<p role="status">Loading work items…</p>';
   const { rows, unlinked } = boardRows(data.items, specs, signals, summaries);
@@ -75,9 +75,12 @@ export function boardMarkup({ data, specs, signals, summaries, workTitle, showAr
       return `<section class="bench-board-row" data-board-item="${esc(item.id)}">
         <header><h2><button class="text-button" type="button" data-bench-work="${esc(item.id)}">${esc(workTitle(item))}</button></h2>
           ${owner ? `<button class="text-button" type="button" data-bench-archive="${esc(item.id)}" data-archive-value="${!archived}">${archived ? "Unarchive" : "Archive"}</button>` : ""}</header>
-        <p>${[item.size ? title(item.size) : "Size unavailable", archived ? "Archived" : state, needs ? "Needs you" : ""].filter(Boolean).join(" · ")}</p>
-        <p>${latest ? `Last change <time datetime="${new Date(latest).toISOString()}">${esc(new Date(latest).toLocaleString())}</time>` : "No spec activity recorded"}</p>
-        <dl class="bench-stage-counts">${STAGES.map(stage => `<div><dt>${title(stage)}</dt><dd>${counts[stage]}</dd></div>`).join("")}</dl>
+        <p class="bench-board-meta">${[item.size ? title(item.size) : "Size unavailable", archived ? "Archived" : state, needs ? "Needs you" : ""].filter(Boolean).join(" · ")}</p>
+        <p class="bench-board-time">${latest ? `Last change <time datetime="${new Date(latest).toISOString()}">${esc(new Date(latest).toLocaleString())}</time>` : "No spec activity recorded"}</p>
+        <div class="bench-board-track">
+          ${documents(item).map(doc => `<span class="bench-board-doc" data-state="${doc.state}"><span>${esc(doc.name)}</span><small class="bench-stamp" data-state="${doc.state}">${esc(doc.word)}</small></span>`).join("")}
+          <dl class="bench-stage-counts">${STAGES.map(stage => `<div data-count="${counts[stage]}"><dt>${title(stage)}</dt><dd>${counts[stage]}</dd></div>`).join("")}</dl>
+        </div>
       </section>`;
     }).join("") + `<details class="bench-board-row" data-board-unlinked><summary>Unlinked (${unlinked.length})</summary><p>Open an unlinked spec from the Work sidebar.</p></details>`;
 }
