@@ -64,6 +64,9 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
   const workTitle = item => item.brd?.match(/^#{1,6}[ 	]+(.+?)\s*#*\s*$/m)?.[1]?.replace(/\s+BRD$/i, "").trim()
     || item.id.replace(/^\d+-/, "").replaceAll("-", " ").replace(/^./, letter => letter.toUpperCase());
 
+  const STAGES = ["spec", "plan", "build", "verify", "review", "ship"];
+  const stageLabel = stage => stage[0].toUpperCase() + stage.slice(1);
+
   function render() {
     const { specs, error, loaded } = workbench.current();
     if (selectedId === null && !selectedWork && terminalId) {
@@ -108,9 +111,15 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     const item = workItems?.items.find(item => item.id === (selectedWork ?? spec?.work_item));
     renderTerminalEmpty(spec);
     reviewTab.render(spec ?? null);
-    const plan = spec || item ? `<h2>${escapeHtml(spec ? `${spec.id} · ${spec.title}` : item.id)}</h2>
-      ${item ? `<ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}</ul>` : '<p class="muted">No work item is linked.</p>'}
-      ${spec ? specPlan(spec, item) : ""}`
+    const plan = spec || item ? `${spec && item ? `<p class="bench-crumb">${escapeHtml(workTitle(item))}</p>` : ""}
+      <h2>${spec ? `<span class="type-cond bench-spec-id">${escapeHtml(spec.id)}</span> ${escapeHtml(spec.title)}` : escapeHtml(item.id)}</h2>
+      ${spec ? nextStep(spec) : ""}
+      <section class="bench-traveler" aria-label="Traveler">
+        <p class="bench-traveler-head"><span class="type-cond">Traveler</span>${item?.size ? `<span>${escapeHtml(stageLabel(item.size))} work item</span>` : ""}</p>
+        ${item ? `<ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}</ul>` : '<p class="muted bench-traveler-note">No work item is linked.</p>'}
+        ${spec ? specPlan(spec, item) : ""}
+      </section>
+      ${spec ? specExtras(spec) : ""}`
       : '<p class="muted">Select a spec or work item from the work tree.</p>';
     const planBody = $("#bench-plan-spec");
     if (planBody._markup !== plan) {
@@ -134,13 +143,24 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
 
   function specPlan(spec, item) {
     const links = item?.specs.find(row => row.id === spec.id)?.criteria ?? [];
-    const tasks = (ui.state?.tasks ?? []).filter(task => task.specId === spec.id);
     const proof = workbench.summaryFor(spec)?.sdlc;
     const evidence = proof?.criteria ?? [];
-    return `<h3><button class="text-button" type="button" data-bench-document="${escapeHtml(spec.file)}">How (Spec)</button> <span class="bench-spec-stage">${escapeHtml(spec.stage)}</span></h3>
-      <label>Stage <select data-bench-stage aria-label="Stage for spec ${escapeHtml(spec.id)}">${["spec", "plan", "build", "verify", "review", "ship"].map(stage => `<option value="${stage}"${stage === spec.stage ? " selected" : ""}>${stage[0].toUpperCase() + stage.slice(1)}</option>`).join("")}</select></label>
+    const stageIndex = STAGES.indexOf(spec.stage);
+    const howState = stageIndex > STAGES.indexOf("build") ? "done" : "current";
+    const accepted = evidence.filter(row => row.accepted).length;
+    const proofLine = proof?.error ? "Proof unavailable" : !proof ? "Checking proof…"
+      : `${accepted} of ${spec.criteria.length} ${spec.criteria.length === 1 ? "criterion has" : "criteria have"} accepted proof`;
+    // Proof is done only when every criterion has accepted proof; the spec stage never implies it,
+    // because gates warn and record but do not block a stage move.
+    const allAccepted = Boolean(proof && !proof.error && spec.criteria.length && accepted === spec.criteria.length);
+    const proofState = allAccepted ? "done" : ["verify", "review", "ship"].includes(spec.stage) ? "current" : "open";
+    const shipState = spec.stage === "ship" ? "done" : "open";
+    return `<div class="bench-station" data-station="how" data-state="${howState}">
+      <div class="bench-station-row"><h3><button class="text-button" type="button" data-bench-document="${escapeHtml(spec.file)}">How (Spec)</button></h3>
+        ${stamp(`how:${spec.id}`, howState, howState === "done" ? "Done" : stageLabel(spec.stage))}</div>
+      <label class="bench-stage-picker">Stage <select data-bench-stage aria-label="Stage for spec ${escapeHtml(spec.id)}">${STAGES.map(stage => `<option value="${stage}"${stage === spec.stage ? " selected" : ""}>${stageLabel(stage)}</option>`).join("")}</select></label>
       ${!spec.work_item && linkableWorkItems().length ? '<button type="button" class="secondary-button" data-bench-link>Link to work item</button>' : ""}
-      <h3>Done when</h3><ul class="bench-criteria">${spec.criteria.map(criterion => {
+      <h3 class="bench-done-when">Done when</h3><ul class="bench-criteria">${spec.criteria.map(criterion => {
         const link = links.find(row => row.number === criterion.index + 1);
         const result = evidence.find(row => row.index === criterion.index);
         const refs = link?.requirements ?? [];
@@ -158,14 +178,52 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
         const state = result?.accepted ? "Proof accepted" : result?.freshness === "stale" ? "Stale proof" :
           result?.result === "failed" ? "Check failed" : result?.recorded ? "Proof recorded" :
             proof?.error ? "Proof unavailable" : !proof ? "Checking proof…" : "No proof recorded";
-        return `<li><span>${escapeHtml(criterion.text)}</span>
-          <small>${criterion.done ? "Marked complete" : "Open"} · ${state}</small>
+        const tone = result?.accepted ? "pass" : result?.result === "failed" ? "fail"
+          : result?.freshness === "stale" ? "hold" : "none";
+        return `<li data-proof="${tone}"><span>${escapeHtml(criterion.text)}</span>
+          <small>${criterion.done ? "Marked complete" : "Open"} · <span class="bench-proof-word">${state}</span></small>
           ${link?.stale ? '<small role="status">Stale traceability link</small>' : ""}
-          ${trace ? `<details data-criterion="${spec.id}:${criterion.index}"><summary>${labels}</summary><ul>${trace}</ul></details>` : '<small class="muted">No requirement linked</small>'}</li>`;
+          ${trace ? `<details data-criterion="${spec.id}:${criterion.index}"><summary class="type-cond">${labels}</summary><ul>${trace}</ul></details>` : '<small class="muted">No requirement linked</small>'}</li>`;
       }).join("")}</ul>
-      <h3>Spec tasks</h3>${tasks.length ? `<ul>${tasks.map(task => `<li>${escapeHtml(task.title)} · ${escapeHtml(task.status)}</li>`).join("")}</ul>` : '<p class="muted">No tasks linked to this spec.</p>'}
+    </div>
+    <div class="bench-station" data-station="proof" data-state="${proofState}">
+      <div class="bench-station-row"><h3>Proof</h3>${stamp(`proof:${spec.id}`, proofState, proofState === "done" ? "Accepted" : proof && !proof.error && proofState === "current" ? `${accepted} of ${spec.criteria.length}` : "Open")}</div>
+      <small class="bench-station-note">${escapeHtml(proofLine)}</small>
+    </div>
+    <div class="bench-station" data-station="ship" data-state="${shipState}">
+      <div class="bench-station-row"><h3>Ship</h3>${stamp(`ship:${spec.id}`, shipState, shipState === "done" ? "Ship" : "Open")}</div>
+      <small class="bench-station-note">${shipState !== "done" ? "Reached when the spec stage is Ship." : allAccepted ? "Spec stage is Ship." : "Spec stage is Ship with proof still open."}</small>
+    </div>`;
+  }
+
+  function specExtras(spec) {
+    const tasks = (ui.state?.tasks ?? []).filter(task => task.specId === spec.id);
+    return `<h3>Spec tasks</h3>${tasks.length ? `<ul>${tasks.map(task => `<li>${escapeHtml(task.title)} · ${escapeHtml(task.status)}</li>`).join("")}</ul>` : '<p class="muted">No tasks linked to this spec.</p>'}
       <button type="button" class="secondary-button" data-bench-task>New spec task</button>
       ${openSessions(spec).length ? "" : '<button type="button" class="secondary-button" data-bench-start>Start terminal</button>'}`;
+  }
+
+  // One obvious next action, only where the host has already resolved the facts behind it:
+  // a spec past planning whose criteria still lack accepted proof. Drafting has its own buttons.
+  function nextStep(spec) {
+    if (!["build", "verify", "review"].includes(spec.stage)) return "";
+    const proof = workbench.summaryFor(spec)?.sdlc;
+    if (!proof || proof.error) return "";
+    const open = spec.criteria.filter(criterion => !(proof.criteria ?? []).find(row => row.index === criterion.index)?.accepted);
+    if (!open.length) return "";
+    const first = open[0];
+    return `<div class="bench-next" role="note"><p>Record proof for criterion ${first.index + 1}<span>${open.length} of ${spec.criteria.length} ${spec.criteria.length === 1 ? "criterion has" : "criteria have"} no accepted proof yet.</span></p>
+      <button type="button" class="secondary-button" data-bench-open-review>Open Review</button></div>`;
+  }
+
+  // Stamps mark a station's state with a word. A station that becomes done while the panel is
+  // open presses its stamp in once; first renders and reduced motion stay still.
+  const stampMemory = new Map();
+  function stamp(key, state, word, attributes = "") {
+    const before = stampMemory.get(key);
+    stampMemory.set(key, state);
+    const fresh = before !== undefined && before !== "done" && state === "done";
+    return `<small class="bench-stamp" data-state="${state}"${fresh ? " data-fresh" : ""}${attributes}>${escapeHtml(word)}</small>`;
   }
 
   function documentRow(item, kind, title) {
@@ -181,8 +239,11 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     const draftAction = !canDraft ? "" : content == null && !draft
       ? draftButton(`Draft ${name} with agent`)
       : `<details class="bench-document-menu"><summary aria-label="${name} actions" title="${name} actions">⋯</summary>${draftButton(content == null ? "Continue draft with agent" : "Redraft with agent")}</details>`;
-    return `<li><div>${actions}<small title="${escapeHtml(warnings.join("\n"))}">${content == null ? draft ? "Draft" : "Missing" : warnings.length ? "Warnings" : "Published"}</small></div>
+    const word = content == null ? draft ? "Draft" : "Missing" : warnings.length ? "Warnings" : "Published";
+    const state = word === "Published" ? "done" : word === "Missing" ? "open" : "hold";
+    return `<li data-state="${state}"><div>${actions}${stamp(`${kind}:${item.id}`, state, word, ` title="${escapeHtml(warnings.join("\n"))}"`)}</div>
       ${draftAction}
+      ${content != null && warnings.length ? `<p class="bench-doc-warnings">${warnings.map(escapeHtml).join("<br>")}</p>` : ""}
       ${draft ? `<button type="button" class="text-button" data-bench-review-draft="${kind}" data-work="${escapeHtml(item.id)}">Review ${name} draft</button>` : ""}</li>`;
   }
 
@@ -568,6 +629,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       return;
     }
     if (target.closest("[data-bench-task]")) return openTask(selectedId);
+    if (target.closest("[data-bench-open-review]")) return selectTab("review");
     const spec = target.closest("[data-bench-spec]");
     if (spec) return focusSpec(spec.dataset.benchSpec);
     const tab = target.closest("[data-bench-tab]");
