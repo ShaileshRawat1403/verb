@@ -147,7 +147,7 @@ export function initBenchReview({ $, api, workbench, escapeHtml: esc, showDialog
     </section>`;
     const markup = spec ? `
       ${verdict ? verdictCard(verdict, failed.length > 0) : ""}
-      <h2><span class="type-cond bench-spec-id">${esc(spec.id)}</span> · ${esc(spec.title)}</h2>
+      <h2><span class="type-cond bench-spec-id">${esc(spec.id)}</span> ${esc(spec.title)}</h2>
       <div class="bench-review-actions">
         <button class="primary-button" type="button" data-bench-review-action="handoff" data-role="${failedForHandoff ? "implement" : "review"}">${failedForHandoff ? "Hand fix to an agent" : "Hand off for review"}</button>
         <button class="secondary-button" type="button" data-bench-review-action="changes">Changes</button>

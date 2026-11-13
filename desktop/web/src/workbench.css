@@ -344,6 +344,11 @@ kbd {
   box-shadow: none;
   transform: none;
 }
+/* On touch, the base buttons meet the 40 px floor from tap-targets.css. Rules loaded later, such as
+   the chat's 44 px send button, can still go larger. */
+@media (pointer: coarse) {
+  .primary-button, .secondary-button, .danger-button, .subtle-button { min-height: 40px; }
+}
 .primary-button {
   background: var(--accent);
   color: var(--on-accent);

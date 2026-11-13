@@ -1352,3 +1352,51 @@ test("Files and Preview share the file list while the host is busy", async ({ pa
   await expect(page.locator('#file-tree [data-dir="specs"]')).toBeVisible();
   expect(requests).toBe(2);
 });
+
+// WCAG 2.2 asks for targets of at least 24 by 24 px. On a touch screen Verb aims for 40 px, about the
+// width of a thumb pad. This walks the main phone screens with touch on and lists every visible
+// control under that size, so a new screen cannot quietly bring back small targets.
+test("phone screens keep every control large enough to tap", async ({ browser }) => {
+  test.setTimeout(90_000);
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const page = await context.newPage();
+  const TOUCH = 40;
+  const tooSmall = () => page.evaluate(min => [...document.querySelectorAll("button, a[href], select, summary, input, [role=tab]")]
+    .map(el => el.matches("input[type=checkbox], input[type=radio]") && el.closest("label") ? el.closest("label") : el)
+    .filter(el => {
+      if (el.closest(".xterm, .terminal-mount, dialog:not([open])")) return false;
+      const box = el.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== "hidden";
+    })
+    .filter(el => { const box = el.getBoundingClientRect(); return box.height < min - 0.5 || box.width < min - 0.5; })
+    .map(el => { const box = el.getBoundingClientRect(); return `${Math.round(box.width)}x${Math.round(box.height)} ${(el.getAttribute("aria-label") || el.textContent).trim().replace(/\s+/g, " ").slice(0, 40)}`; }), TOUCH);
+  const found = {};
+  try {
+    await page.goto(`${origin}/#${token}`);
+    await expect(page.locator("#quick-terminal-empty")).toBeVisible();
+    found.terminals = await tooSmall();
+    await page.locator("#bench-toggle-navigation").click();
+    const group = page.locator('[data-bench-group="001-bench-consolidation"]');
+    await group.locator("summary").click({ position: { x: 6, y: 8 } });
+    await expect(group.locator('[data-bench-spec="006"]')).toBeVisible();
+    found.navigation = await tooSmall();
+    await group.locator('[data-bench-spec="006"]').click();
+    await expect(page.locator("#bench-plan-spec .bench-station").first()).toBeVisible();
+    found.plan = await tooSmall();
+    await page.getByRole("tab", { name: "Review", exact: true }).click();
+    await expect(page.locator("#bench-review-body h2")).toBeVisible();
+    found.review = await tooSmall();
+    await page.keyboard.press("Escape");
+    await page.locator("#bench-toggle-navigation").click();
+    await page.locator('[data-view="bench-board"]').click();
+    await expect(page.locator(".bench-board-row").first()).toBeVisible();
+    found.board = await tooSmall();
+    await page.locator("#bench-toggle-navigation").click();
+    await page.locator('[data-view="needs-you"]').click();
+    await expect(page.locator("#bench-needs-list")).toBeVisible();
+    found.needs = await tooSmall();
+  } finally {
+    await context.close();
+  }
+  expect(found).toEqual({ terminals: [], navigation: [], plan: [], review: [], board: [], needs: [] });
+});

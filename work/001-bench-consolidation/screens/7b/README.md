@@ -37,6 +37,6 @@ terminal stays the hero and everything else stays quiet.
 | 5 | Review verdict, checks, changed files | Done |
 | 6 | Board as stations, Needs you as tags, no empty-state flash | Done |
 | 7 | First run with an empty traveler, shared traveler model | Done |
-| 8 | Phone pass at 390 px | |
+| 8 | Phone pass: tap targets (24 px, 40 px on touch) with a guard test | Done |
 
 "Write it myself" and bulk clearing of planning reports change behaviour and follow in 7c.
