@@ -412,7 +412,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       const result = await api("POST", path, { expectedRevision: draft.publishedRevision,
         draftRevision: draft.revision, acceptStale: form.elements.acceptStale.checked });
       closeDialog("bench-draft-review-dialog");
-      toast([ "Published.", ...(result.warnings ?? []), result.draftNotice ].filter(Boolean).join("\n"));
+      toast([ "Published.", ...(result.warnings ?? []), result.draftNotice, result.publicationNotice ].filter(Boolean).join("\n"));
       await refresh();
     }).finally(() => {
       publishingDraft = false;

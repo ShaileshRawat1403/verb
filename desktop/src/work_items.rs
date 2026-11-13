@@ -830,6 +830,19 @@ pub(crate) fn publish_draft(
         actor,
         &identity,
     )?;
+    if let Some(revision) = result["revision"].as_str() {
+        let path = format!("work/{id}/{}", document.name());
+        if let Err(error) = crate::session_context::record_draft_publication(
+            &identity.store,
+            &project,
+            &path,
+            revision,
+        ) {
+            result["publicationNotice"] = serde_json::json!(format!(
+                "Published, but could not record the write for planning reports: {error}"
+            ));
+        }
+    }
     // Recheck the draft because a terminal can edit it outside the project lock.
     match document_at(&dir, document.draft_name()) {
         Ok(Some(current)) if revision(&current) == draft.revision => {

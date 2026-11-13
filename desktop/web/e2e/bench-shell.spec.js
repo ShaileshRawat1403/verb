@@ -35,6 +35,8 @@ test.beforeAll(async () => {
   writeFileSync(join(bin, "claude"), String.raw`#!/bin/sh
 case "$*" in
   *fixture-question*) printf 'Enter to select · ↑/↓ to navigate · Esc to cancel\n' ;;
+  *fixture-gemini-question*) printf 'Enter to select · ←/→ to switch questions\n' ;;
+  *fixture-codex-question*) printf '←/→ to navigate questions · Esc to interrupt\n' ;;
   *fixture-error*) printf 'API Error: fixture rate limit\n❯\n'; sleep 1; exit 1 ;;
   *fixture-summary*|*"Review sample 097"*)
     conversation=49b965f2-2838-4452-999a-0aee9676a890
@@ -1251,13 +1253,13 @@ test("Plan starts a terminal with the unlinked spec selected", async ({ page, re
 
 test("Needs you shows observed agent questions and provider errors", async ({ page, request }) => {
   const headers = { "X-Verb-Token": token };
-  for (const marker of ["fixture-question", "fixture-error"]) {
+  for (const marker of ["fixture-question", "fixture-gemini-question", "fixture-codex-question", "fixture-error"]) {
     const launch = await request.post(`${origin}/api/terminals`, { headers, data: { agent: "claude", args: [marker] } });
     expect(launch.ok()).toBeTruthy();
   }
   await page.goto(`${origin}/?view=needs-you#${token}`);
   const waiting = page.locator("#bench-needs-list .bench-needs-entry").filter({ hasText: "Waiting for you" });
-  await expect(waiting.getByRole("button", { name: "Open session" })).toBeVisible();
+  await expect(waiting.getByRole("button", { name: "Open session" })).toHaveCount(3);
   await expect(page.locator("#bench-needs-list")).toContainText("API or model error");
 });
 

@@ -40,8 +40,45 @@ pub(crate) struct Handled {
     pub at: String,
 }
 
+fn publication_receipt(store: &Path, project: &Path, path: &str) -> PathBuf {
+    let key = digest(format!("{}\0{path}", project.display()).as_bytes());
+    store.join("planning-publications").join(key)
+}
+
+pub(crate) fn record_draft_publication(
+    store: &Path,
+    project: &Path,
+    path: &str,
+    revision: &str,
+) -> Result<(), String> {
+    let receipt = publication_receipt(store, project, path);
+    let data = format!("{}\n{revision}", crate::now_millis());
+    crate::fsutil::atomic_write(&receipt, data.as_bytes())
+}
+
+fn is_draft_publication(session: &crate::Session, path: &str) -> bool {
+    let Ok(project) = session.project_id.canonicalize() else {
+        return false;
+    };
+    let Ok(identity) = crate::project::identity(&project) else {
+        return false;
+    };
+    let Ok(receipt) = fs::read_to_string(publication_receipt(&identity.store, &project, path))
+    else {
+        return false;
+    };
+    let Some((at, revision)) = receipt.split_once('\n') else {
+        return false;
+    };
+    at.parse::<u128>().is_ok_and(|at| at > session.created_at)
+        && read(&project.join(path), 200 * 1024)
+            .ok()
+            .flatten()
+            .is_some_and(|text| digest(text.as_bytes()) == revision)
+}
+
 pub(crate) fn check_planning_changes(session: &mut crate::Session) {
-    let assignment = &mut session.assignment;
+    let assignment = &session.assignment;
     let Some(draft) = &assignment.draft_path else {
         return;
     };
@@ -49,9 +86,12 @@ pub(crate) fn check_planning_changes(session: &mut crate::Session) {
         .git_start
         .as_ref()
         .and_then(|start| start.changed_paths(&session.project_id));
-    assignment.planning_attention = match changed {
+    session.assignment.planning_attention = match changed {
         Some(mut paths) => {
-            paths.retain(|path| path != draft);
+            let published = draft.replace(".draft.md", ".md");
+            paths.retain(|path| {
+                path != draft && (path != &published || !is_draft_publication(session, path))
+            });
             (!paths.is_empty()).then_some(PlanningAttention {
                 paths,
                 unavailable: false,
@@ -409,6 +449,25 @@ impl GitState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_receipt_matches_only_the_published_bytes() {
+        let root = std::env::temp_dir().join(format!("verb-publication-{}", crate::new_id()));
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let project = project.canonicalize().unwrap();
+        let identity = crate::project::identity(&project).unwrap();
+        let mut session = crate::Session::new(project.clone(), crate::Agent::Claude);
+        session.created_at = 0;
+        let path = "prd.md";
+        fs::write(project.join(path), "published").unwrap();
+        assert!(!is_draft_publication(&session, path));
+        record_draft_publication(&identity.store, &project, path, &digest(b"published")).unwrap();
+        assert!(is_draft_publication(&session, path));
+        fs::write(project.join(path), "changed by agent").unwrap();
+        assert!(!is_draft_publication(&session, path));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn preserves_notes_at_the_cap_and_reads_latest_first() {
