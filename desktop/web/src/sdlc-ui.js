@@ -1,6 +1,6 @@
 import { readWithBusyRetry } from "./read-retry.js";
 
-export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDialog, current, replaceSpec, changed }) {
+export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDialog, current, replaceSpec, changed, openCommit }) {
   let spec = null, flow = null, pending = null, running = false, generation = 0, pendingSpecId = null;
   function status(message, id = pendingSpecId) {
     $("#sdlc-dialog-status").textContent = message;
@@ -52,9 +52,32 @@ export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDial
     if (action === "review") { title = "Record an implementation review"; fields = `<label for="sdlc-decision">Decision</label><select id="sdlc-decision" name="decision"><option value="changes_requested">Changes requested</option><option value="approved"${flow.accepted !== flow.total || !flow.total ? " disabled" : ""}>Approve this implementation and evidence</option></select>` + text("What did you review and what risks remain?", "text"); }
     if (action === "delivery") { title = "Record a manual delivery report"; fields = '<p>This is your report, not an independently observed deployment. It does not run a deployment or health probe.</p><label for="sdlc-milestone">Milestone</label><select id="sdlc-milestone" name="milestone"><option value="artifact">Release artifact</option><option value="deployment">Deployment</option><option value="health">Health after deployment</option></select>' + target + result + text("Release / deployment / health-check reference", "text"); }
     if (action === "remote") { title = "Check the linked remote"; fields = '<p>This contacts the linked Git remote, fetches its branch information and records whether the current implementation is present there. It does not upload work or change your files.</p>'; submit = "Check remote"; }
+    const commitRequired = action === "report" && flow.source?.clean === false;
+    if (commitRequired) {
+      fields = '<div class="warning-box"><p>Commit code changes before recording proof.</p><button type="button" class="secondary-button" id="sdlc-open-commit">Commit changes</button></div>' + fields;
+    }
     $("#sdlc-dialog-title").textContent = title;
     $("#sdlc-fields").innerHTML = fields;
     $("#sdlc-submit").textContent = submit;
+    $("#sdlc-submit").disabled = commitRequired;
+    $("#sdlc-open-commit")?.addEventListener("click", async () => {
+      const draft = new FormData($("#sdlc-form"));
+      const id = pendingSpecId;
+      closeDialog("sdlc-dialog");
+      $("#commit-dialog").addEventListener("close", async () => {
+        try {
+          await changed();
+          if (current()?.id !== id) return;
+          await refresh(current());
+          if (!flow || flow.error || current()?.id !== id) throw new Error("Could not refresh proof after commit review.");
+          open("report");
+          for (const [key, value] of draft) $("#sdlc-form").elements[key].value = value;
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      }, { once: true });
+      await openCommit();
+    });
     $("#sdlc-dialog-error").hidden = true;
     $("#sdlc-dialog-status").textContent = "";
     if (action === "plan" && flow.plan) { $("#sdlc-text").value = flow.plan.label; $("#sdlc-goal").value = flow.goal || ""; }
@@ -78,7 +101,7 @@ export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDial
     $("#sdlc-fields").querySelector("textarea,select,input")?.focus();
   }
   $("#sdlc-form").addEventListener("submit", async event => {
-    event.preventDefault(); if (!pending || running) return;
+    event.preventDefault(); if (!pending || running || $("#sdlc-submit").disabled) return;
     const id = pendingSpecId, request = { ...pending, ...Object.fromEntries(new FormData(event.target)) };
     if (request.criterion != null) request.criterion = Number(request.criterion);
     running = true; $("#sdlc-submit").disabled = true;

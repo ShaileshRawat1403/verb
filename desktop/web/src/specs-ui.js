@@ -63,7 +63,7 @@ export function initWorkbench(deps) {
   }
   const selected = () => state.specs.find((spec) => spec.id === state.selectedId) ?? null;
   const lifecycle = initSdlc({ api, $, escapeHtml, toast, showDialog, closeDialog, current: selected,
-    replaceSpec, changed: () => Promise.all([refreshSpecs(), deps.refreshState(true)]) });
+    replaceSpec, openCommit, changed: () => Promise.all([refreshSpecs(), deps.refreshState(true)]) });
 
   // ------------------------------------------------------------------------------- data
 

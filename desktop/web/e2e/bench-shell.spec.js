@@ -1187,3 +1187,20 @@ test("planning agent can draft a PRD using the prompt example", async ({ page })
     } catch { return ""; }
   }).toContain("- R1 · G1 · A returning customer");
 });
+
+test("proof sends uncommitted work to commit review and restores the form", async ({ page }) => {
+  await page.goto(`${origin}/#${token}`);
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.locator("#palette-input").fill("Open spec 097");
+  await page.keyboard.press("Enter");
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
+  await page.locator(".bench-proof-list").getByRole("button", { name: "Record proof", exact: true }).first().click();
+  const dialog = page.locator("#sdlc-dialog");
+  await expect(dialog.getByText("Commit code changes before recording proof.")).toBeVisible();
+  await dialog.locator("#sdlc-text").fill("Evidence details to preserve");
+  await dialog.getByRole("button", { name: "Commit changes", exact: true }).click();
+  await expect(page.locator("#commit-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator("#sdlc-text")).toHaveValue("Evidence details to preserve");
+});
