@@ -160,6 +160,14 @@ for (const width of [1440, 390]) {
       await shot("navigation");
       await group.getByRole("button", { name: /006 · Terminal-first Shell/ }).click();
       await expect(panel.getByRole("heading", { name: /Terminal-first Shell/ })).toBeVisible();
+      if (!mobile) {
+        // The work tree fits the sidebar: no row is wider than it, so focusing a spec cannot
+        // scroll the navigation sideways and clip "Work" or "New spec". (On a phone the
+        // navigation overlay closes once a spec is chosen.)
+        expect(await nav.evaluate(node => ({ left: node.scrollLeft, over: node.scrollWidth - node.clientWidth })))
+          .toEqual({ left: 0, over: 0 });
+        await expect(group.locator(".bench-mini")).toHaveAttribute("aria-label", /^Why done, What done, How /);
+      }
       await expect(panel.locator(".bench-documents > li > div")).toHaveText(["Why (BRD)Published", "What (PRD)Published"]);
       await shot("plan");
       for (const [label, file] of [["Why (BRD)", "brd.md"], ["What (PRD)", "prd.md"]]) {

@@ -77,13 +77,13 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       const spec = byId.get(id);
       if (!spec) return "";
       const current = selectedId === id ? ' aria-current="true"' : "";
-      return `<li><button type="button" data-bench-spec="${escapeHtml(id)}"${current}><span>${escapeHtml(id)} · ${escapeHtml(spec.title)}</span><small>${escapeHtml(spec.stage)}</small></button></li>`;
+      return `<li><button type="button" data-bench-spec="${escapeHtml(id)}"${current} title="${escapeHtml(`${id} · ${spec.title}`)}"><span class="bench-spec-no type-cond">${escapeHtml(id)}</span><span class="visually-hidden"> · </span><span class="bench-spec-title">${escapeHtml(spec.title)}</span><small>${escapeHtml(stageLabel(spec.stage))}</small></button></li>`;
     };
     const group = (key, label, ids, item) => {
       const name = item
-        ? `<button class="text-button" type="button" data-bench-work="${escapeHtml(key)}"${key === selectedWork ? ' aria-current="true"' : ""}>${escapeHtml(label)}</button>`
-        : escapeHtml(label);
-      return `<details data-bench-group="${escapeHtml(key)}"><summary>${name} <span class="nav-count">${ids.length}</span>${item?.brd && item?.prd ? ` <button type="button" class="text-button" data-bench-new-spec="${escapeHtml(key)}">New spec</button>` : ""}</summary><ul>${ids.map(row).join("")}</ul></details>`;
+        ? `<button class="text-button bench-work-name" type="button" data-bench-work="${escapeHtml(key)}"${key === selectedWork ? ' aria-current="true"' : ""} title="${escapeHtml(label)}">${escapeHtml(label)}</button>`
+        : `<span class="bench-work-name">${escapeHtml(label)}</span>`;
+      return `<details data-bench-group="${escapeHtml(key)}"><summary><span class="bench-caret" aria-hidden="true"></span>${name} <span class="nav-count">${ids.length}</span>${item?.brd && item?.prd ? ` <button type="button" class="text-button bench-new-spec" data-bench-new-spec="${escapeHtml(key)}">New spec</button>` : ""}${item ? miniTraveler(item, ids.map(id => byId.get(id))) : ""}</summary><ul>${ids.map(row).join("")}</ul></details>`;
     };
     let markup;
     if (workError || error) {
@@ -226,11 +226,43 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     return `<small class="bench-stamp" data-state="${state}"${fresh ? " data-fresh" : ""}${attributes}>${escapeHtml(word)}</small>`;
   }
 
-  function documentRow(item, kind, title) {
+  // The state of a work item's BRD or PRD, as the host reports it: content, draft and warnings.
+  function documentState(item, kind) {
     const content = item[kind];
+    const draft = item[`${kind}Draft`];
     const warnings = item.warnings.filter(warning => kind === "brd"
       ? /^(?:BRD|Small BRD|Duplicate BRD)\b/.test(warning)
       : /^(?:PRD|Small PRD|Requirement|Duplicate PRD)\b/.test(warning));
+    const word = content == null ? draft ? "Draft" : "Missing" : warnings.length ? "Warnings" : "Published";
+    return { content, draft, warnings, word, state: word === "Published" ? "done" : word === "Missing" ? "open" : "hold" };
+  }
+
+  // Five segments under a work item. Why and What are the document states. How, Proof and Ship
+  // only aggregate per-spec facts the host resolves: a segment is done when every linked spec has
+  // reached it and current when at least one has. Nothing here is inferred beyond that.
+  function miniTraveler(item, specs) {
+    const known = specs.filter(Boolean);
+    const after = stage => spec => STAGES.indexOf(spec.stage) >= STAGES.indexOf(stage);
+    const accepted = spec => {
+      const proof = workbench.summaryFor(spec)?.sdlc;
+      return Boolean(proof && !proof.error && spec.criteria.length
+        && spec.criteria.every(c => (proof.criteria ?? []).find(row => row.index === c.index)?.accepted));
+    };
+    const across = (reached, started) => !known.length ? "open"
+      : known.every(reached) ? "done" : known.some(started ?? reached) ? "current" : "open";
+    const segments = [
+      ["Why", documentState(item, "brd").state],
+      ["What", documentState(item, "prd").state],
+      ["How", across(after("verify"), () => true)],
+      ["Proof", across(accepted, after("verify"))],
+      ["Ship", across(after("ship"))],
+    ];
+    const words = { done: "done", current: "in progress", hold: "needs a decision", open: "not started" };
+    return `<span class="bench-mini" role="img" aria-label="${escapeHtml(segments.map(([name, state]) => `${name} ${words[state]}`).join(", "))}">${segments.map(([, state]) => `<i data-state="${state}"></i>`).join("")}</span>`;
+  }
+
+  function documentRow(item, kind, title) {
+    const { content, warnings, word, state } = documentState(item, kind);
     const actions = content == null ? title : `<button type="button" class="text-button" data-bench-document="${escapeHtml(`work/${item.id}/${kind}.md`)}">${title}</button>`;
     const draft = item[`${kind}Draft`];
     const name = kind.toUpperCase();
@@ -239,8 +271,6 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     const draftAction = !canDraft ? "" : content == null && !draft
       ? draftButton(`Draft ${name} with agent`)
       : `<details class="bench-document-menu"><summary aria-label="${name} actions" title="${name} actions">⋯</summary>${draftButton(content == null ? "Continue draft with agent" : "Redraft with agent")}</details>`;
-    const word = content == null ? draft ? "Draft" : "Missing" : warnings.length ? "Warnings" : "Published";
-    const state = word === "Published" ? "done" : word === "Missing" ? "open" : "hold";
     return `<li data-state="${state}"><div>${actions}${stamp(`${kind}:${item.id}`, state, word, ` title="${escapeHtml(warnings.join("\n"))}"`)}</div>
       ${draftAction}
       ${content != null && warnings.length ? `<p class="bench-doc-warnings">${warnings.map(escapeHtml).join("<br>")}</p>` : ""}

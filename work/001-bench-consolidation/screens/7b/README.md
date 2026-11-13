@@ -32,7 +32,7 @@ terminal stays the hero and everything else stays quiet.
 |---|---|---|
 | 1 | Barlow interface type, served locally | Done |
 | 2 | Traveler in Plan, next step, inline warning reasons | Done |
-| 3 | Sidebar: mini traveler, states as words, clipping fix | |
+| 3 | Sidebar: mini traveler, states as words, clipping fix | Done |
 | 4 | Terminal tab waiting flag, "This agent knows" strip | |
 | 5 | Review verdict, checks, changed files | |
 | 6 | Board as stations, Needs you as tags, no empty-state flash | |
