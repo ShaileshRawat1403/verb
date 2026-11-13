@@ -80,7 +80,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
       const name = item
         ? `<button class="text-button" type="button" data-bench-work="${escapeHtml(key)}"${key === selectedWork ? ' aria-current="true"' : ""}>${escapeHtml(label)}</button>`
         : escapeHtml(label);
-      return `<details data-bench-group="${escapeHtml(key)}"><summary>${name} <span class="nav-count">${ids.length}</span></summary><ul>${ids.map(row).join("")}</ul></details>`;
+      return `<details data-bench-group="${escapeHtml(key)}"><summary>${name} <span class="nav-count">${ids.length}</span>${item?.brd && item?.prd ? ` <button type="button" class="text-button" data-bench-new-spec="${escapeHtml(key)}">New spec</button>` : ""}</summary><ul>${ids.map(row).join("")}</ul></details>`;
     };
     let markup;
     if (workError || error) {
@@ -137,6 +137,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     const evidence = proof?.criteria ?? [];
     return `<h3><button class="text-button" type="button" data-bench-document="${escapeHtml(spec.file)}">How (Spec)</button> <span class="bench-spec-stage">${escapeHtml(spec.stage)}</span></h3>
       <label>Stage <select data-bench-stage aria-label="Stage for spec ${escapeHtml(spec.id)}">${["spec", "plan", "build", "verify", "review", "ship"].map(stage => `<option value="${stage}"${stage === spec.stage ? " selected" : ""}>${stage[0].toUpperCase() + stage.slice(1)}</option>`).join("")}</select></label>
+      ${!spec.work_item && linkableWorkItems().length ? '<button type="button" class="secondary-button" data-bench-link>Link to work item</button>' : ""}
       <h3>Done when</h3><ul class="bench-criteria">${spec.criteria.map(criterion => {
         const link = links.find(row => row.number === criterion.index + 1);
         const result = evidence.find(row => row.index === criterion.index);
@@ -519,6 +520,14 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     }
     const review = target.closest("[data-bench-review-draft]");
     if (review) return reviewDraft(review);
+    const newSpec = target.closest("[data-bench-new-spec]");
+    if (newSpec) {
+      event.preventDefault();
+      return workbench.openNewSpec({ workItem: newSpec.dataset.benchNewSpec });
+    }
+    if (target.closest("[data-bench-link]")) {
+      return workbench.openLinkSpec(workbench.current().specs.find(spec => spec.id === selectedId));
+    }
     const work = target.closest("[data-bench-work]");
     if (work) {
       event.preventDefault();
@@ -580,7 +589,14 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
   syncLayout();
   refresh();
 
+  function linkableWorkItems() {
+    return (workItems?.items ?? []).filter(item => item.brd && item.prd)
+      .map(item => ({ id: item.id, title: workTitle(item) }));
+  }
+
   return {
+    linkableWorkItems,
+    selectedWorkItem: () => selectedWork ?? workbench.current().specs.find(spec => spec.id === selectedId)?.work_item,
     refresh,
     render,
     focusSpec,

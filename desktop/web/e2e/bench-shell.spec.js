@@ -1149,3 +1149,23 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+test("Plan links a legacy spec and creates a spec from its work item", async ({ page }) => {
+  await page.goto(`${origin}/#${token}`);
+  await page.locator('[data-bench-group="unlinked"] summary').click();
+  await page.locator('[data-bench-spec="099"]').click();
+  await page.getByRole("button", { name: "Link to work item" }).click();
+  await page.locator("#spec-link-work-item").selectOption("001-bench-consolidation");
+  await page.getByRole("button", { name: "Link spec", exact: true }).click();
+  await expect(page.locator("#spec-link-dialog")).not.toBeVisible();
+  await expect(page.locator("#bench-plan-spec")).toContainText("Why (BRD)");
+  expect(readFileSync(join(fixture, "Bench workspace/specs/099-legacy.md"), "utf8"))
+    .toContain("linked work item 001-bench-consolidation");
+
+  await page.locator('[data-bench-new-spec="001-bench-consolidation"]').click();
+  await expect(page.locator("#spec-work-item")).toHaveValue("001-bench-consolidation");
+  await page.locator("#spec-title-input").fill("Work item spec from Plan");
+  await page.locator('#spec-dialog-form button[type="submit"]').click();
+  await expect(page.locator("#spec-dialog")).not.toBeVisible();
+  await expect(page.locator("#bench-plan-spec")).toContainText("Why (BRD)");
+});

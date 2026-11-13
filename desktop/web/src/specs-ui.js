@@ -148,9 +148,47 @@ export function initWorkbench(deps) {
     render();
   }
 
+  function workItemOptions(select, first, defaultId) {
+    select.replaceChildren(new Option(first, ""), ...(deps.extras.linkableWorkItems?.() ?? [])
+      .map(item => new Option(item.title, item.id)));
+    select.value = [...select.options].some(option => option.value === defaultId) ? defaultId : "";
+  }
+
+  async function linkSpec(spec, workItem) {
+    const result = await api("POST", "/api/work-items/link", {
+      specId: spec.id, expectedRevision: spec.revision, workItem,
+    });
+    await Promise.all([refreshSpecs(), deps.extras.refreshBenchWork?.()]);
+    return result;
+  }
+
+  let linkTarget;
+  function openLinkSpec(spec) {
+    linkTarget = spec;
+    workItemOptions($("#spec-link-work-item"), "Choose a published work item");
+    showDialog("spec-link-dialog");
+  }
+
+  $("#spec-link-form").addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      const result = await linkSpec(linkTarget, form.elements.workItem.value);
+      closeDialog("spec-link-dialog");
+      toast(result.message ?? "Spec linked to work item.");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
   function openNewSpec(draft = {}) {
     state.newSpecView = deps.ui.view;
     $("#spec-dialog-form").reset();
+    workItemOptions($("#spec-work-item"), "Unlinked", draft.workItem ?? deps.extras.selectedWorkItem?.());
     $("#spec-title-input").value = draft.title ?? "";
     $("#spec-dialog-form").elements.problem.value = draft.problem ?? "";
     showDialog("spec-dialog");
@@ -415,6 +453,9 @@ export function initWorkbench(deps) {
     event.preventDefault();
     const form = new FormData(event.target);
     const fromStudio = state.newSpecView === "studio";
+    const submit = event.currentTarget.querySelector('[type="submit"]');
+    if (submit.disabled) return;
+    submit.disabled = true;
     try {
       const spec = await api("POST", "/api/specs", {
         title: form.get("title"),
@@ -426,6 +467,16 @@ export function initWorkbench(deps) {
       closeDialog("spec-dialog");
       replaceSpec(spec);
       selectSpec(spec.id, { navigate: !fromStudio });
+      if (form.get("workItem")) {
+        try {
+          const result = await linkSpec(spec, form.get("workItem"));
+          if (result.message) toast(result.message);
+        } catch (error) {
+          toast(`Spec ${spec.id} was created. Linking failed: ${error.message}`, "error");
+          refreshGit();
+          return;
+        }
+      }
       if (fromStudio) {
         deps.extras.onStudioSpecCreated?.(String(form.get("problem") || ""));
       }
@@ -433,6 +484,8 @@ export function initWorkbench(deps) {
       refreshGit();
     } catch (error) {
       toast(error.message, "error");
+    } finally {
+      submit.disabled = false;
     }
   });
 
@@ -773,6 +826,7 @@ export function initWorkbench(deps) {
     switchBranch,
     openHandoff,
     openNewSpec,
+    openLinkSpec,
     current: () => ({ spec: selected(), git: state.git, meters: state.meters,
       presentation: selected() ? presentation(selected()) : null, specs: state.specs, error: state.specsError, loaded: state.specsLoaded }),
     summaryFor,

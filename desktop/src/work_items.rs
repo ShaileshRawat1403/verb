@@ -1085,10 +1085,10 @@ pub(crate) fn link(project: &Path, input: Link, actor: &str) -> Result<bool, Str
     if spec.revision != input.expected_revision {
         return Err("The spec changed. Refresh before linking it.".into());
     }
-    if input.criteria.is_empty() && input.remove_criteria.is_empty() {
+    if spec.work_item.is_some() && input.criteria.is_empty() && input.remove_criteria.is_empty() {
         return Err("Choose at least one criterion to link or remove".into());
     }
-    if spec.work_item.is_none() && input.criteria.is_empty() {
+    if spec.work_item.is_none() && !input.remove_criteria.is_empty() {
         return Err("Link this spec before removing links".into());
     }
     let mut rows = BTreeMap::new();

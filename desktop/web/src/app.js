@@ -2354,6 +2354,9 @@ async function bootstrap() {
     if (event.target.open) { renderTerminalTabs(); benchTerminals?.render(); }
   });
   extras.openBenchSpec = shell.focusSpec;
+  extras.linkableWorkItems = shell.linkableWorkItems;
+  extras.selectedWorkItem = shell.selectedWorkItem;
+  extras.refreshBenchWork = shell.refresh;
   extras.openBenchLaunch = id => { benchTerminals.openLaunch(id); updateLaunchForm(); };
   extras.shellCommands = () => [
     ...connections.commands(),

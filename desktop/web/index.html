@@ -743,6 +743,18 @@
     </dialog>
 
 
+    <dialog id="spec-link-dialog" class="modal">
+      <form id="spec-link-form" class="modal-content">
+        <h2>Link to work item</h2>
+        <label for="spec-link-work-item">Work item</label>
+        <select id="spec-link-work-item" name="workItem" required></select>
+        <div class="modal-footer">
+          <button type="button" class="secondary-button" data-close="spec-link-dialog">Cancel</button>
+          <button type="submit" class="primary-button">Link spec</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="spec-dialog" class="modal">
       <form id="spec-dialog-form" class="modal-content">
         <div class="modal-heading">
@@ -753,6 +765,8 @@
           </div>
           <button class="modal-close" type="button" data-close="spec-dialog" aria-label="Close">×</button>
         </div>
+        <label class="field-label" for="spec-work-item">Work item</label>
+        <select id="spec-work-item" name="workItem"></select>
         <label class="field-label" for="spec-title-input">Title</label
         ><input id="spec-title-input" name="title" maxlength="120" required placeholder="Let people sign in with email" />
         <label class="field-label" for="spec-problem">Problem <span>(what is wrong or missing today)</span></label
