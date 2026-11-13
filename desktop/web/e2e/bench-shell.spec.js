@@ -670,6 +670,13 @@ for (const width of [1440, 390]) {
       await shot("stage-warning");
       await page.locator("#stage-dialog-submit").click();
       await expect(stage).toHaveValue("ship");
+      // A stage move is not proof: gates warn and record but do not block, so the traveler
+      // reaches Ship while Proof stays open until every criterion has accepted proof.
+      const traveler = page.locator("#bench-plan-spec .bench-traveler");
+      await expect(traveler.locator('[data-station="ship"]')).toHaveAttribute("data-state", "done");
+      await expect(traveler.locator('[data-station="proof"]')).not.toHaveAttribute("data-state", "done");
+      await expect(traveler.locator('[data-station="proof"] .bench-stamp')).not.toHaveText("Accepted");
+      await expect(traveler.locator('[data-station="ship"]')).toContainText("Spec stage is Ship with proof still open.");
 
       const ledger = `${origin}/api/specs/${id}/sdlc`;
       const spec = `${origin}/api/specs/${id}`;

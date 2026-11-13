@@ -31,7 +31,7 @@ terminal stays the hero and everything else stays quiet.
 | Slice | Scope | Status |
 |---|---|---|
 | 1 | Barlow interface type, served locally | Done |
-| 2 | Traveler in Plan, next step, inline warning reasons | |
+| 2 | Traveler in Plan, next step, inline warning reasons | Done |
 | 3 | Sidebar: mini traveler, states as words, clipping fix | |
 | 4 | Terminal tab waiting flag, "This agent knows" strip | |
 | 5 | Review verdict, checks, changed files | |
