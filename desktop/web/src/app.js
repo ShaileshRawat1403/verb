@@ -1,5 +1,6 @@
 import { projectGitPresentation } from "./project-git.js";
 import { readApiResponse } from "./api-response.js";
+import { readWithBusyRetry } from "./read-retry.js";
 import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
@@ -2261,15 +2262,24 @@ function watchSilence(terminal) {
   }, 15000);
 }
 /** Which agents this execution environment can start. Unknown stays unavailable. */
+let agentCapabilityRequest;
 async function loadInstalledAgents() {
+  if (agentCapabilityRequest) return agentCapabilityRequest;
+  agentCapabilityRequest = (async () => {
+    try {
+      ui.agentCapabilities = await readWithBusyRetry(api, "/api/agents");
+      ui.installed = ui.agentCapabilities.installed;
+    } catch {
+      ui.installed = {};
+      ui.agentCapabilities = { unavailable: true };
+    }
+    updateLaunchForm();
+  })();
   try {
-    ui.agentCapabilities = await api("GET", "/api/agents");
-    ui.installed = ui.agentCapabilities.installed;
-  } catch {
-    ui.installed = {};
-    ui.agentCapabilities = { unavailable: true };
+    await agentCapabilityRequest;
+  } finally {
+    agentCapabilityRequest = null;
   }
-  updateLaunchForm();
 }
 
 /** Driven with an access token (an agent, a script): say so on every page, with its scope and expiry. */
