@@ -365,3 +365,18 @@
 #bench-board-attention-list .bench-needs-entry { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 
 #app.bench-layout:has(> .locked) { display: block; }
+
+#bench-terminal-tabs .terminal-tabs { scrollbar-width: thin; }
+#bench-terminal-tabs .terminal-tab { flex-shrink: 0; }
+#bench-draft-review-form { display: flex; flex-direction: column; }
+.bench-draft-review-body { min-height: 0; overflow: auto; }
+#bench-draft-review-form > :is(.modal-heading, .modal-footer) { flex-shrink: 0; }
+#toast { white-space: pre-line; }
+.bench-work summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bench-work summary [data-bench-work] {
+  max-width: calc(100% - 84px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}

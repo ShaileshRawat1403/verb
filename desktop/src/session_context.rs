@@ -69,8 +69,8 @@ pub(crate) fn check_planning_changes(session: &mut crate::Session) {
 pub(crate) struct Delivery {
     pub at: String,
     pub trigger: String,
-    pub spec_id: String,
-    pub spec_revision: String,
+    pub spec_id: Option<String>,
+    pub spec_revision: Option<String>,
     pub requirements: Vec<String>,
     pub goals: Vec<String>,
     pub note_count: usize,

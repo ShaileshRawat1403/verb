@@ -349,7 +349,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       mountLaunchedSession({ id: result.sessionId, agent: request.agent, role: "plan",
         specId: request.specId, workItemId: result.workItemId, state: "live", hostedHere: true,
         hasTerminal: true, terminal: { running: true, replayAvailable: true } });
-      toast([result.message, result.warning].filter(Boolean).join(" "), result.warning ? "error" : undefined);
+      toast([result.message, result.warning, result.contextWarning].filter(Boolean).join("\n"), result.warning || result.contextWarning ? "error" : undefined);
       await refresh();
     });
   });
@@ -406,7 +406,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       const result = await api("POST", path, { expectedRevision: draft.publishedRevision,
         draftRevision: draft.revision, acceptStale: form.elements.acceptStale.checked });
       closeDialog("bench-draft-review-dialog");
-      toast([ "Published.", ...(result.warnings ?? []), result.draftNotice ].filter(Boolean).join(" "));
+      toast([ "Published.", ...(result.warnings ?? []), result.draftNotice ].filter(Boolean).join("\n"));
       await refresh();
     }).finally(() => {
       publishingDraft = false;

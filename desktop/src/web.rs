@@ -3146,7 +3146,7 @@ impl WebHost {
                 Ok(self.off_loop(true, move || {
                     let (binding, text, mut delivery) = launcher.context_to_resend(&id)?;
                     if input.hash != delivery.hash
-                        || input.spec_revision != delivery.spec_revision
+                        || Some(&input.spec_revision) != delivery.spec_revision.as_ref()
                         || binding.deliveries.len() != input.delivery_count
                     {
                         return Err(
@@ -3647,6 +3647,28 @@ impl Launcher {
             }
         }
         let draft = crate::work_items::start_draft(&self.project, &input)?;
+        let text = &draft.prompt;
+        let (revision, spec_id) = if let Some(id) = input.spec_id.as_deref() {
+            (
+                Some(crate::specs::find(&self.project, id)?.1.revision),
+                Some(id.to_owned()),
+            )
+        } else {
+            (None, None)
+        };
+        let delivery = crate::session_context::Delivery {
+            at: String::new(),
+            trigger: "planning launch".into(),
+            spec_id,
+            spec_revision: revision,
+            requirements: Vec::new(),
+            goals: Vec::new(),
+            note_count: 0,
+            bytes: text.len(),
+            omission: None,
+            hash: crate::session_context::digest(text.as_bytes()),
+        };
+        crate::session_context::store_delivery(&self.identity.store, text, &delivery.hash)?;
         let args = match input.agent.as_str() {
             "agy" => vec!["-i".into(), draft.prompt],
             "opencode" => vec!["--prompt".into(), draft.prompt],
@@ -3669,6 +3691,9 @@ impl Launcher {
                 ..Default::default()
             }),
         )?;
+        if let Some(terminal) = self.terminals.lock().unwrap().get_mut(&session) {
+            terminal.launch_delivery = Some(delivery);
+        }
         let body = json!({"sessionId": session, "workItemId": draft.id, "draftPath": draft.path, "message": draft.notice});
         Ok((session, body, None))
     }

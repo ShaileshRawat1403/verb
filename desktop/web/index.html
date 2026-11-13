@@ -736,12 +736,14 @@
         <div class="modal-heading"><h2 id="bench-draft-review-title">Review draft</h2>
           <button class="modal-close" type="button" data-close="bench-draft-review-dialog" aria-label="Close">×</button>
         </div>
+        <div class="bench-draft-review-body">
         <p id="bench-draft-stale" role="alert" hidden>The published document changed since drafting began. Read the current document before publishing.</p>
         <details id="bench-draft-current" hidden><summary>Current published document</summary><pre></pre></details>
         <section id="bench-draft-difference" hidden><h3>Changes from the published document</h3><pre tabindex="0"></pre></section>
         <pre id="bench-draft-content" tabindex="0"></pre>
         <label id="bench-draft-confirm-stale" hidden><input type="checkbox" name="acceptStale"> I reviewed the current published document.</label>
         <p role="alert" data-draft-error hidden></p>
+        </div>
         <div class="modal-footer"><button class="secondary-button" type="button" data-close="bench-draft-review-dialog">Cancel</button><button class="primary-button" type="submit">Publish reviewed draft</button></div>
       </form>
     </dialog>

@@ -1095,7 +1095,7 @@ for (const width of [1440, 390]) {
       await expect(row).toContainText("Proof still needed");
       await expect(row).toContainText("Unproven");
       await row.getByRole("button", { name: "Record proof", exact: true }).click();
-      await expect(page.locator("#sdlc-dialog-title")).toHaveText("Link an evidence report");
+      await expect(page.locator("#sdlc-dialog-title")).toHaveText("Record proof");
       await shot("criterion-proof");
       await page.keyboard.press("Escape");
       await page.getByText("Evidence actions", { exact: true }).click();
@@ -1187,6 +1187,10 @@ test("planning agent can draft a PRD using the prompt example", async ({ page })
       return readFileSync(join(fixture, "Bench workspace/work/001-bench-consolidation/prd.draft.md"), "utf8");
     } catch { return ""; }
   }).toContain("- R1 · G1 · A returning customer");
+  await page.getByRole("button", { name: "View delivered context" }).click();
+  await expect(page.locator("#bench-context-detail")).toContainText("planning launch");
+  await expect(page.locator("#bench-context-text")).toContainText("- R1 · G1 · A returning customer");
+  await page.screenshot({ path: test.info().outputPath("planning-context-1440.png") });
 });
 
 test("proof sends uncommitted work to commit review and restores the form", async ({ page }) => {

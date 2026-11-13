@@ -703,8 +703,8 @@ pub(crate) fn spec_delivery(
     let delivery = crate::session_context::Delivery {
         at: crate::iso8601(crate::now_millis()),
         trigger: trigger.to_owned(),
-        spec_id: id.to_owned(),
-        spec_revision: parts.revision.clone(),
+        spec_id: Some(id.to_owned()),
+        spec_revision: Some(parts.revision.clone()),
         requirements: ids("PRD requirement "),
         goals: ids("BRD goal "),
         note_count: parts.notes.len() + parts.session_notes.len(),
