@@ -15,6 +15,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { ImageAddon } from "@xterm/addon-image";
 import QRCode from "qrcode";
 import "@xterm/xterm/css/xterm.css";
+import "./fonts.css";
 import "./style.css";
 import "./workbench.css";
 import "./motion.css";

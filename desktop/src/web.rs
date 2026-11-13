@@ -1780,6 +1780,28 @@ impl WebHost {
                     "image/svg+xml",
                     include_bytes!("../web/favicon.svg"),
                 )),
+                // Interface typefaces (SIL OFL 1.1, notice in web/LICENSES/barlow-OFL.txt).
+                // Served locally because the page policy allows fonts from 'self' only.
+                "/fonts/barlow-400.woff2" => Some(Reply::asset_cached(
+                    "font/woff2",
+                    include_bytes!("../web/fonts/barlow-400.woff2"),
+                )),
+                "/fonts/barlow-500.woff2" => Some(Reply::asset_cached(
+                    "font/woff2",
+                    include_bytes!("../web/fonts/barlow-500.woff2"),
+                )),
+                "/fonts/barlow-600.woff2" => Some(Reply::asset_cached(
+                    "font/woff2",
+                    include_bytes!("../web/fonts/barlow-600.woff2"),
+                )),
+                "/fonts/barlow-condensed-600.woff2" => Some(Reply::asset_cached(
+                    "font/woff2",
+                    include_bytes!("../web/fonts/barlow-condensed-600.woff2"),
+                )),
+                "/fonts/barlow-condensed-700.woff2" => Some(Reply::asset_cached(
+                    "font/woff2",
+                    include_bytes!("../web/fonts/barlow-condensed-700.woff2"),
+                )),
                 _ => None,
             };
             if let Some(mut reply) = asset_reply {
