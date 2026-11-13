@@ -37,6 +37,7 @@ export function initProject(deps) {
       if (request !== hubRequest) return;
       state.hub = hub;
       renderHub();
+      deps.onBriefChange?.();
       const brief = $("#context-brief-text");
       brief.hidden = !hub.brief.exists;
       brief.textContent = "";
@@ -216,6 +217,8 @@ export function initProject(deps) {
   return {
     openFile,
     refreshFiles,
+    refreshHub,
+    briefExists: () => state.hub?.brief.exists,
     onShowView(view) {
       if (view === "context") refreshHub();
     },

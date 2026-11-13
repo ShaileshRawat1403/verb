@@ -1248,3 +1248,23 @@ test("Plan publishes a small BRD with open questions without a format warning", 
   await page.locator(`[data-bench-work="${id}"]`).click();
   await expect(page.locator("#bench-plan-spec .bench-documents > li").first()).toContainText("Published");
 });
+
+test("sign-in is centered and a fresh project offers planning actions", async ({ page }) => {
+  await page.goto(origin);
+  const locked = page.locator(".locked");
+  await expect(locked).toBeVisible();
+  expect((await locked.boundingBox()).width).toBe(1440);
+  await page.screenshot({ path: test.info().outputPath("sign-in-1440.png") });
+  await page.route("**/api/work-items", route => route.fulfill({ json: { items: [], unlinkedSpecs: [], warnings: [] } }));
+  await page.goto(`${origin}/#${token}`);
+  const empty = page.locator(".terminal-empty");
+  await expect(empty.getByRole("button", { name: "Open Terminal", exact: true })).toBeVisible();
+  await expect(empty.getByRole("button", { name: "Write the project brief" })).toBeVisible();
+  await expect(empty.getByRole("button", { name: "Start a work item" })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("first-run-1440.png") });
+  await empty.getByRole("button", { name: "Write the project brief" }).click();
+  await expect(page.locator("#brief-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await empty.getByRole("button", { name: "Start a work item" }).click();
+  await expect(page.locator("#bench-draft-dialog")).toBeVisible();
+});

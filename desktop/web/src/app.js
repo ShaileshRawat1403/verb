@@ -2322,7 +2322,7 @@ async function bootstrap() {
   // Late-bound cross-links between views (Ask Verb opens specs and files).
   const extras = {};
   host = initHost({ api, escapeHtml, $ });
-  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, openPreview: path => shell.openPreview(path) });
+  project = initProject({ api, toast, showDialog, closeDialog, showView, escapeHtml, $, openPreview: path => shell.openPreview(path), onBriefChange: () => shell?.render() });
   initProjectSwitcher({ $, showDialog, closeDialog });
   workbench = initWorkbench({
     refreshState,
@@ -2345,7 +2345,7 @@ async function bootstrap() {
   });
   studio = initStudio({ $, api, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
   connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
-  shell = initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
+  shell = initBenchShell({ $, api, ui, workbench, studio, briefExists: project.briefExists, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
     benchTerminals?.openLaunch(id);
     updateLaunchForm();
     loadInstalledAgents();
@@ -2356,6 +2356,7 @@ async function bootstrap() {
   $("#bench-terminal-menu").addEventListener("toggle", event => {
     if (event.target.open) { renderTerminalTabs(); benchTerminals?.render(); }
   });
+  project.refreshHub();
   extras.openBenchSpec = shell.focusSpec;
   extras.linkableWorkItems = shell.linkableWorkItems;
   extras.selectedWorkItem = shell.selectedWorkItem;

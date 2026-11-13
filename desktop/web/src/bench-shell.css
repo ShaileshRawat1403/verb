@@ -363,3 +363,5 @@
 #bench-board-attention { margin-bottom: 12px; }
 #bench-board-attention-list { display: grid; gap: 8px; }
 #bench-board-attention-list .bench-needs-entry { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+
+#app.bench-layout:has(> .locked) { display: block; }

@@ -5,7 +5,7 @@ import { initBenchReview } from "./bench-review.js";
 import { documentDiff } from "./document-diff.js";
 import { boardMarkup, specSignals } from "./bench-board.js";
 
-export function initBenchShell({ $, api, ui, workbench, studio, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, refreshFiles, openTask, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
+export function initBenchShell({ $, api, ui, workbench, studio, briefExists, showView, selectTerminal, openSession, fitTerminals, escapeHtml, agentDisplayName, openFile, refreshFiles, openTask, openLaunch, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast }) {
   const reviewTab = initBenchReview({ $, api, workbench, escapeHtml, showDialog, toast, refreshChecks });
   const app = $("#app");
   const panel = $("#bench-right-panel");
@@ -128,6 +128,8 @@ export function initBenchShell({ $, api, ui, workbench, studio, showView, select
     start.hidden = !spec;
     start.textContent = spec ? `Start a terminal for ${spec.id} · ${spec.title}` : "";
     start.nextElementSibling.hidden = !start.hidden;
+    const actions = start.nextElementSibling.querySelector("[data-first-run]");
+    actions.hidden = briefExists() !== false || workItems?.items.length !== 0;
   }
 
   function specPlan(spec, item) {
