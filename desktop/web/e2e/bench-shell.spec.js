@@ -591,10 +591,21 @@ for (const width of [1440, 390]) {
         await expect(page.locator("#bench-review-diff-range")).toHaveValue("good");
         await shot("diff");
         await page.locator("#bench-review-diff-range").selectOption("implementation");
-        await expect(page.locator("#bench-review-diff-scope")).toContainText(/Latest commit|Committed implementation/);
+        // Work not yet committed is what a reviewer needs; the comparison ends at the working tree.
+        await expect(page.locator("#bench-review-diff-scope")).toContainText(/^(Uncommitted work|Committed and uncommitted work)/);
+        await expect(page.locator("#bench-review-diff pre")).toContainText("package.json");
         await shot("implementation-diff");
         await page.locator("#bench-review-diff").getByRole("button", { name: "Close" }).click();
         await panel.getByLabel("Git actions").click();
+        // The menu opens into the panel and holds its items; it once spilled past the panel edge.
+        const menuBox = await panel.locator(".bench-git-menu").boundingBox();
+        const panelBox = await panel.boundingBox();
+        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
+        for (const name of ["Review commit", "Git transfer"]) {
+          // Squeezed to the 30 px trigger, each label used to spill out of its own button.
+          const spill = await panel.getByRole("button", { name }).evaluate(button => button.scrollWidth - button.clientWidth);
+          expect(spill).toBeLessThanOrEqual(0);
+        }
         await shot("git-menu");
         await panel.getByRole("button", { name: "Review commit" }).click();
         await expect(page.locator("#commit-dialog")).toBeVisible();
@@ -916,6 +927,23 @@ test("Preview Files mode stays reachable for an empty project", async ({ page })
   await expect(page.locator("#file-tree")).toContainText("No files yet.");
 });
 
+// Found in the 0.2.0-rc.1 real-agent test: an agent edited README.md while it was open in Preview,
+// and Preview kept the old text until the page was reloaded.
+test("Preview shows an agent's edit to the open file without a reload", async ({ page }) => {
+  const readme = join(fixture, "Bench workspace", "README.md");
+  const original = readFileSync(readme, "utf8");
+  try {
+    await page.goto(`${origin}/#${token}`);
+    await page.locator("#bench-tab-preview").click();
+    const panel = page.locator("#bench-preview");
+    await expect(panel.locator("#studio-document")).toContainText("A document in the project.");
+    writeFileSync(readme, `${original}\n\n## Running locally\n\nA section an agent just added.\n`);
+    await expect(panel.locator("#studio-document")).toContainText("A section an agent just added.", { timeout: 10_000 });
+  } finally {
+    writeFileSync(readme, original);
+  }
+});
+
 for (const width of [1440, 390]) {
   for (const theme of ["light", "dark"]) {
     test(`Preview keeps its editor and terminals at ${width} in ${theme}`, async ({ page, request }) => {
@@ -1205,6 +1233,38 @@ test("Plan links a legacy spec and creates a spec from its work item", async ({ 
   await page.locator('#spec-dialog-form button[type="submit"]').click();
   await expect(page.locator("#spec-dialog")).not.toBeVisible();
   await expect(page.locator("#bench-plan-spec")).toContainText("Why (BRD)");
+});
+
+// Found in the 0.2.0-rc.1 real-agent test: a spec created from a work item had no way to name the
+// requirement it meets, so its agent was told "no requirement IDs delivered".
+test("a new spec links its criteria to the requirements chosen for it", async ({ page }) => {
+  await page.goto(`${origin}/#${token}`);
+  await page.locator('[data-bench-new-spec="001-bench-consolidation"]').click();
+  const choices = page.locator("#spec-requirements");
+  await expect(choices).toBeVisible();
+  await expect(choices.getByRole("checkbox", { name: /^R2 · / })).not.toBeChecked();
+  await page.locator("#spec-title-input").fill("Spec that meets R2");
+  await page.locator("#spec-criteria").fill("Documents are stored as Markdown\nPaths are proposed before writing");
+  await choices.getByRole("checkbox", { name: /^R2 · / }).check();
+  await page.locator('#spec-dialog-form button[type="submit"]').click();
+  await expect(page.locator("#spec-dialog")).not.toBeVisible();
+  const plan = page.locator("#bench-plan-spec");
+  await expect(plan.locator(".bench-criteria details")).toHaveCount(2);
+  await expect(plan.locator(".bench-criteria")).not.toContainText("No requirement linked");
+  await expect(plan.locator(".bench-criteria summary").first()).toContainText("R2");
+});
+
+// Found in the 0.2.0-rc.1 real-agent test: with BRD and PRD published, the Plan showed no next
+// step; the only way on was a small link in the work tree.
+test("Plan names the spec as the next step once BRD and PRD are published", async ({ page }) => {
+  await page.goto(`${origin}/#${token}`);
+  await page.locator('#bench-work-tree [data-bench-work="001-bench-consolidation"]').click();
+  const how = page.locator("#bench-plan-spec .bench-documents > li").nth(2);
+  await expect(how).toContainText("How (Spec)");
+  await how.getByRole("button", { name: /Write (the|another) spec/ }).click();
+  await expect(page.locator("#spec-dialog")).toBeVisible();
+  await expect(page.locator("#spec-work-item")).toHaveValue("001-bench-consolidation");
+  await page.keyboard.press("Escape");
 });
 
 test("planning agent can draft a PRD using the prompt example", async ({ page }) => {

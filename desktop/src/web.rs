@@ -525,8 +525,12 @@ impl crate::stream::StreamTerminalHandler for WebTerminalsManager {
     fn write_terminal_input(&self, id: &str, data: &[u8]) -> Result<(), String> {
         let mut terminals = self.terminals.lock().map_err(|e| e.to_string())?;
         let terminal = terminals.get_mut(id).ok_or("terminal not found")?;
+        let data = terminal.sink.admit_input(data);
         let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
-        hosted.write(data)
+        if data.is_empty() {
+            return Ok(());
+        }
+        hosted.write(&data)
     }
 
     fn attach_terminal(
@@ -3340,8 +3344,11 @@ impl WebHost {
                 let terminal = terminals
                     .get_mut(*id)
                     .ok_or("terminal is not hosted here")?;
+                let data = terminal.sink.admit_input(input.data.as_bytes());
                 let hosted = terminal.hosted.as_mut().ok_or("terminal has ended")?;
-                hosted.write(input.data.as_bytes())?;
+                if !data.is_empty() {
+                    hosted.write(&data)?;
+                }
                 Ok(Reply::json(200, json!({"ok": true})))
             }
             // The desktop user takes input back from a paired phone. Only reachable with the page's

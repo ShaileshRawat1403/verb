@@ -54,12 +54,24 @@ import {
 } from "./view.js";
 
 const $ = (selector) => document.querySelector(selector);
-const token =
-  location.hash.slice(1) || sessionStorage.getItem("verb-web-token");
+const storedToken = (() => {
+  try { return sessionStorage.getItem("verb-web-token"); } catch { return null; }
+})();
+const token = location.hash.slice(1) || storedToken;
+const tokenFromUrl = Boolean(location.hash.slice(1));
 if (location.hash && token) {
-  sessionStorage.setItem("verb-web-token", token);
+  try { sessionStorage.setItem("verb-web-token", token); } catch { /* the key still works for this load */ }
   history.replaceState(null, "", location.pathname + location.search);
 }
+// Pasting the printed URL into a tab that already shows Verb changes only the fragment, which does
+// not reload the page. Verb never uses the fragment for navigation, so a new key-shaped fragment
+// means a new key: keep it and load again with it.
+addEventListener("hashchange", () => {
+  const next = location.hash.slice(1);
+  if (next.length < 16 || /[\s/]/.test(next) || next === token) return;
+  try { sessionStorage.setItem("verb-web-token", next); } catch { /* reload still carries the key */ }
+  location.reload();
+});
 
 // The spec workbench (specs-ui.js), created once the workspace has loaded.
 let workbench = null;
@@ -2307,9 +2319,17 @@ async function showAccess() {
 async function bootstrap() {
   const workspaceError = await refreshWorkspace();
   if (!ui.state) {
-    if (!token && workspaceError?.status === 403 && location.protocol === "http:") {
+    if (workspaceError?.status === 403 && location.protocol === "http:") {
+      // A key Verb no longer accepts, usually because Verb was restarted, is forgotten so the next
+      // load is not stuck on it. The way forward is the same as with no key at all.
+      if (token) {
+        try { sessionStorage.removeItem("verb-web-token"); } catch { /* nothing stored */ }
+      }
+      const why = !token ? ""
+        : tokenFromUrl ? "<p>This URL’s key does not match the running Verb. Use the latest URL it printed.</p>"
+          : "<p>The saved key is no longer accepted, usually because Verb was restarted.</p>";
       $("#app").innerHTML =
-        '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Open Verb from its local URL</h1><p>Run <code>verb web</code> in your project and open the URL printed in that terminal. It contains this browser session’s local access key.</p></div>';
+        `<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Open Verb from its local URL</h1><p>Run <code>verb web</code> in your project and open the URL printed in that terminal. It contains this browser session’s local access key.</p>${why}</div>`;
     } else {
       $("#app").innerHTML =
         '<div class="locked"><div class="brand-mark">v<span>.</span></div><h1>Could not open Verb</h1><p></p><button class="primary-button" type="button">Reload Verb</button></div>';
