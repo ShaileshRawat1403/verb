@@ -124,7 +124,7 @@ fn error() -> String {
 fn name(value: &str) -> Result<CString, String> {
     CString::new(value).map_err(|_| "invalid file path".to_owned())
 }
-fn open_at(parent: &File, name: &CString, flags: i32) -> Result<File, String> {
+pub(crate) fn open_at(parent: &File, name: &CString, flags: i32) -> Result<File, String> {
     // SAFETY: parent is a live descriptor, name is NUL-terminated, and ownership of
     // the new descriptor transfers exactly once to File. No symlinks are followed.
     let fd = unsafe {
@@ -142,19 +142,25 @@ fn open_at(parent: &File, name: &CString, flags: i32) -> Result<File, String> {
     }
 }
 fn location(project: &Path, path: &str) -> Result<(File, CString), String> {
-    let parts: Vec<_> = Path::new(path).components().collect();
-    if parts.is_empty()
-        || parts.iter().any(|p| !matches!(p, Component::Normal(_)))
-        || path.contains('\0')
-    {
-        return Err("invalid project-relative path".to_owned());
-    }
     if !crate::hub::files(project)?
         .files
         .iter()
         .any(|f| f.path == path)
     {
         return Err("file is ignored, absent, or outside the visible listing".to_owned());
+    }
+    open_parent(project, path)
+}
+/// The open parent folder of a project-relative path, and the final name inside it. The walk starts
+/// from an open handle on the project root and opens one name at a time without following links,
+/// so no link anywhere on the path can lead outside the project. Callers check visibility first.
+pub(crate) fn open_parent(project: &Path, path: &str) -> Result<(File, CString), String> {
+    let parts: Vec<_> = Path::new(path).components().collect();
+    if parts.is_empty()
+        || parts.iter().any(|p| !matches!(p, Component::Normal(_)))
+        || path.contains('\0')
+    {
+        return Err("invalid project-relative path".to_owned());
     }
     let mut directory = File::open(project.canonicalize().map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;

@@ -145,7 +145,7 @@ pub(crate) fn safe_relative(path: &str) -> Result<PathBuf, String> {
 
 /// A read-only preview of one visible text file.
 pub(crate) fn preview(project: &Path, path: &str) -> Result<Preview, String> {
-    let relative = safe_relative(path)?;
+    safe_relative(path)?;
     if crate::isolation::external() {
         return crate::project_read::request(project, "preview", &[path]);
     }
@@ -155,33 +155,61 @@ pub(crate) fn preview(project: &Path, path: &str) -> Result<Preview, String> {
                 .to_owned(),
         );
     }
-    let full = project.join(&relative);
-    // Symlinks could point outside the project; resolve and check.
-    let canonical = full.canonicalize().map_err(|e| e.to_string())?;
-    let root = project.canonicalize().map_err(|e| e.to_string())?;
-    if !canonical.starts_with(&root) {
-        return Err("that file points outside the project".to_owned());
+    read_visible(project, path)
+}
+
+/// Reads a file that the listing has already shown as visible.
+///
+/// The file is opened once, by walking from an open handle on the project root one name at a time
+/// and refusing to follow a link at any step, and is then read from that same open file with a hard
+/// limit. The containment decision and the read are about the same file, so nothing swapped on disk
+/// in between (a folder replaced by a link, a file grown past the limit) can change what is read.
+#[cfg(unix)]
+fn read_visible(project: &Path, path: &str) -> Result<Preview, String> {
+    use std::io::Read;
+    use std::os::unix::fs::MetadataExt;
+    let (directory, name) = crate::studio::open_parent(project, path)?;
+    let file = crate::studio::open_at(&directory, &name, libc::O_RDONLY | libc::O_NONBLOCK)
+        .map_err(|_| "Verb previews regular files inside the project only; this path is a link, missing or unreadable".to_owned())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("Verb previews regular files only".to_owned());
     }
-    let bytes = fs::metadata(&canonical).map_err(|e| e.to_string())?.len();
-    let unreadable = |reason: &str| Preview {
+    if metadata.nlink() != 1 {
+        return Err("Verb does not preview files with hard links".to_owned());
+    }
+    let bytes = metadata.len();
+    let unreadable = |reason: &str, bytes: u64| Preview {
         path: path.to_owned(),
         text: None,
         reason: Some(reason.to_owned()),
         bytes,
     };
+    let too_large = "too large to preview (over 200 KB)";
     if bytes > MAX_PREVIEW {
-        return Ok(unreadable("too large to preview (over 200 KB)"));
+        return Ok(unreadable(too_large, bytes));
     }
-    let raw = fs::read(&canonical).map_err(|e| e.to_string())?;
+    let mut raw = Vec::new();
+    file.take(MAX_PREVIEW + 1)
+        .read_to_end(&mut raw)
+        .map_err(|e| e.to_string())?;
+    if raw.len() as u64 > MAX_PREVIEW {
+        return Ok(unreadable(too_large, raw.len() as u64));
+    }
     if raw.iter().take(8000).any(|b| *b == 0) {
-        return Ok(unreadable("binary file"));
+        return Ok(unreadable("binary file", raw.len() as u64));
     }
     Ok(Preview {
         path: path.to_owned(),
+        bytes: raw.len() as u64,
         text: Some(String::from_utf8_lossy(&raw).into_owned()),
         reason: None,
-        bytes,
     })
+}
+
+#[cfg(not(unix))]
+fn read_visible(_project: &Path, _path: &str) -> Result<Preview, String> {
+    Err("file previews need a Unix host".to_owned())
 }
 
 // ---------------------------------------------------------------------------------- the brief
@@ -1041,6 +1069,19 @@ pub(crate) fn hub(project: &Path) -> Hub {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn tempdir() -> PathBuf {
+        static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "verb-hub-outside-{}-{}-{n}",
+            std::process::id(),
+            crate::now_millis()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     fn repo() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -1098,6 +1139,99 @@ mod tests {
         let p = preview(&project, "blob.bin").unwrap();
         assert!(p.text.is_none());
         assert_eq!(p.reason.as_deref(), Some("binary file"));
+    }
+
+    // The preview opens the file once, walking from the project root without following any link,
+    // and reads from that same open file. These cases pin that down without depending on a race.
+    #[cfg(unix)]
+    #[test]
+    fn preview_never_follows_a_link_out_of_the_project() {
+        use std::os::unix::fs::symlink;
+        let project = repo();
+        let outside = tempdir();
+        fs::write(outside.join("secret.txt"), "outside\n").unwrap();
+        // A tracked link to a file outside the project.
+        symlink(outside.join("secret.txt"), project.join("leak.txt")).unwrap();
+        git(&project, &["add", "leak.txt"]).unwrap();
+        assert!(preview(&project, "leak.txt").is_err());
+        // A tracked link to a file inside the project is refused too: previews read regular files.
+        symlink(project.join("README.md"), project.join("alias.md")).unwrap();
+        git(&project, &["add", "alias.md"]).unwrap();
+        assert!(preview(&project, "alias.md").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_swapped_for_a_link_after_the_check_is_not_followed() {
+        use std::os::unix::fs::symlink;
+        let project = repo();
+        let outside = tempdir();
+        fs::write(outside.join("note.md"), "outside\n").unwrap();
+        fs::create_dir(project.join("docs")).unwrap();
+        fs::write(project.join("docs/note.md"), "inside\n").unwrap();
+        git(&project, &["add", "docs"]).unwrap();
+        // The listing has been checked; now the folder is swapped for a link before the read.
+        fs::rename(project.join("docs"), project.join("docs-real")).unwrap();
+        symlink(&outside, project.join("docs")).unwrap();
+        let read = read_visible(&project, "docs/note.md");
+        assert!(read.is_err(), "followed a swapped folder: {read:?}");
+    }
+
+    // The race the audit found: a folder on the path swapped for a link between the containment check
+    // and the read. The old check-then-reopen logic leaked the outside file 128 times in 4,431 reads
+    // under this swapping; reading from the one open file cannot, so any leak here is a regression.
+    #[cfg(unix)]
+    #[test]
+    fn preview_reads_never_leave_the_project_while_a_folder_is_being_swapped() {
+        use std::os::unix::fs::symlink;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let project = repo();
+        let outside = tempdir();
+        fs::write(outside.join("note.md"), "OUTSIDE").unwrap();
+        fs::create_dir(project.join("docs")).unwrap();
+        fs::write(project.join("docs/note.md"), "inside").unwrap();
+        symlink(&outside, project.join("docs-out")).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let (swapping, done) = (project.clone(), Arc::clone(&stop));
+        let swapper = std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                let _ = fs::rename(swapping.join("docs"), swapping.join("docs-tmp"));
+                let _ = fs::rename(swapping.join("docs-out"), swapping.join("docs"));
+                let _ = fs::rename(swapping.join("docs"), swapping.join("docs-out"));
+                let _ = fs::rename(swapping.join("docs-tmp"), swapping.join("docs"));
+            }
+        });
+        let leaked = (0..5000)
+            .filter_map(|_| read_visible(&project, "docs/note.md").ok()?.text)
+            .filter(|text| text.contains("OUTSIDE"))
+            .count();
+        stop.store(true, Ordering::Relaxed);
+        swapper.join().unwrap();
+        assert_eq!(leaked, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_links_and_oversized_files_are_not_previewed() {
+        let project = repo();
+        let outside = tempdir();
+        fs::write(outside.join("secret.txt"), "outside\n").unwrap();
+        if fs::hard_link(outside.join("secret.txt"), project.join("linked.txt")).is_ok() {
+            git(&project, &["add", "linked.txt"]).unwrap();
+            assert!(preview(&project, "linked.txt").is_err());
+        }
+        fs::write(
+            project.join("big.txt"),
+            "x".repeat(MAX_PREVIEW as usize + 1),
+        )
+        .unwrap();
+        let big = preview(&project, "big.txt").unwrap();
+        assert!(big.text.is_none());
+        assert_eq!(
+            big.reason.as_deref(),
+            Some("too large to preview (over 200 KB)")
+        );
     }
 
     #[test]
