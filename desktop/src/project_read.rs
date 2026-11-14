@@ -116,6 +116,9 @@ pub(crate) fn helper(args: &[String]) -> Result<(), String> {
         return Err("project read helper must run inside its execution environment".to_owned());
     }
     let project = std::env::current_dir().map_err(|error| error.to_string())?;
+    // Pin the project to the directory this helper was started in, by the kernel's reference to it.
+    #[cfg(unix)]
+    crate::studio::pin_project_root_to_cwd(&project)?;
     let value = match args {
         [action] if action == "files" => serde_json::to_vec(&crate::hub::files(&project)?),
         [action, path] if action == "preview" => {
