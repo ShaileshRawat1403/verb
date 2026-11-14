@@ -1337,14 +1337,26 @@ fn jwks_url(configured: Option<String>, iss: Option<&str>) -> Option<String> {
     url.starts_with("https://").then_some(url)
 }
 
+/// Fetches the signing-key document from `url` without following redirects. The HTTPS check on the
+/// URL is only as good as the request staying on it: a redirect could lead to a plain-HTTP address,
+/// and Cloudflare's key endpoint never redirects. Anything but a 200 is treated as no keys.
+fn fetch_signing_keys(url: &str) -> Option<String> {
+    let response = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout(Duration::from_secs(5))
+        .build()
+        .get(url)
+        .call()
+        .ok()?;
+    if response.status() != 200 {
+        return None;
+    }
+    response.into_string().ok()
+}
+
 fn fetch_jwks_network(iss: Option<&str>) -> Option<jsonwebtoken::jwk::JwkSet> {
     let url = jwks_url(std::env::var("VERB_CF_CERTS_URL").ok(), iss)?;
-    let body = ureq::get(&url)
-        .timeout(Duration::from_secs(5))
-        .call()
-        .ok()?
-        .into_string()
-        .ok()?;
+    let body = fetch_signing_keys(&url)?;
 
     let jwks = serde_json::from_str::<jsonwebtoken::jwk::JwkSet>(&body).ok()?;
     if let Some(path) = jwks_cache_file(|path| path.parent().is_some_and(|d| d.exists())) {
@@ -4214,6 +4226,35 @@ mod tests {
         assert_eq!(jwks_url(Some("http://127.0.0.1:1/certs".into()), iss), None);
         assert_eq!(jwks_url(Some("file:///etc/keys".into()), iss), None);
         assert!(jwks_url(Some("https://keys.example/certs".into()), None).is_some());
+    }
+
+    // The re-audit found that a redirect could carry the key fetch from HTTPS to plain HTTP. Two
+    // local servers: the first redirects to the second, which serves valid keys. The fetch must not
+    // follow, and the second server must never be contacted.
+    #[test]
+    fn signing_key_fetches_never_follow_redirects() {
+        use std::io::{Read as _, Write as _};
+        use std::net::TcpListener;
+        let target = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target_url = format!("http://{}/certs", target.local_addr().unwrap());
+        target.set_nonblocking(true).unwrap();
+        let redirector = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/certs", redirector.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            let _ = write!(
+                stream,
+                "HTTP/1.1 302 Found\r\nLocation: {target_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        });
+        assert_eq!(fetch_signing_keys(&url), None);
+        server.join().unwrap();
+        assert!(
+            target.accept().is_err(),
+            "the redirect target was contacted"
+        );
     }
 
     #[test]

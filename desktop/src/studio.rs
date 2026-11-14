@@ -151,6 +151,16 @@ fn location(project: &Path, path: &str) -> Result<(File, CString), String> {
     }
     open_parent(project, path)
 }
+/// Opens the project folder itself, refusing a link in its place. The path is already resolved, so a
+/// link here means the folder was swapped after it was resolved; following it would lead outside.
+fn open_root(resolved: &Path) -> Result<File, String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(resolved)
+        .map_err(|e| format!("cannot open the project folder: {e}"))
+}
 /// The open parent folder of a project-relative path, and the final name inside it. The walk starts
 /// from an open handle on the project root and opens one name at a time without following links,
 /// so no link anywhere on the path can lead outside the project. Callers check visibility first.
@@ -162,8 +172,7 @@ pub(crate) fn open_parent(project: &Path, path: &str) -> Result<(File, CString),
     {
         return Err("invalid project-relative path".to_owned());
     }
-    let mut directory = File::open(project.canonicalize().map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
+    let mut directory = open_root(&project.canonicalize().map_err(|e| e.to_string())?)?;
     for part in &parts[..parts.len() - 1] {
         directory = open_at(
             &directory,
@@ -364,6 +373,25 @@ impl Previews {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The re-audit found the walk opened the project folder by its path after the visibility check.
+    // A link in the folder's place must not be followed.
+    #[test]
+    fn the_project_folder_is_never_opened_through_a_link() {
+        let base = std::env::temp_dir().join(format!(
+            "verb-studio-root-{}-{}",
+            std::process::id(),
+            crate::now_millis()
+        ));
+        let real = base.join("real");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, base.join("swapped")).unwrap();
+        assert!(open_root(&real).is_ok());
+        assert!(open_root(&base.join("swapped")).is_err());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
     use std::fs;
     fn fixture() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("verb-studio-native-{}", crate::new_id()));
