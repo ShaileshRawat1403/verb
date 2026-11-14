@@ -2059,11 +2059,8 @@ fn existing_terminal_streams_close_on_access_token_revocation_and_expiry() {
         assert!(output.status.success());
         let token = String::from_utf8(output.stdout).unwrap();
         let request = Request::builder()
-            .uri(format!(
-                "ws://127.0.0.1:{}/api/terminals/ws?token={}",
-                server.port,
-                token.trim()
-            ))
+            .uri(format!("ws://127.0.0.1:{}/api/terminals/ws", server.port))
+            .header("X-Verb-Token", token.trim())
             .header("Host", format!("127.0.0.1:{}", server.port))
             .header("Origin", &server.origin)
             .header("Sec-WebSocket-Key", generate_key())
@@ -3454,4 +3451,74 @@ case "$prompt" in *touch-other*) printf 'Unexpected change\n' > outside.txt;; es
     );
     assert!(item_dir.join("prd.md").exists());
     assert!(!item_dir.join("prd.draft.md").exists());
+}
+
+// A terminal stream opened with only a Cloudflare Access login used to carry no expiry, so it could
+// stay open after the login ended. It now closes when the Access assertion expires.
+#[test]
+fn an_access_only_terminal_stream_closes_when_the_login_expires() {
+    use tungstenite::handshake::client::generate_key;
+    use tungstenite::http::Request;
+    use tungstenite::Message;
+    let allowed_email = "shailesh.rawat1403@gmail.com";
+    let cf_iss = "https://shailesh1403.cloudflareaccess.com";
+    let cf_aud = "da8bed97949a85e5d95856a5178b5afa1fd0cb7f76c94a295f90fdb624e56420";
+    let server = WebServer::start_with_env(&[
+        ("VERB_ALLOWED_EMAIL", allowed_email),
+        ("VERB_CF_ACCESS_ISS", cf_iss),
+        ("VERB_CF_ACCESS_AUD", cf_aud),
+        ("VERB_CF_JWKS_JSON", TEST_JWKS_MULTI),
+    ]);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let jwt = sign_test_jwt(
+        TEST_RSA_KEY_1,
+        "test-pilot-key-1",
+        cf_iss,
+        cf_aud,
+        allowed_email,
+        now + 3,
+    );
+    let request = Request::builder()
+        .uri(format!("ws://127.0.0.1:{}/api/terminals/ws", server.port))
+        .header("Host", format!("127.0.0.1:{}", server.port))
+        .header("Origin", &server.origin)
+        .header("Cf-Access-Authenticated-User-Email", allowed_email)
+        .header("Cf-Access-Jwt-Assertion", &jwt)
+        .header("Sec-WebSocket-Key", generate_key())
+        .header("Sec-WebSocket-Version", "13")
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .body(())
+        .unwrap();
+    let tcp = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let (mut ws, _) = tungstenite::client(request, tcp).expect("Access login opens the stream");
+    let started = std::time::Instant::now();
+    let closed = loop {
+        match ws.read() {
+            Ok(Message::Close(_)) => break true,
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => break true,
+        }
+        if started.elapsed() > Duration::from_secs(15) {
+            break false;
+        }
+    };
+    assert!(
+        closed,
+        "the stream stayed open after the Access login expired"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "the stream closed before the login expired"
+    );
 }

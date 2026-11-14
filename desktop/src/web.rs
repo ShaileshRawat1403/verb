@@ -660,6 +660,8 @@ struct WebHost {
     cf_access_iss: Option<String>,
     cf_access_aud: Option<String>,
     sessions: HashMap<String, Instant>,
+    /// One-use tickets that open a terminal stream, so no token ever travels in a WebSocket URL.
+    stream_tickets: HashMap<String, StreamTicket>,
     jwks_cache: Arc<RwLock<JwksCache>>,
     token: String,
     origin: String,
@@ -1095,6 +1097,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty()),
         sessions: HashMap::new(),
+        stream_tickets: HashMap::new(),
         jwks_cache: Arc::new(RwLock::new(JwksCache::default())),
         token: token.clone(),
         origin: format!("http://127.0.0.1:{}", address.port()),
@@ -1121,10 +1124,11 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         browser_identity: Arc::default(),
         access: crate::tokens::Access::owner(),
     };
-    if let Some(jwks) = load_initial_jwks() {
+    if let Some((jwks, pinned, age)) = load_initial_jwks() {
         if let Ok(mut w) = host.jwks_cache.write() {
             w.jwks = Some(jwks);
-            w.fetched_at = Some(Instant::now());
+            w.pinned = pinned;
+            w.fetched_at = Instant::now().checked_sub(age).or(Some(Instant::now()));
         }
     }
     let running = Arc::new(AtomicBool::new(true));
@@ -1202,10 +1206,55 @@ pub(crate) fn secure_token() -> Result<String, String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// How long a terminal stream ticket can wait to be used. The page asks for one right before it opens
+/// the stream, so a few seconds are enough; a ticket copied out of a log is useless.
+const STREAM_TICKET_TTL: Duration = Duration::from_secs(30);
+/// Unused tickets kept at most, so a client asking repeatedly cannot grow host memory.
+const MAX_STREAM_TICKETS: usize = 64;
+
+/// What a terminal stream ticket carries: the authority of the request that asked for it.
+struct StreamTicket {
+    access: crate::tokens::Access,
+    /// The scoped access token, when that is what authorised the request, so the open stream keeps
+    /// checking it for revocation.
+    access_token: Option<String>,
+    /// When the stream must close: the session's or the Access login's expiry. None for the owner
+    /// token, which does not expire.
+    expires_at: Option<Instant>,
+    issued_at: Instant,
+}
+
+/// Converts a Unix-time expiry (an Access assertion's `exp`) to an Instant on this clock.
+fn instant_at(unix_seconds: u64) -> Instant {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    Instant::now() + Duration::from_secs(unix_seconds.saturating_sub(now))
+}
+
+/// How long fetched Cloudflare Access signing keys stay trusted. Refresh runs hourly, so a healthy
+/// host never gets near this; if refreshes keep failing, Access logins fail closed after a day
+/// instead of trusting keys that may have been rotated out. The owner token keeps working.
+const MAX_JWKS_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
 #[derive(Default)]
 struct JwksCache {
     jwks: Option<jsonwebtoken::jwk::JwkSet>,
     fetched_at: Option<Instant>,
+    /// Keys the operator configured directly (VERB_CF_JWKS_JSON). They were not fetched, so they
+    /// do not age out.
+    pinned: bool,
+}
+
+impl JwksCache {
+    fn trusted(&self) -> Option<&jsonwebtoken::jwk::JwkSet> {
+        let fresh = self.pinned
+            || self
+                .fetched_at
+                .is_some_and(|fetched| fetched.elapsed() <= MAX_JWKS_AGE);
+        self.jwks.as_ref().filter(|_| fresh)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1235,18 +1284,36 @@ fn cookie<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
 impl WebHost {
     fn get_jwk(&self, kid: &str) -> Option<jsonwebtoken::jwk::Jwk> {
         let cache = self.jwks_cache.read().ok()?;
-        cache.jwks.as_ref()?.find(kid).cloned()
+        cache.trusted()?.find(kid).cloned()
     }
 }
 
-fn load_initial_jwks() -> Option<jsonwebtoken::jwk::JwkSet> {
+/// Keys available at start: pinned by the operator, or a disk cache young enough to trust.
+/// Returns the keys, whether they are pinned, and how old they are.
+fn load_initial_jwks() -> Option<(jsonwebtoken::jwk::JwkSet, bool, Duration)> {
     if let Ok(raw) = std::env::var("VERB_CF_JWKS_JSON") {
         if let Ok(jwks) = serde_json::from_str::<jsonwebtoken::jwk::JwkSet>(&raw) {
-            return Some(jwks);
+            return Some((jwks, true, Duration::ZERO));
         }
     }
+    let path = jwks_cache_file(|path| path.exists())?;
+    // The cache is only as fresh as its last write; an old file is not trusted at all.
+    let age = std::fs::metadata(&path)
+        .and_then(|metadata| metadata.modified())
+        .ok()?
+        .elapsed()
+        .unwrap_or_default();
+    if age > MAX_JWKS_AGE {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let jwks = serde_json::from_str::<jsonwebtoken::jwk::JwkSet>(&raw).ok()?;
+    Some((jwks, false, age))
+}
 
-    let cache_file = std::env::var("VERB_CF_JWKS_FILE")
+/// Where fetched keys are cached on disk. `root_ok` decides whether the /root fallback applies.
+fn jwks_cache_file(root_ok: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    std::env::var("VERB_CF_JWKS_FILE")
         .ok()
         .map(PathBuf::from)
         .or_else(|| {
@@ -1256,32 +1323,22 @@ fn load_initial_jwks() -> Option<jsonwebtoken::jwk::JwkSet> {
         })
         .or_else(|| {
             let p = PathBuf::from("/root/.verb/cf_jwks.json");
-            if p.exists() {
-                Some(p)
-            } else {
-                None
-            }
-        });
-    if let Some(path) = &cache_file {
-        if let Ok(raw) = std::fs::read_to_string(path) {
-            if let Ok(jwks) = serde_json::from_str::<jsonwebtoken::jwk::JwkSet>(&raw) {
-                return Some(jwks);
-            }
-        }
-    }
-    None
+            root_ok(&p).then_some(p)
+        })
 }
 
-fn fetch_jwks_network(iss: Option<&str>) -> Option<jsonwebtoken::jwk::JwkSet> {
-    let url = std::env::var("VERB_CF_CERTS_URL").ok().unwrap_or_else(|| {
+/// The URL signing keys are fetched from. Only HTTPS is accepted: whoever can change these keys can
+/// mint an Access login with owner authority, so they must come over an authenticated channel.
+fn jwks_url(configured: Option<String>, iss: Option<&str>) -> Option<String> {
+    let url = configured.unwrap_or_else(|| {
         let iss_clean = iss.unwrap_or("").trim_end_matches('/');
         format!("{iss_clean}/cdn-cgi/access/certs")
     });
+    url.starts_with("https://").then_some(url)
+}
 
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return None;
-    }
-
+fn fetch_jwks_network(iss: Option<&str>) -> Option<jsonwebtoken::jwk::JwkSet> {
+    let url = jwks_url(std::env::var("VERB_CF_CERTS_URL").ok(), iss)?;
     let body = ureq::get(&url)
         .timeout(Duration::from_secs(5))
         .call()
@@ -1290,23 +1347,7 @@ fn fetch_jwks_network(iss: Option<&str>) -> Option<jsonwebtoken::jwk::JwkSet> {
         .ok()?;
 
     let jwks = serde_json::from_str::<jsonwebtoken::jwk::JwkSet>(&body).ok()?;
-    let cache_file = std::env::var("VERB_CF_JWKS_FILE")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|h| PathBuf::from(h).join(".verb/cf_jwks.json"))
-        })
-        .or_else(|| {
-            let p = PathBuf::from("/root/.verb/cf_jwks.json");
-            if p.parent().is_some_and(|d| d.exists()) {
-                Some(p)
-            } else {
-                None
-            }
-        });
-    if let Some(path) = cache_file {
+    if let Some(path) = jwks_cache_file(|path| path.parent().is_some_and(|d| d.exists())) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -1320,12 +1361,13 @@ fn background_jwks_refresh(
     iss: Option<String>,
     running: Arc<AtomicBool>,
 ) {
-    let needs_initial = cache.read().map(|c| c.jwks.is_none()).unwrap_or(true);
+    let needs_initial = cache.read().map(|c| c.trusted().is_none()).unwrap_or(true);
     if needs_initial {
         if let Some(jwks) = fetch_jwks_network(iss.as_deref()) {
             if let Ok(mut w) = cache.write() {
                 w.jwks = Some(jwks);
                 w.fetched_at = Some(Instant::now());
+                w.pinned = false;
             }
         }
     }
@@ -1340,6 +1382,7 @@ fn background_jwks_refresh(
             if let Ok(mut w) = cache.write() {
                 w.jwks = Some(jwks);
                 w.fetched_at = Some(Instant::now());
+                w.pinned = false;
             }
         }
     }
@@ -1378,48 +1421,43 @@ impl WebHost {
         owner.name.clone()
     }
 
-    fn authenticate_cf_access(&mut self, request: &Request) -> bool {
+    /// A verified Cloudflare Access login on this request, as the Unix time its assertion expires.
+    fn cf_access_expiry(&mut self, request: &Request) -> Option<u64> {
         let (Some(expected_email), Some(expected_iss), Some(expected_aud)) = (
             self.allowed_email.clone(),
             self.cf_access_iss.clone(),
             self.cf_access_aud.clone(),
         ) else {
-            return false;
+            return None;
         };
 
         // 1. Verify Cf-Access-Authenticated-User-Email header matches configured allowed identity if present
         if let Some(email_hdr) = header(request, "Cf-Access-Authenticated-User-Email") {
             if email_hdr.trim().to_lowercase() != *expected_email {
-                return false;
+                return None;
             }
         }
 
         // 2. Extract JWT from Cf-Access-Jwt-Assertion header or CF_Authorization cookie
         let jwt_str = header(request, "Cf-Access-Jwt-Assertion")
             .or_else(|| cookie(request, "CF_Authorization"));
-        let Some(jwt_str) = jwt_str else {
-            return false;
-        };
+        let jwt_str = jwt_str?;
 
         // 3. Decode header, verify RS256 algorithm, extract kid
         let Ok(hdr) = jsonwebtoken::decode_header(jwt_str) else {
-            return false;
+            return None;
         };
         if hdr.alg != jsonwebtoken::Algorithm::RS256 {
-            return false;
+            return None;
         }
-        let Some(kid) = hdr.kid.as_deref() else {
-            return false;
-        };
+        let kid = hdr.kid.as_deref()?;
 
         // 4. Retrieve matching JWK from cache or Cloudflare endpoint (fail closed if not found)
-        let Some(jwk) = self.get_jwk(kid) else {
-            return false;
-        };
+        let jwk = self.get_jwk(kid)?;
 
         // 5. Construct DecodingKey from the JWK public key components (n, e)
         let Ok(decoding_key) = jsonwebtoken::DecodingKey::from_jwk(&jwk) else {
-            return false;
+            return None;
         };
 
         // 6. Cryptographically verify RS256 signature and standard claims
@@ -1432,7 +1470,7 @@ impl WebHost {
         let Ok(token_data) =
             jsonwebtoken::decode::<CfAccessClaims>(jwt_str, &decoding_key, &validation)
         else {
-            return false;
+            return None;
         };
 
         // 7. Verify email claim inside cryptographically signed token payload matches expected identity
@@ -1444,21 +1482,21 @@ impl WebHost {
             .trim()
             .to_lowercase();
         if email_claim != *expected_email {
-            return false;
+            return None;
         }
 
         // 8. Verify nbf (not before) if present
         if let Some(nbf) = token_data.claims.nbf {
             let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
                 Ok(dur) => dur.as_secs(),
-                Err(_) => return false,
+                Err(_) => return None,
             };
             if nbf > now + 60 {
-                return false;
+                return None;
             }
         }
 
-        true
+        Some(token_data.claims.exp)
     }
 
     fn has_valid_session(&mut self, request: &Request) -> bool {
@@ -1469,6 +1507,21 @@ impl WebHost {
         self.sessions
             .get(token)
             .is_some_and(|expiry| *expiry > Instant::now())
+    }
+
+    fn issue_stream_ticket(&mut self, ticket: StreamTicket) -> Reply {
+        self.stream_tickets
+            .retain(|_, t| t.issued_at.elapsed() <= STREAM_TICKET_TTL);
+        if self.stream_tickets.len() >= MAX_STREAM_TICKETS {
+            return Reply::error(429, "too many unused terminal tickets; retry shortly");
+        }
+        match secure_token() {
+            Ok(id) => {
+                self.stream_tickets.insert(id.clone(), ticket);
+                Reply::json(200, json!({"ticket": id}))
+            }
+            Err(error) => Reply::error(500, error),
+        }
     }
 
     fn prune_sessions(&mut self) {
@@ -1510,37 +1563,44 @@ impl WebHost {
             return;
         }
 
+        // Credentials never travel in the WebSocket URL, where proxy and access logs record them.
+        // A browser opens the stream with a one-use ticket (POST /api/terminals/ticket) or its
+        // session cookie; other clients send X-Verb-Token as a header.
         let url = request.url().to_owned();
-        let token_in_query = url.split('?').nth(1).and_then(|query| {
-            for pair in query.split('&') {
-                if let Some((k, v)) = pair.split_once('=') {
-                    if k == "token" {
-                        return Some(v);
-                    }
-                }
-            }
-            None
-        });
-
-        let cf_authenticated = self.authenticate_cf_access(&request);
+        let ticket = url
+            .split('?')
+            .nth(1)
+            .and_then(|query| {
+                query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("ticket="))
+            })
+            .and_then(|ticket| self.stream_tickets.remove(ticket))
+            .filter(|ticket| ticket.issued_at.elapsed() <= STREAM_TICKET_TTL);
+        let presented = header(&request, "X-Verb-Token");
+        let cf_expiry = self.cf_access_expiry(&request);
         let has_valid_session = self.has_valid_session(&request);
-        let session_valid = token_in_query.is_some_and(|tok| {
-            self.sessions
-                .get(tok)
-                .is_some_and(|expiry| *expiry > Instant::now())
-        });
+        let session_expiry = has_valid_session
+            .then(|| cookie(&request, "verb_session").and_then(|t| self.sessions.get(t).copied()))
+            .flatten();
         // A terminal stream carries keystrokes: it needs drive scope.
-        let access = if self.is_owner_token(header(&request, "X-Verb-Token"))
-            || self.is_owner_token(token_in_query)
-            || session_valid
-            || has_valid_session
-            || cf_authenticated
-        {
-            Some(crate::tokens::Access::owner())
+        let (access, stream_access_token, stream_expiry) = if let Some(ticket) = ticket {
+            (Some(ticket.access), ticket.access_token, ticket.expires_at)
+        } else if self.is_owner_token(presented) {
+            (Some(crate::tokens::Access::owner()), None, None)
+        } else if has_valid_session {
+            (Some(crate::tokens::Access::owner()), None, session_expiry)
+        } else if let Some(exp) = cf_expiry {
+            // An upgrade authenticated only by Cloudflare Access ends when that login does.
+            (
+                Some(crate::tokens::Access::owner()),
+                None,
+                Some(instant_at(exp)),
+            )
         } else {
-            header(&request, "X-Verb-Token")
-                .or(token_in_query)
-                .and_then(crate::tokens::verify)
+            let access = presented.and_then(crate::tokens::verify);
+            let token = access.as_ref().and(presented).map(str::to_owned);
+            (access, token, None)
         };
         let is_authorized = access
             .as_ref()
@@ -1554,21 +1614,6 @@ impl WebHost {
             return;
         }
 
-        let stream_access_token = access
-            .as_ref()
-            .and_then(|access| access.token.as_ref())
-            .and_then(|_| {
-                header(&request, "X-Verb-Token")
-                    .or(token_in_query)
-                    .map(str::to_owned)
-            });
-        let stream_expiry = if session_valid {
-            token_in_query.and_then(|token| self.sessions.get(token).copied())
-        } else if has_valid_session {
-            cookie(&request, "verb_session").and_then(|token| self.sessions.get(token).copied())
-        } else {
-            None
-        };
         let Some(permit) =
             RequestPermit::acquire(&self.terminal_connections, MAX_TERMINAL_CONNECTIONS)
         else {
@@ -1728,7 +1773,8 @@ impl WebHost {
                 };
             }
         }
-        let cf_authenticated = self.authenticate_cf_access(request);
+        let cf_expiry = self.cf_access_expiry(request);
+        let cf_authenticated = cf_expiry.is_some();
         let has_valid_session = self.has_valid_session(request);
         let mut session_cookie = None;
 
@@ -1847,7 +1893,8 @@ impl WebHost {
             return Reply::error(404, "not found");
         }
         let presented = header(request, "X-Verb-Token");
-        let access = if self.is_owner_token(presented) || has_valid_session || cf_authenticated {
+        let owner_token = self.is_owner_token(presented);
+        let access = if owner_token || has_valid_session || cf_authenticated {
             crate::tokens::Access::owner()
         } else if let Some(access) = presented.and_then(crate::tokens::verify) {
             access
@@ -1865,6 +1912,29 @@ impl WebHost {
                     needed.name()
                 ),
             );
+        }
+        if request.method() == &Method::Post && path == "/api/terminals/ticket" {
+            // The ticket carries this request's authority and no more: a scoped token stays
+            // revocable, and a session or Access login keeps its expiry.
+            let expires_at = if owner_token || access.token.is_some() {
+                None
+            } else if has_valid_session {
+                cookie(request, "verb_session").and_then(|t| self.sessions.get(t).copied())
+            } else {
+                cf_expiry.map(instant_at)
+            };
+            let access_token = access.token.as_ref().and(presented).map(str::to_owned);
+            // Read the body even though it is unused: unread bytes would stay on a kept-alive
+            // connection and corrupt the next request on it.
+            if read_json_limit::<Value>(request, 1024).is_err() {
+                return Reply::error(400, "a terminal ticket request takes an empty JSON body");
+            }
+            return self.issue_stream_ticket(StreamTicket {
+                access,
+                access_token,
+                expires_at,
+                issued_at: Instant::now(),
+            });
         }
         self.access = access;
         let method = request.method().clone();
@@ -4129,6 +4199,40 @@ fn read_json_limit<T: for<'de> Deserialize<'de>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn access_signing_keys_are_only_fetched_over_https() {
+        let iss = Some("https://team.cloudflareaccess.com/");
+        assert_eq!(
+            jwks_url(None, iss).as_deref(),
+            Some("https://team.cloudflareaccess.com/cdn-cgi/access/certs")
+        );
+        assert_eq!(
+            jwks_url(None, Some("http://team.cloudflareaccess.com")),
+            None
+        );
+        assert_eq!(jwks_url(Some("http://127.0.0.1:1/certs".into()), iss), None);
+        assert_eq!(jwks_url(Some("file:///etc/keys".into()), iss), None);
+        assert!(jwks_url(Some("https://keys.example/certs".into()), None).is_some());
+    }
+
+    #[test]
+    fn fetched_signing_keys_stop_being_trusted_after_a_day_but_pinned_keys_do_not() {
+        let keys: jsonwebtoken::jwk::JwkSet = serde_json::from_str(r#"{"keys":[]}"#).unwrap();
+        let aged = |age: Duration, pinned| JwksCache {
+            jwks: Some(keys.clone()),
+            fetched_at: Instant::now().checked_sub(age),
+            pinned,
+        };
+        assert!(aged(Duration::from_secs(60), false).trusted().is_some());
+        assert!(aged(MAX_JWKS_AGE + Duration::from_secs(60), false)
+            .trusted()
+            .is_none());
+        assert!(aged(MAX_JWKS_AGE + Duration::from_secs(60), true)
+            .trusted()
+            .is_some());
+        assert!(JwksCache::default().trusted().is_none());
+    }
 
     #[test]
     fn stalled_reads_time_out_and_preserve_interactive_capacity() {

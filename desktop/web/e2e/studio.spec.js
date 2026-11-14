@@ -90,7 +90,10 @@ test("Studio reads the workspace without launching work or executing project HTM
   page.on("pageerror", (error) => errors.push(error.message));
   const writes = [];
   page.on("request", (request) => {
-    if (request.method() === "POST") writes.push(request.url());
+    // The terminal stream ticket is a one-use credential exchange, not a change to the project.
+    if (request.method() === "POST" && !request.url().endsWith("/api/terminals/ticket")) {
+      writes.push(request.url());
+    }
   });
   await openStudio(page);
   expect(
