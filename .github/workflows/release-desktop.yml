@@ -158,6 +158,13 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      # Every Rust crate's own licence text, generated from the lockfile for the release targets.
+      # about.toml lists the accepted licences, so a new copyleft or unknown licence fails here.
+      - name: Generate Rust third-party notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked --features cli
+          cargo about generate --locked about.hbs > "$RUNNER_TEMP/RUST_THIRD_PARTY_NOTICES.txt"
+
       - name: Package
         id: package
         env:
@@ -171,6 +178,11 @@ jobs:
           cp README.md "$STAGE/README.md"
           cp ../LICENSE ../THIRD_PARTY_LICENSES.md "$STAGE/"
           cp web/THIRD_PARTY_LICENSES.md "$STAGE/WEB_THIRD_PARTY_LICENSES.md"
+          # The notice files both inventories point to, at the paths they use.
+          cp -R web/LICENSES "$STAGE/LICENSES"
+          cp vendor/tiny_http/LICENSE-MIT "$STAGE/LICENSES/tiny_http-LICENSE-MIT"
+          cp vendor/tiny_http/LICENSE-APACHE "$STAGE/LICENSES/tiny_http-LICENSE-APACHE"
+          cp "$RUNNER_TEMP/RUST_THIRD_PARTY_NOTICES.txt" "$STAGE/RUST_THIRD_PARTY_NOTICES.txt"
           # The binary must at least start and report the version it is being released as.
           if [ "${{ matrix.test }}" = "true" ]; then
             REPORTED="$("$STAGE/verb" version)"
