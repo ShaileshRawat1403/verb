@@ -916,6 +916,23 @@ test("Preview Files mode stays reachable for an empty project", async ({ page })
   await expect(page.locator("#file-tree")).toContainText("No files yet.");
 });
 
+// Found in the 0.2.0-rc.1 real-agent test: an agent edited README.md while it was open in Preview,
+// and Preview kept the old text until the page was reloaded.
+test("Preview shows an agent's edit to the open file without a reload", async ({ page }) => {
+  const readme = join(fixture, "Bench workspace", "README.md");
+  const original = readFileSync(readme, "utf8");
+  try {
+    await page.goto(`${origin}/#${token}`);
+    await page.locator("#bench-tab-preview").click();
+    const panel = page.locator("#bench-preview");
+    await expect(panel.locator("#studio-document")).toContainText("A document in the project.");
+    writeFileSync(readme, `${original}\n\n## Running locally\n\nA section an agent just added.\n`);
+    await expect(panel.locator("#studio-document")).toContainText("A section an agent just added.", { timeout: 10_000 });
+  } finally {
+    writeFileSync(readme, original);
+  }
+});
+
 for (const width of [1440, 390]) {
   for (const theme of ["light", "dark"]) {
     test(`Preview keeps its editor and terminals at ${width} in ${theme}`, async ({ page, request }) => {

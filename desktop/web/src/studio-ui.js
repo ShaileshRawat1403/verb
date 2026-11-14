@@ -231,7 +231,41 @@ export function initStudio({
       renderFileOptions();
     }
     if (!visible && previewMounted) bridge.suspendPreview();
+    watchPreview(Boolean(previewMounted && visible));
   }
+
+  // An agent edits files while they are open here. While the preview is on screen, the open file
+  // is reread every few seconds and redrawn only when its content changed, keeping the scroll.
+  // Edit mode is never touched, so unsaved edits cannot be replaced.
+  const PREVIEW_WATCH_MS = 3000;
+  let previewWatch = null;
+  function watchPreview(on) {
+    if (on === Boolean(previewWatch)) return;
+    clearInterval(previewWatch);
+    previewWatch = on ? setInterval(rereadOpenFile, PREVIEW_WATCH_MS) : null;
+    if (on) rereadOpenFile();
+  }
+  async function rereadOpenFile() {
+    const path = state.selected;
+    if (!path || document.hidden || dock.isImage(path) || bridge.mode() !== "document" || !state.preview) return;
+    const request = state.request;
+    let result;
+    try {
+      result = await api("GET", `/api/files/preview?path=${encodeURIComponent(path)}`);
+    } catch {
+      return; // The next tick tries again; a passing read error is not worth a message.
+    }
+    if (request !== state.request || path !== state.selected || bridge.mode() !== "document") return;
+    if (result.text === state.preview?.text && result.bytes === state.preview?.bytes) return;
+    const view = $("#studio-document");
+    const scrollers = [view, view.parentElement].filter(Boolean).map((el) => [el, el.scrollTop]);
+    state.preview = result;
+    renderDocument();
+    for (const [el, top] of scrollers) el.scrollTop = top;
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && previewWatch) rereadOpenFile();
+  });
 
   async function refreshFiles() {
     try {
