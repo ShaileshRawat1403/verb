@@ -821,5 +821,6 @@ test("pasting the printed URL into an open tab signs in without a manual reload"
   await expect(page.getByRole("heading",{name:"Open Verb from its local URL"})).toBeVisible();
   await page.evaluate(key=>{location.hash=key;}, TOKEN);
   await expect(page.locator("#quick-terminal-empty")).toBeVisible();
-  expect(new URL(page.url()).hash).toBe("");
+  // The key leaves the address bar once read. Ask the page; Playwright's URL can trail replaceState.
+  await expect.poll(()=>page.evaluate(()=>location.hash)).toBe("");
 });
