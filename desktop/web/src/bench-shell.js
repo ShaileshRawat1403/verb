@@ -596,6 +596,17 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
     }
   });
   narrow.addEventListener("change", () => closeOverlay());
+  // A ⋯ menu opens toward the inside of the panel. Right-anchored by default; when the ⋯ wraps to
+  // the start of a row that would cross the panel's left edge, so it anchors left instead.
+  document.addEventListener("toggle", event => {
+    const menu = event.target;
+    if (!(menu instanceof HTMLDetailsElement) || !menu.classList.contains("bench-document-menu") || !menu.open) return;
+    const pop = menu.querySelector(":scope > :not(summary)");
+    const panel = menu.closest("#bench-right-panel") ?? document.documentElement;
+    if (!pop) return;
+    delete menu.dataset.align;
+    if (pop.getBoundingClientRect().left < panel.getBoundingClientRect().left) menu.dataset.align = "start";
+  }, true);
   document.addEventListener("keydown", event => {
     if (event.key === "Escape" && mobileSurface && !document.querySelector("dialog[open]")) {
       event.preventDefault();

@@ -598,9 +598,36 @@ for (const width of [1440, 390]) {
         await page.locator("#bench-review-diff").getByRole("button", { name: "Close" }).click();
         await panel.getByLabel("Git actions").click();
         // The menu opens into the panel and holds its items; it once spilled past the panel edge.
-        const menuBox = await panel.locator(".bench-git-menu").boundingBox();
-        const panelBox = await panel.boundingBox();
-        expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
+        // The menu stays inside the panel and every item can be clicked, both where the ⋯ ends its
+        // row and, in a panel dragged narrow, where it wraps to the start of the next row. In rc.2
+        // the wrapped case crossed the panel's left edge and hid behind the terminal.
+        const menuInside = async () => {
+          const menuBox = await panel.locator(".bench-git-menu").boundingBox();
+          const panelBox = await page.locator("#bench-right-panel").boundingBox();
+          expect(menuBox.x).toBeGreaterThanOrEqual(panelBox.x - 1);
+          expect(menuBox.x + menuBox.width).toBeLessThanOrEqual(panelBox.x + panelBox.width + 1);
+          for (const name of ["Review commit", "Git transfer"]) {
+            const hit = await panel.getByRole("button", { name }).evaluate(button => {
+              const r = button.getBoundingClientRect();
+              return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button;
+            });
+            expect(hit).toBe(true);
+          }
+        };
+        await menuInside();
+        if (!mobile) {
+          await panel.getByLabel("Git actions").click();
+          await page.evaluate(() => document.querySelector("#app").style.setProperty("--bench-right-w", "285px"));
+          const wrapped = await panel.evaluate(p => {
+            const actions = p.querySelector(".bench-review-actions");
+            const menu = p.querySelector("[data-review-menu=git]");
+            return menu.getBoundingClientRect().top > actions.firstElementChild.getBoundingClientRect().bottom - 1;
+          });
+          expect(wrapped).toBe(true);
+          await panel.getByLabel("Git actions").click();
+          await menuInside();
+          await page.evaluate(() => document.querySelector("#app").style.removeProperty("--bench-right-w"));
+        }
         for (const name of ["Review commit", "Git transfer"]) {
           // Squeezed to the 30 px trigger, each label used to spill out of its own button.
           const spill = await panel.getByRole("button", { name }).evaluate(button => button.scrollWidth - button.clientWidth);
