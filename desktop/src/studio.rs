@@ -207,6 +207,21 @@ pub(crate) fn pin_project_root_to_cwd(project: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Checks that `project` is still the folder pinned when the host started, when it was pinned. The
+/// isolated launch calls this before starting the guest helper in the project, so a guest never
+/// starts in a folder that replaced the pinned one. An unpinned project is left to the caller's own
+/// checks.
+pub(crate) fn verify_pinned_root(project: &Path) -> Result<(), String> {
+    let pinned = pins()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .contains_key(project);
+    if pinned {
+        open_root(project)?;
+    }
+    Ok(())
+}
+
 /// Opens a directory without following a link in its place.
 fn open_dir_nofollow(path: &Path) -> Result<File, String> {
     use std::os::unix::fs::OpenOptionsExt;
@@ -461,6 +476,30 @@ mod tests {
 
     // The re-audit found the walk opened the project folder by its path after the visibility check.
     // A link in the folder's place must not be followed.
+    #[test]
+    fn a_launch_check_refuses_a_folder_that_replaced_the_pinned_one() {
+        let base = std::env::temp_dir().join(format!(
+            "verb-studio-launch-{}-{}",
+            std::process::id(),
+            crate::now_millis()
+        ));
+        let project = base.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        assert!(
+            verify_pinned_root(&project).is_ok(),
+            "an unpinned project is left alone"
+        );
+        pin_project_root(&project).unwrap();
+        assert!(verify_pinned_root(&project).is_ok());
+        std::fs::rename(&project, base.join("moved")).unwrap();
+        std::fs::create_dir(&project).unwrap();
+        assert!(
+            verify_pinned_root(&project).is_err(),
+            "a replaced folder passed"
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
     #[test]
     fn the_project_folder_is_never_opened_through_a_link() {
         let base = std::env::temp_dir().join(format!(
