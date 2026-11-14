@@ -129,6 +129,14 @@ jobs:
           rustup default 1.99.0
           rustup target add ${{ matrix.target }}
 
+      # A release is not built from a lockfile with known vulnerabilities, unsound crates or yanked
+      # versions. One Linux target runs it; the lockfile is the same for every target.
+      - name: Audit locked Rust dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit --deny unsound --deny yanked
+
       - name: Set up Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
