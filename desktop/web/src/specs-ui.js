@@ -253,6 +253,14 @@ export function initWorkbench(deps) {
   let commitReview = null, commitGeneration = 0, commitRunning = false, commitSpec = null, commitDiffGeneration = 0;
   function updateCommitSelection() {
     const count = $("#commit-files").querySelectorAll("input:checked").length;
+    if (commitMessageAuto && commitReview && !commitReview.recovery) {
+      // The suggestion names what will actually be committed: the selected files of the fresh
+      // snapshot. The cached listing only supplies whether a file is new, changed or removed.
+      const known = new Map((state.git?.changes ?? []).map(c => [c.path, c]));
+      const chosen = [...$("#commit-files").querySelectorAll("input:checked")]
+        .map(input => known.get(input.dataset.commitPath) ?? { path: input.dataset.commitPath, code: "M" });
+      $("#commit-message").value = suggestCommitMessage(commitSpec, chosen);
+    }
     $("#commit-selection-count").textContent = `${count} of ${commitReview?.files.length || 0} files selected`;
     $("#commit-dialog-submit").disabled = commitRunning || !commitReview || Boolean(commitReview.blocked) || count === 0;
     $("#commit-dialog-submit").textContent = commitRunning ? (commitReview?.recovery ? "Repairing…" : "Committing…") : "Commit";
@@ -294,8 +302,13 @@ export function initWorkbench(deps) {
       $("#commit-diff-text").textContent = result.reason || result.hunks?.map(h => `${h.header}\n${h.lines.map(l => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`).join("\n")}`).join("\n") || "No text diff available; open binary files in Preview.";
     } catch (error) { if (generation === commitGeneration && diffGeneration === commitDiffGeneration) $("#commit-diff-text").textContent = error.message; }
   });
+  // True until the person types in the message box; until then the suggestion follows the
+  // selection, and after that their words are never replaced.
+  let commitMessageAuto = true;
+  $("#commit-message").addEventListener("input", () => { commitMessageAuto = false; });
   async function openCommit() {
     if (commitRunning) return;
+    commitMessageAuto = true;
     const spec = selected();
     commitSpec = spec;
     const changes = state.git?.changes ?? [];

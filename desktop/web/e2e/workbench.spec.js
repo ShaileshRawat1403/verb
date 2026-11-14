@@ -824,3 +824,23 @@ test("pasting the printed URL into an open tab signs in without a manual reload"
   // The key leaves the address bar once read. Ask the page; Playwright's URL can trail replaceState.
   await expect.poll(()=>page.evaluate(()=>location.hash)).toBe("");
 });
+
+// Found in the 0.2.0-rc.2 real-agent test: with README.md, brd.md and prd.md selected, the suggested
+// message said "update 2 files (brd.md, prd.md)". It was built from an older Git listing.
+test("the suggested commit message names the selected files of the fresh snapshot", async ({ page }) => {
+  await page.route("**/api/git", route => route.fulfill({ json: { branch: "main", changes: [
+    { path: "work/001-x/brd.md", code: "??" }, { path: "work/001-x/prd.md", code: "??" } ], recent: [] } }));
+  await page.route("**/api/git/commit-review", route => route.fulfill({ json: { version: "fixture", blocked: null,
+    files: ["README.md", "work/001-x/brd.md", "work/001-x/prd.md"] } }));
+  await page.goto(url);
+  await page.keyboard.press("Alt+KeyC");
+  await expect(page.locator("#commit-files li")).toHaveCount(3);
+  const message = page.locator("#commit-message");
+  await expect(message).toHaveValue(/update 3 files \(README\.md, brd\.md/);
+  await page.locator('[data-commit-path="README.md"]').uncheck();
+  await expect(message).toHaveValue(/update 2 files \(brd\.md, prd\.md\)/);
+  // Once the person types, their words stay.
+  await message.fill("my own words");
+  await page.locator('[data-commit-path="README.md"]').check();
+  await expect(message).toHaveValue("my own words");
+});
