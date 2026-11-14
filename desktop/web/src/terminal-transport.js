@@ -22,17 +22,49 @@ export function createTerminalTransport({
     return bytes;
   }
 
-  function connectTerminalStream() {
+  let ticketPending = false;
+
+  // Credentials never go in the WebSocket URL, where proxy and access logs keep them. The page asks
+  // for a one-use ticket with its normal credentials (header or session cookie) and opens the stream
+  // with that; a ticket is useless once used or after 30 seconds.
+  async function streamTicket() {
+    const headers = { "Content-Type": "application/json" };
+    if (token) headers["X-Verb-Token"] = token;
+    const response = await fetch("/api/terminals/ticket", {
+      method: "POST",
+      headers,
+      body: "{}",
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw new Error(`terminal ticket refused (${response.status})`);
+    const { ticket } = await response.json();
+    if (!ticket) throw new Error("terminal ticket missing");
+    return ticket;
+  }
+
+  async function connectTerminalStream() {
     if (
-      streamSocket &&
-      (streamSocket.readyState === WebSocket.OPEN ||
-        streamSocket.readyState === WebSocket.CONNECTING)
+      ticketPending ||
+      (streamSocket &&
+        (streamSocket.readyState === WebSocket.OPEN ||
+          streamSocket.readyState === WebSocket.CONNECTING))
     ) {
       return;
     }
     clearTimeout(socketReconnectTimer);
+    ticketPending = true;
+    let ticket;
+    try {
+      ticket = await streamTicket();
+    } catch (e) {
+      console.warn("Verb terminal stream ticket:", e);
+      scheduleStreamReconnect();
+      return;
+    } finally {
+      ticketPending = false;
+    }
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${location.host}/api/terminals/ws?token=${encodeURIComponent(token || "")}`;
+    const wsUrl = `${protocol}//${location.host}/api/terminals/ws?ticket=${encodeURIComponent(ticket)}`;
     try {
       streamSocket = new WebSocket(wsUrl);
       streamSocket.binaryType = "arraybuffer";

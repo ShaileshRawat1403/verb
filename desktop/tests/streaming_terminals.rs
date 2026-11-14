@@ -139,10 +139,34 @@ impl WebServer {
         (status, val)
     }
 
+    /// A one-use stream ticket, asked for the way the page does before it opens the stream.
+    fn ticket(&self) -> String {
+        let (status, body) = self.post("/api/terminals/ticket", json!({}));
+        assert_eq!(status, 200, "{body}");
+        body["ticket"].as_str().unwrap().to_owned()
+    }
+
+    fn ws_request(&self, query: &str) -> Request<()> {
+        Request::builder()
+            .uri(format!(
+                "ws://127.0.0.1:{}/api/terminals/ws?{query}",
+                self.port
+            ))
+            .header("Host", format!("127.0.0.1:{}", self.port))
+            .header("Origin", &self.origin)
+            .header("Sec-WebSocket-Key", generate_key())
+            .header("Sec-WebSocket-Version", "13")
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .body(())
+            .unwrap()
+    }
+
     fn connect_ws(&self) -> WebSocket<MaybeTlsStream<TcpStream>> {
         let ws_url = format!(
-            "ws://127.0.0.1:{}/api/terminals/ws?token={}",
-            self.port, self.token
+            "ws://127.0.0.1:{}/api/terminals/ws?ticket={}",
+            self.port,
+            self.ticket()
         );
         let request = Request::builder()
             .uri(&ws_url)
@@ -196,11 +220,12 @@ fn decode_output_frame(bytes: &[u8]) -> Option<(&str, &[u8])> {
 fn websocket_rejects_unauthorized_and_foreign_origins() {
     let server = WebServer::start();
 
-    // 1. Foreign origin is rejected with 403
+    // 1. Foreign origin is rejected with 403, even with a valid ticket
     let req_foreign = Request::builder()
         .uri(format!(
-            "ws://127.0.0.1:{}/api/terminals/ws?token={}",
-            server.port, server.token
+            "ws://127.0.0.1:{}/api/terminals/ws?ticket={}",
+            server.port,
+            server.ticket()
         ))
         .header("Host", format!("127.0.0.1:{}", server.port))
         .header("Origin", "http://evil.attacker.com")
@@ -217,7 +242,7 @@ fn websocket_rejects_unauthorized_and_foreign_origins() {
     // 2. Missing/invalid token is rejected with 403
     let req_unauth = Request::builder()
         .uri(format!(
-            "ws://127.0.0.1:{}/api/terminals/ws?token=invalid_token",
+            "ws://127.0.0.1:{}/api/terminals/ws?ticket=invalid_ticket",
             server.port
         ))
         .header("Host", format!("127.0.0.1:{}", server.port))
@@ -230,7 +255,28 @@ fn websocket_rejects_unauthorized_and_foreign_origins() {
         .unwrap();
 
     let res_unauth = connect(req_unauth);
-    assert!(res_unauth.is_err(), "Invalid token must be rejected");
+    assert!(res_unauth.is_err(), "Invalid ticket must be rejected");
+}
+
+// Credentials in a WebSocket URL end up in proxy and access logs. The owner token is no longer
+// accepted there; a ticket opens one stream once and is useless if it is copied afterwards.
+#[test]
+fn websocket_urls_carry_one_use_tickets_never_tokens() {
+    let server = WebServer::start();
+    let with_token = server.ws_request(&format!("token={}", server.token));
+    assert!(
+        connect(with_token).is_err(),
+        "the owner token in the URL must be refused"
+    );
+
+    let ticket = server.ticket();
+    let first = connect(server.ws_request(&format!("ticket={ticket}")));
+    assert!(first.is_ok(), "a fresh ticket opens the stream");
+    let replay = connect(server.ws_request(&format!("ticket={ticket}")));
+    assert!(
+        replay.is_err(),
+        "a used ticket must not open a second stream"
+    );
 }
 
 fn set_timeout(ws: &WebSocket<MaybeTlsStream<TcpStream>>, timeout: Duration) {
@@ -1317,4 +1363,28 @@ fn read_until(ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, id: &str, needle: &
         }
     }
     panic!("terminal did not emit {needle}: {output}");
+}
+
+// Browsers reuse one connection for many requests. A ticket request whose body was left unread
+// once corrupted the next request on the same connection, which then failed as "not found".
+#[test]
+fn a_ticket_request_leaves_a_kept_alive_connection_clean() {
+    let server = WebServer::start();
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let host = format!("127.0.0.1:{}", server.port);
+    write!(
+        stream,
+        "POST /api/terminals/ticket HTTP/1.1\r\nHost: {host}\r\nOrigin: {}\r\nX-Verb-Token: {}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{{}}GET /api/work-items HTTP/1.1\r\nHost: {host}\r\nOrigin: {}\r\nX-Verb-Token: {}\r\nConnection: close\r\n\r\n",
+        server.origin, server.token, server.origin, server.token
+    )
+    .unwrap();
+    let mut raw = Vec::new();
+    std::io::Read::read_to_end(&mut stream, &mut raw).unwrap();
+    let text = String::from_utf8_lossy(&raw);
+    // Bodies carry no trailing newline, so a status line can follow one directly.
+    assert_eq!(text.matches("HTTP/1.1 ").count(), 2, "{text}");
+    assert_eq!(text.matches("HTTP/1.1 200 OK").count(), 2, "{text}");
 }
