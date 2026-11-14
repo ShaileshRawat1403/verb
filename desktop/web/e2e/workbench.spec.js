@@ -799,3 +799,27 @@ test("a terminal query is answered once when two tabs view the same session", as
     for (const f of [probe,go]) try {unlinkSync(f);} catch {}
   }
 });
+
+// Found in the 0.2.0-rc.1 real-agent test: after Verb restarted, a tab still holding the old key
+// showed "Could not open Verb" with a reload button that could never work.
+test("a key Verb no longer accepts leads back to the local URL", async ({ page }) => {
+  const origin=url.split("/#")[0];
+  await page.goto(`${origin}/#stale-key-from-an-earlier-run-0000000000`);
+  await expect(page.getByRole("heading",{name:"Open Verb from its local URL"})).toBeVisible();
+  await expect(page.locator(".locked")).toContainText("does not match the running Verb");
+  expect(await page.evaluate(()=>sessionStorage.getItem("verb-web-token"))).toBeNull();
+  await page.reload();
+  await expect(page.getByRole("heading",{name:"Open Verb from its local URL"})).toBeVisible();
+  await expect(page.locator(".locked")).not.toContainText("no longer accepted");
+});
+
+// Also from that test: pasting the printed URL into a tab already showing Verb changed only the
+// fragment, and nothing happened until a manual reload.
+test("pasting the printed URL into an open tab signs in without a manual reload", async ({ page }) => {
+  const origin=url.split("/#")[0];
+  await page.goto(`${origin}/`);
+  await expect(page.getByRole("heading",{name:"Open Verb from its local URL"})).toBeVisible();
+  await page.evaluate(key=>{location.hash=key;}, TOKEN);
+  await expect(page.locator("#quick-terminal-empty")).toBeVisible();
+  expect(new URL(page.url()).hash).toBe("");
+});
