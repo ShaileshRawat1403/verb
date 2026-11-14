@@ -532,33 +532,113 @@ pub(crate) fn implementation_diff(project: &Path) -> Result<Value, String> {
         ":(exclude).env*",
         ":(glob,exclude)**/.env*",
     ];
-    let (output, scope) = if let Some(base) = base {
-        let mut args = vec![
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-color",
-            "--no-renames",
-            &base,
-            "HEAD",
-        ];
-        args.extend(excludes);
-        (text_git(project, &args, deadline)?, format!("Committed implementation compared with local {base}. Spec Markdown and environment files are omitted."))
-    } else {
-        let mut args = vec![
-            "show",
-            "--format=",
-            "--no-show-signature",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-color",
-            "--no-renames",
-            "HEAD",
-        ];
-        args.extend(excludes);
-        (text_git(project, &args, deadline)?, "Latest commit only. Use a terminal for a wider comparison. Spec Markdown and environment files are omitted.".into())
+    // Work in progress is what a reviewer needs before anything is committed, so the comparison
+    // always ends at the working tree. New files have no Git history yet and are shown as added.
+    let against = base.as_deref().unwrap_or("HEAD");
+    let mut args = vec![
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--no-renames",
+        against,
+    ];
+    args.extend(excludes);
+    let mut output = text_git(project, &args, deadline)?;
+    let (added, skipped) = untracked_diffs(project, &excludes, deadline)?;
+    for diff in &added {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(diff);
+    }
+    let new_files = match (added.len(), skipped) {
+        (0, 0) => String::new(),
+        (n, 0) => format!(", including {n} new file{}", if n == 1 { "" } else { "s" }),
+        (n, k) => format!(
+            ", including {n} new file{} ({k} more not shown)",
+            if n == 1 { "" } else { "s" }
+        ),
     };
+    let omitted = "Spec Markdown and environment files are omitted.";
+    if let Some(base) = &base {
+        let scope = format!(
+            "Committed and uncommitted work compared with local {base}{new_files}. {omitted}"
+        );
+        return Ok(diff_result(&output, &scope));
+    }
+    if !output.is_empty() || skipped > 0 {
+        let scope =
+            format!("Uncommitted work compared with the latest commit{new_files}. {omitted}");
+        return Ok(diff_result(&output, &scope));
+    }
+    let mut args = vec![
+        "show",
+        "--format=",
+        "--no-show-signature",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--no-renames",
+        "HEAD",
+    ];
+    args.extend(excludes);
+    let output = text_git(project, &args, deadline)?;
+    let scope = format!("No uncommitted work. Showing the latest commit only. {omitted}");
     Ok(diff_result(&output, &scope))
+}
+
+/// New files Git does not track yet, each as an added-file diff. Bounded so a large generated
+/// folder cannot make a review slow or huge; the count of files left out is returned with them.
+fn untracked_diffs(
+    project: &Path,
+    excludes: &[&str],
+    deadline: Instant,
+) -> Result<(Vec<String>, usize), String> {
+    const MAX_FILES: usize = 50;
+    const MAX_BYTES: u64 = 256 * 1024;
+    let mut args = vec!["ls-files", "--others", "--exclude-standard", "-z"];
+    args.extend(excludes);
+    let listing = read_git(project, &args, deadline)?;
+    if !listing.status.success() {
+        return Err("Could not list new files. Refresh before continuing.".into());
+    }
+    let mut diffs = Vec::new();
+    let mut skipped = 0;
+    for path in listing.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+        let Ok(path) = std::str::from_utf8(path) else {
+            skipped += 1;
+            continue;
+        };
+        // Never follow a link out of the project; Git shows a link as its target text anyway.
+        let small =
+            std::fs::symlink_metadata(project.join(path)).is_ok_and(|m| m.len() <= MAX_BYTES);
+        if diffs.len() >= MAX_FILES || !small {
+            skipped += 1;
+            continue;
+        }
+        let shown = read_git(
+            project,
+            &[
+                "diff",
+                "--no-index",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--",
+                "/dev/null",
+                path,
+            ],
+            deadline,
+        )?;
+        // `--no-index` exits 1 when the files differ, which for a new file is always.
+        if matches!(shown.status.code(), Some(0 | 1)) {
+            diffs.push(String::from_utf8_lossy(&shown.stdout).trim_end().to_owned());
+        } else {
+            skipped += 1;
+        }
+    }
+    Ok((diffs, skipped))
 }
 
 pub(crate) fn good_diff(project: &Path) -> Result<Value, String> {
@@ -918,6 +998,81 @@ pub(crate) fn act(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn diff_repo(branch: &str) -> Option<std::path::PathBuf> {
+        let run = |dir: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .ok()?;
+        let repo = std::env::temp_dir().join(format!("verb-impl-diff-{}", crate::new_id()));
+        std::fs::create_dir_all(&repo).unwrap();
+        run(&repo, &["init", "-q", "-b", "main"]);
+        std::fs::write(repo.join("README.md"), "# old\n").unwrap();
+        run(&repo, &["add", "."]);
+        run(&repo, &["commit", "-q", "-m", "unrelated earlier work"]);
+        if branch != "main" {
+            run(&repo, &["switch", "-q", "-c", branch]);
+        }
+        Some(repo)
+    }
+
+    #[test]
+    fn review_shows_uncommitted_and_new_files_on_main() {
+        let Some(repo) = diff_repo("main") else {
+            return;
+        };
+        let before = implementation_diff(&repo).unwrap();
+        assert!(before["scope"]
+            .as_str()
+            .unwrap()
+            .starts_with("No uncommitted work"));
+        std::fs::write(repo.join("README.md"), "# old\n## Running locally\n").unwrap();
+        std::fs::write(repo.join("NOTES.md"), "brand new\n").unwrap();
+        std::fs::create_dir_all(repo.join("specs")).unwrap();
+        std::fs::write(repo.join("specs/001-x.md"), "spec\n").unwrap();
+        std::fs::write(repo.join(".env"), "SECRET=1\n").unwrap();
+        let after = implementation_diff(&repo).unwrap();
+        let diff = after["diff"].as_str().unwrap();
+        assert!(diff.contains("+## Running locally"), "{diff}");
+        assert!(diff.contains("+brand new"), "{diff}");
+        assert!(!diff.contains("SECRET"), "{diff}");
+        assert!(!diff.contains("specs/001-x.md"), "{diff}");
+        assert_eq!(
+            after["scope"],
+            "Uncommitted work compared with the latest commit, including 1 new file. Spec Markdown and environment files are omitted."
+        );
+    }
+
+    #[test]
+    fn review_on_a_branch_includes_work_not_yet_committed() {
+        let Some(repo) = diff_repo("spec/001-x") else {
+            return;
+        };
+        std::fs::write(repo.join("README.md"), "# old\nuncommitted line\n").unwrap();
+        let result = implementation_diff(&repo).unwrap();
+        assert!(result["diff"]
+            .as_str()
+            .unwrap()
+            .contains("+uncommitted line"));
+        assert!(result["scope"]
+            .as_str()
+            .unwrap()
+            .starts_with("Committed and uncommitted work compared with local refs/heads/main"));
+    }
 
     fn fixture() -> (Spec, Ledger, Snapshot) {
         let spec = Spec {
