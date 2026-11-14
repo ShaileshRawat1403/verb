@@ -23,6 +23,11 @@ distributed with the app; the obligations of their licenses are addressed here.
 | Rust crates compiled into Verb Desktop (213 crate versions across the four release targets) | MIT, Apache-2.0, ISC, Unicode-3.0, BSD-3-Clause, Zlib, CDLA-Permissive-2.0 and dual-licensed combinations of these; no copyleft | Each crate's licence text is generated from `desktop/Cargo.lock` by `cargo about generate --locked about.hbs` (configuration in `desktop/about.toml`) and shipped as `RUST_THIRD_PARTY_NOTICES.txt` in every release archive. CI fails if a dependency brings a licence that is not accepted there. |
 | tiny_http 0.12.0 | MIT OR Apache-2.0 | Vendored in `desktop/vendor/tiny_http/` with one security patch (`VERB_PATCH.md`); license files kept there. |
 
+In a Verb Desktop release archive, the files this table places under `desktop/web/LICENSES/` and
+the `tiny_http` licence files from `desktop/vendor/tiny_http/` are in `LICENSES/` at the top of the
+archive (the latter as `tiny_http-LICENSE-MIT` and `tiny_http-LICENSE-APACHE`), next to
+`WEB_THIRD_PARTY_LICENSES.md` and `RUST_THIRD_PARTY_NOTICES.txt`.
+
 Full license texts are installed in the userland under `usr/share/LICENSES/` (all SPDX
 variants used by packages) and `usr/share/doc/<package>/` (per-package notices), and the
 installed package list is recorded in the release artifact's
