@@ -41,23 +41,20 @@ class OpenCodeAgentAdapter(
         return if (sessions.isEmpty()) ResumeVerdict.NO else ResumeVerdict.YES
     }
 
-    /** OpenCode's own session id -- the newest conversation for this project that was used. */
+    /** OpenCode's own ID only when one used conversation matches this project. */
     override fun resumeIdentity(agent: AgentRef): String? {
         val project = projectDirectory ?: return null
-        return usedSessionIds(project, agent)?.firstOrNull()
+        return usedSessionIds(project, agent)?.distinct()?.singleOrNull()
     }
 
     /**
-     * Sends `opencode --session <id>` -- or `-c` (continue the last session) when no id is known --
-     * and waits up to [resumeSettleMs] to see whether it exits. Flags read from `opencode --help`
-     * on the installed build, not assumed. [AgentResumeLauncher] owns the reasoning about why
-     * "nothing settled" is the shape of success here.
+     * Sends `opencode --session <id>` only with an exact ID. Flags were read from the installed
+     * build's `opencode --help`; a missing identity cannot resume by choosing the last session.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
         val runtime = terminalRuntimeAdapter ?: return null
-        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity)
-            ?.let { "--session $it" }
-            ?: "--continue"
+        val identity = ResumeIdentity.validOrNull(agent.resumeIdentity) ?: return null
+        val resumeArgument = "--session $identity"
         val stillRunning = AgentResumeLauncher.launch(
             terminalRuntimeAdapter = runtime,
             command = "opencode $resumeArgument",

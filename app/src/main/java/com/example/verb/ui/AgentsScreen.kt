@@ -51,7 +51,9 @@ fun AgentsScreen(
     // Keyed by profile so every agent Verb can recover reads the same way; nothing here is
     // Claude-specific.
     agentSessions: Map<com.example.verb.terminal.RuntimeProfileId, com.example.verb.session.VerbSession> = emptyMap(),
+    sessionHistory: Map<com.example.verb.terminal.RuntimeProfileId, List<com.example.verb.session.VerbSession>> = emptyMap(),
     onResumeSession: (com.example.verb.terminal.RuntimeProfileId) -> Unit = {},
+    onResumeSavedSession: (com.example.verb.terminal.RuntimeProfileId, String) -> Unit = { _, _ -> },
     onStartNewSession: (com.example.verb.terminal.RuntimeProfileId) -> Unit = {},
     // The terminals open in this project. Empty only before the first one exists, which in practice
     // is never -- the workspace always has one.
@@ -120,6 +122,33 @@ fun AgentsScreen(
                 onResumeSession = { onResumeSession(report.profile.id) },
                 onStartNewSession = { onStartNewSession(report.profile.id) }
             )
+            val older = sessionHistory[report.profile.id].orEmpty()
+                .filter { it.id != agentSessions[report.profile.id]?.id }
+                .asReversed()
+            if (older.isNotEmpty()) {
+                Text(
+                    "Other sessions",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(start = 12.dp, top = 4.dp)
+                )
+                older.forEach { saved ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            "${saved.id.take(8)} · ${saved.state.name.lowercase().replaceFirstChar(Char::titlecase)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (saved.state == com.example.verb.session.VerbSessionState.RECOVERABLE) {
+                            OutlinedButton(onClick = { onResumeSavedSession(report.profile.id, saved.id) }) {
+                                Text("Resume")
+                            }
+                        }
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(10.dp))
         }
 

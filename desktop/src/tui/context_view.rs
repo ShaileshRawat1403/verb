@@ -43,11 +43,11 @@ impl EvidenceLines {
             Kind::Fact,
             match context.git.root {
                 Some(_) => format!(
-                    "  {} · {} changed",
-                    context.git.branch.as_deref().unwrap_or("detached"),
-                    context.git.changed_files
+                    "  {} · {}",
+                    context.git.branch_label(),
+                    context.git.change_summary()
                 ),
-                None => "  not a Git repository".to_owned(),
+                None => format!("  {}", context.git.branch_label()),
             },
         ));
 
@@ -198,6 +198,8 @@ mod tests {
                 root: Some(PathBuf::from("/tmp/project")),
                 branch: Some("main".to_owned()),
                 changed_files: 4,
+                status: crate::gitview::GitStatus::Branch,
+                changes_known: true,
             },
             session: None,
             events: vec![Event {

@@ -15,6 +15,9 @@ it true. Automated, emulator and physical-device results remain separate.
 
 ## Automated verification
 
+- [ ] For the release commit, run `cargo audit --file desktop/Cargo.lock --deny unsound --deny yanked`
+  against the current RustSec database. Record the result and any remaining informational warnings.
+  CI and the release workflow run the same check; this records it for the specific release commit.
 - [x] Desktop format, clippy with warnings denied, all-target tests and release build pass in CI
   (PR #4, run 32732143051).
 - [x] Both Android flavors pass unit tests, lint and debug assembly in CI
@@ -86,7 +89,7 @@ Exercised on the physical Vivo I2202 on 5 September 2026 against the **published
 the installed `com.aistudio.verb.app` base APK hashes to
 `e9272bc85cf3f1784fdc6a1bff336dedde3ca42ba927542514a9dbe4985255c6`, which is the beta.8 release
 asset pinned to `74f0df8`. So these observations are of the thing that would ship, not of a local
-build of it. `docs/BETA8_HANDOFF.md` carries the procedure for each.
+build of it. `docs/history/BETA8_HANDOFF.md` carries the procedure for each.
 
 - [x] The changes compile and the unit suite passes.
   `:app:testFullCliDebugUnitTest :app:testPlayDebugUnitTest :app:lintFullCliDebug :app:lintPlayDebug

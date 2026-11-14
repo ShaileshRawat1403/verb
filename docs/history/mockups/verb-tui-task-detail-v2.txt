@@ -1,0 +1,30 @@
+  verb  ›  verb / main    16 changed                                            ● 1 running     ◐ 1 recoverable
+  1 Terminal      2 Workbench       3 Activity                                                       ? Help
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  ← WORKBENCH / TASK                                                                         f3a72c91
+
+  Review session lock recovery
+
+  NEEDS REVIEW         from Claude · 4m ago
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  BRIEF
+    Verify that an agent cannot resume twice when the Verb host crashes.
+    Inspect the inherited session lock and recovery transition.
+
+
+  LATEST HANDOFF
+    Claude: "Lock inheritance and crash test are ready. Please check
+    the release path and exact resume guard."
+
+
+  ACTIVITY
+    14:52  Claude handed off for review
+    14:14  Claude claimed this task
+
+  c  Claim review as Codex         r  Reassign with reason            s  Open Claude session
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Esc  Back to workbench          ↑↓  Scroll history          m  Shared memory         Ctrl+Space  Commands
+  NEXT ACTION    Claim review, inspect evidence, then record completion or hand off again.

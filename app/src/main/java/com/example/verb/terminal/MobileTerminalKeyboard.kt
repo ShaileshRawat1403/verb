@@ -47,6 +47,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import kotlin.reflect.KProperty
+import kotlin.properties.ReadWriteProperty
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.snapshots.SnapshotStateMap
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -95,6 +100,12 @@ fun MobileTerminalKeyboard(
     inputFocusRequester: FocusRequester? = null,
     /** False while a deliberate Verb surface owns input in front of the mounted terminal. */
     enabled: Boolean = true,
+    /**
+     * Which terminal the field is mirroring into. The field's text is a copy of characters already
+     * written to *that* terminal's line, so it belongs to that terminal and must not follow the
+     * person to another one. Null in single-terminal contexts and tests.
+     */
+    terminalKey: String? = null,
     modifier: Modifier = Modifier
 ) {
     val clipboardManager = LocalClipboardManager.current
@@ -121,7 +132,15 @@ fun MobileTerminalKeyboard(
     // Saveable, not merely remembered: switching to Agents and back used to drop this while the
     // characters were still sitting on the shell line, after which the field and the line disagreed
     // about what had been typed and every edit was computed against the wrong text.
-    var terminalInput by rememberSaveable { mutableStateOf("") }
+    //
+    // Keyed per terminal. One shared buffer meant that text typed while Terminal 1 was in front --
+    // already mirrored onto Terminal 1's line -- was still in the field after switching to Terminal
+    // 2, and every edit from then on was diffed against it and sent to Terminal 2: backspaces into
+    // a Codex composer that had never seen those characters. Observed on a Vivo I2202. Each terminal
+    // now keeps its own copy, restored when you come back to it.
+    val inputByTerminal = rememberSaveable(saver = TerminalInputsSaver) { mutableStateMapOf<String, String>() }
+    val terminalInputSlot = remember(terminalKey) { TerminalInputSlot(inputByTerminal, terminalKey.orEmpty()) }
+    var terminalInput by terminalInputSlot
     
     val scrollState1 = rememberScrollState()
     val scrollState2 = rememberScrollState()
@@ -584,3 +603,25 @@ internal fun terminalInputEdit(old: String, new: String): TerminalInputEdit {
         textToSend = new.substring(shared)
     )
 }
+
+
+/** One terminal's entry in the per-terminal input map, usable as a local `var` delegate. */
+private class TerminalInputSlot(
+    private val inputs: SnapshotStateMap<String, String>,
+    private val key: String
+) : ReadWriteProperty<Any?, String> {
+    override fun getValue(thisRef: Any?, property: KProperty<*>): String = inputs[key] ?: ""
+    override fun setValue(thisRef: Any?, property: KProperty<*>, value: String) {
+        if (value.isEmpty()) inputs.remove(key) else inputs[key] = value
+    }
+}
+
+/** Saves the per-terminal input map as a flat key/value list, which a Bundle can hold. */
+private val TerminalInputsSaver = Saver<SnapshotStateMap<String, String>, List<String>>(
+    save = { map -> map.flatMap { (k, v) -> listOf(k, v) } },
+    restore = { flat ->
+        mutableStateMapOf<String, String>().apply {
+            flat.chunked(2).forEach { (k, v) -> put(k, v) }
+        }
+    }
+)

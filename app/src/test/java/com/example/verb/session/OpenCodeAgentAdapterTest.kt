@@ -189,7 +189,7 @@ class OpenCodeAgentAdapterTest {
     }
 
     @Test
-    fun `resumeIdentity returns the most recently updated used session`() {
+    fun `resumeIdentity refuses ambiguous used sessions`() {
         val (filesDir, project) = setUpFilesystem()
         openCodeDatabase(filesDir).use {
             it.insertSession("session-older", project.absolutePath, updatedAt = 10L)
@@ -200,7 +200,8 @@ class OpenCodeAgentAdapterTest {
 
         val adapter = adapter(filesDir, project, FakeTerminalRuntimeAdapter(filesDir))
 
-        assertEquals("session-newer", adapter.resumeIdentity(AgentRef("opencode")))
+        assertNull(adapter.resumeIdentity(AgentRef("opencode")))
+        assertEquals("session-newer", adapter.resumeIdentity(AgentRef("opencode", "session-newer")))
     }
 
     @Test
@@ -242,25 +243,30 @@ class OpenCodeAgentAdapterTest {
     // --- resume(): flags read from `opencode --help` on the installed build ---
 
     @Test
-    fun `resume runs opencode --session with the conversation id and succeeds when nothing settles`() = runTest {
+    fun `resume runs exact opencode session after observing a running command`() = runTest {
         val (filesDir, project) = setUpFilesystem()
         val fake = FakeTerminalRuntimeAdapter(filesDir)
         val adapter = adapter(filesDir, project, fake)
 
-        val binding = adapter.resume(AgentRef("opencode", "session-1"))
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
+        val resumeCall = async { adapter.resume(AgentRef("opencode", "session-1")) }
+        runCurrent()
+        fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)
+        advanceUntilIdle()
+        val binding = resumeCall.await()
 
         assertNotNull(binding)
         assertTrue(fake.terminalOutput.value.contains("opencode --session session-1"))
     }
 
     @Test
-    fun `resume falls back to --continue when no id is known`() = runTest {
+    fun `resume refuses a missing id`() = runTest {
         val (filesDir, project) = setUpFilesystem()
         val fake = FakeTerminalRuntimeAdapter(filesDir)
 
-        adapter(filesDir, project, fake).resume(AgentRef("opencode", resumeIdentity = null))
+        assertNull(adapter(filesDir, project, fake).resume(AgentRef("opencode", resumeIdentity = null)))
 
-        assertTrue(fake.terminalOutput.value.contains("opencode --continue"))
+        assertTrue(!fake.terminalOutput.value.contains("opencode --continue"))
     }
 
     @Test
@@ -271,6 +277,7 @@ class OpenCodeAgentAdapterTest {
             filesDir, project, fake, scratchDir, resumeSettleMs = 5_000, pollIntervalMs = 50
         )
 
+        fake.simulateShellIntegration(ShellIntegrationEvent.Handshake)
         val resumeCall = async { adapter.resume(AgentRef("opencode", "session-1")) }
         runCurrent()
         fake.simulateShellIntegration(ShellIntegrationEvent.CommandStart)

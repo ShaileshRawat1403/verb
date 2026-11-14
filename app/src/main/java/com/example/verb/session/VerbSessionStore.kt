@@ -2,6 +2,8 @@ package com.example.verb.session
 
 import android.annotation.SuppressLint
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.Instant
 
 /**
@@ -14,31 +16,35 @@ import java.time.Instant
  */
 interface VerbSessionStore {
     fun load(): VerbSession?
+    fun loadAll(): List<VerbSession> = listOfNotNull(load())
     fun save(session: VerbSession)
     fun clear()
 }
 
 /** Small in-memory implementation for coordinator tests and host adapters that own their store. */
 class InMemoryVerbSessionStore(initial: VerbSession? = null) : VerbSessionStore {
-    private var value: VerbSession? = initial
+    private val values = linkedMapOf<String, VerbSession>().apply {
+        initial?.let { put(it.id, it.copy(process = null)) }
+    }
 
-    override fun load(): VerbSession? = value
+    override fun load(): VerbSession? = loadAll().lastOrNull()
+    override fun loadAll(): List<VerbSession> = values.values.toList()
 
     override fun save(session: VerbSession) {
-        value = session.copy(process = null)
+        values[session.id] = session.copy(process = null)
     }
 
     override fun clear() {
-        value = null
+        values.clear()
     }
 }
 
 /**
  * Android process-death durable implementation backed by app-private SharedPreferences.
  *
- * One store per agent, named by [preferencesName]: each agent tracks its own session, and sharing
- * one record would make launching Codex silently destroy Claude's recovery evidence. The default
- * name is Claude's, unchanged, so records written before Codex existed still load.
+ * One store per agent, named by [preferencesName]. Each record is keyed by product session ID so
+ * parallel terminals using the same agent cannot erase one another. Version-one single records are
+ * read and migrated on the first successful save.
  */
 class SharedPreferencesVerbSessionStore(
     context: Context,
@@ -49,7 +55,20 @@ class SharedPreferencesVerbSessionStore(
         Context.MODE_PRIVATE
     )
 
-    override fun load(): VerbSession? {
+    override fun load(): VerbSession? = loadAll().lastOrNull()
+
+    override fun loadAll(): List<VerbSession> {
+        if (preferences.getInt(KEY_SCHEMA_VERSION, -1) == MULTI_SCHEMA_VERSION) {
+            val json = preferences.getString(KEY_SESSIONS_JSON, null) ?: return emptyList()
+            return runCatching {
+                val array = JSONArray(json)
+                (0 until array.length()).map { decode(array.getJSONObject(it)) }
+            }.getOrElse { throw IllegalStateException("Damaged Verb session registry", it) }
+        }
+        return listOfNotNull(loadLegacy())
+    }
+
+    private fun loadLegacy(): VerbSession? {
         if (preferences.getInt(KEY_SCHEMA_VERSION, -1) != SCHEMA_VERSION) return null
         val id = preferences.getString(KEY_SESSION_ID, null) ?: return null
         val state = preferences.getString(KEY_STATE, null)
@@ -84,36 +103,54 @@ class SharedPreferencesVerbSessionStore(
     }
 
     @SuppressLint("ApplySharedPref")
+    @Synchronized
     override fun save(session: VerbSession) {
         // commit() is deliberate: this metadata is the recovery anchor if Android kills the app
         // immediately after the launch or state transition.
-        preferences.edit()
-            .clear()
-            .putInt(KEY_SCHEMA_VERSION, SCHEMA_VERSION)
-            .putString(KEY_SESSION_ID, session.id)
-            .putNullableString(KEY_PROJECT_ID, session.projectId)
-            .putNullableString(KEY_RUNTIME_ID, session.runtime)
-            .putNullableString(KEY_LAST_KNOWN_CWD, session.lastKnownCwd)
-            .putNullableLong(KEY_LAST_OBSERVED_AT, session.lastObservedAt?.toEpochMilli())
-            .putLong(KEY_CREATED_AT, session.createdAt.toEpochMilli())
-            .putLong(KEY_LAST_SEEN_AT, session.lastSeenAt.toEpochMilli())
-            .putString(KEY_STATE, session.state.name)
-            .putNullableString(KEY_AGENT_TYPE, session.agent?.agentType)
-            .putNullableString(
-                KEY_RESUME_IDENTITY,
-                ResumeIdentity.validOrNull(session.agent?.resumeIdentity)
-            )
-            // commit(), not apply(), and lint's ApplySharedPref advice is wrong here. apply()
-            // writes in the background; this record exists to survive the process being killed,
-            // which is the exact moment a background write is lost. A session record that did not
-            // reach disk is a session Verb cannot prove it ever had.
-            .commit()
+        val records = loadAll().associateByTo(linkedMapOf()) { it.id }
+        records[session.id] = session.copy(process = null)
+        val json = JSONArray().apply { records.values.forEach { put(encode(it)) } }.toString()
+        check(preferences.edit().clear()
+            .putInt(KEY_SCHEMA_VERSION, MULTI_SCHEMA_VERSION)
+            .putString(KEY_SESSIONS_JSON, json)
+            .commit()) { "Verb session metadata was not committed" }
     }
 
     @SuppressLint("ApplySharedPref")
     override fun clear() {
-        preferences.edit().clear().commit()
+        check(preferences.edit().clear().commit()) { "Verb session metadata could not be cleared" }
     }
+
+    private fun encode(session: VerbSession): JSONObject = JSONObject().apply {
+        put("id", session.id)
+        put("projectId", session.projectId ?: JSONObject.NULL)
+        put("runtime", session.runtime ?: JSONObject.NULL)
+        put("createdAt", session.createdAt.toEpochMilli())
+        put("lastSeenAt", session.lastSeenAt.toEpochMilli())
+        put("state", session.state.name)
+        put("lastKnownCwd", session.lastKnownCwd ?: JSONObject.NULL)
+        put("lastObservedAt", session.lastObservedAt?.toEpochMilli() ?: JSONObject.NULL)
+        put("agentType", session.agent?.agentType ?: JSONObject.NULL)
+        put("resumeIdentity", ResumeIdentity.validOrNull(session.agent?.resumeIdentity) ?: JSONObject.NULL)
+    }
+
+    private fun decode(record: JSONObject): VerbSession = VerbSession(
+        id = record.getString("id"),
+        projectId = record.optString("projectId").takeIf { record.has("projectId") && !record.isNull("projectId") },
+        runtime = record.optString("runtime").takeIf { record.has("runtime") && !record.isNull("runtime") },
+        createdAt = Instant.ofEpochMilli(record.getLong("createdAt")),
+        lastSeenAt = Instant.ofEpochMilli(record.getLong("lastSeenAt")),
+        state = VerbSessionState.valueOf(record.getString("state")),
+        lastKnownCwd = record.optString("lastKnownCwd").takeIf { record.has("lastKnownCwd") && !record.isNull("lastKnownCwd") },
+        lastObservedAt = record.optLong("lastObservedAt").takeIf { !record.isNull("lastObservedAt") }?.let(Instant::ofEpochMilli),
+        process = null,
+        agent = record.optString("agentType").takeIf { record.has("agentType") && !record.isNull("agentType") }
+            ?.let {
+                val identity = record.optString("resumeIdentity")
+                    .takeIf { record.has("resumeIdentity") && !record.isNull("resumeIdentity") }
+                AgentRef(it, ResumeIdentity.validOrNull(identity))
+            }
+    )
 
     private fun android.content.SharedPreferences.getNullableString(key: String): String? =
         if (contains(key)) getString(key, null) else null
@@ -141,6 +178,8 @@ class SharedPreferencesVerbSessionStore(
         const val OPENCODE_PREFERENCES_NAME = "verb_session_opencode"
 
         private const val SCHEMA_VERSION = 1
+        private const val MULTI_SCHEMA_VERSION = 2
+        private const val KEY_SESSIONS_JSON = "sessionsJson"
         private const val INVALID_INSTANT = Long.MIN_VALUE
         private const val KEY_SCHEMA_VERSION = "schemaVersion"
         private const val KEY_SESSION_ID = "sessionId"

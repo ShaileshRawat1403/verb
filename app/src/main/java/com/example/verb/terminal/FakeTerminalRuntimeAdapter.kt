@@ -29,6 +29,7 @@ open class FakeTerminalRuntimeAdapter(
 
     private val commandTracker = CommandExecutionTracker()
     override val commandHistory: StateFlow<List<CommandExecutionRecord>> = commandTracker.history
+    override val runningCommand: StateFlow<CommandExecutionRecord?> = commandTracker.runningCommand
     override val shellIntegrationActive: StateFlow<Boolean> = commandTracker.shellIntegrationActive
 
     override val launchWorkingDirectory: File get() = workingDir

@@ -1,0 +1,21 @@
+/* Tap targets: the floor every control starts from. WCAG 2.2 asks for at least 24 by 24 px. On a touch
+   screen (pointer: coarse, so phones, tablets and touch laptops alike) the floor is 40 px, about the
+   width of a thumb pad.
+
+   This file loads before every other stylesheet, so any component rule that sets its own size wins
+   over it: a control that is deliberately larger, such as the chat's 44 px buttons, keeps its size.
+   A base component that is smaller sets its touch size next to its own definition. The phone
+   tap-target browser test fails if a visible control falls under the floor. */
+:root :where(button, select, [role="tab"], input:not([type="checkbox"], [type="radio"], [type="hidden"], [type="range"])) {
+  min-height: 24px;
+}
+:root :where(button, [role="tab"]) { min-width: 24px; }
+:root :where(summary) { min-height: 24px; min-width: 24px; align-content: center; }
+:root :where(label:has(> input[type="checkbox"], > input[type="radio"])) {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 24px;
+}
+@media (pointer: coarse) {
+  :root :where(button, select, summary, [role="tab"], label:has(> input[type="checkbox"], > input[type="radio"]),
+    input:not([type="checkbox"], [type="radio"], [type="hidden"], [type="range"])) { min-height: 40px; }
+  :root :where(button, summary, [role="tab"]) { min-width: 40px; }
+}

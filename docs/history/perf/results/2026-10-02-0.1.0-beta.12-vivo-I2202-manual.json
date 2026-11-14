@@ -1,0 +1,199 @@
+{
+  "meta": {
+    "timestamp": "2026-10-02T09:37:00+05:30",
+    "package": "com.aistudio.verb.app",
+    "version_name": "0.1.0-beta.12",
+    "version_code": "12",
+    "debuggable": false,
+    "repo_head": "77cc07f",
+    "device": "vivo I2202",
+    "android": "14",
+    "sdk": "34",
+    "refresh_rate_hz": 120.0,
+    "battery_pct": null,
+    "charging": null,
+    "runs": 1,
+    "output_lines": 20000,
+    "note": "Reconstructed from hand-run adb measurements on 2 Oct 2026, before verb_bench.py existed. Single samples, no warm-up discarded, warm start measured once on a process that had been alive for 6.5 days. Treat as indicative only."
+  },
+  "results": {
+    "warm": {
+      "total_ms": {
+        "n": 1,
+        "median": 239.0,
+        "p90": 239.0,
+        "min": 239.0,
+        "max": 239.0,
+        "samples": [
+          239.0
+        ]
+      }
+    },
+    "memory": {
+      "pss_kb": {
+        "n": 1,
+        "median": 33360,
+        "p90": 33360,
+        "min": 33360,
+        "max": 33360,
+        "samples": [
+          33360
+        ]
+      },
+      "rss_kb": {
+        "n": 1,
+        "median": 92804,
+        "p90": 92804,
+        "min": 92804,
+        "max": 92804,
+        "samples": [
+          92804
+        ]
+      },
+      "java_heap_kb": {
+        "n": 1,
+        "median": 1332,
+        "p90": 1332,
+        "min": 1332,
+        "max": 1332,
+        "samples": [
+          1332
+        ]
+      },
+      "native_heap_kb": {
+        "n": 1,
+        "median": 524,
+        "p90": 524,
+        "min": 524,
+        "max": 524,
+        "samples": [
+          524
+        ]
+      },
+      "graphics_kb": {
+        "n": 1,
+        "median": 2208,
+        "p90": 2208,
+        "min": 2208,
+        "max": 2208,
+        "samples": [
+          2208
+        ]
+      },
+      "activities": {
+        "n": 1,
+        "median": 2,
+        "p90": 2,
+        "min": 2,
+        "max": 2,
+        "samples": [
+          2
+        ]
+      },
+      "views": {
+        "n": 1,
+        "median": 35,
+        "p90": 35,
+        "min": 35,
+        "max": 35,
+        "samples": [
+          35
+        ]
+      },
+      "threads": {
+        "n": 1,
+        "median": 34,
+        "p90": 34,
+        "min": 34,
+        "max": 34,
+        "samples": [
+          34
+        ]
+      }
+    },
+    "idle": {
+      "cpu_pct": {
+        "n": 1,
+        "median": 3.0,
+        "p90": 3.0,
+        "min": 3.0,
+        "max": 3.0,
+        "samples": [
+          3.0
+        ]
+      },
+      "fps": {
+        "n": 1,
+        "median": 2.0,
+        "p90": 2.0,
+        "min": 2.0,
+        "max": 2.0,
+        "samples": [
+          2.0
+        ]
+      }
+    },
+    "scroll": {
+      "frames": {
+        "n": 1,
+        "median": 170,
+        "p90": 170,
+        "min": 170,
+        "max": 170,
+        "samples": [
+          170
+        ]
+      },
+      "janky_pct": {
+        "n": 1,
+        "median": 7.65,
+        "p90": 7.65,
+        "min": 7.65,
+        "max": 7.65,
+        "samples": [
+          7.65
+        ]
+      },
+      "p50_ms": {
+        "n": 1,
+        "median": 5,
+        "p90": 5,
+        "min": 5,
+        "max": 5,
+        "samples": [
+          5
+        ]
+      },
+      "p90_ms": {
+        "n": 1,
+        "median": 14,
+        "p90": 14,
+        "min": 14,
+        "max": 14,
+        "samples": [
+          14
+        ]
+      },
+      "p95_ms": {
+        "n": 1,
+        "median": 17,
+        "p90": 17,
+        "min": 17,
+        "max": 17,
+        "samples": [
+          17
+        ]
+      },
+      "p99_ms": {
+        "n": 1,
+        "median": 26,
+        "p90": 26,
+        "min": 26,
+        "max": 26,
+        "samples": [
+          26
+        ]
+      }
+    }
+  }
+}

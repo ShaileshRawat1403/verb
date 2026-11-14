@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import java.io.File
+import java.io.FileOutputStream
 
 /**
  * Moving a world archive out of app-private storage, and back in.
@@ -58,16 +59,21 @@ object WorldArchive {
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: return Outcome.Failed("Downloads is not available on this device.")
-
-            resolver.openOutputStream(uri)?.use { output ->
-                archive.inputStream().use { input -> input.copyTo(output) }
-            } ?: return Outcome.Failed("Downloads could not be opened for writing.")
-
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-
-            Outcome.Saved("${Environment.DIRECTORY_DOWNLOADS}/${archive.name}")
+            var published = false
+            try {
+                val output = resolver.openOutputStream(uri)
+                    ?: error("Downloads could not be opened for writing.")
+                output.use { stream -> archive.inputStream().use { it.copyTo(stream) } }
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                check(resolver.update(uri, values, null, null) == 1) {
+                    "Downloads could not publish the archive."
+                }
+                published = true
+                Outcome.Saved("${Environment.DIRECTORY_DOWNLOADS}/${archive.name}")
+            } finally {
+                if (!published) resolver.delete(uri, null, null)
+            }
         }.getOrElse { error ->
             Outcome.Failed(error.message ?: "The archive could not be saved.")
         }
@@ -83,9 +89,20 @@ object WorldArchive {
     fun stageForImport(context: Context, uri: android.net.Uri, filesDir: File): Outcome = runCatching {
         val home = File(filesDir, "home").apply { mkdirs() }
         val target = File(home, "imported-world.$EXTENSION")
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            target.outputStream().use { output -> input.copyTo(output) }
-        } ?: return Outcome.Failed("That file could not be opened.")
+        val staging = File.createTempFile("imported-world-", ".$EXTENSION", home)
+        try {
+            val input = context.contentResolver.openInputStream(uri)
+                ?: return Outcome.Failed("That file could not be opened.")
+            input.use { source ->
+                FileOutputStream(staging).use { output ->
+                    source.copyTo(output)
+                    output.fd.sync()
+                }
+            }
+            check(staging.renameTo(target)) { "The archive could not be staged." }
+        } finally {
+            staging.delete()
+        }
         Outcome.Saved(target.name)
     }.getOrElse { error ->
         Outcome.Failed(error.message ?: "The archive could not be staged.")

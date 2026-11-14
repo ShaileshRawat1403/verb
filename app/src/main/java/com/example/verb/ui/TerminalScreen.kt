@@ -339,48 +339,24 @@ fun TerminalScreen(
                             shape = RoundedCornerShape(999.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             onClick = { showWorkspaceSheet = true },
-                            // The flexible one. When the row runs out of width -- which is exactly
-                            // when a second terminal adds the switcher -- this is what gives way,
-                            // because `docs/UX_FOUNDATION.md` says density degrades in a fixed
-                            // order and never takes the session state with it. Weighting the group
-                            // without this squeezed the status chip until "running" disappeared.
                             modifier = Modifier.testTag("terminal_project_selector")
                         ) {
-                            // Capped and ellipsized -- an untruncated long project id (e.g.
-                            // "mobile-kit-30603ae7") was measured on the Vivo I2202 to consume
-                            // over a third of the header's width by itself, leaving no room for
-                            // the action row on the right (Runs' and the overflow menu's touch
-                            // targets both measured 0x0 before this cap was added).
-                            //
-                            // Once a second terminal adds the switcher there is no longer room for
-                            // the name at all, and squeezing it produced an unreadable sliver --
-                            // worse than dropping it, because a stub still asks to be read. The
-                            // glyph keeps the control and its touch target; the name is a tap away
-                            // in the Verb sheet, and the prompt shows the directory regardless.
-                            // `docs/UX_FOUNDATION.md` puts the path first in the order density
-                            // gives way, and the session state last.
-                            if (terminalSessionIds.size > 1) {
-                                Icon(
-                                    imageVector = Icons.Default.FolderOpen,
-                                    contentDescription = "Project ${selectedProject?.id ?: "none"}. " +
-                                        "Activate to change project.",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .padding(horizontal = 8.dp, vertical = 5.dp)
-                                        .size(14.dp)
-                                )
-                            } else {
-                                Text(
-                                    text = selectedProject?.id ?: "project",
-                                    modifier = Modifier
-                                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                                        .widthIn(max = 56.dp),
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            // Always the glyph, never the name. The workspace line directly
+                            // beneath already states the project, by its display name; printing the
+                            // raw id here as well meant one project read three ways at once on a
+                            // Vivo I2202 -- `demo` on the workspace line, `demo-...` in this chip,
+                            // `demo-a3b2606f` at the prompt -- and the chip's 72dp was what left the
+                            // session pill ~9dp short, clipping "running" on every single-terminal
+                            // screen. One surface answers one question (`docs/UX_FOUNDATION.md`).
+                            Icon(
+                                imageVector = Icons.Default.FolderOpen,
+                                contentDescription = "Project ${selectedProject?.displayName ?: "none"}. " +
+                                    "Activate to change project or terminal.",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    .size(14.dp)
+                            )
                         }
 
                         // Active status indicator; tap to restart a stopped/failed session.
@@ -1023,7 +999,8 @@ fun TerminalScreen(
             onInspectOutput = onInspectText,
             onCommandExecuted = onCommandExecuted,
             inputFocusRequester = terminalInputFocusRequester,
-            enabled = !verbSurfaceOpen
+            enabled = !verbSurfaceOpen,
+            terminalKey = activeTerminalSessionId
         )
     }
 
@@ -1101,10 +1078,12 @@ fun TerminalScreen(
             },
             onSelectProject = { id -> onSelectProject(id); showWorkspaceSheet = false },
             // Switching terminals dismisses, because the thing you switched to is behind the
-            // sheet. Opening and closing do not: those are list edits, and the list is what you
-            // came here to look at.
+            // sheet. Opening dismisses for the same reason: a new terminal is made active the
+            // moment it opens, so it too is behind the sheet, and leaving the sheet up made every
+            // new terminal cost an extra Back before you could type into it. Closing does not
+            // dismiss -- that one is a list edit, and the list is what you came here to look at.
             onSwitchTerminal = { id -> onSwitchTerminalSession(id); showWorkspaceSheet = false },
-            onOpenTerminal = onOpenTerminalSession,
+            onOpenTerminal = { onOpenTerminalSession(); showWorkspaceSheet = false },
             onCloseTerminal = onCloseTerminalSession
         )
     }

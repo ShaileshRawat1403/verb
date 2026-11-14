@@ -51,28 +51,26 @@ class CodexAgentAdapter(
     }
 
     /**
-     * Codex's own conversation id, taken from the newest rollout for this project that contains a
-     * real user turn. Never the rollout filename or a PID: the filename carries a timestamp and the
-     * process is gone by the time this matters.
+     * Codex's own conversation ID when one used rollout matches this project. Multiple candidates
+     * are ambiguous without an already recorded ID, so they are never guessed from recency.
      */
     override fun resumeIdentity(agent: AgentRef): String? {
         val project = projectDirectory ?: return null
         val rollouts = rolloutFiles() ?: return null
         return matchingRollouts(rollouts, project, agent)
-            .firstOrNull { hasUserTurn(it.file) }
-            ?.sessionId
+            .filter { hasUserTurn(it.file) }
+            .map { it.sessionId }
+            .distinct()
+            .singleOrNull()
     }
 
     /**
-     * Sends `codex resume <id>` -- or `codex resume --last` when no id is known, never the bare
-     * `codex resume`, which opens an interactive picker the user would have to answer by hand --
-     * carrying the same launch flags `RuntimeProfiles` uses for a fresh Codex --
-     * and waits up to [resumeSettleMs] to see whether it exits. [AgentResumeLauncher] owns the
-     * reasoning about why "nothing settled" is the shape of success here.
+     * Sends `codex resume <id>` with the same launch flags as a fresh session. A missing ID never
+     * falls through to a latest-conversation command.
      */
     override suspend fun resume(agent: AgentRef): ProcessBinding? {
         val runtime = terminalRuntimeAdapter ?: return null
-        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity) ?: "--last"
+        val resumeArgument = ResumeIdentity.validOrNull(agent.resumeIdentity) ?: return null
         // The same flags a fresh launch uses, so resuming a conversation is not quietly a different
         // Codex from the one that started it.
         val flags = "--disable ${RuntimeProfiles.CODEX_APPS_FEATURE}"

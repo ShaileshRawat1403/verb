@@ -1,0 +1,58 @@
+/* Interface typefaces, served by the local host (font-src 'self'); nothing loads from the network.
+   Barlow carries the interface. Barlow Condensed is reserved for stamps and spec numbers.
+   Terminal and editor keep their own monospace stack (--mono).
+   size-adjust 108% matches Barlow's x-height (0.506) to Inter's (0.546), the previous UI face,
+   so every existing font-size keeps its reading size. It scales these faces only. */
+@font-face {
+  font-family: "Barlow";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  size-adjust: 108%;
+  src: url("/fonts/barlow-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  size-adjust: 108%;
+  src: url("/fonts/barlow-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow";
+  font-style: normal;
+  font-weight: 600 700;
+  font-display: swap;
+  size-adjust: 108%;
+  src: url("/fonts/barlow-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  size-adjust: 108%;
+  src: url("/fonts/barlow-condensed-600.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: normal;
+  font-weight: 700 800;
+  font-display: swap;
+  size-adjust: 108%;
+  src: url("/fonts/barlow-condensed-700.woff2") format("woff2");
+}
+
+:root {
+  --font-ui: Barlow, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-cond: "Barlow Condensed", Barlow, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Condensed type for identifiers and stamps: spec numbers, requirement IDs, stage marks. */
+.type-cond {
+  font-family: var(--font-cond);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}

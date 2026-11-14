@@ -1,5 +1,11 @@
 # Verb Product Vision
 
+> Updated direction (29 October 2026): Verb is becoming a primary development
+> workstation for all, with Studio editing and previews alongside agent conversations
+> and durable terminals. The evidence, recovery and human-control principles below
+> remain; terminal-first describes the foundation rather than a permanent limit on
+> IDE capabilities. See [the release gates](PRIMARY_WORKSTATION_RELEASE.md).
+
 **Verb makes AI-assisted development easier to understand, control, debug and recover.**
 
 Modern AI agents can write substantial amounts of code and operate development environments, but the

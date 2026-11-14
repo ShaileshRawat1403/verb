@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Verb · Continue on phone concept</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0c1016; --panel:#151b25; --raised:#202936; --line:#344153; --text:#edf1f8; --sub:#aab5c5; --quiet:#7e8ba0; --accent:#a6a0ff; --good:#9ce3bc; --warn:#efcf89; --mono:ui-monospace,SFMono-Regular,Consolas,monospace; font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif }
+    * { box-sizing:border-box }
+    body { margin:0; background:#090c12; color:var(--text) }
+    button, input { font:inherit }
+    button { cursor:pointer }
+    button:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:3px }
+    button:disabled { cursor:not-allowed; opacity:.55 }
+    .stage { max-width:1280px; margin:0 auto; padding:30px 24px 55px }
+    .eyebrow { margin:0 0 10px; color:var(--accent); font:600 12px var(--mono); letter-spacing:.12em; text-transform:uppercase }
+    h1 { font-size:30px; line-height:1.16; letter-spacing:-.035em; margin:0 0 9px }
+    .intro { color:var(--sub); margin:0 0 28px; max-width:790px; line-height:1.5 }
+    .canvases { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(300px,.85fr); gap:24px; align-items:start }
+    .desktop, .phone { background:var(--bg); border:1px solid var(--line); box-shadow:0 24px 60px #0005; overflow:hidden }
+    .desktop { border-radius:15px; min-height:590px }
+    .desktop-top { height:52px; background:#111720; display:flex; align-items:center; gap:14px; padding:0 20px; border-bottom:1px solid var(--line) }
+    .lights { display:flex; gap:7px; margin-right:5px }
+    .lights i { width:9px; height:9px; border-radius:50%; background:#586476 }
+    .brand { font:700 16px var(--mono); letter-spacing:-.05em }
+    .project { color:var(--sub); font-size:13px }
+    .spacer { flex:1 }
+    .host { color:var(--quiet); font:12px var(--mono) }
+    .desktop-body { padding:24px 25px }
+    .desktop-title { display:flex; align-items:end; gap:12px; margin-bottom:25px }
+    .desktop-title h2 { margin:0; font-size:23px; letter-spacing:-.03em }
+    .desktop-title span { color:var(--quiet); font-size:12px; padding-bottom:3px }
+    .columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.1fr); gap:26px }
+    h3 { margin:0 0 12px; color:var(--sub); font-size:11px; letter-spacing:.1em; text-transform:uppercase }
+    .session { padding:16px 0; border-top:1px solid var(--line) }
+    .session strong, .work strong { display:block; font-size:14px; font-weight:600; margin-bottom:6px }
+    .meta { color:var(--sub); font-size:12px; line-height:1.5 }
+    .state { color:var(--good) }
+    .dot { display:inline-block; background:var(--good); width:7px; height:7px; border-radius:50%; margin-right:6px }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px }
+    .btn { border:1px solid #526078; background:#253041; color:var(--text); border-radius:7px; padding:9px 11px; font-size:12px; font-weight:600; min-height:38px }
+    .btn:hover:not(:disabled) { background:#334157 }
+    .btn.primary { background:var(--accent); border-color:#c0bbff; color:#161525 }
+    .btn.primary:hover { background:#c0bbff }
+    .btn.quiet { background:transparent; border-color:transparent; color:var(--sub) }
+    .work { padding:16px 0; border-top:1px solid var(--line) }
+    .work small { color:var(--warn); font-size:11px; font-weight:600 }
+    .memory { margin-top:26px; padding-top:15px; border-top:1px solid var(--line); color:var(--sub); font-size:12px; line-height:1.5 }
+    .memory strong { color:var(--text); margin-right:12px }
+    .notice { min-height:27px; color:var(--good); font-size:12px; margin-top:18px }
+    .phone-wrap { display:flex; flex-direction:column; align-items:center }
+    .phone-label { align-self:stretch; display:flex; justify-content:space-between; color:var(--sub); font:12px var(--mono); margin:1px 0 10px }
+    .phone { border-radius:29px; width:min(100%,365px); min-height:590px; border-width:5px; border-color:#3b4555 }
+    .phone-status { text-align:center; font:11px var(--mono); color:var(--quiet); padding:14px 0 8px }
+    .phone-content { padding:10px 19px 24px }
+    .phone-head { display:flex; align-items:center; gap:9px; padding-bottom:20px }
+    .phone-head .brand { font-size:19px }
+    .phone-head .spacer { flex:1 }
+    .device { color:var(--quiet); font-size:11px }
+    .phone h2 { font-size:22px; letter-spacing:-.03em; margin:0 0 5px }
+    .phone-copy { color:var(--sub); font-size:12px; line-height:1.5; margin:0 0 23px }
+    .mobile-session { border-top:1px solid var(--line); padding:16px 0 }
+    .mobile-session strong { display:block; font-size:14px; font-weight:600 }
+    .mobile-session .meta { margin:7px 0 12px }
+    .mobile-session .btn { width:100%; min-height:44px }
+    .pair-label { display:block; color:var(--sub); font-size:12px; margin:10px 0 6px }
+    .pair-input { width:100%; min-height:44px; border:1px solid #526078; border-radius:7px; background:var(--raised); color:var(--text); padding:9px 12px; font:16px var(--mono); letter-spacing:.12em }
+    .pair-error { color:#f4a8a8; font-size:12px; min-height:20px; margin:7px 0 }
+    .muted-row { color:var(--quiet); font-size:12px; border-top:1px solid var(--line); padding:15px 0 }
+    .sheet { margin:17px 0 0; background:var(--raised); padding:17px; border:1px solid #49566b; border-radius:10px }
+    .sheet h4 { margin:0 0 9px; font-size:15px }
+    .sheet p { color:var(--sub); font-size:12px; line-height:1.55; margin:0 0 14px }
+    .code { color:var(--text); font:700 21px var(--mono); letter-spacing:.13em; margin-bottom:14px }
+    .terminal { background:#090d13; border:1px solid var(--line); border-radius:7px; color:#cfd9e9; font:12px/1.65 var(--mono); white-space:pre-wrap; padding:15px; margin:17px 0; min-height:190px }
+    .terminal span { color:var(--good) }
+    .hide { display:none }
+    .footer { margin-top:19px; color:var(--quiet); font-size:12px; line-height:1.5 }
+    @media(max-width:850px) { .canvases { grid-template-columns:1fr } .phone-wrap { align-items:flex-start } .phone-label { max-width:365px } }
+    @media(max-width:560px) { .stage { padding:20px 12px 36px } h1 { font-size:25px } .desktop-body { padding:18px } .columns { grid-template-columns:1fr; gap:17px } .desktop { min-height:0 } .desktop-top { padding:0 13px } .host { display:none } }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <p class="eyebrow">Product concept · local interaction only</p>
+    <h1>Continue the same desktop session on your phone</h1>
+    <p class="intro">The agent and project stay on the desktop. The phone becomes a second view of the same running terminal, with one device controlling input at a time.</p>
+    <div class="canvases">
+      <section class="desktop" aria-label="Desktop Workbench concept">
+        <header class="desktop-top"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand">verb</span><span class="project">/ website-redesign</span><span class="spacer"></span><span class="host">This Mac · connected</span></header>
+        <div class="desktop-body">
+          <div class="desktop-title"><h2>Workbench</h2><span>2 agents running</span></div>
+          <div class="columns">
+            <section aria-label="Sessions"><h3>Sessions</h3>
+              <div class="session"><strong><span class="dot"></span>Claude · Homepage copy</strong><div class="meta">This Mac · running · task: Review landing page copy</div><div class="actions"><button class="btn" type="button" data-open="claude">Open</button><button class="btn primary" type="button" data-pair="claude">Continue on phone</button></div></div>
+              <div class="session"><strong><span class="dot"></span>OpenCode · Asset audit</strong><div class="meta">This Mac · running · task: Audit image licences</div><div class="actions"><button class="btn" type="button" data-open="opencode">Open</button><button class="btn" type="button" data-pair="opencode">Continue on phone</button></div></div>
+            </section>
+            <section aria-label="Priority work"><h3>Work that needs attention</h3>
+              <div class="work"><strong>Review landing page copy</strong><div class="meta">Needs review · Claude handed off 12 min ago</div><small>Review is still separate from completion</small></div>
+              <div class="work"><strong>Audit image licences</strong><div class="meta">In progress · OpenCode owns this task</div></div>
+              <div class="memory"><strong>Project memory</strong>Brand voice · Approved image sources · Current release goal</div>
+            </section>
+          </div>
+          <div id="desktop-sheet" class="sheet hide" role="status" aria-live="polite"></div>
+          <div id="desktop-notice" class="notice" aria-live="polite"></div>
+        </div>
+      </section>
+      <section class="phone-wrap" aria-label="Phone continuation concept"><div class="phone-label"><span>VERB MOBILE · CONCEPT</span><span id="phone-state-label">Not paired</span></div>
+        <div class="phone"><div class="phone-status">9:41</div><div class="phone-content"><div class="phone-head"><span class="brand">verb</span><span class="spacer"></span><span class="device">My phone</span></div><div id="phone-screen" aria-live="polite"></div></div></div>
+      </section>
+    </div>
+    <p class="footer">This mockup demonstrates the proposed journey. It does not connect devices or change the Android app. “Continue on this phone” as a new local agent session is a separate future handoff flow.</p>
+  </main>
+  <script>
+    (() => {
+      const names = {claude:'Claude · Homepage copy',opencode:'OpenCode · Asset audit'};
+      let paired = false, pairing = false, pairError = '', connected = true, active = null, control = 'desktop';
+      const phone = document.getElementById('phone-screen');
+      const sheet = document.getElementById('desktop-sheet');
+      const label = document.getElementById('phone-state-label');
+      const notice = document.getElementById('desktop-notice');
+      function render() {
+        label.textContent = !paired ? 'Not paired' : connected ? 'Connected' : 'Disconnected';
+        if (!paired) {
+          phone.innerHTML = pairing
+            ? '<h2>Pair a desktop</h2><p class="phone-copy">On your desktop, choose Continue on phone for a session. Enter the code shown there.</p><label class="pair-label" for="pair-code">Six-digit pairing code</label><input class="pair-input" id="pair-code" inputmode="numeric" maxlength="7" autocomplete="one-time-code" placeholder="000 000"><div class="pair-error" role="alert">'+pairError+'</div><button class="btn primary" type="button" data-phone="join">Connect</button> <button class="btn quiet" type="button" data-phone="cancel-pair">Cancel</button>'
+            : '<h2>Continue work</h2><p class="phone-copy">Pair with your desktop to see its running sessions here.</p><button class="btn primary" type="button" data-phone="pair">Pair a desktop</button><div class="muted-row">No paired desktop yet</div>';
+          return;
+        }
+        if (!connected) {
+          phone.innerHTML = '<h2>Desktop unavailable</h2><p class="phone-copy">The last session state was seen on this Mac. Verb cannot confirm it is still running.</p><button class="btn primary" type="button" data-phone="reconnect">Reconnect</button><div class="muted-row">Task history remains available as recorded information.</div>';
+          return;
+        }
+        if (active) {
+          phone.innerHTML = '<button class="btn quiet" type="button" data-phone="back">← All sessions</button><h2>'+names[active]+'</h2><p class="phone-copy">Running on this Mac · '+(control==='phone'?'Your phone controls input':'Desktop controls input')+'</p><div class="terminal" aria-label="Illustrative terminal output"><span>~/website-redesign</span> $ agent\nReview handoff is ready.\nWaiting for your next instruction…</div><button class="btn primary" type="button" data-phone="control">'+(control==='phone'?'Release control':'Take control')+'</button> <button class="btn" type="button" data-phone="disconnect">Simulate disconnect</button>';
+          return;
+        }
+        phone.innerHTML = '<h2>Continue work</h2><p class="phone-copy">website-redesign · This Mac is connected</p>'+Object.entries(names).map(([id,name])=>'<div class="mobile-session"><strong><span class="dot"></span>'+name+'</strong><div class="meta">Running on this Mac · '+(id==='claude'?'Needs review':'In progress')+'</div><button class="btn primary" type="button" data-phone="'+id+'">Continue live</button></div>').join('')+'<div class="muted-row">History from another device · view only</div>';
+      }
+      document.addEventListener('click', event => {
+        const pair = event.target.closest('[data-pair]');
+        if (pair) {
+          const name = names[pair.dataset.pair];
+          sheet.classList.remove('hide');
+          sheet.innerHTML = '<h4>Continue '+name+' on your phone</h4><p>The agent and project keep running on this Mac. In Verb Mobile, choose Pair a desktop and enter this short-lived code.</p><div class="code">584 213</div><button class="btn quiet" type="button" data-desktop="cancel">Cancel</button>';
+          notice.textContent = '';
+          return;
+        }
+        const open = event.target.closest('[data-open]');
+        if (open) { notice.textContent = names[open.dataset.open]+' would open in the terminal.'; return; }
+        const desktopAction = event.target.closest('[data-desktop]');
+        if (desktopAction) {
+          if (desktopAction.dataset.desktop==='cancel') sheet.classList.add('hide');
+          return;
+        }
+        const action = event.target.closest('[data-phone]');
+        if (!action) return;
+        switch (action.dataset.phone) {
+          case 'pair': pairing=true; pairError=''; break;
+          case 'cancel-pair': pairing=false; pairError=''; break;
+          case 'join': {
+            const entered = document.getElementById('pair-code').value.replace(/\s/g,'');
+            if (!sheet.classList.contains('hide') && entered==='584213') {
+              paired=true; pairing=false; connected=true; sheet.classList.add('hide'); notice.textContent='Phone paired. Desktop keeps running the agent.';
+            } else {
+              pairError='Open Continue on phone on the desktop and enter its code.';
+              document.querySelector('.pair-error').textContent=pairError;
+              return;
+            }
+            break;
+          }
+          case 'claude': case 'opencode': active=action.dataset.phone; break;
+          case 'back': active=null; break;
+          case 'control': control=control==='phone'?'desktop':'phone'; notice.textContent=control==='phone'?'Phone now controls input.':'Desktop now controls input.'; break;
+          case 'disconnect': connected=false; active=null; control='desktop'; notice.textContent='Phone disconnected. Desktop process keeps running.'; break;
+          case 'reconnect': connected=true; notice.textContent='Phone reconnected to the desktop.'; break;
+        }
+        render();
+      });
+      render();
+    })();
+  </script>
+</body>
+</html>

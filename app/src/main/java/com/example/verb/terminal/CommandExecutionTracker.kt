@@ -21,6 +21,8 @@ class CommandExecutionTracker {
 
     private val _history = MutableStateFlow<List<CommandExecutionRecord>>(emptyList())
     val history: StateFlow<List<CommandExecutionRecord>> = _history.asStateFlow()
+    private val _runningCommand = MutableStateFlow<CommandExecutionRecord?>(null)
+    val runningCommand: StateFlow<CommandExecutionRecord?> = _runningCommand.asStateFlow()
 
     private val _shellIntegrationActive = MutableStateFlow(false)
     val shellIntegrationActive: StateFlow<Boolean> = _shellIntegrationActive.asStateFlow()
@@ -83,12 +85,14 @@ class CommandExecutionTracker {
             workingDirectory = _currentWorkingDirectory.value,
             startedAtEpochMs = System.currentTimeMillis()
         )
+        _runningCommand.value = runningRecord
         pendingCommandText = null
     }
 
     private fun endRecord(exitCode: Int) {
         val record = runningRecord ?: return // D with nothing running: ignore, never fabricate a record.
         runningRecord = null
+        _runningCommand.value = null
         append(
             record.copy(
                 endedAtEpochMs = System.currentTimeMillis(),
@@ -101,6 +105,7 @@ class CommandExecutionTracker {
     private fun abandonRunningRecord() {
         val record = runningRecord ?: return
         runningRecord = null
+        _runningCommand.value = null
         append(record.copy(endedAtEpochMs = System.currentTimeMillis(), state = CommandLifecycleState.ABANDONED))
     }
 

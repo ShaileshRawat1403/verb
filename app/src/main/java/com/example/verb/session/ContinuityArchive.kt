@@ -63,6 +63,7 @@ object ContinuityArchive {
         }
         return runCatching {
             val bytes = buildEnvelope(context, project, sessions.filter { it.projectId == project.id })
+            val parsed = parse(bytes)
             val name = "verb-continuity-${Instant.now().epochSecond}.$EXTENSION"
             val resolver = context.contentResolver
             val values = ContentValues().apply {
@@ -72,13 +73,21 @@ object ContinuityArchive {
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: return Outcome.Failed("Downloads is not available on this device.")
-            resolver.openOutputStream(uri)?.use { it.write(bytes) }
-                ?: return Outcome.Failed("Downloads could not be opened for writing.")
-            values.clear()
-            values.put(MediaStore.Downloads.IS_PENDING, 0)
-            resolver.update(uri, values, null, null)
-            val parsed = parse(bytes)
-            Outcome.Saved("${Environment.DIRECTORY_DOWNLOADS}/$name", parsed.summary)
+            var published = false
+            try {
+                val output = resolver.openOutputStream(uri)
+                    ?: error("Downloads could not be opened for writing.")
+                output.use { it.write(bytes) }
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                check(resolver.update(uri, values, null, null) == 1) {
+                    "Downloads could not publish continuity."
+                }
+                published = true
+                Outcome.Saved("${Environment.DIRECTORY_DOWNLOADS}/$name", parsed.summary)
+            } finally {
+                if (!published) resolver.delete(uri, null, null)
+            }
         }.getOrElse { error -> Outcome.Failed(error.message ?: "Continuity export failed.") }
     }
 
