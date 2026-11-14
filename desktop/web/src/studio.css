@@ -1418,3 +1418,8 @@
   #view-studio[data-work-expanded="true"] #studio-work-panel { grid-column: 1; }
 }
 @media (max-width: 820px) { .studio-pane-controls { display: none; } }
+
+/* Front matter in a Markdown preview: folded metadata, quiet until opened. */
+.front-matter { margin: 0 0 12px; color: var(--text-muted); font-size: 12px; }
+.front-matter summary { cursor: pointer; }
+.front-matter pre { white-space: pre-wrap; overflow-wrap: anywhere; }

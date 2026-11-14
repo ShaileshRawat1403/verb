@@ -205,3 +205,13 @@ test("markdown previews are escaped before anything is interpreted", () => {
   assert.ok(html.includes('<a href="https://example.com"'));
   assert.ok(!html.includes("javascript:alert(1)\""), "only http(s) links become links");
 });
+
+test("front matter is folded away, kept intact and never interpreted", () => {
+  const esc = (s) => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const html = renderMarkdown("---\ntitle: GoATee\ntags:\n  - <b>x</b>\n---\n# GoATee\n\nBody.", esc);
+  assert.match(html, /^<details class="front-matter"><summary>Front matter<\/summary><pre><code>title: GoATee\ntags:\n  - &lt;b&gt;x&lt;\/b&gt;<\/code><\/pre><\/details>/);
+  assert.match(html, /<h1>GoATee<\/h1>/);
+  assert.doesNotMatch(html, /<p>title:/);
+  // A rule later in the file is not front matter.
+  assert.doesNotMatch(renderMarkdown("# A\n\n---\n\nB", esc), /front-matter/);
+});

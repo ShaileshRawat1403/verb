@@ -117,7 +117,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
       ${spec ? nextStep(spec) : ""}
       <section class="bench-traveler" aria-label="Traveler">
         <p class="bench-traveler-head"><span class="type-cond">Traveler</span>${item?.size ? `<span>${escapeHtml(stageLabel(item.size))} work item</span>` : ""}</p>
-        ${item ? `<ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}</ul>` : '<p class="muted bench-traveler-note">No work item is linked.</p>'}
+        ${item ? `<ul class="bench-documents">${documentRow(item, "brd", "Why (BRD)")}${documentRow(item, "prd", "What (PRD)")}${spec ? "" : specRow(item, specs)}</ul>` : '<p class="muted bench-traveler-note">No work item is linked.</p>'}
         ${spec ? specPlan(spec, item) : ""}
       </section>
       ${spec ? specExtras(spec) : ""}`
@@ -193,7 +193,7 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
             proof?.error ? "Proof unavailable" : !proof ? "Checking proof…" : "No proof recorded";
         const tone = result?.accepted ? "pass" : result?.result === "failed" ? "fail"
           : result?.freshness === "stale" ? "hold" : "none";
-        return `<li data-proof="${tone}"><span>${escapeHtml(criterion.text)}</span>
+        return `<li data-proof="${tone}"><span>${codeSpans(criterion.text)}</span>
           <small>${criterion.done ? "Marked complete" : "Open"} · <span class="bench-proof-word">${state}</span></small>
           ${link?.stale ? '<small role="status">Stale traceability link</small>' : ""}
           ${trace ? `<details data-criterion="${spec.id}:${criterion.index}"><summary class="type-cond">${labels}</summary><ul>${trace}</ul></details>` : '<small class="muted">No requirement linked</small>'}</li>`;
@@ -232,6 +232,23 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
   const stamp = createStamp(escapeHtml);
   const miniTraveler = (item, specs) =>
     miniTravelerMarkup(itemStations(item, specs, spec => workbench.summaryFor(spec)?.sdlc), escapeHtml);
+
+  // With a work item selected and both documents published, the next station is How. Say so where
+  // the eye already is, instead of leaving the only way on as a small link in the work tree.
+  function specRow(item, specs) {
+    if (item.brd == null || item.prd == null) return "";
+    const count = specs.filter(spec => spec.work_item === item.id).length;
+    const state = count ? "current" : "open";
+    const word = count ? `${count} spec${count === 1 ? "" : "s"}` : "Next";
+    return `<li data-state="${state}"><div><span>How (Spec)</span>${stamp(`how:${item.id}`, state, word)}</div>
+      <button type="button" class="text-button" data-bench-new-spec="${escapeHtml(item.id)}">${count ? "Write another spec" : "Write the spec"}</button></li>`;
+  }
+
+  // Criteria often name exact commands. Barlow's narrow hyphens make `--help` read as a dash, so
+  // text in backticks is set in the terminal face, where every character stands apart.
+  function codeSpans(text) {
+    return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
 
   function documentRow(item, kind, title) {
     const { content, warnings, word, state } = documentState(item, kind);

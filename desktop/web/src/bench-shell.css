@@ -338,7 +338,8 @@
 .bench-review-verdict { font-weight: 650; margin: 8px 0 14px; }
 .bench-proof-list { list-style: none; padding-left: 0; }
 .bench-proof-list > li { border-bottom: 1px solid var(--line); padding-bottom: 8px; }
-.bench-git-menu { position: absolute; inset: 100% 0 auto auto; z-index: 2; display: grid; padding: 4px; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; }
+/* As wide as its longest item and anchored right, so it opens into the panel, never past its edge. */
+.bench-git-menu { position: absolute; inset: 100% 0 auto auto; z-index: 2; display: grid; width: max-content; padding: 4px; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; }
 .bench-document-menu .bench-git-menu button { position: static; border: 0; text-align: left; }
 #handoff-dialog .handoff-footer { display: grid; grid-template-columns: auto auto; justify-content: end; margin-top: 10px; padding-top: 8px; }
 #handoff-running-note { grid-column: 1 / -1; justify-self: end; margin: 0; }

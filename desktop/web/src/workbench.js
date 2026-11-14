@@ -337,6 +337,13 @@ export function suggestCommitMessage(spec, changes) {
  * headings, lists, quotes, rules, code, bold, italic and http(s) links are interpreted.
  */
 export function renderMarkdown(text, escapeHtml) {
+  // YAML front matter is metadata, not prose. Run together as a paragraph it reads as noise at
+  // the top of a README, so it is kept intact and folded away.
+  const matter = /^---\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)\r?\n?/.exec(String(text));
+  if (matter) {
+    const folded = `<details class="front-matter"><summary>Front matter</summary><pre><code>${escapeHtml(matter[1])}</code></pre></details>`;
+    return folded + renderMarkdown(String(text).slice(matter[0].length), escapeHtml);
+  }
   const inline = (s) =>
     escapeHtml(s)
       .replace(/`([^`]+)`/g, "<code>$1</code>")
