@@ -679,7 +679,11 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
 
   function linkableWorkItems() {
     return (workItems?.items ?? []).filter(item => item.brd && item.prd)
-      .map(item => ({ id: item.id, title: workTitle(item) }));
+      .map(item => ({
+        id: item.id, title: workTitle(item),
+        requirements: Object.entries(item.requirements ?? {}).filter(([, r]) => !r.retired)
+          .map(([id, r]) => ({ id, text: r.text })),
+      }));
   }
 
   return {

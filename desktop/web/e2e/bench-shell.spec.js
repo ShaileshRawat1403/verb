@@ -1224,6 +1224,25 @@ test("Plan links a legacy spec and creates a spec from its work item", async ({ 
   await expect(page.locator("#bench-plan-spec")).toContainText("Why (BRD)");
 });
 
+// Found in the 0.2.0-rc.1 real-agent test: a spec created from a work item had no way to name the
+// requirement it meets, so its agent was told "no requirement IDs delivered".
+test("a new spec links its criteria to the requirements chosen for it", async ({ page }) => {
+  await page.goto(`${origin}/#${token}`);
+  await page.locator('[data-bench-new-spec="001-bench-consolidation"]').click();
+  const choices = page.locator("#spec-requirements");
+  await expect(choices).toBeVisible();
+  await expect(choices.getByRole("checkbox", { name: /^R2 · / })).not.toBeChecked();
+  await page.locator("#spec-title-input").fill("Spec that meets R2");
+  await page.locator("#spec-criteria").fill("Documents are stored as Markdown\nPaths are proposed before writing");
+  await choices.getByRole("checkbox", { name: /^R2 · / }).check();
+  await page.locator('#spec-dialog-form button[type="submit"]').click();
+  await expect(page.locator("#spec-dialog")).not.toBeVisible();
+  const plan = page.locator("#bench-plan-spec");
+  await expect(plan.locator(".bench-criteria details")).toHaveCount(2);
+  await expect(plan.locator(".bench-criteria")).not.toContainText("No requirement linked");
+  await expect(plan.locator(".bench-criteria summary").first()).toContainText("R2");
+});
+
 test("planning agent can draft a PRD using the prompt example", async ({ page }) => {
   await page.goto(`${origin}/#${token}`);
   await page.locator('#bench-work-tree [data-bench-work="001-bench-consolidation"]').click();

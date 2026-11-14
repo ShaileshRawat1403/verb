@@ -777,6 +777,10 @@
         </div>
         <label class="field-label" for="spec-work-item">Work item</label>
         <select id="spec-work-item" name="workItem"></select>
+        <fieldset id="spec-requirements" class="spec-requirements" hidden>
+          <legend class="field-label">Requirements this spec meets <span>(from the published PRD)</span></legend>
+          <div data-requirement-options></div>
+        </fieldset>
         <label class="field-label" for="spec-title-input">Title</label
         ><input id="spec-title-input" name="title" maxlength="120" required placeholder="Let people sign in with email" />
         <label class="field-label" for="spec-problem">Problem <span>(what is wrong or missing today)</span></label

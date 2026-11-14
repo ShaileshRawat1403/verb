@@ -1607,6 +1607,31 @@ body {
   font-weight: 400;
   color: var(--text-dim);
 }
+.spec-requirements {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.spec-requirements[hidden] {
+  display: none;
+}
+.spec-requirements legend {
+  padding: 0;
+}
+.spec-requirement {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.spec-requirement input {
+  margin-top: 2px;
+  flex: none;
+}
 .modal input:not([type="radio"]):not([type="checkbox"]),
 .modal textarea,
 .modal select {

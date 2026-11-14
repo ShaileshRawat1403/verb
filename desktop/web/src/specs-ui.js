@@ -154,9 +154,14 @@ export function initWorkbench(deps) {
     select.value = [...select.options].some(option => option.value === defaultId) ? defaultId : "";
   }
 
-  async function linkSpec(spec, workItem) {
+  // Every criterion of a new spec meets the requirements chosen for it; the host writes the
+  // Traceability rows, so the agent is told which requirement IDs its work serves.
+  async function linkSpec(spec, workItem, requirements = []) {
+    const criteria = requirements.length
+      ? Object.fromEntries((spec.criteria ?? []).map(c => [String(c.index + 1), requirements]))
+      : undefined;
     const result = await api("POST", "/api/work-items/link", {
-      specId: spec.id, expectedRevision: spec.revision, workItem,
+      specId: spec.id, expectedRevision: spec.revision, workItem, ...(criteria ? { criteria } : {}),
     });
     await Promise.all([refreshSpecs(), deps.extras.refreshBenchWork?.()]);
     return result;
@@ -185,10 +190,31 @@ export function initWorkbench(deps) {
     }
   });
 
+  function renderRequirementOptions() {
+    const id = $("#spec-work-item").value;
+    const item = (deps.extras.linkableWorkItems?.() ?? []).find(row => row.id === id);
+    const requirements = item?.requirements ?? [];
+    const box = $("#spec-requirements");
+    box.hidden = !requirements.length;
+    box.querySelector("[data-requirement-options]").replaceChildren(...requirements.map(r => {
+      const label = document.createElement("label");
+      label.className = "spec-requirement";
+      const input = Object.assign(document.createElement("input"), { type: "checkbox", name: "requirement", value: r.id });
+      // One requirement is the common small work item; it is chosen for you and can be cleared.
+      input.checked = requirements.length === 1;
+      const text = document.createElement("span");
+      text.textContent = `${r.id} · ${r.text}`;
+      label.append(input, text);
+      return label;
+    }));
+  }
+  $("#spec-work-item").addEventListener("change", renderRequirementOptions);
+
   function openNewSpec(draft = {}) {
     state.newSpecView = deps.ui.view;
     $("#spec-dialog-form").reset();
     workItemOptions($("#spec-work-item"), "Unlinked", draft.workItem ?? deps.extras.selectedWorkItem?.());
+    renderRequirementOptions();
     $("#spec-title-input").value = draft.title ?? "";
     $("#spec-dialog-form").elements.problem.value = draft.problem ?? "";
     showDialog("spec-dialog");
@@ -469,7 +495,7 @@ export function initWorkbench(deps) {
       selectSpec(spec.id, { navigate: !fromStudio });
       if (form.get("workItem")) {
         try {
-          const result = await linkSpec(spec, form.get("workItem"));
+          const result = await linkSpec(spec, form.get("workItem"), form.getAll("requirement").map(String));
           if (result.message) toast(result.message);
         } catch (error) {
           toast(`Spec ${spec.id} was created. Linking failed: ${error.message}`, "error");
