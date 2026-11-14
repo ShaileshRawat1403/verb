@@ -1,6 +1,6 @@
 # Verb security model
 
-Status: 2026-10-11. What Verb protects, from whom, what is in place, and the containment decision
+Status: 2026-10-11, project file reads added 2026-11-14. What Verb protects, from whom, what is in place, and the containment decision
 that is still open.
 
 ## What Verb is, from a security view
@@ -50,6 +50,29 @@ operating-system user Verb runs as. Everything below follows from that.
 - **Honest audit.** Stage moves, proofs (with evidence), commits, agent starts and handoffs are
   appended to the spec file, which goes into Git history with the spec's commits; moving to Ship
   warns about uncommitted work and an unmerged branch.
+
+## Project file reads: what they protect, and from whom
+
+File previews, Studio reads and the isolated project-read helper keep reads inside the project:
+
+- A read opens the file once and reads that open file, capped in size, so nothing swapped on disk
+  between the check and the read changes what is read.
+- The walk from the project folder to the file never follows a link, at any step.
+- The host pins the project folder when it starts (its resolved path and the filesystem's device
+  and inode). Every read, and every isolated launch, checks the folder is still that one; a folder
+  swapped for a link, or replaced by another under the same name, is refused until Verb restarts.
+- Git-ignored files are never listed or opened, and files with hard links are not read.
+
+These protect the project from **remote clients** (an access token, a browser session, a published
+Access login) and from **isolated agents**, which can write inside the project but not above it.
+
+They do not defend against code running with the **Verb account's own permissions**. Renaming or
+replacing the project folder needs write access to the folder above it, and code with that access
+can already read every file the account can, directly; a preview trick gives it nothing new. For
+example, the Git visibility check still finds the project by its path, so such code could, with
+precise timing, make an ignored file look visible for one read. That follows from this boundary
+rather than being a separate gap: containing same-account code is the job of account separation
+(residual risk 1 below), not of the read path.
 
 ## Residual risks (known, not yet closed)
 

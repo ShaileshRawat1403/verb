@@ -204,6 +204,8 @@ fn project_id(project: &Path) -> Result<String, String> {
         {
             return Err("registered project ownership or mode changed".into());
         }
+        // The folder must also still be the one the host pinned when it started.
+        crate::studio::verify_pinned_root(project)?;
     }
     Ok(id.to_owned())
 }
