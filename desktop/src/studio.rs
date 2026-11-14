@@ -151,15 +151,100 @@ fn location(project: &Path, path: &str) -> Result<(File, CString), String> {
     }
     open_parent(project, path)
 }
-/// Opens the project folder itself, refusing a link in its place. The path is already resolved, so a
-/// link here means the folder was swapped after it was resolved; following it would lead outside.
-fn open_root(resolved: &Path) -> Result<File, String> {
+/// The project folder as the host found it when it started: its resolved path and the filesystem's
+/// own identity for it (device and inode). Every walk opens that fixed path without following a
+/// link and checks the identity, so the host never re-learns where its project is mid-run: a folder
+/// swapped for a link, or renamed and replaced, is refused instead of read.
+#[derive(Clone)]
+struct PinnedRoot {
+    path: std::path::PathBuf,
+    dev: u64,
+    ino: u64,
+}
+
+fn pins() -> &'static Mutex<HashMap<std::path::PathBuf, PinnedRoot>> {
+    static PINS: std::sync::OnceLock<Mutex<HashMap<std::path::PathBuf, PinnedRoot>>> =
+        std::sync::OnceLock::new();
+    PINS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_pin(project: &Path, pin: PinnedRoot) {
+    pins()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .insert(project.to_path_buf(), pin);
+}
+
+/// Pins `project` to the folder it names now. The web host calls this once as it starts.
+pub(crate) fn pin_project_root(project: &Path) -> Result<(), String> {
+    let path = project.canonicalize().map_err(|e| e.to_string())?;
+    let metadata = open_dir_nofollow(&path)?
+        .metadata()
+        .map_err(|e| e.to_string())?;
+    record_pin(
+        project,
+        PinnedRoot {
+            path,
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        },
+    );
+    Ok(())
+}
+
+/// Pins `project` to the process's current directory, by the kernel's reference to it rather than by
+/// any path. The guest project-read helper starts inside the project and calls this first.
+pub(crate) fn pin_project_root_to_cwd(project: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(".").map_err(|e| e.to_string())?;
+    record_pin(
+        project,
+        PinnedRoot {
+            path: project.canonicalize().map_err(|e| e.to_string())?,
+            dev: metadata.dev(),
+            ino: metadata.ino(),
+        },
+    );
+    Ok(())
+}
+
+/// Opens a directory without following a link in its place.
+fn open_dir_nofollow(path: &Path) -> Result<File, String> {
     use std::os::unix::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(resolved)
+        .open(path)
         .map_err(|e| format!("cannot open the project folder: {e}"))
+}
+
+/// Opens the pinned project folder and checks it is still the same folder. A project that was not
+/// pinned at start (tests, one-off commands) is pinned on first use.
+fn open_root(project: &Path) -> Result<File, String> {
+    let existing = pins()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .get(project)
+        .cloned();
+    let pin = match existing {
+        Some(pin) => pin,
+        None => {
+            pin_project_root(project)?;
+            pins()
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .get(project)
+                .cloned()
+                .ok_or("the project folder could not be pinned")?
+        }
+    };
+    let root = open_dir_nofollow(&pin.path)?;
+    let metadata = root.metadata().map_err(|e| e.to_string())?;
+    if metadata.dev() != pin.dev || metadata.ino() != pin.ino {
+        return Err(
+            "the project folder changed since Verb started; restart Verb to serve it".to_owned(),
+        );
+    }
+    Ok(root)
 }
 /// The open parent folder of a project-relative path, and the final name inside it. The walk starts
 /// from an open handle on the project root and opens one name at a time without following links,
@@ -172,7 +257,7 @@ pub(crate) fn open_parent(project: &Path, path: &str) -> Result<(File, CString),
     {
         return Err("invalid project-relative path".to_owned());
     }
-    let mut directory = open_root(&project.canonicalize().map_err(|e| e.to_string())?)?;
+    let mut directory = open_root(project)?;
     for part in &parts[..parts.len() - 1] {
         directory = open_at(
             &directory,
@@ -388,8 +473,8 @@ mod tests {
         std::fs::create_dir_all(&real).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, base.join("swapped")).unwrap();
-        assert!(open_root(&real).is_ok());
-        assert!(open_root(&base.join("swapped")).is_err());
+        assert!(open_dir_nofollow(&real).is_ok());
+        assert!(open_dir_nofollow(&base.join("swapped")).is_err());
         std::fs::remove_dir_all(&base).unwrap();
     }
     use std::fs;

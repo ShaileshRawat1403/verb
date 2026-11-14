@@ -1076,6 +1076,8 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         _ => (secure_token()?, false),
     };
     let identity = project::identity(project)?;
+    // Fix where the project folder is for the life of this host; file reads check it is unchanged.
+    crate::studio::pin_project_root(project)?;
     crate::host::mark_started();
     let mut host = WebHost {
         project: project.to_path_buf(),

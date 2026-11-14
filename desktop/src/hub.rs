@@ -1211,6 +1211,43 @@ mod tests {
         assert_eq!(leaked, 0);
     }
 
+    // The re-audit's last finding: the project folder itself replaced after the host started, with a
+    // link to another folder or with a different folder holding the same names. The host pinned the
+    // folder at start, so both are refused rather than read.
+    #[cfg(unix)]
+    #[test]
+    fn a_project_folder_replaced_after_start_is_refused() {
+        use std::os::unix::fs::symlink;
+        let project = repo();
+        crate::studio::pin_project_root(&project).unwrap();
+        assert_eq!(
+            read_visible(&project, "README.md").unwrap().text.as_deref(),
+            Some("# hub\n")
+        );
+        let outside = tempdir();
+        fs::write(outside.join("README.md"), "outside\n").unwrap();
+        let moved = project.with_extension("moved");
+        fs::rename(&project, &moved).unwrap();
+        symlink(&outside, &project).unwrap();
+        assert!(
+            read_visible(&project, "README.md").is_err(),
+            "followed a swapped link"
+        );
+        fs::remove_file(&project).unwrap();
+        fs::create_dir(&project).unwrap();
+        fs::write(project.join("README.md"), "impostor\n").unwrap();
+        assert!(
+            read_visible(&project, "README.md").is_err(),
+            "read a replaced folder"
+        );
+        fs::remove_dir_all(&project).unwrap();
+        fs::rename(&moved, &project).unwrap();
+        assert!(
+            read_visible(&project, "README.md").is_ok(),
+            "the original folder is still served"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn hard_links_and_oversized_files_are_not_previewed() {
