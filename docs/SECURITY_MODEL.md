@@ -58,10 +58,14 @@ File previews, Studio reads and the isolated project-read helper keep reads insi
 - A read opens the file once and reads that open file, capped in size, so nothing swapped on disk
   between the check and the read changes what is read.
 - The walk from the project folder to the file never follows a link, at any step.
-- The host pins the project folder when it starts (its resolved path and the filesystem's device
-  and inode). Every read, and every isolated launch, checks the folder is still that one; a folder
-  swapped for a link, or replaced by another under the same name, is refused until Verb restarts.
-- Git-ignored files are never listed or opened, and files with hard links are not read.
+- `verb web` pins the project folder when it starts (its resolved path and the filesystem's device
+  and inode). From then on every read, and every isolated launch on that host, checks the folder is
+  still that one; a folder swapped for a link, or replaced by another under the same name, is
+  refused until Verb restarts. Commands that did not start a host pin the folder on first use.
+- Untracked files that Git ignores are never listed or opened. Files Git already tracks stay
+  visible even if they match an ignore pattern, because Git applies ignore rules to untracked
+  files only; remove a secret from tracking (`git rm --cached`) to hide it. Files with hard links
+  are not read.
 
 These protect the project from **remote clients** (an access token, a browser session, a published
 Access login) and from **isolated agents**, which can write inside the project but not above it.
