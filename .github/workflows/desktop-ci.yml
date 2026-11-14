@@ -89,6 +89,14 @@ jobs:
           cargo install cargo-audit --version 0.22.2 --locked
           cargo audit --deny unsound --deny yanked
 
+      # Fails when a dependency brings a licence that about.toml does not accept, so it is caught in
+      # the PR rather than at release time.
+      - name: Check Rust third-party licences
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked --features cli
+          cargo about generate --locked about.hbs > /dev/null
+
       - name: Format
         if: startsWith(matrix.os, 'ubuntu')
         run: cargo fmt --check

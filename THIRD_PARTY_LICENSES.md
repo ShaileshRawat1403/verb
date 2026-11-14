@@ -18,9 +18,9 @@ distributed with the app; the obligations of their licenses are addressed here.
 | proot | GPL-2.0-or-later | Statically linked v5.3.0 wrapper bundled as an app asset (`assets/proot-arm64-v8a`). |
 | GNU tar | GPL-3.0-or-later | Termux package 1.35-3, bundled as an app asset (`assets/gnu-tar-aarch64`) and installed over the bootstrap's toybox `tar` when needed so dpkg can unpack packages. |
 | Per-package libraries and tools (git, curl, bash, coreutils, apt, dpkg, openssl, etc.) | Each under its own license (GPL-2.0, GPL-3.0, LGPL-2.1/3.0, MIT, BSD, Apache-2.0, ISC, MPL-2.0, CC0, public domain, ...) | Full license texts ship inside the userland. |
-| xterm.js and addon-fit | MIT | Bundled in the desktop browser workbench; notices are under `desktop/web/LICENSES/`. |
-| qrcode and bundled dijkstrajs | MIT | Generate pairing QR codes locally in the desktop browser workbench; notices are under `desktop/web/LICENSES/`. |
-| Barlow and Barlow Condensed (Fontsource 5.3.0 latin subsets) | OFL-1.1 | Interface typefaces for the desktop browser workbench, served locally from `desktop/web/fonts/`; notice in `desktop/web/LICENSES/barlow-OFL.txt`. |
+| Browser workbench packages: xterm.js 5.5.0 and six add-ons, CodeMirror 6 and Lezer, qrcode, dijkstrajs and small helpers (32 npm packages, plus 3 libraries prebundled in the xterm image add-on) | MIT | Bundled into the desktop browser workbench. Listed with versions in `desktop/web/THIRD_PARTY_LICENSES.md`; each notice is under `desktop/web/LICENSES/`. |
+| Barlow and Barlow Condensed (Fontsource 5.3.0 latin subsets) | OFL-1.1 | Interface typefaces for the desktop browser workbench, served locally from `desktop/web/fonts/`; notices in `desktop/web/LICENSES/barlow-OFL.txt` and `desktop/web/LICENSES/barlow-condensed-OFL.txt`. |
+| Rust crates compiled into Verb Desktop (213 crate versions across the four release targets) | MIT, Apache-2.0, ISC, Unicode-3.0, BSD-3-Clause, Zlib, CDLA-Permissive-2.0 and dual-licensed combinations of these; no copyleft | Each crate's licence text is generated from `desktop/Cargo.lock` by `cargo about generate --locked about.hbs` (configuration in `desktop/about.toml`) and shipped as `RUST_THIRD_PARTY_NOTICES.txt` in every release archive. CI fails if a dependency brings a licence that is not accepted there. |
 | tiny_http 0.12.0 | MIT OR Apache-2.0 | Vendored in `desktop/vendor/tiny_http/` with one security patch (`VERB_PATCH.md`); license files kept there. |
 
 Full license texts are installed in the userland under `usr/share/LICENSES/` (all SPDX
