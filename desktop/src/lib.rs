@@ -59,6 +59,7 @@ mod studio;
 #[cfg(unix)]
 mod studio_bridge;
 mod talk;
+pub(crate) mod terminal_replies;
 mod tokens;
 mod transcript;
 #[cfg(unix)]

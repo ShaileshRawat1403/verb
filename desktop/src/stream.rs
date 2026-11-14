@@ -170,6 +170,9 @@ pub struct TerminalStreamSink {
     cond: Condvar,
     lock: Mutex<()>,
     listeners: Mutex<HashMap<u64, Arc<WsQueue>>>,
+    /// Every attached tab answers the program's terminal questions; one answer per question
+    /// reaches the program. See `crate::terminal_replies`.
+    replies: Mutex<crate::terminal_replies::ReplyGate>,
 }
 
 impl TerminalStreamSink {
@@ -181,6 +184,7 @@ impl TerminalStreamSink {
             cond: Condvar::new(),
             lock: Mutex::new(()),
             listeners: Mutex::new(HashMap::new()),
+            replies: Mutex::new(Default::default()),
         })
     }
 
@@ -213,6 +217,11 @@ impl TerminalStreamSink {
             return;
         }
 
+        // Count the questions before any tab can see them, so an answer never outruns its count.
+        self.replies
+            .lock()
+            .unwrap()
+            .observe_output(data, std::time::Instant::now());
         for queue in listeners.values() {
             queue.push_output(&self.id, data);
         }
@@ -221,6 +230,14 @@ impl TerminalStreamSink {
         if unacked >= HIGH_WATER_MARK {
             self.paused.store(true, Ordering::SeqCst);
         }
+    }
+
+    /// Input from any viewer, with duplicate answers to terminal questions removed.
+    pub fn admit_input(&self, data: &[u8]) -> Vec<u8> {
+        self.replies
+            .lock()
+            .unwrap()
+            .admit_input(data, std::time::Instant::now())
     }
 
     /// Broadcasts a JSON control message to all attached listeners.

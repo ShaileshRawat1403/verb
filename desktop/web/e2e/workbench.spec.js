@@ -767,3 +767,35 @@ test("two native sessions share project files and reattach to the same processes
     try {unlinkSync(join(repo,"verb-shared-acceptance.txt"));} catch {}
   }
 });
+
+// Found in the 0.2.0-rc.1 real-agent test: with two browser tabs on one session, both terminals
+// answered the agent's cursor-position query, and the second answer reached the agent as typed text.
+test("a terminal query is answered once when two tabs view the same session", async ({ page, context }) => {
+  const origin=url.split("/#")[0];const headers={"X-Verb-Token":TOKEN,Origin:origin};
+  const workspace=await (await page.request.get(`${origin}/api/workspace`,{headers})).json();
+  for (const id of Object.keys(workspace.terminalStates || {})) await page.request.delete(`${origin}/api/terminals/${id}`,{headers});
+  const probe=join(repo,"cpr-probe.py");const go=join(repo,"cpr-go");
+  writeFileSync(probe,`import os,sys,time,tty,select\ntty.setraw(0)\nos.write(1,b'CPR_READY\\r\\n')\nwhile not os.path.exists(${JSON.stringify(go)}): time.sleep(0.05)\nos.write(1,b'\\x1b[6n')\nend=time.time()+2;got=b''\nwhile time.time()<end:\n  r,_,_=select.select([0],[],[],0.1)\n  if r: got+=os.read(0,1024)\nos.write(1,('CPR_REPLIES=%d\\r\\n' % got.count(b'R')).encode())\ntime.sleep(30)\n`);
+  const output=async id=>Buffer.from((await (await page.request.get(`${origin}/api/terminals/${id}/output`,{headers})).json()).data,"base64").toString();
+  let id;
+  const second=await context.newPage();
+  try {
+    await page.goto(url);
+    await page.locator("#quick-terminal-empty").click();
+    id=(await page.locator(".terminal-tile").getAttribute("id")).slice("terminal-".length);
+    const input=()=>page.getByRole("textbox",{name:"Terminal input"}).filter({visible:true});
+    await input().pressSequentially("python3 -u cpr-probe.py");await input().press("Enter");
+    await expect.poll(()=>output(id)).toContain("CPR_READY");
+    await second.goto(url);
+    await expect(second.locator(`#terminal-${id} .terminal-state`)).toContainText("Connected");
+    await expect(page.locator(`#terminal-${id} .terminal-state`)).toContainText("Connected");
+    writeFileSync(go,"");
+    await expect.poll(()=>output(id),{timeout:10000}).toMatch(/CPR_REPLIES=\d/);
+    expect((await output(id)).match(/CPR_REPLIES=(\d+)/)[1]).toBe("1");
+  } finally {
+    await second.close();
+    if (id) await page.request.delete(`${origin}/api/terminals/${id}`,{headers});
+    const {unlinkSync}=await import("node:fs");
+    for (const f of [probe,go]) try {unlinkSync(f);} catch {}
+  }
+});
