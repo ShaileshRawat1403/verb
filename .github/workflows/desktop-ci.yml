@@ -81,11 +81,13 @@ jobs:
             desktop/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('desktop/Cargo.lock') }}
 
-      - name: Cargo audit
-        if: matrix.os == 'ubuntu-latest'
+      # Denies known vulnerabilities, unsound crates and yanked versions in the lockfile, on both
+      # Linux runners. Restored from the 2026-11-07 security branch after the pre-merge audit.
+      - name: Audit locked Rust dependencies
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           cargo install cargo-audit --version 0.22.2 --locked
-          cargo audit
+          cargo audit --deny unsound --deny yanked
 
       - name: Format
         if: startsWith(matrix.os, 'ubuntu')
