@@ -251,7 +251,7 @@ export function initStudio({
     const request = state.request;
     let result;
     try {
-      result = await api("GET", `/api/files/preview?path=${encodeURIComponent(path)}`);
+      result = await readWithBusyRetry(api, `/api/files/preview?path=${encodeURIComponent(path)}`);
     } catch {
       return; // The next tick tries again; a passing read error is not worth a message.
     }
@@ -322,8 +322,7 @@ export function initStudio({
       return;
     }
     try {
-      const result = await api(
-        "GET",
+      const result = await readWithBusyRetry(api,
         `/api/files/preview?path=${encodeURIComponent(path)}`,
       );
       if (request !== state.request) return;

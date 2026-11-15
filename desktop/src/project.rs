@@ -34,7 +34,7 @@ struct Location {
 }
 
 fn git_output(project: &Path, args: &[&str]) -> Option<String> {
-    let output = crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()?;
+    let output = crate::exec::read_output(&mut crate::exec::git_for(project, args)?).ok()?;
     if !output.status.success() {
         return None;
     }

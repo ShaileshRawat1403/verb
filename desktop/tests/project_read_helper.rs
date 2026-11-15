@@ -59,7 +59,12 @@ fn project_reads_are_batched_but_never_run_repo_hooks_or_preview_ignored_files()
     git(&root, &["config", "filter.fixture.required", "true"]);
     std::fs::write(root.join("sample"), "after!\n").unwrap();
     std::fs::write(root.join("ignored-uat.txt"), "synthetic ignored fixture\n").unwrap();
-    for args in [&["files"][..], &["git"], &["preview", "sample"]] {
+    for args in [
+        &["files"][..],
+        &["git"],
+        &["preview", "sample"],
+        &["source"],
+    ] {
         let result = helper(&root, args);
         assert!(
             result.status.success(),
@@ -85,6 +90,13 @@ fn project_reads_are_batched_but_never_run_repo_hooks_or_preview_ignored_files()
                 assert!(!value["changes"].as_array().unwrap().is_empty());
             }
             "preview" => assert_eq!(value["text"], "after!\n"),
+            // The whole source observation crosses the boundary once.
+            "source" => {
+                assert_eq!(value["branch"], "main");
+                assert_eq!(value["clean"], false);
+                assert_eq!(value["integrated"], true);
+                assert_eq!(value["commit"].as_str().unwrap().len(), 40);
+            }
             _ => unreachable!(),
         }
         assert!(!root.join("monitor-ran").exists());
@@ -93,6 +105,7 @@ fn project_reads_are_batched_but_never_run_repo_hooks_or_preview_ignored_files()
     for args in [
         &["unknown"][..],
         &["files", "extra"],
+        &["source", "extra"],
         &["preview", "../sample"],
         &["preview", "/etc/passwd"],
         &["preview", "ignored-uat.txt"],

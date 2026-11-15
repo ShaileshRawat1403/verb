@@ -1,3 +1,4 @@
+import { readWithBusyRetry } from "./read-retry.js";
 import { icon, fileIconName } from "./icons.js";
 // Typed previews project existing files and Git facts; they never own another work ledger.
 export function initStudioPreviews({
@@ -207,8 +208,7 @@ export function initStudioPreviews({
     $("#studio-diff-path").textContent = path;
     $("#studio-diff").textContent = "Reading changes…";
     try {
-      const result = await api(
-        "GET",
+      const result = await readWithBusyRetry(api,
         `/api/git/diff?path=${encodeURIComponent(path)}`,
       );
       if (generation !== request) return;
@@ -238,7 +238,7 @@ export function initStudioPreviews({
     $("#studio-changed-files").textContent = "Reading changed files…";
     $("#studio-diff").textContent = "Select a file to review its changes.";
     try {
-      const summary = await api("GET", "/api/git");
+      const summary = await readWithBusyRetry(api, "/api/git");
       if (generation !== request) return;
       if (summary.error) throw new Error(summary.error);
       const changes = summary.changes || [];
@@ -290,8 +290,7 @@ export function initStudioPreviews({
       const generation = ++request;
       $("#studio-image-state").textContent = "Reading image…";
       try {
-        const result = await api(
-          "GET",
+        const result = await readWithBusyRetry(api,
           `/api/studio/image?path=${encodeURIComponent(path)}`,
         );
         if (generation !== request || !current()) return;

@@ -339,8 +339,8 @@ pub(crate) struct GitState {
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
-    let mut cmd = crate::exec::git(project)?;
-    let out = crate::exec::read_output(cmd.args(args)).ok()?;
+    let mut cmd = crate::exec::git_for(project, args)?;
+    let out = crate::exec::read_output(&mut cmd).ok()?;
     if !out.status.success() {
         return None;
     }

@@ -539,7 +539,7 @@ pub(crate) fn ship_state(project: &Path, spec: &Spec) -> ShipState {
 }
 
 fn observed_git(project: &Path, args: &[&str]) -> Option<std::process::Output> {
-    crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()
+    crate::exec::read_output(&mut crate::exec::git_for(project, args)?).ok()
 }
 
 /// The branch work is merged into: the remote's default, else `main` or `master` if present.

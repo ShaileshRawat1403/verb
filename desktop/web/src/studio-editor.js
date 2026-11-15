@@ -125,8 +125,7 @@ export function initStudioEditor({ $, api, onMode, onSaved, inBench, onCapabilit
     return draft;
   }
   async function load(wanted) {
-    const result = await api(
-      "GET",
+    const result = await readWithBusyRetry(api,
       `/api/studio/file?path=${encodeURIComponent(wanted)}`,
     );
     if (

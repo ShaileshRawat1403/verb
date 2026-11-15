@@ -865,6 +865,10 @@ for (const width of [1440, 390]) test(`a person commits chosen files at ${width}
   const dialog = page.locator("#commit-dialog");
   await expect(dialog.locator(`input[data-commit-path="${finished}"]`)).toBeVisible();
   for (const input of await dialog.locator("input[data-commit-path]:enabled").all()) await input.uncheck();
+  // An earlier test in this file may leave a spec selected, which offers to add its file to the
+  // commit. This journey commits exactly one chosen file, so it declines that offer.
+  const record = page.locator("#commit-record");
+  if (await record.isEnabled()) await record.uncheck();
   await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
   await dialog.locator(`input[data-commit-path="${finished}"]`).check();
   await expect(page.locator("#commit-selection-count")).toContainText("1 of");
@@ -938,6 +942,7 @@ for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px c
 
 
 test("Studio retries busy file reads, then exposes manual recovery if the host stays busy", async ({ page }) => {
+  test.setTimeout(75_000);
   await page.goto(url);
   await openWorkspaceView(page, "Studio");
   const file = page.locator("#studio-file option[value='app.html']");
@@ -949,13 +954,14 @@ test("Studio retries busy file reads, then exposes manual recovery if the host s
   });
   const refresh = page.getByRole("button", { name: "Refresh canvas", exact: true });
   await refresh.click();
-  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.");
-  expect(reads).toBe(3);
+  // A busy host is retried with growing pauses for about sixteen seconds before giving up.
+  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.", { timeout: 30_000 });
+  expect(reads).toBe(8);
   available = true;
   await refresh.click();
   await expect(page.locator("#studio-file-note")).not.toHaveText("Files unavailable. Refresh to retry.");
   await expect(file).toHaveCount(1);
-  expect(reads).toBe(4);
+  expect(reads).toBe(9);
 });
 
 test("go to line navigates the current draft without saving and tracks cursor position", async ({ page }) => {

@@ -149,6 +149,35 @@ pub(crate) fn git(project: &Path) -> Option<Command> {
     Some(command)
 }
 
+/// Subcommands that only read the object database and refs, never working-tree file content, so
+/// no `clean`, `smudge` or `process` filter can run. They skip the filter lookup above, which on a
+/// node behind the execution boundary costs a whole extra boundary round trip per probe.
+const CONTENT_FREE: &[&str] = &[
+    "rev-parse",
+    "symbolic-ref",
+    "ls-tree",
+    "merge-base",
+    "rev-list",
+    "show-ref",
+    "for-each-ref",
+];
+
+fn content_free(args: &[&str]) -> bool {
+    args.first().is_some_and(|sub| CONTENT_FREE.contains(sub))
+}
+
+/// `git` with `args` already applied. Content-free subcommands (named as the very first argument)
+/// skip filter discovery; everything else is [`git`] unchanged.
+pub(crate) fn git_for(project: &Path, args: &[&str]) -> Option<Command> {
+    let mut command = if content_free(args) {
+        base_git(&trusted_program("git", project)?, project)?
+    } else {
+        git(project)?
+    };
+    command.args(args);
+    Some(command)
+}
+
 /// `git` for an operation the user asked for (`verb project worktree`): found on a trusted `PATH`
 /// entry, but otherwise Git as the user configured it, so their own filters and hooks behave as they
 /// would from the shell.
@@ -175,6 +204,66 @@ fn base_git(program: &Path, project: &Path) -> Option<Command> {
 
 /// Names of filter drivers the repository-local config defines. Reading config runs nothing.
 fn local_filters(program: &Path, project: &Path) -> Option<Vec<String>> {
+    let identity = config_identity(project);
+    if let Some(identity) = &identity {
+        if let Some((seen, names)) = FILTERS.lock().ok()?.get(project) {
+            if seen == identity {
+                return Some(names.clone());
+            }
+        }
+    }
+    let names = discover_filters(program, project)?;
+    if let (Some(identity), Ok(mut cache)) = (identity, FILTERS.lock()) {
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(project.to_path_buf(), (identity, names.clone()));
+    }
+    Some(names)
+}
+
+type ConfigIdentity = (u64, u64, u64, i64, i64);
+
+type FilterCache = std::collections::HashMap<PathBuf, (ConfigIdentity, Vec<String>)>;
+
+static FILTERS: std::sync::LazyLock<std::sync::Mutex<FilterCache>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Identity of `project/.git/config` when the filter list read from it may be reused: a plain
+/// `.git` directory (not a worktree link or symlink) whose config is a regular file with no
+/// `include` directive. Git rewrites config through a lock file and rename, so any change gives a
+/// new inode; size and nanosecond mtime catch the rest. Anything else is looked up every time.
+#[cfg(unix)]
+fn config_identity(project: &Path) -> Option<ConfigIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let git_dir = project.join(".git");
+    if !std::fs::symlink_metadata(&git_dir).ok()?.is_dir() {
+        return None;
+    }
+    let config = git_dir.join("config");
+    let before = std::fs::symlink_metadata(&config).ok()?;
+    if !before.is_file() || before.len() > 1024 * 1024 {
+        return None;
+    }
+    let text = std::fs::read(&config).ok()?;
+    if text
+        .to_ascii_lowercase()
+        .windows(7)
+        .any(|w| w == b"include")
+    {
+        return None;
+    }
+    let after = std::fs::symlink_metadata(&config).ok()?;
+    let identity = |m: &std::fs::Metadata| (m.dev(), m.ino(), m.len(), m.mtime(), m.mtime_nsec());
+    (identity(&before) == identity(&after)).then(|| identity(&after))
+}
+
+#[cfg(not(unix))]
+fn config_identity(_: &Path) -> Option<ConfigIdentity> {
+    None
+}
+
+fn discover_filters(program: &Path, project: &Path) -> Option<Vec<String>> {
     let mut command = base_git(program, project)?;
     command
         .args([
@@ -248,6 +337,63 @@ mod tests {
         .unwrap();
         assert_eq!(local_filters(&program, &root), Some(vec!["danger".into()]));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn filter_lists_are_reused_only_while_the_config_is_unchanged() {
+        let root = std::env::temp_dir().join(format!("verb-filter-cache-{}", crate::new_id()));
+        fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(&root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success())
+        };
+        git(&["init", "-q"]);
+        let program = trusted_program("git", &root).unwrap();
+        let first = config_identity(&root).expect("plain config is cacheable");
+        assert_eq!(local_filters(&program, &root), Some(Vec::new()));
+        assert_eq!(config_identity(&root), Some(first));
+        // Git rewrites config through a lock file and rename: a new filter is seen at once.
+        git(&["config", "filter.danger.clean", "false"]);
+        assert_ne!(config_identity(&root), Some(first));
+        assert_eq!(local_filters(&program, &root), Some(vec!["danger".into()]));
+        // An include can change the answer without touching this file, so it is never cached.
+        git(&["config", "include.path", "elsewhere"]);
+        assert_eq!(config_identity(&root), None);
+        // A linked worktree or symlinked .git is looked up every time as well.
+        let linked = root.join("linked");
+        fs::create_dir_all(&linked).unwrap();
+        fs::write(linked.join(".git"), "gitdir: ../.git\n").unwrap();
+        assert_eq!(config_identity(&linked), None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_content_free_subcommands_skip_filter_discovery() {
+        for args in [
+            &["rev-parse", "HEAD"][..],
+            &["ls-tree", "-r", "HEAD"],
+            &["merge-base", "a", "b"],
+            &["symbolic-ref", "HEAD"],
+        ] {
+            assert!(content_free(args), "{args:?}");
+        }
+        // Anything that reads working-tree content, or hides its subcommand behind an option.
+        for args in [
+            &["status"][..],
+            &["diff"],
+            &["ls-files"],
+            &["log", "-p"],
+            &["cat-file", "--filters"],
+            &["-c", "x=y", "rev-parse"],
+            &[],
+        ] {
+            assert!(!content_free(args), "{args:?}");
+        }
     }
 
     #[test]

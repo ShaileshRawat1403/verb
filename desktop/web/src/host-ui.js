@@ -1,3 +1,4 @@
+import { readWithBusyRetry } from "./read-retry.js";
 // The Host view: read-only health of the machine Verb runs on. Data from GET /api/host.
 
 import { formatDuration, formatKb, temperatureTone, usedPercent } from "./workbench.js";
@@ -75,7 +76,7 @@ export function initHost(deps) {
 
   async function refresh() {
     try {
-      render(await api("GET", "/api/host"));
+      render(await readWithBusyRetry(api, "/api/host"));
     } catch (error) {
       $("#host-updated").textContent = `Could not read host: ${error.message}`;
     }

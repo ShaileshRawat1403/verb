@@ -131,7 +131,7 @@ export function initSdlc({ api, $, escapeHtml: esc, toast, showDialog, closeDial
     async exportEvidence() {
       const chosen = current();
       if (!chosen) return;
-      const data = await api("GET", `/api/specs/${chosen.id}/sdlc-export`);
+      const data = await readWithBusyRetry(api, `/api/specs/${chosen.id}/sdlc-export`);
       const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;

@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 
 const MAX_REPLY: usize = 8 * 1024 * 1024;
 pub(crate) const TIMEOUT: &str = "Project read timed out. Retry when the host is less busy.";
+/// What a helper from before an action existed answers (after a "Verb: " prefix on stderr); the
+/// caller then falls back.
+pub(crate) const UNKNOWN_ACTION: &str = "invalid project read helper invocation";
 
 pub(crate) fn request<T: DeserializeOwned>(
     project: &Path,
@@ -125,7 +128,8 @@ pub(crate) fn helper(args: &[String]) -> Result<(), String> {
             serde_json::to_vec(&crate::hub::preview(&project, path)?)
         }
         [action] if action == "git" => serde_json::to_vec(&crate::specs::git_summary(&project)?),
-        _ => return Err("invalid project read helper invocation".to_owned()),
+        [action] if action == "source" => serde_json::to_vec(&crate::sdlc::observe(&project)?),
+        _ => return Err(UNKNOWN_ACTION.to_owned()),
     }
     .map_err(|error| error.to_string())?;
     if value.len() > MAX_REPLY {
