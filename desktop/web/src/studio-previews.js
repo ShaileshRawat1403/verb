@@ -208,8 +208,7 @@ export function initStudioPreviews({
     $("#studio-diff-path").textContent = path;
     $("#studio-diff").textContent = "Reading changes…";
     try {
-      const result = await api(
-        "GET",
+      const result = await readWithBusyRetry(api,
         `/api/git/diff?path=${encodeURIComponent(path)}`,
       );
       if (generation !== request) return;
@@ -291,8 +290,7 @@ export function initStudioPreviews({
       const generation = ++request;
       $("#studio-image-state").textContent = "Reading image…";
       try {
-        const result = await api(
-          "GET",
+        const result = await readWithBusyRetry(api,
           `/api/studio/image?path=${encodeURIComponent(path)}`,
         );
         if (generation !== request || !current()) return;

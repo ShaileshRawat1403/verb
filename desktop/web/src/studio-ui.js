@@ -322,8 +322,7 @@ export function initStudio({
       return;
     }
     try {
-      const result = await api(
-        "GET",
+      const result = await readWithBusyRetry(api,
         `/api/files/preview?path=${encodeURIComponent(path)}`,
       );
       if (request !== state.request) return;

@@ -865,6 +865,10 @@ for (const width of [1440, 390]) test(`a person commits chosen files at ${width}
   const dialog = page.locator("#commit-dialog");
   await expect(dialog.locator(`input[data-commit-path="${finished}"]`)).toBeVisible();
   for (const input of await dialog.locator("input[data-commit-path]:enabled").all()) await input.uncheck();
+  // An earlier test in this file may leave a spec selected, which offers to add its file to the
+  // commit. This journey commits exactly one chosen file, so it declines that offer.
+  const record = page.locator("#commit-record");
+  if (await record.isEnabled()) await record.uncheck();
   await expect(page.locator("#commit-dialog-submit")).toBeDisabled();
   await dialog.locator(`input[data-commit-path="${finished}"]`).check();
   await expect(page.locator("#commit-selection-count")).toContainText("1 of");
