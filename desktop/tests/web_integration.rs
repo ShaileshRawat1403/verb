@@ -2027,13 +2027,16 @@ fn talk_agents_do_not_inherit_the_owner_token_or_launcher_identity() {
     );
     assert_eq!(status, 201, "{}", String::from_utf8_lossy(&body));
     let check = server.root.join("project/environment-check");
+    // The shell creates the file before it writes the word, so wait for the word, not the file.
+    let mut seen = String::new();
     for _ in 0..50 {
-        if check.exists() {
+        seen = fs::read_to_string(&check).unwrap_or_default();
+        if !seen.trim().is_empty() {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    assert_eq!(fs::read_to_string(check).unwrap().trim(), "clean");
+    assert_eq!(seen.trim(), "clean");
 }
 
 #[test]
