@@ -147,20 +147,29 @@ fn text_git(project: &Path, args: &[&str], deadline: Instant) -> Result<String, 
 fn spec_metadata(path: &str) -> bool {
     path.starts_with("specs/") && path.ends_with(".md")
 }
-/// Whether this host's boundary helper answers the `source` project read. Older helpers do not;
-/// they are asked once, then every observation runs probe by probe as before.
-static SOURCE_READ_UNSUPPORTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// When this host last found that its boundary helper does not answer the `source` project read.
+/// Older helpers do not; until [`SOURCE_RECHECK`] passes, observations run probe by probe. The
+/// helper can be updated under a running host, so the answer is asked again rather than kept.
+static SOURCE_READ_REFUSED: Mutex<Option<Instant>> = Mutex::new(None);
+const SOURCE_RECHECK: Duration = Duration::from_secs(60);
 
 /// The current source observation. Behind an execution boundary every Git probe is its own
 /// boundary entry, so the whole observation crosses once as a project read when the helper
 /// supports it.
 pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
-    use std::sync::atomic::Ordering;
-    if crate::isolation::external() && !SOURCE_READ_UNSUPPORTED.load(Ordering::Relaxed) {
+    let refused_recently = || {
+        SOURCE_READ_REFUSED
+            .lock()
+            .ok()
+            .and_then(|at| *at)
+            .is_some_and(|at| at.elapsed() < SOURCE_RECHECK)
+    };
+    if crate::isolation::external() && !refused_recently() {
         match crate::project_read::request(project, "source", &[]) {
             Err(error) if error.ends_with(crate::project_read::UNKNOWN_ACTION) => {
-                SOURCE_READ_UNSUPPORTED.store(true, Ordering::Relaxed);
+                if let Ok(mut at) = SOURCE_READ_REFUSED.lock() {
+                    *at = Some(Instant::now());
+                }
             }
             result => return result,
         }
