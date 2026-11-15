@@ -4,6 +4,7 @@
 use crate::fsutil::atomic_write;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -41,6 +42,76 @@ fn git_output(project: &Path, args: &[&str]) -> Option<String> {
     Some(String::from_utf8(output.stdout).ok()?.trim().to_owned())
 }
 
+/// `.git` as this checkout sees it. A main checkout's `.git` directory is the common dir itself,
+/// so its device, inode and birth time identify the answer (its mtime moves on every index write,
+/// so it is not used; birth time tells a recreated `.git` apart from a recycled inode). A linked
+/// worktree's `.git` file names its gitdir, so its inode, size and nanosecond mtime are used:
+/// re-pointing the worktree rewrites it. Without a birth time a directory is not cached.
+#[cfg(unix)]
+fn dot_git(checkout: &Path) -> Option<(u64, u64, u64, i64, i64, bool)> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = fs::symlink_metadata(checkout.join(".git")).ok()?;
+    if meta.is_dir() {
+        let born = meta
+            .created()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?;
+        Some((
+            meta.dev(),
+            meta.ino(),
+            0,
+            born.as_secs() as i64,
+            i64::from(born.subsec_nanos()),
+            true,
+        ))
+    } else if meta.is_file() {
+        Some((
+            meta.dev(),
+            meta.ino(),
+            meta.len(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            false,
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+fn dot_git(_: &Path) -> Option<(u64, u64, u64, i64, i64, bool)> {
+    None
+}
+
+type CommonDirs = HashMap<PathBuf, ((u64, u64, u64, i64, i64, bool), String)>;
+static COMMON_DIRS: std::sync::LazyLock<std::sync::Mutex<CommonDirs>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// `git rev-parse --git-common-dir`, which every work item, hub and session read asks for. It
+/// only changes when the checkout's `.git` does, so it is asked again only then. On a node each
+/// ask is a boundary entry. A checkout without a readable `.git` is asked every time.
+fn common_dir(checkout: &Path) -> Option<String> {
+    let identity = dot_git(checkout);
+    if let Some(identity) = identity {
+        if let Some((seen, value)) = COMMON_DIRS.lock().ok()?.get(checkout) {
+            if *seen == identity {
+                return Some(value.clone());
+            }
+        }
+    }
+    let value = git_output(checkout, &["rev-parse", "--git-common-dir"])?;
+    if let (Some(identity), Ok(mut cache)) = (identity, COMMON_DIRS.lock()) {
+        if !value.is_empty() && dot_git(checkout) == Some(identity) {
+            if cache.len() > 64 {
+                cache.clear();
+            }
+            cache.insert(checkout.to_path_buf(), (identity, value.clone()));
+        }
+    }
+    Some(value)
+}
+
 fn location(project: &Path) -> Result<Location, String> {
     let checkout = fs::canonicalize(project)
         .or_else(|error| {
@@ -51,7 +122,7 @@ fn location(project: &Path) -> Result<Location, String> {
             }
         })
         .map_err(|error| format!("could not open project {}: {error}", project.display()))?;
-    let common = git_output(&checkout, &["rev-parse", "--git-common-dir"])
+    let common = common_dir(&checkout)
         .filter(|value| !value.is_empty())
         .and_then(|value| {
             let path = PathBuf::from(value);
@@ -298,4 +369,65 @@ fn show_status(project: &Path, json: bool) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn common_dir_is_reused_until_the_checkout_is_repointed() {
+        let root = std::env::temp_dir().join(format!("verb-common-dir-{}", new_id()));
+        let main = root.join("main");
+        fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        fs::write(main.join("a"), "a").unwrap();
+        git(&main, &["add", "a"]);
+        git(&main, &["commit", "-q", "-m", "a"]);
+        let main = fs::canonicalize(&main).unwrap();
+        assert_eq!(common_dir(&main).as_deref(), Some(".git"));
+        if dot_git(&main).is_none() {
+            return; // no birth time on this filesystem: nothing is cached
+        }
+        // Ordinary work rewrites files inside .git; the answer is still reused.
+        let seen = dot_git(&main);
+        fs::write(main.join("b"), "b").unwrap();
+        git(&main, &["add", "b"]);
+        assert_eq!(dot_git(&main), seen);
+
+        let linked = root.join("linked");
+        git(&main, &["worktree", "add", "-q", linked.to_str().unwrap()]);
+        let linked = fs::canonicalize(&linked).unwrap();
+        let common = common_dir(&linked).unwrap();
+        assert_eq!(fs::canonicalize(&common).unwrap(), main.join(".git"));
+
+        // A new repository in the same place is a new .git directory: asked again.
+        fs::remove_dir_all(main.join(".git")).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        assert_ne!(dot_git(&main), seen);
+        assert_eq!(common_dir(&main).as_deref(), Some(".git"));
+        // A re-pointed worktree file is a new identity too.
+        let before = dot_git(&linked);
+        fs::write(linked.join(".git"), "gitdir: /nowhere/at/all\n").unwrap();
+        assert_ne!(dot_git(&linked), before);
+        assert_eq!(common_dir(&linked), None);
+        fs::remove_dir_all(root).unwrap();
+    }
 }
