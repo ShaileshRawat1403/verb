@@ -128,8 +128,9 @@ fn read_git(
     if Instant::now() >= deadline {
         return Err("Source observation timed out. Refresh before continuing.".into());
     }
-    let mut cmd = crate::exec::git(project).ok_or("Could not prepare source observation.")?;
-    crate::exec::read_output_before(cmd.args(args), deadline)
+    let mut cmd =
+        crate::exec::git_for(project, args).ok_or("Could not prepare source observation.")?;
+    crate::exec::read_output_before(&mut cmd, deadline)
         .map_err(|_| "Source observation unavailable. Refresh before continuing.".into())
 }
 fn text_git(project: &Path, args: &[&str], deadline: Instant) -> Result<String, String> {
@@ -146,18 +147,71 @@ fn text_git(project: &Path, args: &[&str], deadline: Instant) -> Result<String, 
 fn spec_metadata(path: &str) -> bool {
     path.starts_with("specs/") && path.ends_with(".md")
 }
+/// How long a source observation may label evidence freshness in lists. `/api/state` and
+/// `/api/specs` both summarise every spec when a page loads; sharing one observation saves a full
+/// set of Git probes, each a boundary round trip on a node. Recording evidence never uses this.
+const DISPLAY_REUSE: Duration = Duration::from_secs(2);
+
+static DISPLAY: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, (Instant, Snapshot)>>,
+> = std::sync::LazyLock::new(Default::default);
+static DISPLAY_OBSERVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// [`snapshot`] for display only: concurrent callers share one observation, reused for
+/// [`DISPLAY_REUSE`]. A failed observation is never reused.
+pub(crate) fn snapshot_for_display(project: &Path) -> Result<Snapshot, String> {
+    let recent = || {
+        DISPLAY.lock().ok().and_then(|seen| {
+            seen.get(project)
+                .filter(|(at, _)| at.elapsed() < DISPLAY_REUSE)
+                .map(|(_, snapshot)| snapshot.clone())
+        })
+    };
+    if let Some(snapshot) = recent() {
+        return Ok(snapshot);
+    }
+    let _observing = DISPLAY_OBSERVING
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    if let Some(snapshot) = recent() {
+        return Ok(snapshot);
+    }
+    let snapshot = snapshot(project)?;
+    if let Ok(mut seen) = DISPLAY.lock() {
+        if seen.len() > 64 {
+            seen.clear();
+        }
+        seen.insert(project.to_path_buf(), (Instant::now(), snapshot.clone()));
+    }
+    Ok(snapshot)
+}
+
 pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
-    let commit = text_git(
+    // One probe for the commit and the branch: `--abbrev-ref` applies to the arguments after it.
+    // A detached HEAD reads as "HEAD", which `symbolic-ref` used to refuse; it is refused the same.
+    let head = text_git(
         project,
-        &["rev-parse", "--verify", "HEAD^{commit}"],
+        &["rev-parse", "HEAD^{commit}", "--abbrev-ref", "HEAD"],
         deadline,
     )?;
-    let branch = text_git(
-        project,
-        &["symbolic-ref", "--quiet", "--short", "HEAD"],
-        deadline,
-    )?;
+    let (commit, branch) = match head.split_once('\n') {
+        Some((commit, branch))
+            if matches!(commit.len(), 40 | 64)
+                && commit.bytes().all(|b| b.is_ascii_hexdigit())
+                && !branch.is_empty()
+                && branch != "HEAD"
+                && !branch.contains('\n') =>
+        {
+            (commit.to_owned(), branch.to_owned())
+        }
+        _ => {
+            return Err(
+                "Could not read the source revision. Save a first commit and check Git access."
+                    .into(),
+            )
+        }
+    };
     let tree = text_git(
         project,
         &["ls-tree", "-r", "-z", "--full-tree", &commit],
@@ -198,16 +252,10 @@ pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
             clean = false;
         }
     }
+    // `merge-base --is-ancestor` answers 0 or 1 for an existing base and fails otherwise, so a
+    // missing `main` falls through to `master` without a separate existence probe.
     let mut integrated = None;
     for base in ["refs/heads/main", "refs/heads/master"] {
-        let exists = read_git(
-            project,
-            &["rev-parse", "--verify", "--quiet", base],
-            deadline,
-        )?;
-        if !exists.status.success() {
-            continue;
-        }
         let ancestor = read_git(
             project,
             &["merge-base", "--is-ancestor", &commit, base],
@@ -216,7 +264,7 @@ pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
         integrated = match ancestor.status.code() {
             Some(0) => Some(true),
             Some(1) => Some(false),
-            _ => None,
+            _ => continue,
         };
         break;
     }
@@ -446,7 +494,7 @@ pub(crate) fn enrich_all(
     if specs.is_empty() {
         return;
     }
-    let source = snapshot(project).ok();
+    let source = snapshot_for_display(project).ok();
     for spec in specs {
         let result = crate::state_root().and_then(|root| load(&root, project_id, &spec.id));
         if let Some(summary) = summaries.get_mut(&spec.id) {
@@ -1028,6 +1076,53 @@ mod tests {
             run(&repo, &["switch", "-q", "-c", branch]);
         }
         Some(repo)
+    }
+
+    #[test]
+    fn snapshot_reads_branch_and_integration_in_fewer_probes() {
+        let Some(repo) = diff_repo("main") else {
+            return;
+        };
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        let on_main = snapshot(&repo).unwrap();
+        assert_eq!(
+            (on_main.branch.as_str(), on_main.integrated, on_main.clean),
+            ("main", Some(true), true)
+        );
+        git(&["switch", "-q", "-c", "spec/001-x"]);
+        std::fs::write(repo.join("feature.txt"), "work\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "feature"]);
+        let ahead = snapshot(&repo).unwrap();
+        assert_eq!(
+            (ahead.branch.as_str(), ahead.integrated),
+            ("spec/001-x", Some(false))
+        );
+        assert_ne!(ahead.commit, on_main.commit);
+        // Only `master`: still answered, without a separate existence probe.
+        git(&["branch", "-q", "-m", "main", "master"]);
+        assert_eq!(snapshot(&repo).unwrap().integrated, Some(false));
+        // Neither base: unknown, not an error.
+        git(&["branch", "-q", "-m", "master", "trunk"]);
+        assert_eq!(snapshot(&repo).unwrap().integrated, None);
+        // A detached HEAD is refused, as `symbolic-ref` refused it before.
+        git(&["switch", "-q", "--detach"]);
+        assert!(snapshot(&repo).is_err());
+        std::fs::remove_dir_all(repo).unwrap();
     }
 
     #[test]

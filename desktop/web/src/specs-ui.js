@@ -94,7 +94,7 @@ export function initWorkbench(deps) {
   async function refreshGit(attempt = 0) {
     clearTimeout(gitRetry);
     try {
-      state.git = await api("GET", "/api/git");
+      state.git = await readWithBusyRetry(api, "/api/git");
     } catch (error) {
       const busy = error.code === "capacity" && attempt < GIT_RETRY_DELAYS.length;
       state.git = { error: busy ? "Busy—retrying" : error.message, busy, changes: [], recent: [] };
@@ -297,7 +297,7 @@ export function initWorkbench(deps) {
     $("#commit-diff-title").textContent = button.dataset.commitDiff;
     $("#commit-diff-text").textContent = "Reading changes…";
     try {
-      const result = await api("GET", `/api/git/diff?path=${encodeURIComponent(button.dataset.commitDiff)}`);
+      const result = await readWithBusyRetry(api, `/api/git/diff?path=${encodeURIComponent(button.dataset.commitDiff)}`);
       if (generation !== commitGeneration || diffGeneration !== commitDiffGeneration) return;
       $("#commit-diff-text").textContent = result.reason || result.hunks?.map(h => `${h.header}\n${h.lines.map(l => `${l.kind === "add" ? "+" : l.kind === "del" ? "-" : " "}${l.text}`).join("\n")}`).join("\n") || "No text diff available; open binary files in Preview.";
     } catch (error) { if (generation === commitGeneration && diffGeneration === commitDiffGeneration) $("#commit-diff-text").textContent = error.message; }
@@ -338,7 +338,7 @@ export function initWorkbench(deps) {
     box.focus();
     box.setSelectionRange(prefix.length, box.value.length);
     try {
-      const review = await api("GET", "/api/git/commit-review");
+      const review = await readWithBusyRetry(api, "/api/git/commit-review");
       if (generation !== commitGeneration || !$("#commit-dialog").open) return;
       commitReview = review;
       $("#commit-repair").hidden = !review.recovery?.canRepair;
@@ -375,7 +375,7 @@ export function initWorkbench(deps) {
     paintTransfer("Reading local branch information…");
     showDialog("git-transfer-dialog");
     try {
-      const review = await api("GET", "/api/git/transfer");
+      const review = await readWithBusyRetry(api, "/api/git/transfer");
       if (generation !== transferGeneration) return;
       transferReview = review;
       paintTransfer(`${transferDescription(review)} This comparison uses local records. Choose Check remote before uploading or downloading.`);

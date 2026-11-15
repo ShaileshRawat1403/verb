@@ -545,7 +545,7 @@ fn git(project: &Path, args: &[&str]) -> Option<String> {
 }
 
 fn git_bytes(project: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()?;
+    let output = crate::exec::read_output(&mut crate::exec::git_for(project, args)?).ok()?;
     output.status.success().then_some(output.stdout)
 }
 

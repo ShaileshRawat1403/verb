@@ -103,11 +103,11 @@ impl Reading {
 }
 
 pub(crate) fn observe(project: &Path) -> Reading {
-    let Some(mut command) = crate::exec::git(project) else {
+    let Some(mut command) = crate::exec::git_for(project, &["rev-parse", "--absolute-git-dir"])
+    else {
         return Reading::Unavailable;
     };
-    let Ok(output) = crate::exec::read_output(command.args(["rev-parse", "--absolute-git-dir"]))
-    else {
+    let Ok(output) = crate::exec::read_output(&mut command) else {
         return Reading::Unavailable;
     };
     if !output.status.success() {
@@ -125,12 +125,11 @@ pub(crate) fn observe(project: &Path) -> Reading {
         return Reading::Unavailable;
     };
     let unmerged = count_unmerged(&entries);
-    let Some(mut head_command) = crate::exec::git(project) else {
+    let Some(mut head_command) = crate::exec::git_for(project, &["symbolic-ref", "-q", "HEAD"])
+    else {
         return Reading::Unavailable;
     };
-    let Ok(head_output) =
-        crate::exec::read_output(head_command.args(["symbolic-ref", "-q", "HEAD"]))
-    else {
+    let Ok(head_output) = crate::exec::read_output(&mut head_command) else {
         return Reading::Unavailable;
     };
     let head = if head_output.status.success() {
@@ -320,7 +319,7 @@ impl RepoState {
 }
 
 fn git(project: &Path, args: &[&str]) -> Option<String> {
-    let output = crate::exec::read_output(crate::exec::git(project)?.args(args)).ok()?;
+    let output = crate::exec::read_output(&mut crate::exec::git_for(project, args)?).ok()?;
     output
         .status
         .success()
