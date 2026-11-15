@@ -938,6 +938,7 @@ for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px c
 
 
 test("Studio retries busy file reads, then exposes manual recovery if the host stays busy", async ({ page }) => {
+  test.setTimeout(75_000);
   await page.goto(url);
   await openWorkspaceView(page, "Studio");
   const file = page.locator("#studio-file option[value='app.html']");
@@ -949,13 +950,14 @@ test("Studio retries busy file reads, then exposes manual recovery if the host s
   });
   const refresh = page.getByRole("button", { name: "Refresh canvas", exact: true });
   await refresh.click();
-  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.");
-  expect(reads).toBe(3);
+  // A busy host is retried with growing pauses for about sixteen seconds before giving up.
+  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.", { timeout: 30_000 });
+  expect(reads).toBe(8);
   available = true;
   await refresh.click();
   await expect(page.locator("#studio-file-note")).not.toHaveText("Files unavailable. Refresh to retry.");
   await expect(file).toHaveCount(1);
-  expect(reads).toBe(4);
+  expect(reads).toBe(9);
 });
 
 test("go to line navigates the current draft without saving and tracks cursor position", async ({ page }) => {

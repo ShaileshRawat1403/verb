@@ -147,46 +147,29 @@ fn text_git(project: &Path, args: &[&str], deadline: Instant) -> Result<String, 
 fn spec_metadata(path: &str) -> bool {
     path.starts_with("specs/") && path.ends_with(".md")
 }
-/// How long a source observation may label evidence freshness in lists. `/api/state` and
-/// `/api/specs` both summarise every spec when a page loads; sharing one observation saves a full
-/// set of Git probes, each a boundary round trip on a node. Recording evidence never uses this.
-const DISPLAY_REUSE: Duration = Duration::from_secs(2);
+/// Whether this host's boundary helper answers the `source` project read. Older helpers do not;
+/// they are asked once, then every observation runs probe by probe as before.
+static SOURCE_READ_UNSUPPORTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
-static DISPLAY: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, (Instant, Snapshot)>>,
-> = std::sync::LazyLock::new(Default::default);
-static DISPLAY_OBSERVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// [`snapshot`] for display only: concurrent callers share one observation, reused for
-/// [`DISPLAY_REUSE`]. A failed observation is never reused.
-pub(crate) fn snapshot_for_display(project: &Path) -> Result<Snapshot, String> {
-    let recent = || {
-        DISPLAY.lock().ok().and_then(|seen| {
-            seen.get(project)
-                .filter(|(at, _)| at.elapsed() < DISPLAY_REUSE)
-                .map(|(_, snapshot)| snapshot.clone())
-        })
-    };
-    if let Some(snapshot) = recent() {
-        return Ok(snapshot);
-    }
-    let _observing = DISPLAY_OBSERVING
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    if let Some(snapshot) = recent() {
-        return Ok(snapshot);
-    }
-    let snapshot = snapshot(project)?;
-    if let Ok(mut seen) = DISPLAY.lock() {
-        if seen.len() > 64 {
-            seen.clear();
+/// The current source observation. Behind an execution boundary every Git probe is its own
+/// boundary entry, so the whole observation crosses once as a project read when the helper
+/// supports it.
+pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
+    use std::sync::atomic::Ordering;
+    if crate::isolation::external() && !SOURCE_READ_UNSUPPORTED.load(Ordering::Relaxed) {
+        match crate::project_read::request(project, "source", &[]) {
+            Err(error) if error.ends_with(crate::project_read::UNKNOWN_ACTION) => {
+                SOURCE_READ_UNSUPPORTED.store(true, Ordering::Relaxed);
+            }
+            result => return result,
         }
-        seen.insert(project.to_path_buf(), (Instant::now(), snapshot.clone()));
     }
-    Ok(snapshot)
+    observe(project)
 }
 
-pub(crate) fn snapshot(project: &Path) -> Result<Snapshot, String> {
+/// [`snapshot`] computed here, probe by probe. Inside a boundary this is what the helper runs.
+pub(crate) fn observe(project: &Path) -> Result<Snapshot, String> {
     let deadline = Instant::now() + Duration::from_secs(30);
     // One probe for the commit and the branch: `--abbrev-ref` applies to the arguments after it.
     // A detached HEAD reads as "HEAD", which `symbolic-ref` used to refuse; it is refused the same.
@@ -494,7 +477,7 @@ pub(crate) fn enrich_all(
     if specs.is_empty() {
         return;
     }
-    let source = snapshot_for_display(project).ok();
+    let source = snapshot(project).ok();
     for spec in specs {
         let result = crate::state_root().and_then(|root| load(&root, project_id, &spec.id));
         if let Some(summary) = summaries.get_mut(&spec.id) {

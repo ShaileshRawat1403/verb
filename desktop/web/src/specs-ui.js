@@ -134,7 +134,7 @@ export function initWorkbench(deps) {
     const anyAgentLive = spec && specSessions(spec, deps.ui.state?.sessions ?? []).some((x) => x.live && /^(claude|codex)$/.test(x.agent));
     if (!anyAgentLive) return;
     try {
-      state.meters = (await api("GET", "/api/meters")).meters ?? {};
+      state.meters = (await readWithBusyRetry(api, "/api/meters")).meters ?? {};
     } catch {
       // A missing meter is shown as nothing, never as a wrong number.
     }
@@ -229,7 +229,7 @@ export function initWorkbench(deps) {
     let warnings = stageWarnings(spec, stage);
     let context = null;
     try {
-      const result = await api("GET", `/api/specs/${spec.id}/stage-check?to=${encodeURIComponent(stage)}`);
+      const result = await readWithBusyRetry(api, `/api/specs/${spec.id}/stage-check?to=${encodeURIComponent(stage)}`);
       warnings = result.warnings; context = result.context;
     } catch {
       warnings.push("Readiness checks are unavailable. Changing stage does not confirm verification or release.");

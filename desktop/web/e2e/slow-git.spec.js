@@ -137,7 +137,10 @@ test("two tabs on a slow host load every panel without showing host is busy", as
     const reads = [...loaded(page), ...loaded(second)];
     await Promise.all([page.goto(`${origin}/#${TOKEN}`), second.goto(`${origin}/#${TOKEN}`)]);
     await Promise.all(reads);
-    for (const tab of [page, second]) await expect(tab.getByText("desktop host is busy")).toHaveCount(0);
+    for (const tab of [page, second]) {
+      const where = await tab.evaluate(() => [...document.querySelectorAll("body *")].filter(n => n.children.length === 0 && /host is busy/.test(n.textContent)).map(n => { const ids = []; for (let e = n; e; e = e.parentElement) if (e.id) ids.push(e.id); return ids.join("<"); }));
+      expect(where).toEqual([]);
+    }
     await other.close();
   } finally {
     server.kill();

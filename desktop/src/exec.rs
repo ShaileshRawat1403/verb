@@ -224,9 +224,10 @@ fn local_filters(program: &Path, project: &Path) -> Option<Vec<String>> {
 
 type ConfigIdentity = (u64, u64, u64, i64, i64);
 
-static FILTERS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<PathBuf, (ConfigIdentity, Vec<String>)>>,
-> = std::sync::LazyLock::new(Default::default);
+type FilterCache = std::collections::HashMap<PathBuf, (ConfigIdentity, Vec<String>)>;
+
+static FILTERS: std::sync::LazyLock<std::sync::Mutex<FilterCache>> =
+    std::sync::LazyLock::new(Default::default);
 
 /// Identity of `project/.git/config` when the filter list read from it may be reused: a plain
 /// `.git` directory (not a worktree link or symlink) whose config is a regular file with no
