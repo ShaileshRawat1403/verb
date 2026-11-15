@@ -107,8 +107,10 @@ test("two tabs on a slow host load every panel without showing host is busy", as
   writeFileSync(join(repo, "README.md"), "Synthetic slow-host fixture.\n");
   git("add", ".");
   git("commit", "-q", "-m", "first");
-  // Every Git process costs a second, as each probe does behind the phone's execution boundary.
-  writeFileSync(join(bin, "git"), `#!/bin/sh\nsleep 1\nexec ${quote(realGit)} "$@"\n`, { mode: 0o755 });
+  // Once the page loads, every Git process costs a second, as each probe does behind the phone's
+  // execution boundary. Host start-up stays fast so the test measures page reads, not boot time.
+  const slow = join(fixture, "slow");
+  writeFileSync(join(bin, "git"), `#!/bin/sh\n[ -e ${quote(slow)} ] && sleep 1\nexec ${quote(realGit)} "$@"\n`, { mode: 0o755 });
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   const server = spawn(resolve(process.env.VERB_BIN ?? "../target/debug/verb"), ["web", "--port", String(port)], {
@@ -126,6 +128,7 @@ test("two tabs on a slow host load every panel without showing host is busy", as
       const created = await page.request.post(`${origin}/api/specs`, { headers: { "X-Verb-Token": TOKEN, Origin: origin }, data: { title, problem: "p", criteria: ["a"] } });
       expect(created.ok()).toBe(true);
     }
+    writeFileSync(slow, "");
     // Two browsers open at once, as on a phone-hosted node where every Git probe is slow: together
     // they ask for more reads than the host has workers, so some are turned away and must wait.
     // (A second context has its own connection pool; one HTTP/1.1 pool would cap reads at six,
