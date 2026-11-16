@@ -1,4 +1,4 @@
-import { readWithBusyRetry } from "./read-retry.js";
+import { readWithBusyRetry, readRemembered } from "./read-retry.js";
 import { makeResizer } from "./resize.js";
 import { agentAvailability } from "./agent-availability.js";
 import { initBenchReview } from "./bench-review.js";
@@ -367,7 +367,12 @@ export function initBenchShell({ $, api, ui, workbench, studio, briefExists, sho
   async function refresh() {
     const current = ++request;
     try {
-      const data = await readWithBusyRetry(api, "/api/work-items");
+      const data = await readRemembered(api, "/api/work-items", (prior) => {
+        if (current === request && !workItems) {
+          workItems = prior;
+          render();
+        }
+      });
       if (current !== request) return;
       workItems = data;
       workError = "";

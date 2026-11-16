@@ -18,7 +18,7 @@ import { icon } from "./icons.js";
 import { gitRemoteDescription } from "./project-git.js";
 import { specPresentation } from "./spec-summary.js";
 import { initSdlc } from "./sdlc-ui.js";
-import { readWithBusyRetry } from "./read-retry.js";
+import { readRemembered, readWithBusyRetry } from "./read-retry.js";
 
 const SHORTCUTS = [
   ["⌘K / Ctrl+K", "Command palette: search specs and run any action"],
@@ -70,9 +70,7 @@ export function initWorkbench(deps) {
   let specsRequest = 0;
   async function refreshSpecs() {
     const request = ++specsRequest;
-    try {
-      const result = await readWithBusyRetry(api, "/api/specs");
-      if (request !== specsRequest) return;
+    const show = (result) => {
       state.specs = (result.specs || []).map(normalize);
       state.summaries = result.summaries || {};
       state.specsError = null;
@@ -80,6 +78,13 @@ export function initWorkbench(deps) {
       if (!selected() && state.specs.length) state.selectedId = state.specs.at(-1).id;
       if ($("#palette-dialog").open) renderPalette();
       render();
+    };
+    try {
+      const result = await readRemembered(api, "/api/specs", (prior) => {
+        if (request === specsRequest && !state.specsLoaded) show(prior);
+      });
+      if (request !== specsRequest) return;
+      show(result);
     } catch (error) {
       if (request !== specsRequest) return;
       state.specsError = error.message;
@@ -94,7 +99,12 @@ export function initWorkbench(deps) {
   async function refreshGit(attempt = 0) {
     clearTimeout(gitRetry);
     try {
-      state.git = await readWithBusyRetry(api, "/api/git");
+      state.git = await readRemembered(api, "/api/git", (prior) => {
+        if (!state.git) {
+          state.git = prior;
+          deps.extras.onWorkbenchChange?.();
+        }
+      });
     } catch (error) {
       const busy = error.code === "capacity" && attempt < GIT_RETRY_DELAYS.length;
       state.git = { error: busy ? "Busy—retrying" : error.message, busy, changes: [], recent: [] };

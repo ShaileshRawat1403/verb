@@ -1,6 +1,6 @@
 import { projectGitPresentation } from "./project-git.js";
 import { readApiResponse } from "./api-response.js";
-import { readWithBusyRetry } from "./read-retry.js";
+import { forgetRemembered, readWithBusyRetry, remember, remembered } from "./read-retry.js";
 import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
@@ -625,6 +625,7 @@ async function refreshState(silent = false) {
   try {
     const state = await request;
     if (revision !== ui.sessionRevision) return;
+    remember("/api/state#project", state.project);
     if (JSON.stringify(state) !== JSON.stringify(ui.state)) {
       ui.state = state;
       render();
@@ -2324,6 +2325,7 @@ async function bootstrap() {
       // load is not stuck on it. The way forward is the same as with no key at all.
       if (token) {
         try { sessionStorage.removeItem("verb-web-token"); } catch { /* nothing stored */ }
+        forgetRemembered();
       }
       const why = !token ? ""
         : tokenFromUrl ? "<p>This URL’s key does not match the running Verb. Use the latest URL it printed.</p>"
@@ -2337,6 +2339,15 @@ async function bootstrap() {
       $("#app .locked button").addEventListener("click", () => location.reload());
     }
     return;
+  }
+  // Until the full state arrives (seconds on a slow host), show this project's last known branch
+  // and Git status from this tab instead of "Reading Git status…".
+  const prior = remembered("/api/state#project");
+  if (prior?.id && prior.id === ui.state.project?.id && ui.state.project.gitStatus === "loading"
+    && prior.gitStatus && prior.gitStatus !== "loading") {
+    ui.state = { ...ui.state, project: { ...ui.state.project, branch: prior.branch,
+      gitStatus: prior.gitStatus, changedFiles: prior.changedFiles } };
+    render();
   }
   initResizers();
   // Sessions still running in this Verb come back with the page: after a reload the spec said

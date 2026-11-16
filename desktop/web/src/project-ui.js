@@ -1,7 +1,7 @@
 // The Preview file tree and Context hub.
 
 import { buildTree, changeLabel, filterFiles, renderMarkdown } from "./workbench.js";
-import { readWithBusyRetry } from "./read-retry.js";
+import { readWithBusyRetry, readRemembered } from "./read-retry.js";
 import { fileIconName, icon } from "./icons.js";
 
 export function initProject(deps) {
@@ -35,7 +35,13 @@ export function initProject(deps) {
   async function refreshHub() {
     const request = ++hubRequest;
     try {
-      const hub = await readWithBusyRetry(api, "/api/hub");
+      const hub = await readRemembered(api, "/api/hub", (prior) => {
+        if (request === hubRequest && !state.hub) {
+          state.hub = prior;
+          renderHub();
+          deps.onBriefChange?.();
+        }
+      });
       if (request !== hubRequest) return;
       state.hub = hub;
       renderHub();
