@@ -4,8 +4,10 @@ use crate::{
     agents, default_shell, isolation, new_id, now_millis, optional_number, optional_path,
     optional_string, program_on_path, valid_resume_identity,
 };
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Agent {
@@ -134,7 +136,19 @@ impl Agent {
             if identity.is_none() {
                 return ResumeVerdict::Unknown;
             }
-            return match isolation::recovery_evidence(self.label(), project, None, identity)
+            let key = (
+                self.label().to_owned(),
+                project.to_path_buf(),
+                identity.map(str::to_owned),
+            );
+            if let Some(verdict) = RECOVERY_VERDICTS
+                .lock()
+                .ok()
+                .and_then(|seen| seen.get(&key, Instant::now()))
+            {
+                return verdict;
+            }
+            let verdict = match isolation::recovery_evidence(self.label(), project, None, identity)
                 .map(|e| e.status)
                 .as_deref()
             {
@@ -142,6 +156,10 @@ impl Agent {
                 Some("no") => ResumeVerdict::No,
                 _ => ResumeVerdict::Unknown,
             };
+            if let Ok(mut seen) = RECOVERY_VERDICTS.lock() {
+                seen.put(key, verdict, Instant::now());
+            }
+            return verdict;
         }
         let Some(home) = isolation::agent_home() else {
             return ResumeVerdict::Unknown;
@@ -158,6 +176,46 @@ impl Agent {
         }
     }
 }
+
+type VerdictKey = (String, PathBuf, Option<String>);
+
+/// Resume verdicts asked across the execution boundary. Each costs a boundary entry, and every
+/// `/api/state` asks one per recoverable session, so a page with many ended conversations spent
+/// most of its time here. A conversation's evidence changes rarely: a found or absent
+/// conversation is reused for five minutes, a failed or unclear answer for thirty seconds.
+struct RecoveryVerdicts {
+    seen: HashMap<VerdictKey, (Instant, ResumeVerdict)>,
+}
+
+const VERDICT_KNOWN: Duration = Duration::from_secs(300);
+const VERDICT_UNKNOWN: Duration = Duration::from_secs(30);
+const VERDICT_LIMIT: usize = 1024;
+
+impl RecoveryVerdicts {
+    fn get(&self, key: &VerdictKey, now: Instant) -> Option<ResumeVerdict> {
+        let (at, verdict) = self.seen.get(key)?;
+        let keep = if *verdict == ResumeVerdict::Unknown {
+            VERDICT_UNKNOWN
+        } else {
+            VERDICT_KNOWN
+        };
+        (now.saturating_duration_since(*at) < keep).then_some(*verdict)
+    }
+
+    fn put(&mut self, key: VerdictKey, verdict: ResumeVerdict, now: Instant) {
+        if self.seen.len() >= VERDICT_LIMIT {
+            self.seen.clear();
+        }
+        self.seen.insert(key, (now, verdict));
+    }
+}
+
+static RECOVERY_VERDICTS: std::sync::LazyLock<std::sync::Mutex<RecoveryVerdicts>> =
+    std::sync::LazyLock::new(|| {
+        std::sync::Mutex::new(RecoveryVerdicts {
+            seen: HashMap::new(),
+        })
+    });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResumeVerdict {
@@ -349,5 +407,40 @@ impl Session {
                 .and_then(|value| valid_resume_identity(value))
                 .map(str::to_owned),
         })
+    }
+}
+
+#[cfg(test)]
+mod recovery_verdict_tests {
+    use super::*;
+
+    #[test]
+    fn known_verdicts_last_five_minutes_and_unclear_ones_thirty_seconds() {
+        let mut seen = RecoveryVerdicts {
+            seen: HashMap::new(),
+        };
+        let start = Instant::now();
+        let key = |id: &str| {
+            (
+                "claude".to_owned(),
+                PathBuf::from("/p"),
+                Some(id.to_owned()),
+            )
+        };
+        seen.put(key("a"), ResumeVerdict::Yes, start);
+        seen.put(key("b"), ResumeVerdict::Unknown, start);
+        let later = |secs| start + Duration::from_secs(secs);
+        assert_eq!(seen.get(&key("a"), later(299)), Some(ResumeVerdict::Yes));
+        assert_eq!(seen.get(&key("a"), later(300)), None);
+        assert_eq!(seen.get(&key("b"), later(29)), Some(ResumeVerdict::Unknown));
+        assert_eq!(seen.get(&key("b"), later(30)), None);
+        // Another conversation, agent or project is its own question.
+        assert_eq!(seen.get(&key("c"), later(1)), None);
+        let other = (
+            "codex".to_owned(),
+            PathBuf::from("/p"),
+            Some("a".to_owned()),
+        );
+        assert_eq!(seen.get(&other, later(1)), None);
     }
 }
