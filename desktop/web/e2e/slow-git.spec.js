@@ -150,3 +150,55 @@ test("two tabs on a slow host load every panel without showing host is busy", as
     await new Promise((done) => server.exitCode !== null ? done() : server.once("exit", done));
   }
 });
+
+test("a reload on a slow host shows the last known project at once", async ({ page }) => {
+  test.skip(process.platform === "win32", "POSIX synthetic Git delay");
+  test.setTimeout(90_000);
+  const fixture = mkdtempSync(join(tmpdir(), "verb-reload-"));
+  const repo = join(fixture, "project");
+  const home = join(fixture, "home");
+  const bin = join(fixture, "bin");
+  for (const path of [repo, home, bin]) mkdirSync(path, { mode: 0o700 });
+  const realGit = execFileSync("/usr/bin/which", ["git"], { encoding: "utf8" }).trim();
+  const environment = { PATH: process.env.PATH, HOME: home, LANG: "C", SHELL: "/bin/bash" };
+  const git = (...args) => execFileSync(realGit, ["-C", repo, ...args], { env: { ...environment, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" } });
+  execFileSync(realGit, ["init", "-q", "-b", "main", repo], { env: environment });
+  writeFileSync(join(repo, "README.md"), "Synthetic reload fixture.\n");
+  git("add", ".");
+  git("commit", "-q", "-m", "first");
+  const slow = join(fixture, "slow");
+  writeFileSync(join(bin, "git"), `#!/bin/sh\n[ -e ${quote(slow)} ] && sleep 2\nexec ${quote(realGit)} "$@"\n`, { mode: 0o755 });
+  const port = await freePort();
+  const origin = `http://127.0.0.1:${port}`;
+  const server = spawn(resolve(process.env.VERB_BIN ?? "../target/debug/verb"), ["web", "--port", String(port)], {
+    cwd: repo,
+    env: { ...environment, PATH: `${bin}:${environment.PATH}`, VERB_STATE_DIR: join(fixture, "state"), VERB_TOKEN: TOKEN },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  try {
+    await new Promise((ready, reject) => {
+      const timer = setTimeout(() => reject(new Error("synthetic host did not start")), 15_000);
+      server.stdout.on("data", (data) => { if (String(data).includes("Verb web UI")) { clearTimeout(timer); ready(); } });
+      server.once("exit", () => { clearTimeout(timer); reject(new Error("synthetic host exited")); });
+    });
+    const created = await page.request.post(`${origin}/api/specs`, { headers: { "X-Verb-Token": TOKEN, Origin: origin }, data: { title: "Login flow", problem: "p", criteria: ["a"] } });
+    expect(created.ok()).toBe(true);
+    // A first, fast load fills the tab's memory.
+    await page.goto(`${origin}/#${TOKEN}`);
+    await expect(page.locator("#top-branch")).toHaveText(/main/, { timeout: 20_000 });
+    await expect(page.locator('[data-bench-group="unlinked"] .nav-count')).toHaveText("1", { timeout: 20_000 });
+    // Now every Git process takes two seconds, so the host's reads take several.
+    writeFileSync(slow, "");
+    const fresh = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/specs", { timeout: 60_000 });
+    await page.reload();
+    // The last known branch and work tree are there well before the host answers.
+    await expect(page.locator("#top-branch")).toHaveText(/main/, { timeout: 1_500 });
+    await expect(page.locator('[data-bench-group="unlinked"] .nav-count')).toHaveText("1", { timeout: 1_500 });
+    await expect(page.getByText("Reading Git status")).toHaveCount(0);
+    await fresh;
+    await expect(page.locator('[data-bench-group="unlinked"] .nav-count')).toHaveText("1");
+  } finally {
+    server.kill();
+    await new Promise((done) => server.exitCode !== null ? done() : server.once("exit", done));
+  }
+});

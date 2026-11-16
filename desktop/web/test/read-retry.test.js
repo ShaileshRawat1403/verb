@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUSY_DELAYS, createReadQueue, readWithBusyRetry } from "../src/read-retry.js";
+import { BUSY_DELAYS, createReadQueue, forgetRemembered, readRemembered, readWithBusyRetry, remember, remembered } from "../src/read-retry.js";
 const busy = () => Object.assign(new Error("desktop host is busy; retry shortly"), { status: 503 });
 const direct = task => task();
 test("only rejected busy GETs retry, preserving the successful value", async () => {
@@ -45,4 +45,33 @@ test("a failed read frees its slot", async () => {
   const queue = createReadQueue(1);
   await assert.rejects(queue(async () => { throw new Error("boom"); }), /boom/);
   assert.equal(await queue(async () => "next"), "next");
+});
+const store = () => { const m = new Map(); return { getItem: k => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)), removeItem: k => m.delete(k), key: i => [...m.keys()][i], get length() { return m.size; } }; };
+test("a reload shows the last answer first, then the fresh one replaces it", async () => {
+  const storage = store();
+  const seen = [];
+  const first = await readRemembered(async () => ({ n: 1 }), "/api/specs", v => seen.push(["prior", v]), { storage, queue: direct });
+  assert.deepEqual(first, { n: 1 });
+  assert.deepEqual(seen, [], "nothing remembered on the first load");
+  const second = await readRemembered(async () => ({ n: 2 }), "/api/specs", v => seen.push(["prior", v]), { storage, queue: direct });
+  assert.deepEqual(seen, [["prior", { n: 1 }]]);
+  assert.deepEqual(second, { n: 2 });
+  assert.deepEqual(remembered("/api/specs", storage), { n: 2 });
+});
+test("a failed read keeps the last good answer; a sign-out forgets every answer", async () => {
+  const storage = store();
+  remember("/api/git", { branch: "main" }, storage);
+  storage.setItem("verb-web-token", "kept");
+  await assert.rejects(readRemembered(async () => { throw new Error("down"); }, "/api/git", () => {}, { storage, queue: direct }), /down/);
+  assert.deepEqual(remembered("/api/git", storage), { branch: "main" });
+  forgetRemembered(storage);
+  assert.equal(remembered("/api/git", storage), undefined);
+  assert.equal(storage.getItem("verb-web-token"), "kept", "only remembered reads are forgotten");
+});
+test("an oversized or unreadable answer is not remembered", () => {
+  const storage = store();
+  remember("/api/files", { big: "x".repeat(600 * 1024) }, storage);
+  assert.equal(remembered("/api/files", storage), undefined);
+  storage.setItem("verb.read.v1:/api/hub", "{not json");
+  assert.equal(remembered("/api/hub", storage), undefined);
 });
