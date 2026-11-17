@@ -6,7 +6,8 @@
   "scripts": {
     "build": "esbuild src/app.js --bundle --minify --target=es2022 --supported:template-literal=false --external:/fonts/* --outfile=dist/app.js",
     "test": "node --test test/*.test.js",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "journeys": "playwright test -c journeys"
   },
   "dependencies": {
     "@codemirror/autocomplete": "6.20.4",
