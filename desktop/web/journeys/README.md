@@ -9,11 +9,16 @@ created, committed or edited, because the candidate and public Verb share one pr
 
 ## Run against the node candidate
 
-1. From the Mac, tunnel the candidate privately (nothing is exposed):
-   `ssh -N -L 4007:127.0.0.1:3007 -p 2222 -i ~/.ssh/oneplus9_ed25519 root@192.168.68.114`
-2. Put the candidate's token in `VERB_TOKEN` yourself (agents never read it), then:
-   `cd desktop/web && VERB_URL=http://127.0.0.1:4007 npm run journeys`
-3. Read `desktop/web/journeys-report/summary.json`. Every result is `pass`, `slow` (over target,
+1. From the Mac, tunnel the candidate privately (nothing is exposed). Use the same port number on
+   both ends: Verb refuses any address but its own (`unexpected host`).
+   `ssh -N -L 3007:127.0.0.1:3007 -p 2222 -i ~/.ssh/oneplus9_ed25519 root@192.168.68.114`
+   Public Verb is the same with 3005.
+2. Load the candidate's token into `VERB_TOKEN` yourself, without showing it (agents never read it).
+   It is the `web-token` file in that service's state folder on the node:
+   `export VERB_TOKEN="$(ssh -p 2222 -i ~/.ssh/oneplus9_ed25519 root@192.168.68.114 'cat <state folder>/web-token')"`
+   Public Verb signs browsers in through Cloudflare Access, so a browser tab never holds this token.
+3. `cd desktop/web && VERB_URL=http://127.0.0.1:3007 npm run journeys`
+4. Read `desktop/web/journeys-report/summary.json`. Every result is `pass`, `slow` (over target,
    within limit) or `fail`. Any `fail` fails the run. Each read also carries `details`: its median,
    p75 and p90, and the host's own `Server-Timing` phases for the median sample (`queue`,
    `boundary` with its entry count, `work`, `total`; see `docs/PERFORMANCE_BUDGET.md`).
