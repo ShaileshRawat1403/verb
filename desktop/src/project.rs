@@ -50,6 +50,10 @@ fn git_output(project: &Path, args: &[&str]) -> Option<String> {
 #[cfg(unix)]
 fn dot_git(checkout: &Path) -> Option<(u64, u64, u64, i64, i64, bool)> {
     use std::os::unix::fs::MetadataExt;
+    #[cfg(test)]
+    if crate::isolation::simulated::node() {
+        return None; // the host account cannot read the checkout's .git there
+    }
     let meta = fs::symlink_metadata(checkout.join(".git")).ok()?;
     if meta.is_dir() {
         let born = meta
@@ -84,32 +88,81 @@ fn dot_git(_: &Path) -> Option<(u64, u64, u64, i64, i64, bool)> {
     None
 }
 
-type CommonDirs = HashMap<PathBuf, ((u64, u64, u64, i64, i64, bool), String)>;
+/// What a cached common dir was checked against: the checkout's `.git` when the host can identify
+/// it, otherwise only when it was last asked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Seen {
+    DotGit((u64, u64, u64, i64, i64, bool)),
+    At(std::time::Instant),
+}
+
+/// How long a common dir is reused for a checkout whose `.git` the host cannot identify. It changes
+/// only on a re-clone or a worktree conversion, so a minute is a short time to show an old answer.
+pub(crate) const COMMON_DIR_REUSE: std::time::Duration = std::time::Duration::from_secs(60);
+
+type CommonDirs = HashMap<PathBuf, (Seen, String)>;
 static COMMON_DIRS: std::sync::LazyLock<std::sync::Mutex<CommonDirs>> =
     std::sync::LazyLock::new(Default::default);
 
+fn seen(checkout: &Path) -> Seen {
+    dot_git(checkout).map_or_else(|| Seen::At(std::time::Instant::now()), Seen::DotGit)
+}
+
+fn remember(checkout: &Path, seen: Seen, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = COMMON_DIRS.lock() {
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(checkout.to_path_buf(), (seen, value.to_owned()));
+    }
+}
+
+/// Records the common dir that a project read already returned (the helper adds it to its reply),
+/// so the next identity lookup for this checkout needs no boundary entry of its own.
+pub(crate) fn remember_common_dir(project: &Path, value: &str) {
+    if let Ok(checkout) = fs::canonicalize(project) {
+        remember(&checkout, seen(&checkout), value);
+    }
+}
+
 /// `git rev-parse --git-common-dir`, which every work item, hub and session read asks for. It
 /// only changes when the checkout's `.git` does, so it is asked again only then. On a node each
-/// ask is a boundary entry. A checkout without a readable `.git` is asked every time.
-fn common_dir(checkout: &Path) -> Option<String> {
-    let identity = dot_git(checkout);
-    if let Some(identity) = identity {
-        if let Some((seen, value)) = COMMON_DIRS.lock().ok()?.get(checkout) {
-            if *seen == identity {
-                return Some(value.clone());
-            }
+/// ask is a boundary entry, and the host cannot identify the checkout's `.git` there, so the answer
+/// is reused for [`COMMON_DIR_REUSE`] instead, or refreshed sooner by a project read that returns it.
+pub(crate) fn common_dir(checkout: &Path) -> Option<String> {
+    let before = seen(checkout);
+    if let Some((cached, value)) = COMMON_DIRS.lock().ok()?.get(checkout) {
+        let fresh = match (cached, before) {
+            (Seen::DotGit(cached), Seen::DotGit(now)) => *cached == now,
+            (Seen::At(at), Seen::At(_)) => at.elapsed() < COMMON_DIR_REUSE,
+            _ => false,
+        };
+        if fresh {
+            return Some(value.clone());
         }
     }
     let value = git_output(checkout, &["rev-parse", "--git-common-dir"])?;
-    if let (Some(identity), Ok(mut cache)) = (identity, COMMON_DIRS.lock()) {
-        if !value.is_empty() && dot_git(checkout) == Some(identity) {
-            if cache.len() > 64 {
-                cache.clear();
-            }
-            cache.insert(checkout.to_path_buf(), (identity, value.clone()));
-        }
+    // A `.git` that changed while Git answered is not trusted with this answer.
+    if match before {
+        Seen::DotGit(_) => dot_git(checkout).map(Seen::DotGit) == Some(before),
+        Seen::At(_) => true,
+    } {
+        remember(checkout, before, &value);
     }
     Some(value)
+}
+
+/// Tests: makes every reused common dir look `by` older.
+#[cfg(test)]
+pub(crate) fn age_common_dirs(by: std::time::Duration) {
+    for (seen, _) in COMMON_DIRS.lock().unwrap().values_mut() {
+        if let Seen::At(at) = seen {
+            *at = at.checked_sub(by).unwrap_or(*at);
+        }
+    }
 }
 
 fn location(project: &Path) -> Result<Location, String> {

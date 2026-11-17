@@ -90,6 +90,8 @@ fn millis(duration: Duration) -> u128 {
 
 /// Runs one execution-boundary entry, counting it against the current request when there is one.
 pub(crate) fn boundary<T>(entry: impl FnOnce() -> T) -> T {
+    #[cfg(test)]
+    trace::note();
     let recorder = CURRENT.with(|current| current.borrow().clone());
     let Some(recorder) = recorder else {
         return entry();
@@ -108,6 +110,90 @@ pub(crate) fn boundary<T>(entry: impl FnOnce() -> T) -> T {
         recorder.entries.fetch_add(1, Ordering::Relaxed);
     }
     result
+}
+
+/// Test builds: names the code each outermost boundary entry on this thread comes from, as the
+/// chain of Verb functions that led to it (innermost first). Nested entries are not named again.
+#[cfg(test)]
+pub(crate) mod trace {
+    use std::cell::{Cell, RefCell};
+
+    thread_local! {
+        static NAMES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+        static INSIDE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Runs `work` and returns the boundary entries it made, one chain per entry.
+    pub(crate) fn entries<T>(work: impl FnOnce() -> T) -> (T, Vec<String>) {
+        let previous = NAMES.with(|names| names.replace(Some(Vec::new())));
+        let value = work();
+        let names = NAMES
+            .with(|names| names.replace(previous))
+            .unwrap_or_default();
+        (value, names)
+    }
+
+    /// Marks the entries that a boundary call makes on this thread as nested.
+    pub(crate) fn inside<T>(work: impl FnOnce() -> T) -> T {
+        let was = INSIDE.with(|inside| inside.replace(true));
+        let value = work();
+        INSIDE.with(|inside| inside.set(was));
+        value
+    }
+
+    pub(super) fn note() {
+        if INSIDE.with(Cell::get) || NAMES.with(|names| names.borrow().is_none()) {
+            return;
+        }
+        let chain = chain(&std::backtrace::Backtrace::force_capture().to_string());
+        NAMES.with(|names| {
+            if let Some(names) = names.borrow_mut().as_mut() {
+                names.push(chain);
+            }
+        });
+    }
+
+    /// `project::common_dir < project::location < ...`: Verb frames only, without the plumbing
+    /// that every entry shares, closures folded into their function.
+    fn chain(backtrace: &str) -> String {
+        let mut frames: Vec<String> = Vec::new();
+        for line in backtrace.lines() {
+            let Some((_, name)) = line.trim().split_once(": ") else {
+                continue;
+            };
+            let Some(name) = name.strip_prefix("verb::") else {
+                continue;
+            };
+            let name = match name.rsplit_once("::h") {
+                Some((head, hash))
+                    if hash.len() == 16 && hash.chars().all(|c| c.is_ascii_hexdigit()) =>
+                {
+                    head
+                }
+                _ => name,
+            };
+            let name = name.split("::{{closure}}").next().unwrap_or(name);
+            let name = name.split("::<").next().unwrap_or(name).to_owned();
+            if name.starts_with("isolation::simulated::") {
+                break;
+            }
+            if [
+                "timing::",
+                "exec::bounded::",
+                "exec::read_output",
+                "project_read::request",
+            ]
+            .iter()
+            .any(|plumbing| name.starts_with(plumbing))
+                || name.contains("::tests::")
+                || frames.last() == Some(&name)
+            {
+                continue;
+            }
+            frames.push(name);
+        }
+        frames.join(" < ")
+    }
 }
 
 #[cfg(test)]

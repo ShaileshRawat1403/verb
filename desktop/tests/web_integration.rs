@@ -1614,6 +1614,8 @@ fn secondary_state_work_does_not_block_workspace_or_terminal_io() {
     std::thread::sleep(Duration::from_millis(150));
     let started = std::time::Instant::now();
     let workspace = server.json("GET", "/api/workspace", None);
+    // No execution boundary here: the page keeps its own read slots.
+    assert_eq!(workspace["boundaryReads"], Value::Null);
     assert!(workspace["sessions"]
         .as_array()
         .unwrap()

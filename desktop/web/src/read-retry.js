@@ -7,26 +7,71 @@ export const READ_SLOTS = 4;
 export const BUSY_DELAYS = [250, 500, 1000, 2000, 3000, 4000, 5000];
 const BUSY = "desktop host is busy; retry shortly";
 
-export function createReadQueue(slots = READ_SLOTS) {
+// The order a first load needs its reads in: the sidebar and work tree first, then the rest. On a
+// node the execution boundary serves one read at a time (it says so in /api/workspace), so the
+// page starts one read at a time, in this order, rather than queueing six behind the boundary in
+// whatever order they were asked. Any other read comes after these.
+export const FIRST_PAINT = ["/api/state", "/api/hub", "/api/work-items", "/api/git", "/api/specs", "/api/files"];
+
+export function readRank(path) {
+  const index = FIRST_PAINT.indexOf(String(path).split("?")[0]);
+  return index < 0 ? FIRST_PAINT.length : index;
+}
+
+// Waiting reads start lowest rank first, then in the order they were asked. Reads asked in the
+// same turn of the event loop are ordered together: starting waits for that turn to end.
+export function createReadQueue(slots = READ_SLOTS, { defer = run => setTimeout(run, 0) } = {}) {
   let active = 0;
+  let limit = slots;
+  let asked = 0;
+  let scheduled = false;
   const waiting = [];
-  const release = () => {
-    active--;
-    const next = waiting.shift();
-    if (next) next();
-  };
-  return async function run(task) {
-    if (active >= slots) await new Promise(resolve => waiting.push(resolve));
-    active++;
-    try {
-      return await task();
-    } finally {
-      release();
+  const pump = () => {
+    scheduled = false;
+    waiting.sort((a, b) => a.rank - b.rank || a.asked - b.asked);
+    while (active < limit && waiting.length) {
+      active++;
+      waiting.shift().start();
     }
   };
+  const schedule = () => {
+    if (scheduled) return;
+    scheduled = true;
+    defer(pump);
+  };
+  function run(task, rank = FIRST_PAINT.length) {
+    return new Promise((resolve, reject) => {
+      waiting.push({
+        rank,
+        asked: asked++,
+        start: () => {
+          Promise.resolve()
+            .then(task)
+            .then(resolve, reject)
+            .finally(() => {
+              active--;
+              schedule();
+            });
+        },
+      });
+      schedule();
+    });
+  }
+  // How many reads the host can serve at once; never more than READ_SLOTS from one page.
+  run.setSlots = (count) => {
+    limit = Math.max(1, Math.min(READ_SLOTS, Math.floor(Number(count)) || READ_SLOTS));
+    schedule();
+  };
+  run.slots = () => limit;
+  return run;
 }
 
 const sharedQueue = createReadQueue();
+
+// Called with /api/workspace's `boundaryReads` (absent on a host without a boundary).
+export function setReadSlots(count) {
+  sharedQueue.setSlots(count ?? READ_SLOTS);
+}
 
 // Only a rejected, read-only request may retry. Never accept a write callback.
 export async function readWithBusyRetry(api, path, {
@@ -36,7 +81,7 @@ export async function readWithBusyRetry(api, path, {
 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
-      return await queue(() => api("GET", path));
+      return await queue(() => api("GET", path), readRank(path));
     } catch (error) {
       if (attempt >= delays.length || error.status !== 503 || error.message !== BUSY) throw error;
       await wait(delays[attempt] + Math.floor(Math.random() * 100));

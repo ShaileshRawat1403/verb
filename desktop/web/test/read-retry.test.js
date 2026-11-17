@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUSY_DELAYS, createReadQueue, forgetRemembered, readRemembered, readWithBusyRetry, remember, remembered } from "../src/read-retry.js";
+import { BUSY_DELAYS, FIRST_PAINT, READ_SLOTS, createReadQueue, forgetRemembered, readRank, readRemembered, readWithBusyRetry, remember, remembered } from "../src/read-retry.js";
 const busy = () => Object.assign(new Error("desktop host is busy; retry shortly"), { status: 503 });
 const direct = task => task();
 test("only rejected busy GETs retry, preserving the successful value", async () => {
@@ -74,4 +74,44 @@ test("an oversized or unreadable answer is not remembered", () => {
   assert.equal(remembered("/api/files", storage), undefined);
   storage.setItem("verb.read.v1:/api/hub", "{not json");
   assert.equal(remembered("/api/hub", storage), undefined);
+});
+test("on a one-read boundary, a first load starts one read at a time in first-paint order", async () => {
+  const queue = createReadQueue(4);
+  queue.setSlots(1);
+  const started = [];
+  let inFlight = 0, peak = 0;
+  const api = async (_method, path) => {
+    started.push(path);
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    inFlight--;
+    return path;
+  };
+  // Asked in the order the page's modules happen to start, not the order the page needs.
+  const asked = ["/api/files", "/api/talk", "/api/git", "/api/specs", "/api/work-items", "/api/hub", "/api/state"];
+  await Promise.all(asked.map(path => readWithBusyRetry(api, path, { queue })));
+  assert.deepEqual(started, [...FIRST_PAINT, "/api/talk"]);
+  assert.equal(peak, 1);
+});
+test("a read asked later still waits behind lower-ranked reads, and slots never exceed the page's own", async () => {
+  const queue = createReadQueue(4);
+  queue.setSlots(1);
+  const started = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const api = async (_method, path) => { started.push(path); if (path === "/api/state") await gate; return path; };
+  const first = readWithBusyRetry(api, "/api/state", { queue });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  const later = ["/api/files", "/api/hub"].map(path => readWithBusyRetry(api, path, { queue }));
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(started, ["/api/state"], "one at a time");
+  release();
+  await Promise.all([first, ...later]);
+  assert.deepEqual(started, ["/api/state", "/api/hub", "/api/files"]);
+  queue.setSlots(64);
+  assert.equal(queue.slots(), READ_SLOTS);
+  queue.setSlots(undefined);
+  assert.equal(queue.slots(), READ_SLOTS);
+  assert.equal(readRank("/api/files/preview?path=a"), FIRST_PAINT.length);
+  assert.equal(readRank("/api/git?x=1"), FIRST_PAINT.indexOf("/api/git"));
 });

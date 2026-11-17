@@ -25,6 +25,15 @@ fn request_once<T: DeserializeOwned>(
     action: &str,
     args: &[&str],
 ) -> Result<T, String> {
+    #[cfg(test)]
+    if crate::isolation::simulated::node() {
+        let args: Vec<String> = std::iter::once(action)
+            .chain(args.iter().copied())
+            .map(str::to_owned)
+            .collect();
+        let raw = crate::isolation::simulated::in_guest(|| reply(project, &args))?;
+        return parse(project, &raw);
+    }
     let mut command = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")?;
     command
         .args([
@@ -104,8 +113,7 @@ fn request_once<T: DeserializeOwned>(
                     String::from_utf8_lossy(stderr).trim().to_owned()
                 });
             }
-            break serde_json::from_slice(stdout)
-                .map_err(|_| "Invalid project read reply.".to_owned());
+            break parse(project, stdout);
         }
         if Instant::now() >= until {
             break Err(TIMEOUT.to_owned());
@@ -130,16 +138,7 @@ pub(crate) fn helper(args: &[String]) -> Result<(), String> {
     // Pin the project to the directory this helper was started in, by the kernel's reference to it.
     #[cfg(unix)]
     crate::studio::pin_project_root_to_cwd(&project)?;
-    let value = match args {
-        [action] if action == "files" => serde_json::to_vec(&crate::hub::files(&project)?),
-        [action, path] if action == "preview" => {
-            serde_json::to_vec(&crate::hub::preview(&project, path)?)
-        }
-        [action] if action == "git" => serde_json::to_vec(&crate::specs::git_summary(&project)?),
-        [action] if action == "source" => serde_json::to_vec(&crate::sdlc::observe(&project)?),
-        _ => return Err(UNKNOWN_ACTION.to_owned()),
-    }
-    .map_err(|error| error.to_string())?;
+    let value = reply(&project, args)?;
     if value.len() > MAX_REPLY {
         return Err("Project read returned too much data.".to_owned());
     }
@@ -147,4 +146,54 @@ pub(crate) fn helper(args: &[String]) -> Result<(), String> {
     std::io::stdout()
         .write_all(&value)
         .map_err(|error| error.to_string())
+}
+
+/// The field a helper adds to its `files`, `git` and `source` replies: the checkout's
+/// `git rev-parse --git-common-dir`, which the host would otherwise cross the boundary again to ask.
+/// Helpers from before it existed leave it out, and hosts from before it ignore it.
+const COMMON_DIR: &str = "commonDir";
+
+/// The helper's answer to one request, as JSON.
+fn reply(project: &Path, args: &[String]) -> Result<Vec<u8>, String> {
+    let with_common_dir = |value: Result<serde_json::Value, serde_json::Error>| {
+        let mut value = value.map_err(|error| error.to_string())?;
+        if let (Some(object), Some(common)) = (
+            value.as_object_mut(),
+            crate::project::common_dir(project).filter(|common| !common.is_empty()),
+        ) {
+            object.insert(COMMON_DIR.to_owned(), common.into());
+        }
+        serde_json::to_vec(&value).map_err(|error| error.to_string())
+    };
+    match args {
+        [action] if action == "files" => {
+            with_common_dir(serde_json::to_value(crate::hub::files(project)?))
+        }
+        [action, path] if action == "preview" => {
+            serde_json::to_vec(&crate::hub::preview(project, path)?)
+                .map_err(|error| error.to_string())
+        }
+        [action] if action == "git" => {
+            with_common_dir(serde_json::to_value(crate::specs::git_summary(project)?))
+        }
+        [action] if action == "source" => {
+            with_common_dir(serde_json::to_value(crate::sdlc::observe(project)?))
+        }
+        _ => Err(UNKNOWN_ACTION.to_owned()),
+    }
+}
+
+/// Reads a helper reply, keeping the common dir it carries, if any, for the next identity lookup.
+fn parse<T: DeserializeOwned>(project: &Path, raw: &[u8]) -> Result<T, String> {
+    let invalid = |_| "Invalid project read reply.".to_owned();
+    let mut value: serde_json::Value = serde_json::from_slice(raw).map_err(invalid)?;
+    if let Some(common) = value
+        .as_object_mut()
+        .and_then(|object| object.remove(COMMON_DIR))
+    {
+        if let Some(common) = common.as_str() {
+            crate::project::remember_common_dir(project, common);
+        }
+    }
+    serde_json::from_value(value).map_err(invalid)
 }

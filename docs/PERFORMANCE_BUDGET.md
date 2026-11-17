@@ -32,12 +32,42 @@ Every Git process behind the execution boundary is its own boundary entry, about
 each on the phone. A whole read inside the boundary helper (`__project-read`, `__git-snapshot`)
 is also one entry. So the budget is mostly a count of entries per read.
 
-| Read | rc.3 entries | rc.4 entries | rc.5 entries | With helper at rc.4+ |
-|---|---|---|---|---|
-| `/api/specs` | 14 | 5 | 5 | 1 |
-| `/api/state` | 18 (6 crossing) | 6 | 6 | 2 |
-| `/api/hub` | 4 | 2 | 1 | 1 |
-| `/api/work-items` | 2 | 1 | 0 | 0 |
+| Read | rc.3 entries | rc.4 entries | rc.5 entries | With helper at rc.4+ | rc.7 measured | After fewer crossings, cold / warm |
+|---|---|---|---|---|---|---|
+| `/api/specs` | 14 | 5 | 5 | 1 | 1 | 1 |
+| `/api/state` | 18 (6 crossing) | 6 | 6 | 2 | 0 | unchanged |
+| `/api/hub` | 4 | 2 | 1 | 1 | 2 | 1 / 0 |
+| `/api/work-items` | 2 | 1 | 0 | 0 | 1 | 1 / 0 (0 after any read that carries the common dir) |
+
+rc.7 measured on the candidate (Server-Timing, 10 samples): each entry costs about 0.75 s and work
+time is under 10 ms, so the count is the budget. What the hub and work-item entries were, named by
+`hub::tests::node_reads_cross_the_boundary_once_cold_and_never_warm` on a simulated node (the host
+cannot identify the checkout's `.git` there):
+
+- hub: `hub::files < hub::context_files < hub::context_parts < hub::context_section < hub::hub`
+  (the visible file list), and `project::common_dir < project::location < project::identity <
+  workbench::shared_memory < hub::context_parts < ...` (`git rev-parse --git-common-dir`).
+- work items: `project::common_dir < project::location < project::identity < work_items::read`.
+
+How they are removed:
+
+- **Common dir.** Where the host cannot identify `.git`, a checkout's common dir is reused for 60 s
+  (it changes only on a re-clone or a worktree conversion). The helper's `files`, `git` and
+  `source` replies carry it as `commonDir`, which refreshes it at no cost. A helper from before
+  this omits the field and the host asks Git as before; a host from before ignores it.
+- **Hub file list.** The hub's context preview reuses the visible file list for 60 s while the
+  places context comes from keep their modification times (project root, top-level `.gitignore`,
+  `docs/`, `docs/project/`, `specs/`, `specs/sessions/`, `work/` and each work item). Adding or
+  renaming a brief, spec or work item document asks again at once. Agent launches and syncs never
+  reuse it.
+
+## First load on a node
+
+A node's boundary serves one project read at a time. `/api/workspace` says so
+(`boundaryReads: 1`; absent on a host without a boundary), and the page then starts its reads one
+at a time, in this order: state, hub, work items, Git, specs, files, then anything else. Panels show
+their remembered answers from this tab meanwhile. Target on the node: first useful page under
+2.5 s, every panel within 5 s.
 
 ## Where one read spends its time: `Server-Timing`
 
