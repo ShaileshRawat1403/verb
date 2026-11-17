@@ -115,3 +115,9 @@ test("a read asked later still waits behind lower-ranked reads, and slots never 
   assert.equal(readRank("/api/files/preview?path=a"), FIRST_PAINT.length);
   assert.equal(readRank("/api/git?x=1"), FIRST_PAINT.indexOf("/api/git"));
 });
+test("the work tree's two reads come before any side-panel read", () => {
+  // The work tree waits for work items and specs; the hub and Git fill panels beside it.
+  const tree = Math.max(readRank("/api/work-items"), readRank("/api/specs"));
+  for (const side of ["/api/hub", "/api/git", "/api/files"]) assert.ok(tree < readRank(side), side);
+  assert.equal(readRank("/api/state"), 0, "the sidebar branch comes first");
+});

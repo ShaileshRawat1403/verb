@@ -7,11 +7,13 @@ export const READ_SLOTS = 4;
 export const BUSY_DELAYS = [250, 500, 1000, 2000, 3000, 4000, 5000];
 const BUSY = "desktop host is busy; retry shortly";
 
-// The order a first load needs its reads in: the sidebar and work tree first, then the rest. On a
+// The order a first load needs its reads in: the sidebar (state) and the work tree first, then the
+// rest. The work tree shows nothing until both work items and specs have arrived, so specs comes
+// before the hub and Git, which fill side panels. On a
 // node the execution boundary serves one read at a time (it says so in /api/workspace), so the
 // page starts one read at a time, in this order, rather than queueing six behind the boundary in
 // whatever order they were asked. Any other read comes after these.
-export const FIRST_PAINT = ["/api/state", "/api/hub", "/api/work-items", "/api/git", "/api/specs", "/api/files"];
+export const FIRST_PAINT = ["/api/state", "/api/work-items", "/api/specs", "/api/hub", "/api/git", "/api/files"];
 
 export function readRank(path) {
   const index = FIRST_PAINT.indexOf(String(path).split("?")[0]);
