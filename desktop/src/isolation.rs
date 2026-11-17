@@ -448,7 +448,8 @@ pub(crate) fn recovery_evidence(
         ]);
         probe
     };
-    let output = probe.stdin(std::process::Stdio::null()).output().ok()?;
+    probe.stdin(std::process::Stdio::null());
+    let output = crate::timing::boundary(|| probe.output()).ok()?;
     if !output.status.success() || output.stdout.len() > 4096 {
         return None;
     }

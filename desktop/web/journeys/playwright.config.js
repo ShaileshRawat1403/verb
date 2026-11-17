@@ -5,8 +5,11 @@
 //   VERB_URL=http://127.0.0.1:4007 VERB_TOKEN=… npx playwright test -c journeys
 //
 // The token is read from the environment and never printed; traces and videos are off so it is
-// not recorded either. Results: journeys-report/summary.json plus a screenshot of any failure.
+// not recorded either. With VERB_ACCESS_CLIENT_ID and VERB_ACCESS_CLIENT_SECRET set, every request
+// also carries that Cloudflare Access service token, so the suite can run against the public URL.
+// Results: journeys-report/summary.json plus a screenshot of any failure.
 import { defineConfig } from "@playwright/test";
+import { accessHeaders } from "./access.js";
 
 export default defineConfig({
   testDir: ".",
@@ -23,5 +26,6 @@ export default defineConfig({
     trace: "off",
     video: "off",
     screenshot: "only-on-failure",
+    extraHTTPHeaders: accessHeaders(),
   },
 });

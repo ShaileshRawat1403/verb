@@ -60,6 +60,7 @@ mod studio;
 mod studio_bridge;
 mod talk;
 pub(crate) mod terminal_replies;
+mod timing;
 mod tokens;
 mod transcript;
 #[cfg(unix)]

@@ -3,14 +3,18 @@
 import { rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { accessHeaders } from "./access.js";
 
 export default async function () {
   rmSync(join(dirname(fileURLToPath(import.meta.url)), "..", "journeys-report", "summary.json"), { force: true });
   const url = (process.env.VERB_URL || "").replace(/\/+$/, "");
-  if (!url || !process.env.VERB_TOKEN) throw new Error("Set VERB_URL and VERB_TOKEN (the token is never printed).");
+  const access = accessHeaders();
+  if (!url || (!process.env.VERB_TOKEN && !Object.keys(access).length)) {
+    throw new Error("Set VERB_URL and VERB_TOKEN, or the Access service token (never printed).");
+  }
   let reply;
   try {
-    reply = await fetch(`${url}/healthz`, { signal: AbortSignal.timeout(15_000) });
+    reply = await fetch(`${url}/healthz`, { headers: access, signal: AbortSignal.timeout(15_000) });
   } catch (error) {
     throw new Error(`Verb did not answer at ${url}: ${error.cause?.code || error.message}. Is the tunnel up?`);
   }

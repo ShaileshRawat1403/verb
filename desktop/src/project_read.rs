@@ -17,6 +17,14 @@ pub(crate) fn request<T: DeserializeOwned>(
     action: &str,
     args: &[&str],
 ) -> Result<T, String> {
+    crate::timing::boundary(|| request_once(project, action, args))
+}
+
+fn request_once<T: DeserializeOwned>(
+    project: &Path,
+    action: &str,
+    args: &[&str],
+) -> Result<T, String> {
     let mut command = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")?;
     command
         .args([

@@ -3525,3 +3525,51 @@ fn an_access_only_terminal_stream_closes_when_the_login_expires() {
         "the stream closed before the login expired"
     );
 }
+
+#[test]
+fn every_api_reply_says_where_its_time_went() {
+    let server = WebServer::start();
+    let init = Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(server.root.join("project"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let phases = |path: &str| {
+        let (status, header, _) = server.request_with_headers_full("GET", path, None, true, "");
+        assert_eq!(status, 200, "{path}");
+        let line = header
+            .lines()
+            .find_map(|line| {
+                line.split_once(':')
+                    .filter(|(name, _)| name.eq_ignore_ascii_case("Server-Timing"))
+                    .map(|(_, value)| value.trim().to_owned())
+            })
+            .unwrap_or_else(|| panic!("{path} has no Server-Timing: {header}"));
+        let names: Vec<_> = line
+            .split(", ")
+            .map(|phase| phase.split(';').next().unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            names,
+            ["queue", "boundary", "work", "total"],
+            "{path}: {line}"
+        );
+        assert!(line.contains(";desc=\"n="), "{path}: {line}");
+        assert!(!line.contains('/'), "{path} leaks a path: {line}");
+        line
+    };
+    // Answered on the request loop: nothing crosses the boundary.
+    assert!(phases("/api/workspace").contains("desc=\"n=0\""));
+    // Answered on a worker: every Git process is counted.
+    let git = phases("/api/git");
+    assert!(!git.contains("desc=\"n=0\""), "{git}");
+    // A page asset is not an API reply.
+    let (_, header, _) = server.request_with_headers_full("GET", "/", None, true, "");
+    assert!(
+        !header.to_ascii_lowercase().contains("server-timing"),
+        "{header}"
+    );
+}
