@@ -55,3 +55,13 @@ is also one entry. So the budget is mostly a count of entries per read.
    part.
 3. **Measure the first useful page and every panel on the node** with the browser's own timing, not
    only single reads.
+
+## Terminal stream reconnects
+
+- A stream whose sign-in has ended (session, Access login or scoped token) is closed by the host
+  with code `4401` ("sign-in expired"), flushed before the socket is dropped. A terminal ticket
+  request from an Access login whose `exp` has passed is refused with 401. On either, the page
+  stops reconnecting and shows "Signed out. Reload to sign in again." with a Reload button.
+- Any other close reconnects after 1, 2, 4, 8, 16, then 30 s (up to 20% jitter). The back-off
+  starts again after a stream has stayed open for 60 s.
+- The page logs the first close and then only a change, not every retry.

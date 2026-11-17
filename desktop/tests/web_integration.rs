@@ -3525,3 +3525,39 @@ fn an_access_only_terminal_stream_closes_when_the_login_expires() {
         "the stream closed before the login expired"
     );
 }
+
+#[test]
+fn an_access_login_that_has_ended_gets_no_terminal_ticket() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let email = "owner@example.invalid";
+    let iss = "https://example.cloudflareaccess.com";
+    let aud = "verb-test-audience";
+    let server = WebServer::start_with_env(&[
+        ("VERB_ALLOWED_EMAIL", email),
+        ("VERB_CF_ACCESS_ISS", iss),
+        ("VERB_CF_ACCESS_AUD", aud),
+        ("VERB_CF_JWKS_JSON", TEST_JWKS_MULTI),
+    ]);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let ticket = |exp: u64| {
+        let jwt = sign_test_jwt(TEST_RSA_KEY_1, "test-pilot-key-1", iss, aud, email, exp);
+        let headers = format!("Cf-Access-Jwt-Assertion: {jwt}\r\n");
+        server.request_with_headers_full(
+            "POST",
+            "/api/terminals/ticket",
+            Some(json!({})),
+            false,
+            &headers,
+        )
+    };
+    // Still accepted for reads through clock-skew leeway, but the login has ended: a ticket would
+    // open a stream that closes at once, and the page would retry it forever.
+    let (status, _, body) = ticket(now - 10);
+    assert_eq!(status, 401, "{}", String::from_utf8_lossy(&body));
+    assert!(String::from_utf8_lossy(&body).contains("sign-in expired"));
+    let (status, _, body) = ticket(now + 3600);
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+}

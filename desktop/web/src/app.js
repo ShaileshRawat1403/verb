@@ -94,6 +94,12 @@ const theme = createThemeController({
 const terminalTransport = createTerminalTransport({
  token, onOpen: () => terminalStreamView.connected(), onClose: () => terminalStreamView.disconnected(),
  onControl: msg => terminalStreamView.control(msg), onOutput: bytes => terminalStreamView.binary(bytes),
+ // The sign-in has ended: one clear message, no reconnect loop.
+ onSignedOut: () => {
+  const notice = document.querySelector("#signed-out");
+  notice.hidden = false;
+  notice.querySelector("#signed-out-reload").onclick = () => location.reload();
+ },
 });
 const { connectTerminalStream, sendStreamAttach, sendStreamDetach, sendStreamResize, sendStreamSignal, sendStreamInput, sendStreamAck } = terminalTransport;
 const terminalStreamView = createTerminalStreamView({
