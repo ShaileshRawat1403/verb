@@ -285,6 +285,8 @@ fn shell() -> Option<Value> {
 fn concurrent_custom_launches_reuse_the_hosts_identity_when_git_is_unavailable() {
     let host = Host::start("admit");
     let (_, workspace) = host.request("GET", "/api/workspace", None);
+    // The boundary serves one project read at a time; the page starts its reads one by one.
+    assert_eq!(workspace["boundaryReads"], 1);
     let project_id = workspace["project"]["id"].as_str().unwrap().to_owned();
     // The host already established its identity. A Git marker plus the fixture's
     // failing background client now models an unavailable Git execution slot.

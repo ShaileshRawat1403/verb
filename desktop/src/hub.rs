@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub(crate) const BRIEF_PATH: &str = "docs/project/BRIEF.md";
 const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
@@ -440,7 +441,24 @@ fn visible_context_file(
     read_agent_file(project, path).ok().flatten()
 }
 
-fn context_files(project: &Path) -> Result<std::collections::HashSet<String>, String> {
+/// Which files may feed agent context: those Git tracks or would track. `reuse` lets a read-only
+/// view take the list from a recent read (see [`VisibleFiles`]); anything that writes or launches
+/// asks again.
+fn context_files(
+    project: &Path,
+    reuse: bool,
+) -> Result<std::sync::Arc<std::collections::HashSet<String>>, String> {
+    let layout = layout(project);
+    if reuse {
+        if let Some(files) = VISIBLE_FILES.lock().ok().and_then(|cache| {
+            cache
+                .get(project)
+                .filter(|(at, seen, _)| at.elapsed() < VISIBLE_REUSE && *seen == layout)
+                .map(|(_, _, files)| std::sync::Arc::clone(files))
+        }) {
+            return Ok(files);
+        }
+    }
     let paths = if crate::isolation::external() {
         let result = files(project)?;
         if result.truncated {
@@ -450,7 +468,65 @@ fn context_files(project: &Path) -> Result<std::collections::HashSet<String>, St
     } else {
         visible_files(project)?
     };
-    Ok(paths.into_iter().collect())
+    let files = std::sync::Arc::new(paths.into_iter().collect::<std::collections::HashSet<_>>());
+    if let Ok(mut cache) = VISIBLE_FILES.lock() {
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(
+            project.to_path_buf(),
+            (Instant::now(), layout, std::sync::Arc::clone(&files)),
+        );
+    }
+    Ok(files)
+}
+
+/// The hub asks for the visible file list on every view, and on a node that is a boundary entry.
+/// A list is reused for a minute while the directories that context draws on keep their
+/// modification times: adding, removing or renaming a brief, spec or work item document, or editing
+/// the top-level `.gitignore`, asks again at once. Only a file that became ignored by some other
+/// rule can stay in the hub's context preview for up to that minute. Agent launches and syncs never
+/// reuse it.
+type VisibleFiles = HashMap<
+    PathBuf,
+    (
+        Instant,
+        Vec<Option<std::time::SystemTime>>,
+        std::sync::Arc<std::collections::HashSet<String>>,
+    ),
+>;
+static VISIBLE_FILES: std::sync::LazyLock<std::sync::Mutex<VisibleFiles>> =
+    std::sync::LazyLock::new(Default::default);
+const VISIBLE_REUSE: Duration = Duration::from_secs(60);
+
+/// Modification times of the places context files live, read on the host without Git.
+fn layout(project: &Path) -> Vec<Option<std::time::SystemTime>> {
+    let modified = |path: &Path| {
+        fs::symlink_metadata(path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    };
+    let mut seen: Vec<_> = [
+        "",
+        ".gitignore",
+        "docs",
+        "docs/project",
+        "specs",
+        "specs/sessions",
+        "work",
+    ]
+    .iter()
+    .map(|path| modified(&project.join(path)))
+    .collect();
+    let mut items: Vec<PathBuf> = fs::read_dir(project.join("work"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    items.sort();
+    seen.extend(items.iter().map(|path| modified(path)));
+    seen
 }
 
 // Resolve inline Markdown links lexically. Context generation never opens their targets.
@@ -517,8 +593,9 @@ fn context_parts(
     spec_id: Option<&str>,
     launch: bool,
     notes_project: Option<&Path>,
+    reuse_files: bool,
 ) -> Result<ContextParts, String> {
-    let files = context_files(project)?;
+    let files = context_files(project, reuse_files)?;
     let mut parts = ContextParts::default();
     if let Some(raw) = visible_context_file(project, BRIEF_PATH, &files) {
         for heading in ["Problem", "Scope", "Constraints", "Who it is for"] {
@@ -582,7 +659,7 @@ fn context_parts(
         let notes_path = format!("specs/sessions/{id}.md");
         let mut notes_root = files.contains(&notes_path).then_some(project);
         if let Some(source) = notes_project.filter(|source| *source != project) {
-            if context_files(source)?.contains(&notes_path) {
+            if context_files(source, false)?.contains(&notes_path) {
                 notes_root = Some(source);
             }
         }
@@ -692,7 +769,7 @@ fn context_parts(
 }
 
 pub(crate) fn full_context(project: &Path, spec: Option<&str>) -> Result<String, String> {
-    let mut out = context_parts(project, spec, false, None)?.render();
+    let mut out = context_parts(project, spec, false, None, false)?.render();
     out.push_str(END);
     out.push('\n');
     Ok(out)
@@ -715,8 +792,9 @@ pub(crate) fn spec_delivery(
     trigger: &str,
 ) -> Result<(String, crate::session_context::Delivery), String> {
     let command = format!("verb shared spec {id}");
-    let (text, _, omission, parts) = context_parts(project, Some(id), true, Some(notes_project))?
-        .bound(limit.min(CONTEXT_LIMIT), &command);
+    let (text, _, omission, parts) =
+        context_parts(project, Some(id), true, Some(notes_project), false)?
+            .bound(limit.min(CONTEXT_LIMIT), &command);
     let ids = |prefix: &str| {
         parts
             .links
@@ -743,8 +821,9 @@ pub(crate) fn spec_delivery(
     Ok((text, delivery))
 }
 
-fn context_section(project: &Path) -> Result<(String, bool), String> {
-    Ok(context_parts(project, None, false, None)?.bounded(CONTEXT_LIMIT, "verb shared full"))
+fn context_section(project: &Path, reuse_files: bool) -> Result<(String, bool), String> {
+    Ok(context_parts(project, None, false, None, reuse_files)?
+        .bounded(CONTEXT_LIMIT, "verb shared full"))
 }
 
 fn current_section(raw: &str) -> Result<Option<&str>, String> {
@@ -937,7 +1016,7 @@ pub(crate) fn protect_work_drafts_from_git(project: &Path) -> Result<&'static st
 pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<AgentSync, String> {
     let identity = crate::project::identity(project)?;
     let _lock = crate::workbench::lock_project(&identity.store)?;
-    let (wanted, _) = context_section(project)?;
+    let (wanted, _) = context_section(project, false)?;
     let block = wanted.trim_end_matches('\n');
     let mut writes = Vec::new();
     for name in AGENT_FILES {
@@ -979,7 +1058,7 @@ pub(crate) fn sync_agent_files(project: &Path, actor: &str) -> Result<AgentSync,
 
 pub(crate) fn hub(project: &Path) -> Hub {
     let brief = brief_status(project);
-    let context = context_section(project);
+    let context = context_section(project, true);
     let wanted = context
         .as_ref()
         .ok()
@@ -1080,6 +1159,96 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The boundary entries a read makes on a node, one named chain per entry (innermost first).
+    fn node_entries(read: impl FnOnce()) -> Vec<String> {
+        crate::timing::trace::entries(|| crate::isolation::simulated::on_node(read)).1
+    }
+
+    /// On a node the host cannot identify a checkout's `.git`, so every identity lookup used to ask
+    /// Git for the common dir: the hub crossed twice (the visible file list, then the common dir
+    /// for shared memory) and work items once. Run with `--nocapture` to see the chains.
+    #[test]
+    fn node_reads_cross_the_boundary_once_cold_and_never_warm() {
+        let dir = repo();
+        let hub_cold = node_entries(|| drop(hub(&dir)));
+        let hub_warm = node_entries(|| drop(hub(&dir)));
+        let items = node_entries(|| drop(crate::work_items::read(&dir).unwrap()));
+        let items_warm = node_entries(|| drop(crate::work_items::read(&dir).unwrap()));
+        for (label, entries) in [
+            ("hub cold", &hub_cold),
+            ("hub warm", &hub_warm),
+            ("work-items after hub", &items),
+            ("work-items warm", &items_warm),
+        ] {
+            eprintln!("{label}: {} {entries:#?}", entries.len());
+        }
+        // The one cold entry is the file list, whose reply also carries the common dir.
+        assert_eq!(hub_cold.len(), 1, "{hub_cold:#?}");
+        assert!(
+            hub_cold[0].starts_with("hub::files < hub::context_files"),
+            "{hub_cold:#?}"
+        );
+        assert_eq!(hub_warm, Vec::<String>::new());
+        assert_eq!(items, Vec::<String>::new());
+        assert_eq!(items_warm, Vec::<String>::new());
+
+        // Work items on their own: one lookup cold, none warm.
+        let other = repo();
+        let cold = node_entries(|| drop(crate::work_items::read(&other).unwrap()));
+        let warm = node_entries(|| drop(crate::work_items::read(&other).unwrap()));
+        eprintln!("work-items cold: {cold:#?}");
+        assert_eq!(cold.len(), 1, "{cold:#?}");
+        assert!(cold[0].starts_with("project::git_output < project::common_dir < project::location < project::identity < work_items::read"), "{cold:#?}");
+        assert_eq!(warm, Vec::<String>::new());
+
+        // A new spec changes the specs directory: the hub asks for the file list again.
+        fs::create_dir_all(dir.join("specs")).unwrap();
+        fs::write(dir.join("specs/001-new.md"), "# New\n").unwrap();
+        let after_spec = node_entries(|| drop(hub(&dir)));
+        assert_eq!(after_spec.len(), 1, "{after_spec:#?}");
+        assert!(
+            after_spec[0].starts_with("hub::files < hub::context_files"),
+            "{after_spec:#?}"
+        );
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&other);
+    }
+
+    /// A common dir only changes on a re-clone or a worktree conversion. On a node the old answer
+    /// is shown for at most a minute, or until a project read brings the new one.
+    #[test]
+    fn a_changed_common_dir_is_picked_up_within_a_minute() {
+        let checkout = fs::canonicalize(repo()).unwrap();
+        let elsewhere = fs::canonicalize(repo()).unwrap();
+        let common = || {
+            crate::isolation::simulated::on_node(|| crate::project::common_dir(&checkout)).unwrap()
+        };
+        assert_eq!(common(), ".git");
+        // Re-point the checkout at another repository's Git directory.
+        fs::remove_dir_all(checkout.join(".git")).unwrap();
+        fs::write(
+            checkout.join(".git"),
+            format!("gitdir: {}\n", elsewhere.join(".git").display()),
+        )
+        .unwrap();
+        let moved = |value: &str| {
+            fs::canonicalize(checkout.join(value)).ok() == Some(elsewhere.join(".git"))
+        };
+        assert_eq!(common(), ".git", "reused within the minute, without asking");
+        crate::project::age_common_dirs(crate::project::COMMON_DIR_REUSE);
+        assert!(moved(&common()), "asked again once the minute is up");
+
+        // Sooner: a project read that returns the new common dir refreshes it.
+        fs::remove_file(checkout.join(".git")).unwrap();
+        git(&checkout, &["init", "--quiet", "-b", "main"]).unwrap();
+        assert!(moved(&common()), "still the reused answer");
+        let entries = node_entries(|| drop(files(&checkout).unwrap()));
+        assert_eq!(entries.len(), 1, "{entries:#?}");
+        assert_eq!(common(), ".git");
+        let _ = fs::remove_dir_all(&checkout);
+        let _ = fs::remove_dir_all(&elsewhere);
     }
 
     fn repo() -> PathBuf {

@@ -35,6 +35,8 @@ const MAX_REPLY: usize = 128 * 1024;
 
 const MAX_BACKGROUND_REQUESTS: usize = 8;
 const MAX_BACKGROUND_READS: usize = 6;
+/// Project reads a node's execution boundary serves at once.
+const BOUNDARY_READS: usize = 1;
 // Let the project-read layer finish its 20-second budget and report its own result.
 const BACKGROUND_READ_TIMEOUT: Duration = Duration::from_secs(25);
 const TERMINAL_CLEANUP_UNCONFIRMED: &str =
@@ -3600,6 +3602,9 @@ impl WebHost {
             "anchor": self.identity.anchor, "workspace": self.project,
             "branch": null, "gitStatus": "loading", "changedFiles": null},
             "deployment": self.deployment, "sessions": sessions,
+            // How many project reads the host serves at once. A node's execution boundary takes
+            // one at a time, so the page starts its first-load reads one by one, in order.
+            "boundaryReads": crate::isolation::external().then_some(BOUNDARY_READS),
             "terminalStates": terminals.iter().filter(|(_, terminal)| terminal.pending_admission.is_none()).map(|(id, terminal)|
                 (id.clone(), terminal_status(Some(terminal.hosted.is_some()))))
                 .collect::<serde_json::Map<String, Value>>(),

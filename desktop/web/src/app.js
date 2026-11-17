@@ -1,6 +1,6 @@
 import { projectGitPresentation } from "./project-git.js";
 import { readApiResponse } from "./api-response.js";
-import { forgetRemembered, readWithBusyRetry, remember, remembered } from "./read-retry.js";
+import { forgetRemembered, readWithBusyRetry, remember, remembered, setReadSlots } from "./read-retry.js";
 import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
 import { createTerminalStreamView } from "./terminal-stream-view.js";
 import { finishTerminalChrome } from "./terminal-ui.js";
@@ -626,7 +626,8 @@ async function refreshState(silent = false) {
     }
   }
   const revision = ui.sessionRevision;
-  const request = api("GET", "/api/state");
+  // First in the page's read queue: on a node it shares the boundary with every panel read.
+  const request = readWithBusyRetry(api, "/api/state");
   ui.refreshing = request;
   try {
     const state = await request;
@@ -651,6 +652,7 @@ async function refreshWorkspace() {
   try {
     const workspace = await request;
     ui.workspaceAccessInterrupted = false;
+    setReadSlots(workspace.boundaryReads);
     if (revision !== ui.sessionRevision) return;
     const previous = ui.state;
     const ids = new Set(workspace.sessions.map((session) => session.id));

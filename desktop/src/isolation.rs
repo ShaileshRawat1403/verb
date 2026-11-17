@@ -42,7 +42,44 @@ pub(crate) fn profile() -> Result<Option<Profile>, String> {
 }
 
 pub(crate) fn external() -> bool {
+    #[cfg(test)]
+    if simulated::node() {
+        return true;
+    }
     matches!(profile(), Ok(Some(Profile::External)))
+}
+
+/// Unit tests only: this thread behaves as the host on a node with external isolation. Reads go
+/// through the project read helper, the host cannot read a checkout's `.git`, and every helper
+/// request and Git process counts as one boundary entry. Commands still run here, directly.
+#[cfg(test)]
+pub(crate) mod simulated {
+    use std::cell::Cell;
+
+    thread_local! {
+        static NODE: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn node() -> bool {
+        NODE.with(Cell::get)
+    }
+
+    fn with<T>(value: bool, work: impl FnOnce() -> T) -> T {
+        let was = NODE.with(|node| node.replace(value));
+        let result = work();
+        NODE.with(|node| node.set(was));
+        result
+    }
+
+    /// Runs `work` as the host on a node.
+    pub(crate) fn on_node<T>(work: impl FnOnce() -> T) -> T {
+        with(true, work)
+    }
+
+    /// Runs `work` as the helper does: inside the guest, where there is no boundary to cross.
+    pub(crate) fn in_guest<T>(work: impl FnOnce() -> T) -> T {
+        with(false, || crate::timing::trace::inside(work))
+    }
 }
 
 /// Programs exposed inside external terminals, never inferred from the host account's PATH.
@@ -341,7 +378,11 @@ fn launcher_args(
 }
 
 pub(crate) fn command(program: &Path, project: &Path, session: &str) -> Result<Command, String> {
-    let (program, args) = if external() {
+    #[cfg(test)]
+    let direct = simulated::node();
+    #[cfg(not(test))]
+    let direct = false;
+    let (program, args) = if external() && !direct {
         (
             external::client(),
             external::arguments(&program.to_string_lossy(), &[], project, session, "pipes")?,
