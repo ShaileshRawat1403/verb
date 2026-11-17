@@ -1235,14 +1235,19 @@ struct StreamTicket {
     issued_at: Instant,
 }
 
-/// Converts a Unix-time expiry (an Access assertion's `exp`) to an Instant on this clock.
-fn instant_at(unix_seconds: u64) -> Instant {
+/// Converts a Unix-time expiry (an Access assertion's `exp`) to an Instant on this clock, or None
+/// when it has already passed. Access assertions are accepted with clock-skew leeway, so one can
+/// still verify after its `exp`; it must not become a stream that closes as soon as it opens.
+fn instant_at(unix_seconds: u64) -> Option<Instant> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    Instant::now() + Duration::from_secs(unix_seconds.saturating_sub(now))
+    (unix_seconds > now).then(|| Instant::now() + Duration::from_secs(unix_seconds - now))
 }
+
+/// What the page is told when its sign-in has ended: it stops reconnecting and offers a reload.
+const SIGNED_OUT: &str = "sign-in expired";
 
 /// How long fetched Cloudflare Access signing keys stay trusted. Refresh runs hourly, so a healthy
 /// host never gets near this; if refreshes keep failing, Access logins fail closed after a day
@@ -1614,11 +1619,13 @@ impl WebHost {
         } else if has_valid_session {
             (Some(crate::tokens::Access::owner()), None, session_expiry)
         } else if let Some(exp) = cf_expiry {
-            // An upgrade authenticated only by Cloudflare Access ends when that login does.
+            // An upgrade authenticated only by Cloudflare Access ends when that login does. One that
+            // has already ended is upgraded and then closed with the signed-out code, because a
+            // browser cannot read the status of a refused upgrade and would retry it.
             (
                 Some(crate::tokens::Access::owner()),
                 None,
-                Some(instant_at(exp)),
+                Some(instant_at(exp).unwrap_or_else(Instant::now)),
             )
         } else {
             let access = presented.and_then(crate::tokens::verify);
@@ -1950,7 +1957,12 @@ impl WebHost {
             } else if has_valid_session {
                 cookie(request, "verb_session").and_then(|t| self.sessions.get(t).copied())
             } else {
-                cf_expiry.map(instant_at)
+                match cf_expiry.map(instant_at) {
+                    Some(Some(expiry)) => Some(expiry),
+                    // Verified only through clock-skew leeway: the login has ended.
+                    Some(None) => return Reply::error(401, SIGNED_OUT),
+                    None => None,
+                }
             };
             let access_token = access.token.as_ref().and(presented).map(str::to_owned);
             // Read the body even though it is unused: unread bytes would stay on a kept-alive

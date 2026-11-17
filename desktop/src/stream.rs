@@ -367,6 +367,52 @@ fn drain_outgoing(ws: &mut tungstenite::WebSocket<std::net::TcpStream>, queue: &
     }
 }
 
+/// Close code for a stream whose sign-in (session, Access login or scoped token) has ended. The
+/// page stops reconnecting on it and asks the person to sign in again.
+pub const SIGNED_OUT: u16 = 4401;
+pub const SIGNED_OUT_REASON: &str = "sign-in expired";
+
+/// Sends a Close frame with [`SIGNED_OUT`] and completes the closing handshake before the socket
+/// is dropped. Before, the frame stayed in tungstenite's buffer, and dropping a socket with unread
+/// client frames resets the connection, so the browser saw an abnormal close (1006), took it for a
+/// network drop and retried every two seconds. Now the frame is flushed and the client's own Close
+/// (or anything it still sends) is read, for at most two seconds.
+fn close_signed_out(ws: &mut tungstenite::WebSocket<std::net::TcpStream>, fd: c_int) {
+    use tungstenite::protocol::frame::{coding::CloseCode, CloseFrame};
+    let frame = CloseFrame {
+        code: CloseCode::from(SIGNED_OUT),
+        reason: SIGNED_OUT_REASON.into(),
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut sent = ws.close(Some(frame));
+    while std::time::Instant::now() < deadline {
+        let flushed = match sent {
+            Ok(()) => true,
+            Err(ref e) if would_block(e) => false,
+            Err(_) => return,
+        };
+        let mut poll_fds = [PollFd {
+            fd,
+            events: if flushed { POLLIN } else { POLLIN | POLLOUT },
+            revents: 0,
+        }];
+        if pty::poll_fds(&mut poll_fds, 50).is_err() {
+            return;
+        }
+        if poll_fds[0].revents & POLLIN != 0 {
+            loop {
+                match ws.read() {
+                    Ok(_) => continue,
+                    Err(ref e) if would_block(e) => break,
+                    // ConnectionClosed: the client answered our Close; the handshake is done.
+                    Err(_) => return,
+                }
+            }
+        }
+        sent = ws.flush();
+    }
+}
+
 /// Handles an upgraded WebSocket connection on its own background thread.
 pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
     tcp_stream: std::net::TcpStream,
@@ -397,6 +443,12 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
     let mut attached: HashSet<String> = HashSet::new();
     let mut state = Drain::Idle;
 
+    // A ticket whose sign-in has already ended is told so at once, not after the first poll.
+    if !handler.is_authorized() {
+        close_signed_out(&mut ws, fd);
+        return;
+    }
+
     loop {
         let mut poll_fds = [
             PollFd {
@@ -420,7 +472,7 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
             break;
         }
         if !handler.is_authorized() {
-            let _ = ws.close(None);
+            close_signed_out(&mut ws, fd);
             break;
         }
 
@@ -445,6 +497,7 @@ pub fn handle_ws_connection<T: StreamTerminalHandler + 'static>(
             let mut disconnected = false;
             loop {
                 if !handler.is_authorized() {
+                    close_signed_out(&mut ws, fd);
                     disconnected = true;
                     break;
                 }
@@ -560,5 +613,69 @@ fn cleanup_attached<T: StreamTerminalHandler>(
 ) {
     for id in attached {
         handler.detach_terminal(id, conn_id);
+    }
+}
+
+#[cfg(test)]
+mod signed_out_tests {
+    use super::*;
+    use std::net::{TcpListener, TcpStream};
+
+    struct SignedOut;
+    impl StreamTerminalHandler for SignedOut {
+        fn is_authorized(&self) -> bool {
+            false
+        }
+        fn write_terminal_input(&self, _: &str, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn attach_terminal(
+            &self,
+            _: &str,
+            _: u64,
+            _: Arc<WsQueue>,
+            _: u16,
+            _: u16,
+        ) -> Option<TerminalAttachInfo> {
+            None
+        }
+        fn detach_terminal(&self, _: &str, _: u64) {}
+        fn resize_terminal(&self, _: &str, _: u16, _: u16) {}
+        fn ack_terminal(&self, _: &str, _: usize) {}
+        fn signal_terminal(&self, _: &str, _: &str) {}
+    }
+
+    #[test]
+    fn an_expired_stream_closes_with_the_signed_out_code_not_an_abnormal_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_ws_connection(stream, Arc::new(SignedOut), 1);
+        });
+        let client = TcpStream::connect(address).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut ws = tungstenite::WebSocket::from_raw_socket(
+            client,
+            tungstenite::protocol::Role::Client,
+            None,
+        );
+        let close = loop {
+            match ws.read() {
+                Ok(Message::Close(frame)) => {
+                    // Answer it, as a browser does, so the server finishes the closing handshake.
+                    let _ = ws.flush();
+                    break frame;
+                }
+                Ok(_) => continue,
+                Err(error) => panic!("no Close frame before the socket ended: {error}"),
+            }
+        };
+        let frame = close.expect("the Close frame carries a code");
+        assert_eq!(u16::from(frame.code), SIGNED_OUT);
+        assert_eq!(frame.reason, SIGNED_OUT_REASON);
+        server.join().unwrap();
     }
 }

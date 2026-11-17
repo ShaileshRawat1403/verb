@@ -1,15 +1,43 @@
 // Owns the terminal WebSocket, framing and reconnect.
 // The callbacks consume stream events; transport owns neither DOM nor durable session records.
+// Close code the host sends when the stream's sign-in has ended (see SIGNED_OUT in stream.rs).
+export const SIGNED_OUT_CODE = 4401;
+// Back-off between reconnects after any other close, in seconds, with jitter. It starts again from
+// the beginning once a stream has stayed open for a minute.
+export const RECONNECT_DELAYS = [1, 2, 4, 8, 16, 30];
+export const STABLE_MS = 60_000;
+
+// Delay before reconnect attempt `attempt` (0-based): the step, plus up to 20% jitter.
+export function reconnectDelay(attempt, random = Math.random) {
+  const step = RECONNECT_DELAYS[Math.min(attempt, RECONNECT_DELAYS.length - 1)] * 1000;
+  return Math.round(step + step * 0.2 * random());
+}
+
 export function createTerminalTransport({
   token,
   onOpen,
   onClose,
   onControl,
   onOutput,
+  onSignedOut = () => {},
+  // Injected by tests; the page uses the browser's own.
+  WebSocketImpl = globalThis.WebSocket,
+  fetchImpl = (...args) => globalThis.fetch(...args),
+  setTimer = (fn, ms) => setTimeout(fn, ms),
+  clearTimer = (id) => clearTimeout(id),
+  now = () => Date.now(),
+  random = Math.random,
+  log = console,
+  loc = globalThis.location,
+  doc = globalThis.document,
 }) {
   let streamSocket = null;
   let streamReady = false;
   let socketReconnectTimer = null;
+  let attempt = 0;
+  let openedAt = 0;
+  let signedOut = false;
+  let lastClose = null;
   const textEncoder = new TextEncoder();
   const idBytesMap = new Map();
 
@@ -24,18 +52,37 @@ export function createTerminalTransport({
 
   let ticketPending = false;
 
+  // The first close is logged, then only a change, never every retry.
+  function noteClose(what) {
+    if (what === lastClose) return;
+    lastClose = what;
+    log.warn("Verb terminal stream closed:", what);
+  }
+
+  // The sign-in has ended: reconnecting cannot help, so stop and ask for a reload once.
+  function endSignedOut() {
+    if (signedOut) return;
+    signedOut = true;
+    clearTimer(socketReconnectTimer);
+    noteClose(`${SIGNED_OUT_CODE} sign-in expired`);
+    onSignedOut();
+  }
+
   // Credentials never go in the WebSocket URL, where proxy and access logs keep them. The page asks
   // for a one-use ticket with its normal credentials (header or session cookie) and opens the stream
   // with that; a ticket is useless once used or after 30 seconds.
   async function streamTicket() {
     const headers = { "Content-Type": "application/json" };
     if (token) headers["X-Verb-Token"] = token;
-    const response = await fetch("/api/terminals/ticket", {
+    const response = await fetchImpl("/api/terminals/ticket", {
       method: "POST",
       headers,
       body: "{}",
       credentials: "same-origin",
     });
+    if (response.status === 401 || response.status === 403) {
+      throw Object.assign(new Error(`terminal ticket refused (${response.status})`), { signedOut: true });
+    }
     if (!response.ok) throw new Error(`terminal ticket refused (${response.status})`);
     const { ticket } = await response.json();
     if (!ticket) throw new Error("terminal ticket missing");
@@ -44,109 +91,129 @@ export function createTerminalTransport({
 
   async function connectTerminalStream() {
     if (
+      signedOut ||
       ticketPending ||
       (streamSocket &&
-        (streamSocket.readyState === WebSocket.OPEN ||
-          streamSocket.readyState === WebSocket.CONNECTING))
+        (streamSocket.readyState === WebSocketImpl.OPEN ||
+          streamSocket.readyState === WebSocketImpl.CONNECTING))
     ) {
       return;
     }
-    clearTimeout(socketReconnectTimer);
+    clearTimer(socketReconnectTimer);
     ticketPending = true;
     let ticket;
     try {
       ticket = await streamTicket();
     } catch (e) {
-      console.warn("Verb terminal stream ticket:", e);
+      if (e.signedOut) {
+        endSignedOut();
+        return;
+      }
+      noteClose(`ticket: ${e.message}`);
       scheduleStreamReconnect();
       return;
     } finally {
       ticketPending = false;
     }
-    const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${location.host}/api/terminals/ws?ticket=${encodeURIComponent(ticket)}`;
+    const protocol = loc.protocol === "https:" ? "wss:" : "ws:";
+    const wsUrl = `${protocol}//${loc.host}/api/terminals/ws?ticket=${encodeURIComponent(ticket)}`;
+    let socket;
     try {
-      streamSocket = new WebSocket(wsUrl);
-      streamSocket.binaryType = "arraybuffer";
+      socket = new WebSocketImpl(wsUrl);
+      socket.binaryType = "arraybuffer";
     } catch (e) {
       scheduleStreamReconnect();
       return;
     }
+    streamSocket = socket;
 
-    streamSocket.onopen = () => {
+    socket.onopen = () => {
       streamReady = true;
-      console.info("Verb terminal stream connected over WebSocket");
+      openedAt = now();
+      if (lastClose === null) log.info("Verb terminal stream connected over WebSocket");
       onOpen();
     };
 
-    streamSocket.onmessage = (event) => {
+    socket.onmessage = (event) => {
       if (typeof event.data === "string") {
         try {
           const msg = JSON.parse(event.data);
           onControl(msg);
         } catch (e) {
-          console.error("Malformed control frame", e);
+          log.error("Malformed control frame", e);
         }
       } else if (event.data instanceof ArrayBuffer) {
         onOutput(event.data);
       }
     };
 
-    streamSocket.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (streamSocket === socket) streamSocket = null;
+      const wasOpen = streamReady;
       streamReady = false;
-      streamSocket = null;
-      console.warn("Verb terminal stream closed:", event?.code, event?.reason);
       onClose();
+      if (event?.code === SIGNED_OUT_CODE) {
+        endSignedOut();
+        return;
+      }
+      // A stream that stayed up for a minute was healthy: start the back-off again.
+      if (wasOpen && now() - openedAt >= STABLE_MS) {
+        attempt = 0;
+        lastClose = null;
+      }
+      noteClose(`${event?.code ?? ""} ${event?.reason ?? ""}`.trim());
       scheduleStreamReconnect();
     };
 
-    streamSocket.onerror = (e) => {
+    socket.onerror = () => {
       streamReady = false;
-      console.warn("Verb terminal stream error:", e);
     };
   }
 
   function scheduleStreamReconnect() {
-    clearTimeout(socketReconnectTimer);
-    socketReconnectTimer = setTimeout(connectTerminalStream, 2000);
+    if (signedOut) return;
+    clearTimer(socketReconnectTimer);
+    const delay = reconnectDelay(attempt, random);
+    attempt++;
+    socketReconnectTimer = setTimer(connectTerminalStream, delay);
   }
 
-  document.addEventListener("visibilitychange", () => {
+  doc?.addEventListener("visibilitychange", () => {
     if (
-      document.visibilityState === "visible" &&
-      (!streamSocket || streamSocket.readyState !== WebSocket.OPEN)
+      doc.visibilityState === "visible" &&
+      (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN)
     ) {
       connectTerminalStream();
     }
   });
 
   function sendStreamAttach(id, rows, cols) {
-    if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+    if (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN) return;
     streamSocket.send(JSON.stringify({ type: "attach", id, rows, cols }));
   }
 
   function sendStreamDetach(id) {
-    if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+    if (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN) return;
     streamSocket.send(JSON.stringify({ type: "detach", id }));
   }
 
   function sendStreamResize(id, rows, cols) {
-    if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+    if (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN) return;
     streamSocket.send(JSON.stringify({ type: "resize", id, rows, cols }));
   }
 
   function sendStreamAck(id, bytes) {
-    if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+    if (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN) return;
     streamSocket.send(JSON.stringify({ type: "ack", id, bytes }));
   }
 
   function sendStreamSignal(id, signal) {
-    if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) return;
+    if (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN) return;
     streamSocket.send(JSON.stringify({ type: "signal", id, signal }));
   }
 
   function sendStreamInput(id, dataStr) {
-    if (!streamSocket || streamSocket.readyState !== WebSocket.OPEN) {
+    if (!streamSocket || streamSocket.readyState !== WebSocketImpl.OPEN) {
       return false;
     }
     const idBytes = getIdBytes(id);
@@ -169,6 +236,9 @@ export function createTerminalTransport({
     sendStreamInput,
     get ready() {
       return streamReady;
+    },
+    get signedOut() {
+      return signedOut;
     },
   };
 }
