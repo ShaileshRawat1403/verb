@@ -65,7 +65,7 @@ How they are removed:
 
 A node's boundary serves one project read at a time. `/api/workspace` says so
 (`boundaryReads: 1`; absent on a host without a boundary), and the page then starts its reads one
-at a time, in this order: state, hub, work items, Git, specs, files, then anything else. Panels show
+at a time, in this order: state, work items, specs, hub, Git, files, then anything else. Panels show
 their remembered answers from this tab meanwhile. Target on the node: first useful page under
 2.5 s, every panel within 5 s.
 
