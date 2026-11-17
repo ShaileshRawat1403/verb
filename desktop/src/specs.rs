@@ -630,14 +630,9 @@ pub(crate) fn set_criterion(
 // ------------------------------------------------------------------------------------------- Git
 
 fn git(project: &Path, args: &[&str]) -> Result<String, String> {
-    crate::exec::git_text(
-        crate::exec::user_git(project)
-            .ok_or("could not prepare isolated git")?
-            .arg("-C")
-            .arg(project)
-            .args(args)
-            .output(),
-    )
+    let mut command = crate::exec::user_git(project).ok_or("could not prepare isolated git")?;
+    command.arg("-C").arg(project).args(args);
+    crate::exec::git_text(crate::timing::boundary(|| command.output()))
 }
 
 pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
@@ -645,11 +640,10 @@ pub(crate) fn git_summary(project: &Path) -> Result<GitSummary, String> {
         return crate::project_read::request(project, "git", &[]);
     }
     let read_git = |args: &[&str]| -> Result<String, String> {
-        let output = crate::exec::git(project)
-            .ok_or("could not prepare read-only git")?
-            .args(args)
-            .output()
-            .map_err(|error| error.to_string())?;
+        let mut command = crate::exec::git(project).ok_or("could not prepare read-only git")?;
+        command.args(args);
+        let output =
+            crate::timing::boundary(|| command.output()).map_err(|error| error.to_string())?;
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into_owned())
         } else {

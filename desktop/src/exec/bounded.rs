@@ -7,7 +7,7 @@ use std::time::Duration;
 pub(super) fn output(command: &mut Command, timeout: Duration, limit: usize) -> io::Result<Output> {
     #[cfg(unix)]
     {
-        unix::output(command, timeout, limit, None, None)
+        crate::timing::boundary(|| unix::output(command, timeout, limit, None, None))
     }
     #[cfg(not(unix))]
     {
@@ -27,7 +27,7 @@ pub(super) fn exchange(
     limit: usize,
     input: &[u8],
 ) -> io::Result<Output> {
-    unix::output(command, timeout, limit, Some(input), None)
+    crate::timing::boundary(|| unix::output(command, timeout, limit, Some(input), None))
 }
 
 type OutputSink<'a> = &'a mut dyn FnMut(&[u8]);
@@ -40,7 +40,7 @@ pub(super) fn stream(
 ) -> io::Result<Output> {
     #[cfg(unix)]
     {
-        unix::output(command, timeout, limit, None, Some(sink))
+        crate::timing::boundary(|| unix::output(command, timeout, limit, None, Some(sink)))
     }
     #[cfg(not(unix))]
     {

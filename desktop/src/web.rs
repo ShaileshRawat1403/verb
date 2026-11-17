@@ -1008,6 +1008,8 @@ struct Reply {
     deferred: Option<DeferredWork>,
     /// A worker permit reserved before the request had side effects (a terminal launch).
     permit: Option<RequestPermit>,
+    /// The `Server-Timing` value, set on every `/api/*` reply.
+    server_timing: Option<String>,
 }
 
 impl Reply {
@@ -1023,6 +1025,7 @@ impl Reply {
             state_job: None,
             deferred: None,
             permit: None,
+            server_timing: None,
         }
     }
 
@@ -1042,6 +1045,7 @@ impl Reply {
             state_job: None,
             deferred: None,
             permit: None,
+            server_timing: None,
         }
     }
 
@@ -1057,6 +1061,7 @@ impl Reply {
             state_job: None,
             deferred: None,
             permit: None,
+            server_timing: None,
         }
     }
 }
@@ -1672,11 +1677,13 @@ impl WebHost {
     }
 
     fn respond(&mut self, mut request: Request) {
+        let received = Instant::now();
         // A stalled HTTP client must not keep the controller waiting indefinitely.
         if let Some(stream) = request.tcp_stream() {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
         }
+        let timed = request.url().starts_with("/api/");
         let mut reply = self.dispatch(&mut request);
         let work = reply.deferred.take().or_else(|| {
             reply.state_job.take().map(|job| {
@@ -1685,15 +1692,19 @@ impl WebHost {
             })
         });
         let Some(work) = work else {
+            if timed {
+                reply.server_timing = Some(crate::timing::immediate(received));
+            }
             send_reply(request, reply);
             return;
         };
+        let (work, finish) = timed_work(work, received, timed);
         // Launches, writes and cleanup retain their own outcome and admission contracts.
         let is_read = request.method() == &Method::Get && reply.permit.is_none();
         let read_permit = if is_read {
             let Some(permit) = RequestPermit::acquire(&self.background_reads, MAX_BACKGROUND_READS)
             else {
-                send_reply(request, Reply::error(503, HOST_BUSY));
+                send_reply(request, finish(Reply::error(503, HOST_BUSY)));
                 return;
             };
             Some(permit)
@@ -1705,7 +1716,7 @@ impl WebHost {
             .take()
             .or_else(|| RequestPermit::acquire(&self.background_requests, MAX_BACKGROUND_REQUESTS));
         let Some(permit) = permit else {
-            send_reply(request, Reply::error(503, HOST_BUSY));
+            send_reply(request, finish(Reply::error(503, HOST_BUSY)));
             return;
         };
         let deadline = Instant::now() + BACKGROUND_READ_TIMEOUT;
@@ -1716,7 +1727,7 @@ impl WebHost {
             } else {
                 finish_deferred(reply, work())
             };
-            send_reply(request, reply);
+            send_reply(request, finish(reply));
             drop(permits);
         });
     }
@@ -4032,6 +4043,27 @@ fn finish_deferred(mut reply: Reply, result: Result<Vec<u8>, String>) -> Reply {
     reply
 }
 
+/// `work` with a per-request timing recorder installed on whichever thread runs it, and the step
+/// that stamps the reply's `Server-Timing` when `timed` (an `/api/*` request).
+fn timed_work(
+    work: DeferredWork,
+    received: Instant,
+    timed: bool,
+) -> (DeferredWork, impl FnOnce(Reply) -> Reply) {
+    let recorder = crate::timing::Recorder::new(received);
+    let work: DeferredWork = {
+        let recorder = Arc::clone(&recorder);
+        Box::new(move || recorder.run(work))
+    };
+    let finish = move |mut reply: Reply| {
+        if timed {
+            reply.server_timing = Some(recorder.header(Instant::now()));
+        }
+        reply
+    };
+    (work, finish)
+}
+
 fn bounded_read_reply(
     work: DeferredWork,
     reply: Reply,
@@ -4102,6 +4134,11 @@ fn send_reply(request: Request, reply: Reply) {
     }
     if let Some(cookie) = reply.set_cookie {
         if let Ok(header) = Header::from_bytes("Set-Cookie", cookie) {
+            response.add_header(header);
+        }
+    }
+    if let Some(timing) = reply.server_timing {
+        if let Ok(header) = Header::from_bytes("Server-Timing", timing) {
             response.add_header(header);
         }
     }
@@ -4282,6 +4319,53 @@ mod tests {
             .trusted()
             .is_some());
         assert!(JwksCache::default().trusted().is_none());
+    }
+
+    #[test]
+    fn a_read_with_one_boundary_call_reports_n_1() {
+        let total = Arc::new(AtomicUsize::new(0));
+        let reads = Arc::new(AtomicUsize::new(0));
+        let permit = RequestPermit::acquire(&total, MAX_BACKGROUND_REQUESTS).unwrap();
+        let read = RequestPermit::acquire(&reads, MAX_BACKGROUND_READS).unwrap();
+        let received = Instant::now();
+        let (work, finish) = timed_work(
+            Box::new(|| {
+                let output = crate::exec::probe_output(
+                    &mut std::process::Command::new("true"),
+                    Duration::from_secs(5),
+                )
+                .map_err(|error| error.to_string())?;
+                assert!(output.status.success());
+                Ok(b"{}".to_vec())
+            }),
+            received,
+            true,
+        );
+        let reply = finish(bounded_read_reply(
+            work,
+            Reply::json(200, Value::Null),
+            Arc::new((permit, Some(read))),
+            received + Duration::from_secs(5),
+        ));
+        assert_eq!(reply.status, 200);
+        let timing = reply.server_timing.unwrap();
+        let phases: Vec<_> = timing
+            .split(", ")
+            .map(|p| p.split(';').next().unwrap())
+            .collect();
+        assert_eq!(phases, ["queue", "boundary", "work", "total"], "{timing}");
+        assert!(
+            timing.contains("boundary;dur=") && timing.contains(";desc=\"n=1\""),
+            "{timing}"
+        );
+
+        // Not an /api/* reply: no header.
+        let (work, finish) = timed_work(Box::new(|| Ok(Vec::new())), Instant::now(), false);
+        assert!(
+            finish(finish_deferred(Reply::json(200, Value::Null), work()))
+                .server_timing
+                .is_none()
+        );
     }
 
     #[test]
