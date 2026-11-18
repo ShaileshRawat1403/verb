@@ -4,6 +4,8 @@ import { parseServerTiming, readVerdict, summarize } from "./stats.js";
 import { expect, open, record, test, verdict } from "./support.js";
 
 const FIRST_USEFUL = ["sidebar branch", "work tree"];
+// What the sidebar shows before it knows the branch.
+const PLACEHOLDER = /^\s*(—|Reading\b.*)?\s*$/;
 
 // One opening in a fresh browser (nothing remembered): when each panel filled, and any busy answer.
 async function openOnce(page) {
@@ -29,7 +31,7 @@ async function openOnce(page) {
     }
   };
   await Promise.all([
-    timed("sidebar branch", expect(page.locator("#sidebar-branch")).not.toHaveText(/^(—|Reading Git status…|Reading local state…)?$/, { timeout: BUDGET.allPanels })),
+    timed("sidebar branch", expect(page.locator("#sidebar-branch")).not.toHaveText(PLACEHOLDER, { timeout: BUDGET.allPanels })),
     timed("work tree", expect(page.locator("#bench-work-tree")).not.toContainText("Loading work items", { timeout: BUDGET.allPanels })),
     expect.poll(() => Object.keys(PANEL_READS).every(panel => panelAt[panel] !== undefined), { timeout: BUDGET.allPanels }).toBe(true).catch(() => {}),
   ]);
@@ -114,9 +116,12 @@ test("every background read meets the read budget", async ({ page }) => {
 test("a reload shows the last known project at once", async ({ page }) => {
   await open(page);
   const branch = page.locator("#sidebar-branch");
-  await expect(branch).not.toHaveText(/^(—|Reading Git status…)?$/, { timeout: BUDGET.allPanels });
   await expect(page.locator("#bench-work-tree")).not.toContainText("Loading work items", { timeout: BUDGET.allPanels });
-  const known = await branch.textContent();
+  // The sidebar passes through "Reading local state…" and then "Reading Git status…" before the
+  // branch; wait for the branch itself, checked last so nothing can replace it in between.
+  await expect(branch).not.toHaveText(PLACEHOLDER, { timeout: BUDGET.allPanels });
+  const known = (await branch.textContent()).trim();
+  expect(known, "a real branch name").not.toMatch(PLACEHOLDER);
   await page.reload({ waitUntil: "domcontentloaded" });
   const started = Date.now();
   await expect(branch).toHaveText(known, { timeout: BUDGET.reloadRemembered });
