@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUSY_DELAYS, FIRST_PAINT, READ_SLOTS, createReadQueue, forgetRemembered, readRank, readRemembered, readWithBusyRetry, remember, remembered } from "../src/read-retry.js";
+import { BUSY_DELAYS, FIRST_PAINT, slotsFor, READ_SLOTS, createReadQueue, forgetRemembered, readRank, readRemembered, readWithBusyRetry, remember, remembered } from "../src/read-retry.js";
 const busy = () => Object.assign(new Error("desktop host is busy; retry shortly"), { status: 503 });
 const direct = task => task();
 test("only rejected busy GETs retry, preserving the successful value", async () => {
@@ -120,4 +120,27 @@ test("the work tree's two reads come before any side-panel read", () => {
   const tree = Math.max(readRank("/api/work-items"), readRank("/api/specs"));
   for (const side of ["/api/hub", "/api/git", "/api/files"]) assert.ok(tree < readRank(side), side);
   assert.equal(readRank("/api/state"), 0, "the sidebar branch comes first");
+});
+test("a node keeps one read ready behind each boundary slot; a host without a boundary keeps its own slots", () => {
+  assert.equal(slotsFor(1), 2);
+  assert.equal(slotsFor(2), 3);
+  assert.equal(slotsFor(64), READ_SLOTS);
+  for (const none of [undefined, null, 0, "x"]) assert.equal(slotsFor(none), READ_SLOTS);
+});
+test("with two slots a first load still starts its reads in first-paint order, two at most", async () => {
+  const queue = createReadQueue(4);
+  queue.setSlots(slotsFor(1));
+  const started = [];
+  let inFlight = 0, peak = 0;
+  const api = async (_method, path) => {
+    started.push(path);
+    inFlight++; peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setTimeout(resolve, 2));
+    inFlight--;
+    return path;
+  };
+  const asked = ["/api/files", "/api/git", "/api/specs", "/api/work-items", "/api/hub", "/api/state"];
+  await Promise.all(asked.map(path => readWithBusyRetry(api, path, { queue })));
+  assert.equal(peak, 2);
+  assert.deepEqual(started, FIRST_PAINT, "the sidebar and work tree reads go first, whatever order they were asked in");
 });
