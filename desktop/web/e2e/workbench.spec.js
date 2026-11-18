@@ -58,6 +58,24 @@ test.beforeAll(async () => {
 
 test.afterAll(() => server?.kill());
 
+test("the sidebar branch fills from the Git read while state fails, and state is read again soon", async ({ page }) => {
+  // On a node /api/state crosses the boundary twice; /api/git once. A failed state read used to
+  // leave "Reading Git status…" until the 30 s poll.
+  const stateReads = [];
+  await page.route("**/api/state", route => {
+    stateReads.push(Date.now());
+    return route.fulfill({ status: 500, json: { error: "state held back by the test" } });
+  });
+  await page.goto(url);
+  const branch = page.locator("#sidebar-branch");
+  await expect(branch).toHaveText("main");
+  await expect(page.locator("#top-branch")).toHaveText("main");
+  // Retried after about 1 s and 2 s rather than 30 s.
+  await expect.poll(() => stateReads.length, { timeout: 6_000 }).toBeGreaterThanOrEqual(3);
+  expect(stateReads[1] - stateReads[0]).toBeLessThan(5_000);
+  await expect(branch).toHaveText("main");
+});
+
 test("agent chooser explains isolated availability before a launch", async ({ page }) => {
   await page.route("**/api/agents", route => route.fulfill({
     json: { installed: { claude: true, codex: true, agy: false, opencode: false },

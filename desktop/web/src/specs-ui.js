@@ -105,6 +105,8 @@ export function initWorkbench(deps) {
           deps.extras.onWorkbenchChange?.();
         }
       });
+      // The sidebar branch waits on /api/state, which crosses the boundary more than once.
+      deps.extras.onGitSummary?.(state.git);
     } catch (error) {
       const busy = error.code === "capacity" && attempt < GIT_RETRY_DELAYS.length;
       state.git = { error: busy ? "Busy—retrying" : error.message, busy, changes: [], recent: [] };

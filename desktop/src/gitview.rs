@@ -78,12 +78,15 @@ pub(crate) fn snapshot(project: &Path) -> GitSnapshot {
     if crate::isolation::external() {
         // Enter the boundary once. The trusted helper runs these same guarded reads
         // under the project UID, rather than creating a namespace for each Git call.
-        return isolated_snapshot(project).unwrap_or_else(|status| GitSnapshot {
-            root: None,
-            branch: None,
-            changed_files: 0,
-            status,
-            changes_known: false,
+        // Counted as a boundary entry, so /api/state's Server-Timing shows this crossing.
+        return crate::timing::boundary(|| isolated_snapshot(project)).unwrap_or_else(|status| {
+            GitSnapshot {
+                root: None,
+                branch: None,
+                changed_files: 0,
+                status,
+                changes_known: false,
+            }
         });
     }
     local_snapshot(project)
@@ -92,6 +95,12 @@ pub(crate) fn snapshot(project: &Path) -> GitSnapshot {
 /// One boundary entry for all Git facts. A refused admission is reported as `Busy`, distinct from
 /// a Git or helper failure, so a full background slot never reads as a broken repository.
 fn isolated_snapshot(project: &Path) -> Result<GitSnapshot, GitStatus> {
+    #[cfg(test)]
+    if crate::isolation::simulated::node() {
+        let mut facts = crate::isolation::simulated::in_guest(|| local_snapshot(project));
+        facts.root = facts.root.map(|_| project.to_path_buf());
+        return Ok(facts);
+    }
     let mut command = crate::isolation::command(Path::new("/usr/bin/timeout"), project, "")
         .map_err(|_| GitStatus::Unavailable)?;
     let output = crate::exec::read_output(
@@ -260,6 +269,23 @@ mod tests {
         let missing = snapshot(&path.join("missing"));
         assert_eq!(missing.status, GitStatus::Unavailable);
         assert!(!missing.changes_known);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    /// On a node the state read's Git facts are one boundary entry, and it is counted, so
+    /// /api/state's Server-Timing shows the crossing it used to hide.
+    #[test]
+    fn node_snapshot_is_one_counted_boundary_entry() {
+        let path = folder();
+        git(&path, &["init", "-q", "-b", "main"]);
+        git(&path, &["commit", "-q", "--allow-empty", "-m", "fixture"]);
+        let (facts, entries) = crate::timing::trace::entries(|| {
+            crate::isolation::simulated::on_node(|| snapshot(&path))
+        });
+        assert_eq!(facts.status, GitStatus::Branch);
+        assert_eq!(facts.branch.as_deref(), Some("main"));
+        assert_eq!(facts.root.as_deref(), Some(path.as_path()));
+        assert_eq!(entries.len(), 1, "{entries:#?}");
+        assert!(entries[0].starts_with("gitview::snapshot"), "{entries:#?}");
         std::fs::remove_dir_all(path).unwrap();
     }
 }
