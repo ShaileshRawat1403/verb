@@ -64,8 +64,10 @@ How they are removed:
 ## First load on a node
 
 A node's boundary serves one project read at a time. `/api/workspace` says so
-(`boundaryReads: 1`; absent on a host without a boundary), and the page then starts its reads one
-at a time, in this order: state, work items, specs, hub, Git, files, then anything else. Panels show
+(`boundaryReads: 1`; absent on a host without a boundary), and the page then keeps two reads in
+flight (one crossing, one ready behind it), started in this order: state, work items, specs, hub,
+Git, files, then anything else. One at a time (rc.9) left the work tree waiting 5.2 s; four at a
+time (rc.7) drew a "busy" answer. Panels show
 their remembered answers from this tab meanwhile. Target on the node: first useful page under
 2.5 s, every panel within 5 s.
 
@@ -120,3 +122,7 @@ names or ids. The journeys record the phases of each read's median sample.
 - Any other close reconnects after 1, 2, 4, 8, 16, then 30 s (up to 20% jitter). The back-off
   starts again after a stream has stayed open for 60 s.
 - The page logs the first close and then only a change, not every retry.
+
+The opening journey times three openings, each in a fresh browser, and judges the median. The
+first one may meet a cold node (its caches expire after a minute idle); it is kept as `cold` in the
+report.

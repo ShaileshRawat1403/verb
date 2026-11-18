@@ -70,9 +70,18 @@ export function createReadQueue(slots = READ_SLOTS, { defer = run => setTimeout(
 
 const sharedQueue = createReadQueue();
 
+// How many reads the page keeps in flight for a host. Without a boundary: READ_SLOTS. On a node the
+// boundary serves `boundaryReads` at a time; one more read in flight lets the next one be ready the
+// moment a crossing ends. Measured on the rc.9 candidate: one at a time left the work tree waiting
+// 5.2 s, where rc.7's four at a time filled it in 3.7 s but drew a "busy" answer.
+export function slotsFor(boundaryReads) {
+  const count = Math.floor(Number(boundaryReads));
+  return count >= 1 ? Math.min(READ_SLOTS, count + 1) : READ_SLOTS;
+}
+
 // Called with /api/workspace's `boundaryReads` (absent on a host without a boundary).
-export function setReadSlots(count) {
-  sharedQueue.setSlots(count ?? READ_SLOTS);
+export function setReadSlots(boundaryReads) {
+  sharedQueue.setSlots(slotsFor(boundaryReads));
 }
 
 // Only a rejected, read-only request may retry. Never accept a write callback.

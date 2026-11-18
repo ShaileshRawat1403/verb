@@ -5,7 +5,8 @@ import { expect, open, record, test, verdict } from "./support.js";
 
 const FIRST_USEFUL = ["sidebar branch", "work tree"];
 
-test("opening Verb shows the project within budget and never says the host is busy", async ({ page }) => {
+// One opening in a fresh browser (nothing remembered): when each panel filled, and any busy answer.
+async function openOnce(page) {
   const busy = [];
   // Each panel's own read, timed from the navigation: the first successful answer fills the panel.
   const panelAt = {};
@@ -32,28 +33,44 @@ test("opening Verb shows the project within budget and never says the host is bu
     timed("work tree", expect(page.locator("#bench-work-tree")).not.toContainText("Loading work items", { timeout: BUDGET.allPanels })),
     expect.poll(() => Object.keys(PANEL_READS).every(panel => panelAt[panel] !== undefined), { timeout: BUDGET.allPanels }).toBe(true).catch(() => {}),
   ]);
-  const late = [];
-  for (const panel of ["sidebar branch", "work tree", ...Object.keys(PANEL_READS)]) {
-    const ms = panelAt[panel];
-    const limit = FIRST_USEFUL.includes(panel) ? BUDGET.firstUseful : BUDGET.allPanels;
-    const target = FIRST_USEFUL.includes(panel) ? 2_500 : 5_000;
-    if (ms === undefined) {
-      record("open", `${panel} filled`, limit, "ms", "fail", { filled: false });
-      late.push(`${panel} not filled within ${limit} ms`);
-      continue;
-    }
-    const v = verdict(ms, target, limit);
-    record("open", `${panel} filled`, ms, "ms", v);
-    if (v === "fail") late.push(`${panel} took ${Math.round(ms)} ms (limit ${limit} ms)`);
-  }
-  const done = (panels) => panels.every(panel => panelAt[panel] !== undefined);
-  const firstUseful = done(FIRST_USEFUL) ? Math.max(...FIRST_USEFUL.map(panel => panelAt[panel])) : Infinity;
-  const all = Object.keys(panelAt);
-  const allPanels = done(["sidebar branch", "work tree", ...Object.keys(PANEL_READS)]) ? Math.max(...all.map(panel => panelAt[panel])) : Infinity;
-  record("open", "first useful page", Math.min(firstUseful, BUDGET.firstUseful), "ms", verdict(firstUseful, 2_500, BUDGET.firstUseful));
-  record("open", "every panel filled", Math.min(allPanels, BUDGET.allPanels), "ms", verdict(allPanels, 5_000, BUDGET.allPanels));
   await expect(page.getByText("desktop host is busy")).toHaveCount(0);
-  record("open", "busy answers seen", busy.length, "count", busy.length ? "info" : "pass");
+  return { panelAt, busy };
+}
+
+// Opening is timed three times, each in a fresh browser, because one opening is one sample. The first
+// one may meet a cold host (caches empty after a minute idle); it is reported as "cold" but the
+// verdict uses the median of the three, the same rule as the reads.
+const OPENINGS = 3;
+
+test("opening Verb shows the project within budget and never says the host is busy", async ({ browser }) => {
+  test.setTimeout(OPENINGS * (BUDGET.allPanels + 15_000));
+  const runs = [];
+  for (let i = 0; i < OPENINGS; i++) {
+    const context = await browser.newContext();
+    try {
+      runs.push(await openOnce(await context.newPage()));
+    } finally {
+      await context.close();
+    }
+  }
+  const panels = ["sidebar branch", "work tree", ...Object.keys(PANEL_READS)];
+  const at = (run, list) => (list.every(panel => run.panelAt[panel] !== undefined) ? Math.max(...list.map(panel => run.panelAt[panel])) : Infinity);
+  const late = [];
+  const check = (name, values, target, limit) => {
+    const median = [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+    const v = verdict(median, target, limit);
+    const shown = Number.isFinite(median) ? median : limit;
+    record("open", name, shown, "ms", v, { median: shown, cold: Number.isFinite(values[0]) ? values[0] : null, runs: values.map(x => (Number.isFinite(x) ? x : null)) });
+    if (v === "fail") late.push(`${name}: median ${Number.isFinite(median) ? `${Math.round(median)} ms` : "not filled"} (limit ${limit} ms)`);
+  };
+  for (const panel of panels) {
+    const first = FIRST_USEFUL.includes(panel);
+    check(`${panel} filled`, runs.map(run => at(run, [panel])), first ? 2_500 : 5_000, first ? BUDGET.firstUseful : BUDGET.allPanels);
+  }
+  check("first useful page", runs.map(run => at(run, FIRST_USEFUL)), 2_500, BUDGET.firstUseful);
+  check("every panel filled", runs.map(run => at(run, panels)), 5_000, BUDGET.allPanels);
+  const busy = runs.reduce((sum, run) => sum + run.busy.length, 0);
+  record("open", "busy answers seen", busy, "count", busy ? "info" : "pass");
   // A failure names the slow panel.
   expect(late, "slow panels").toEqual([]);
 });
