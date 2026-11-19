@@ -22,6 +22,13 @@ Notes on the budget:
   over 2.5 s or p90 over 4 s (nearest-rank percentiles).
 - Opening times each panel separately (sidebar branch, work tree, Plan, hub, Git). The branch and
   work tree make the first useful page (4 s); every panel must be filled within 10 s.
+- The sidebar branch counts as filled only when it shows a branch name. "Busy—retrying" and "Git
+  status unavailable" are reported on their own. Opening also records when `/api/state` answered,
+  and the reads journey reports the first, uncached `/api/state` sample separately (the host
+  reuses a state answer for 1.5 s, so the other nine samples are cache hits). From rc.11 the
+  `/api/state` Git snapshot counts as a boundary entry in its Server-Timing.
+- From rc.11 the page fills the sidebar branch from `/api/git` while `/api/state` is still loading,
+  and reads state again after 1 s, 2 s and 4 s when it failed or had no Git facts yet.
 - The terminal journey allows no terminal socket reconnects.
 - The desktop host must meet them with a wide margin.
 - The latency e2e test already holds the median keystroke below 10 ms and P99 below 30 ms on CI.

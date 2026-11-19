@@ -1,4 +1,5 @@
 import { projectGitPresentation } from "./project-git.js";
+import { createStateRetry, projectWithGitBranch } from "./sidebar-branch.js";
 import { readApiResponse } from "./api-response.js";
 import { forgetRemembered, readWithBusyRetry, remember, remembered, setReadSlots } from "./read-retry.js";
 import { agentAvailability, customCommandAvailable, isolatedCheckoutAvailability } from "./agent-availability.js";
@@ -616,6 +617,17 @@ function closeDialog(id) {
   document.getElementById(id).close();
 }
 
+// Reads state again soon (1 s, 2 s, 4 s) after a failed answer or one without Git facts yet.
+const stateRetry = createStateRetry(() => refreshState(true));
+
+// /api/git usually answers before /api/state on a node; its branch fills the sidebar until then.
+function fillBranchFromGit(git) {
+  const project = projectWithGitBranch(ui.state?.project, git);
+  if (!project || project === ui.state.project) return;
+  ui.state = { ...ui.state, project };
+  render();
+}
+
 async function refreshState(silent = false) {
   if (ui.refreshing) {
     if (silent) return;
@@ -637,8 +649,11 @@ async function refreshState(silent = false) {
       ui.state = state;
       render();
     }
+    stateRetry(state);
   } catch (error) {
     if (!silent) toast(error.message, "error");
+    // A failed read used to leave the sidebar on "Reading Git status…" until the 30 s poll.
+    stateRetry(undefined);
   } finally {
     if (ui.refreshing === request) ui.refreshing = null;
   }
@@ -2443,6 +2458,7 @@ async function bootstrap() {
     studio.render();
     shell.render();
   };
+  extras.onGitSummary = fillBranchFromGit;
   extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
   extras.selectSpec = workbench.selectSpec;
