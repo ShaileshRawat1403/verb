@@ -3094,7 +3094,14 @@ fn spec_terminal_deliveries_and_notes_keep_the_reviewed_revision() {
     );
     fs::write(bin.join("claude"), &script).unwrap();
     fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(bin.join("codex"), &script).unwrap();
+    // Codex writes its own file: the handoff below launches it, and its write (`--disable apps`)
+    // could otherwise land after Claude's and replace the prompt this test reads.
+    let codex_script = script.replace(
+        &format!("'{}'", capture.display()),
+        &format!("'{}'", server.root.join("codex-prompt").display()),
+    );
+    assert_ne!(codex_script, script);
+    fs::write(bin.join("codex"), &codex_script).unwrap();
     fs::set_permissions(bin.join("codex"), fs::Permissions::from_mode(0o755)).unwrap();
     let path = format!(
         "{}:{}",
@@ -3268,8 +3275,10 @@ fn spec_terminal_deliveries_and_notes_keep_the_reviewed_revision() {
     );
     assert_eq!(next_context["delivery"]["noteCount"], 1);
     assert!(!text.contains(secret));
+    // Poll until the stand-in agent has written its prompt; the ceiling only bounds a real failure.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut received = false;
-    for _ in 0..100 {
+    while std::time::Instant::now() < deadline {
         if fs::read_to_string(&capture).is_ok_and(|prompt| prompt.contains(text)) {
             received = true;
             break;
