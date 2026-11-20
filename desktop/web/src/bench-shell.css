@@ -2,7 +2,6 @@
 #bench-navigation .nav-item { justify-content: flex-start; width: 100%; height: auto; min-height: 40px; padding: 8px 10px; }
 #bench-navigation .nav-item::after { content: none; }
 #app.bench-layout .sidebar > .sidebar-bottom,
-.bench-layout .git-indicator,
 .bench-layout #view-sessions .page-heading { display: none; }
 .bench-layout #view-sessions .sessions-layout { grid-template-columns: minmax(0, 1fr); }
 .bench-layout {
@@ -77,7 +76,7 @@
   .bench-layout .topbar { flex-wrap: wrap; gap: 8px; }
 }
 
-#bench-toggle-navigation, #bench-toggle-right, #bench-settings {
+#bench-toggle-navigation, #bench-toggle-right {
   display: inline-flex;
   flex: none;
   padding-inline: 8px;
@@ -94,12 +93,11 @@
 .bench-tabs button { font-size: .85rem; border-bottom: 2px solid transparent; }
 .bench-tabs [aria-selected="true"] { border-bottom-color: var(--accent); }
 @media (max-width: 760px) {
-  #bench-toggle-navigation, #bench-toggle-right, #bench-settings { min-height: 44px; }
+  #bench-toggle-navigation, #bench-toggle-right { min-height: 44px; }
 }
 .bench-layout .workspace-location { min-width: 92px; }
 .bench-layout .topbar { height: auto; flex-wrap: wrap; }
 .bench-layout .top-actions { flex: 0 1 auto; flex-wrap: wrap; min-width: 0; }
-#app .top-actions > #bench-settings,
 #app.bench-layout.studio-open .top-actions > :is(.observer-pill, .ask-button) { display: inline-flex; }
 .bench-layout #bench-toggle-navigation { position: relative; z-index: 1; }
 @media (max-width: 760px) {
@@ -121,7 +119,6 @@
   min-width: 0;
   overflow: visible;
 }
-#app.bench-layout .topbar .breadcrumb,
 #app.bench-layout .top-actions > :not(.palette-hint):not(#theme-toggle):not(#bench-toggle-right) { display: none; }
 #app.bench-layout .topbar .top-actions { flex: none; flex-wrap: nowrap; gap: 2px; }
 #app.bench-layout .topbar :is(#bench-toggle-navigation, #bench-toggle-right, #theme-toggle, .palette-hint, #bench-terminal-menu summary) {

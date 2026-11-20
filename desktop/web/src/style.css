@@ -365,44 +365,13 @@ body {
   padding: 0 37px;
   gap: 20px;
 }
-.breadcrumb {
-  display: flex;
-  gap: 13px;
-  align-items: center;
-  color: var(--text-dim);
-  font-size: 13px;
-  min-width: 0;
-  white-space: nowrap;
-}
-.breadcrumb strong {
-  color: var(--text);
-  font-weight: 650;
-}
-.breadcrumb-separator {
-  color: var(--line-strong);
-}
+
 .top-actions {
   display: flex;
   align-items: center;
   gap: 14px;
 }
-.git-indicator {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--text);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.git-icon {
-  font-size: 22px;
-  color: var(--text-dim);
-}
-.git-changes {
-  border-left: 1px solid var(--line);
-  padding-left: 10px;
-  color: var(--text-dim);
-}
+
 .icon-button {
   border: 1px solid var(--line-strong);
   background: var(--surface);
@@ -748,21 +717,7 @@ body {
   gap: 10px;
   align-items: center;
 }
-.top-terminal {
-  padding: 7px 13px;
-  font-size: 12px;
-  font-weight: 650;
-  background: var(--surface-2);
-  color: var(--accent-text);
-  border: 1px solid var(--accent-line);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.18s ease;
-}
-.top-terminal:hover {
-  background: var(--line);
-  border-color: var(--accent);
-}
+
 .terminal-area {
   min-width: 0;
 }
@@ -1804,10 +1759,7 @@ body {
     height: 56px;
     padding: 0 16px;
   }
-  .git-indicator,
-  .top-new {
-    display: none;
-  }
+
   .page-content {
     padding: 18px 14px 40px;
   }
@@ -1962,14 +1914,7 @@ button:disabled {
 
 }
 @media (max-width: 640px) {
-  .top-new {
-    display: inline-flex;
-    padding: 9px 10px;
-    font-size: 11px;
-  }
-  .top-terminal {
-    padding: 9px 10px;
-  }
+
   #view-sessions .session-item {
     padding: 8px;
   }
@@ -2004,11 +1949,7 @@ button:disabled {
     justify-content: space-between;
     gap: 8px;
   }
-  .top-terminal,
-  .top-new {
-    flex: 1;
-    white-space: nowrap;
-  }
+
   .nav-item {
     width: 52px;
     height: 42px;
@@ -2107,9 +2048,7 @@ button:disabled {
   height: 64px;
   padding: 0 28px;
 }
-.breadcrumb {
-  font-size: 12px;
-}
+
 .page-content {
   padding: 28px 28px 32px;
 }
@@ -3410,7 +3349,6 @@ button .icon + *,
 button .icon {
   vertical-align: middle;
 }
-.git-icon,
 .theme-icon,
 .observer-eye,
 .tree-icon,

@@ -202,19 +202,7 @@ kbd {
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   box-shadow: none;
 }
-.breadcrumb {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-dim);
-  gap: 8px;
-}
-.breadcrumb strong {
-  color: var(--text-strong);
-  font-weight: 500;
-}
-.breadcrumb-separator {
-  color: var(--text-faint);
-}
+
 .top-actions {
   gap: 4px;
 }
@@ -222,8 +210,7 @@ kbd {
 .theme-toggle,
 .observer-pill,
 .ask-button,
-.icon-button,
-.git-indicator {
+.icon-button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -256,18 +243,10 @@ kbd {
   height: 24px;
   border-radius: 7px;
 }
-.git-indicator {
-  box-shadow: inset 0 0 0 1px var(--line-strong);
-  font: 500 12px var(--mono);
-}
-.git-changes {
-  color: var(--text-dim);
-  font-family: var(--font-ui);
-}
+
 .ask-button .icon,
 .observer-eye,
-.theme-icon,
-.git-icon {
+.theme-icon {
   color: inherit;
 }
 .observer-pill[data-state="on"] {
@@ -353,9 +332,7 @@ kbd {
   padding: 0 10px;
   font-size: 12px;
 }
-.btn-icon {
-  display: inline-flex;
-}
+
 .text-button {
   border: 0;
   background: none;
@@ -874,7 +851,6 @@ select:focus-visible,
     flex-wrap: nowrap;
   }
   .panel-toggle,
-  .git-indicator,
   .palette-hint,
   #observer-label,
   #theme-label {
@@ -907,10 +883,7 @@ select:focus-visible,
     flex: 1;
     min-width: 0;
   }
-  #breadcrumb-project,
-  .breadcrumb-separator {
-    display: none;
-  }
+
   .top-actions {
     width: auto;
     flex: none;
@@ -927,9 +900,7 @@ select:focus-visible,
   flex-wrap: nowrap;
   gap: 12px;
 }
-.topbar button,
-.topbar .git-indicator,
-.topbar .breadcrumb {
+.topbar button {
   white-space: nowrap;
   flex-wrap: nowrap;
 }
@@ -938,16 +909,7 @@ select:focus-visible,
   min-width: 0;
   overflow: hidden;
 }
-.breadcrumb {
-  min-width: 0;
-  overflow: hidden;
-  display: flex;
-}
-#breadcrumb-project {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+
 .top-actions {
   flex: none;
   flex-wrap: nowrap;
@@ -957,8 +919,7 @@ select:focus-visible,
 }
 @container work (max-width: 1120px) {
   .palette-hint .btn-label,
-  .ask-button .btn-label,
-  .git-changes {
+  .ask-button .btn-label {
     display: none;
   }
   .ask-button {
@@ -968,16 +929,10 @@ select:focus-visible,
   }
 }
 @container work (max-width: 940px) {
-  .top-terminal .btn-label,
-  .top-new .btn-label,
   #observer-label {
     display: none;
   }
-  .top-terminal,
-  .top-new {
-    width: 32px;
-    padding: 0;
-  }
+
   .observer-pill {
     width: 30px;
     padding: 0;
@@ -985,9 +940,6 @@ select:focus-visible,
   }
 }
 @container work (max-width: 760px) {
-  .git-indicator,
-  #breadcrumb-project,
-  .breadcrumb-separator,
   .panel-toggle {
     display: none;
   }
@@ -1613,29 +1565,6 @@ select:focus-visible,
   font-weight: 600;
   color: var(--text-strong);
 }
-.top-commit {
-  min-height: 30px;
-  padding: 0 12px;
-  font-size: 12.5px;
-}
-.app-shell:not(:has(#view-specs.active)) #top-commit {
-  display: none;
-}
-@container work (max-width: 940px) {
-  .top-commit .btn-label {
-    font-size: 0;
-  }
-  .top-commit .btn-label::before {
-    content: "Commit";
-    font-size: 12.5px;
-  }
-}
-.topbar .top-commit,
-.topbar .top-commit .btn-label {
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 1;
-}
 
 .nav-item.needs-you .nav-count {
   color: var(--warning);
@@ -1650,9 +1579,6 @@ select:focus-visible,
   background: var(--raised);
   margin-bottom: -1px;
   padding-bottom: 4px;
-}
-.topbar .top-commit.secondary-button {
-  box-shadow: inset 0 0 0 1px var(--line-strong);
 }
 
 /* ---------------------------------------------------------------- Antigravity talk (src/talk-ui.js) */
@@ -1823,12 +1749,6 @@ select:focus-visible,
 .section-kicker.kicker-name {
   text-transform: none;
 }
-/* One primary per screen: "New session" leads only on Sessions. */
-.app-shell:not(:has(#view-sessions.active)) .topbar .top-new {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--line-strong);
-}
 
 #commit-branch-note code {
   font: 12px var(--mono);
@@ -1853,12 +1773,6 @@ select:focus-visible,
   }
 }
 
-/* Narrow work areas: "Commit" alone. Must out-rank the `.topbar .top-commit .btn-label` size above. */
-@container work (max-width: 940px) {
-  .topbar .top-commit .btn-label {
-    font-size: 0;
-  }
-}
 /* Shared notes */
 .memory-panel {
   padding: 18px 20px;
