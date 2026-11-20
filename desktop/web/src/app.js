@@ -320,7 +320,6 @@ function showView(destination) {
     if (active) element.setAttribute("aria-current", "page");
     else element.removeAttribute("aria-current");
   });
-  $("#breadcrumb-view").textContent = view[0].toUpperCase() + view.slice(1);
   if (["tasks", "session-history"].includes(destination) || view === "context") refreshState();
   workbench?.onShowView(view);
   project?.onShowView(view);
@@ -410,10 +409,6 @@ function render() {
   const git = projectGitPresentation(project);
   $("#sidebar-branch").textContent = git.branch;
   $("#sidebar-branch").title = git.detail;
-  $("#breadcrumb-project").textContent = project.name || "Project";
-  $("#top-branch").textContent = git.branch;
-  $("#top-branch").title = git.detail;
-  $("#top-changes").textContent = git.changes;
 
   $("#session-count").textContent = activeCount;
   $("#task-count").textContent = tasks.length;
@@ -1646,7 +1641,7 @@ async function launchQuickTerminal() {
   ui.launchingTerminal = true;
   const buttons = [
     ...document.querySelectorAll(
-      "#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty",
+      "#quick-terminal-sessions, #quick-terminal-empty",
     ),
   ];
   const labels = buttons.map((button) => button.textContent);
@@ -1684,7 +1679,7 @@ document.addEventListener("click", async (event) => {
   const terminalMenu = $("#bench-terminal-menu");
   if (terminalMenu.open && !terminalMenu.contains(event.target)) terminalMenu.open = false;
   const quickTerm = event.target.closest(
-    "#quick-terminal-button, #quick-terminal-sessions, #quick-terminal-empty",
+    "#quick-terminal-sessions, #quick-terminal-empty",
   );
   if (quickTerm) return launchQuickTerminal();
   const clearHistory = event.target.closest("#clear-ended-button");
@@ -1988,10 +1983,10 @@ $("#phone-stop").addEventListener("click", async () => {
   }
 });
 
-$("#refresh-button").addEventListener("click", () => {
+function refreshProject() {
   refreshState();
   shell?.refresh();
-});
+}
 function updateLaunchForm() {
   const form = $("#session-form");
   const checkout = isolatedCheckoutAvailability(ui.agentCapabilities);
@@ -2444,7 +2439,7 @@ async function bootstrap() {
     { title: "Open Context", run: () => showView("context") },
     { title: "Open Settings", run: () => showView("settings") },
     { title: "Open Sessions", run: () => showView("sessions") },
-    { title: "Refresh project", run: () => $("#refresh-button").click() },
+    { title: "Refresh project", run: refreshProject },
     { title: "Open Observer", run: () => $("#observer-pill").click() },
     { title: "Ask Verb", run: () => $('[data-action="ask"]').click() },
     { title: "Open plain terminal", run: launchQuickTerminal },
@@ -2452,7 +2447,6 @@ async function bootstrap() {
       ui.splitTerminals = !ui.splitTerminals;
       updateTerminalFocus();
     } }] : []),
-    ...(!$("#top-commit").hidden ? [{ title: "Review commit", run: () => $("#top-commit").click() }] : []),
   ];
   extras.onWorkbenchChange = () => {
     studio.render();

@@ -125,13 +125,7 @@ for (const width of [1440, 390]) {
         await page.locator("#palette-input").fill(title);
         await page.locator("#palette-input").press("Enter");
       };
-      const openSettings = async () => {
-        if (!(await app.evaluate(node => node.classList.contains("bench-layout")))) {
-          await page.locator("#bench-settings").click();
-          return;
-        }
-        await run("Open Settings");
-      };
+      const openSettings = () => run("Open Settings");
       const shot = async name => {
         if (process.env.VERB_SHELL_SCREEN_DIR) {
           await page.screenshot({ animations: "disabled", path: join(process.env.VERB_SHELL_SCREEN_DIR, `${name}-${width}-${theme}.png`) });
@@ -141,15 +135,12 @@ for (const width of [1440, 390]) {
       await expect(page.locator("#view-sessions")).toBeVisible();
       if (mobile) await expect(nav).toBeHidden();
       else await expect(panel).toBeVisible();
-      await expect(page.locator(".topbar .breadcrumb")).toBeHidden();
       await expect(page.locator("#toggle-navigation")).toBeHidden();
-      await expect(page.locator("#refresh-button")).toBeHidden();
       // The theme is one icon in the bar, like search and the panel toggles.
       await expect(page.locator("#theme-toggle")).toBeVisible();
       await expect(page.locator("#theme-toggle .theme-icon svg")).toBeVisible();
       await expect(page.locator("#observer-pill")).toBeHidden();
       await expect(page.locator('[data-action="ask"]')).toBeHidden();
-      await expect(page.locator("#bench-settings")).toBeHidden();
       const top = await page.locator(".topbar").boundingBox();
       expect(top.height).toBeLessThanOrEqual(56);
       await shot("shell");

@@ -69,7 +69,7 @@ test("the sidebar branch fills from the Git read while state fails, and state is
   await page.goto(url);
   const branch = page.locator("#sidebar-branch");
   await expect(branch).toHaveText("main");
-  await expect(page.locator("#top-branch")).toHaveText("main");
+  await expect(page.locator("#sidebar-branch")).toHaveText("main");
   // Retried after about 1 s and 2 s rather than 30 s.
   await expect.poll(() => stateReads.length, { timeout: 6_000 }).toBeGreaterThanOrEqual(3);
   expect(stateReads[1] - stateReads[0]).toBeLessThan(5_000);
@@ -689,15 +689,13 @@ test("Git diagnostics survive lightweight terminal refreshes", async ({page}) =>
     await route.fulfill({response,json:data});
   });
   await page.goto(url);
-  await expect(page.locator("#top-branch")).toHaveText("Git status unavailable");
-  await expect(page.locator("#top-changes")).toHaveText("Changes unavailable");
+  await expect(page.locator("#sidebar-branch")).toHaveText("Git status unavailable");
   await page.waitForTimeout(4500); // Includes a workspace poll that must retain the completed verdict.
-  await expect(page.locator("#top-branch")).toHaveText("Git status unavailable");
-  for (const [state,branch,label,count] of [["unborn","main","main · no commits","0 changed"],["not_repository",null,"Not a Git repository","No Git tracking"]]) {
+  await expect(page.locator("#sidebar-branch")).toHaveText("Git status unavailable");
+  for (const [state,branch,label] of [["unborn","main","main · no commits"],["not_repository",null,"Not a Git repository"]]) {
     facts={gitStatus:state,branch,changedFiles:state === "unborn" ? 0 : null};
     await page.reload();
-    await expect(page.locator("#top-branch")).toHaveText(label);
-    await expect(page.locator("#top-changes")).toHaveText(count);
+    await expect(page.locator("#sidebar-branch")).toHaveText(label);
   }
 });
 
@@ -708,7 +706,7 @@ test("real detached Git checkout is diagnosed without changing terminal availabi
     const origin=url.split("/#")[0];
     await expect.poll(async()=> (await (await page.request.get(`${origin}/api/state`,{headers:{"X-Verb-Token":TOKEN}})).json()).project.gitStatus).toBe("detached");
     await page.goto(url);
-    await expect(page.locator("#top-branch")).toHaveText("Detached HEAD");
+    await expect(page.locator("#sidebar-branch")).toHaveText("Detached HEAD");
     const tabs = page.getByRole("tablist", { name: "Terminals", exact: true }).getByRole("tab");
     const before = await tabs.count();
     await runPaletteCommand(page, "New terminal");

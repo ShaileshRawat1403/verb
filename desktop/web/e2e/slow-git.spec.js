@@ -185,14 +185,14 @@ test("a reload on a slow host shows the last known project at once", async ({ pa
     expect(created.ok()).toBe(true);
     // A first, fast load fills the tab's memory.
     await page.goto(`${origin}/#${TOKEN}`);
-    await expect(page.locator("#top-branch")).toHaveText(/main/, { timeout: 20_000 });
+    await expect(page.locator("#sidebar-branch")).toHaveText(/main/, { timeout: 20_000 });
     await expect(page.locator('[data-bench-group="unlinked"] .nav-count')).toHaveText("1", { timeout: 20_000 });
     // Now every Git process takes two seconds, so the host's reads take several.
     writeFileSync(slow, "");
     const fresh = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/specs", { timeout: 60_000 });
     await page.reload();
     // The last known branch and work tree are there well before the host answers.
-    await expect(page.locator("#top-branch")).toHaveText(/main/, { timeout: 1_500 });
+    await expect(page.locator("#sidebar-branch")).toHaveText(/main/, { timeout: 1_500 });
     await expect(page.locator('[data-bench-group="unlinked"] .nav-count')).toHaveText("1", { timeout: 1_500 });
     await expect(page.getByText("Reading Git status")).toHaveCount(0);
     await fresh;
