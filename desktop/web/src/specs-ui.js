@@ -223,7 +223,6 @@ export function initWorkbench(deps) {
   $("#spec-work-item").addEventListener("change", renderRequirementOptions);
 
   function openNewSpec(draft = {}) {
-    state.newSpecView = deps.ui.view;
     $("#spec-dialog-form").reset();
     workItemOptions($("#spec-work-item"), "Unlinked", draft.workItem ?? deps.extras.selectedWorkItem?.());
     renderRequirementOptions();
@@ -503,7 +502,6 @@ export function initWorkbench(deps) {
   $("#spec-dialog-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
-    const fromStudio = state.newSpecView === "studio";
     const submit = event.currentTarget.querySelector('[type="submit"]');
     if (submit.disabled) return;
     submit.disabled = true;
@@ -517,7 +515,7 @@ export function initWorkbench(deps) {
       });
       closeDialog("spec-dialog");
       replaceSpec(spec);
-      selectSpec(spec.id, { navigate: !fromStudio });
+      selectSpec(spec.id);
       if (form.get("workItem")) {
         try {
           const result = await linkSpec(spec, form.get("workItem"), form.getAll("requirement").map(String));
@@ -527,9 +525,6 @@ export function initWorkbench(deps) {
           refreshGit();
           return;
         }
-      }
-      if (fromStudio) {
-        deps.extras.onStudioSpecCreated?.(String(form.get("problem") || ""));
       }
       toast(`Spec ${spec.id} created in ${spec.file}`);
       refreshGit();
@@ -849,12 +844,9 @@ export function initWorkbench(deps) {
   refreshSpecs();
   refreshGit();
   setInterval(() => {
-    if (deps.ui.view !== "studio" || document.hidden) return;
-    refreshGit();
-  }, 5000);
-  setInterval(() => {
     if (document.hidden) return;
     if (["bench-board", "needs-you"].includes(deps.ui.view)) refreshSpecs();
+    refreshMeters(); // Reads only while a Claude or Codex session works on the selected spec.
   }, 15000);
 
   return {
@@ -890,13 +882,6 @@ export function initWorkbench(deps) {
       deps.extras.openBenchSpec?.(spec.id, "review");
       lifecycle.openAction("claim", index, evidence).catch(error => toast(error.message, "error"));
       return true;
-    },
-    onShowView(view) {
-      if (view === "studio") {
-        refreshMeters();
-        refreshSpecs();
-        refreshGit();
-      }
     },
   };
 }

@@ -1921,13 +1921,6 @@ label.not-installed {
   border-radius: var(--radius-sm, 6px);
 }
 
-/* Research direction: neutral work surfaces, quiet navigation, aligned information. */
-#app.studio-open { gap: 0; padding: 0; }
-.studio-open .main-content { border-radius: 0; box-shadow: none; }
-.studio-open .sidebar { background: var(--bg-0); border-radius: 0; box-shadow: none; border: 0; border-right: 1px solid var(--line); }
-.studio-open .sidebar-bottom { background: transparent; border-radius: 0; box-shadow: none; border-top: 1px solid var(--line); }
-.studio-open .topbar { background: var(--surface); backdrop-filter: none; border-bottom: 1px solid var(--line); }
-
 .commit-file-choice { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; min-height: 44px; }
 .commit-file-choice code { overflow-wrap: anywhere; }
 #commit-files li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

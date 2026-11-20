@@ -1,5 +1,5 @@
 // A real Chromium worker behind Verb, with HTTP fixtures that refuse all iframe embedding.
-import {test, expect, chromium, openWorkspaceView} from './workspace-navigation.js';
+import {test, expect, chromium, openPreview} from './workspace-navigation.js';
 import {spawn, execFileSync} from 'node:child_process';
 import {mkdtempSync, mkdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -124,10 +124,10 @@ test('bounded browser resource and cleanup sample',async()=>{
  await expect.poll(()=>owned.filter(pid=>{try{process.kill(pid,0);return true;}catch{return false;}}).length,{timeout:7000}).toBe(0);
 });
 
-test('Studio browser shows pixels, page text, responsive view and teardown without embedding site code',async({page})=>{
+test('Preview browser shows pixels, page text, responsive view and teardown without embedding site code',async({page})=>{
  let releaseFiles; const filesReady=new Promise(resolve=>{releaseFiles=resolve;});
  await page.route('**/api/files',async route=>{await filesReady;await route.continue();});
- await page.goto(url);await openWorkspaceView(page, "Studio");await page.getByRole('button',{name:'Browser',exact:true}).click();
+ await page.goto(url);await openPreview(page);await page.getByRole('button',{name:'Browser',exact:true}).click();
  releaseFiles();await expect(page.locator('#studio-browser')).toBeVisible();
  await expect(page.locator('#studio-show-document')).toHaveAttribute('aria-pressed','false');
  await expect(page.locator('#studio-show-browser')).toHaveAttribute('aria-pressed','true');
@@ -178,7 +178,7 @@ test('Studio browser shows pixels, page text, responsive view and teardown witho
  await page.getByLabel('Browser viewport',{exact:true}).selectOption('390');await expect.poll(()=>page.locator('#studio-browser-stage img').evaluate(i=>i.naturalWidth)).toBe(390);
  await page.locator('.studio-browser-head').scrollIntoViewIfNeeded();
  await page.screenshot({path:test.info().outputPath('verb-browser-desktop.png'),fullPage:false});
- await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Canvas',exact:true}).click();await page.locator('#studio-browser-stage').scrollIntoViewIfNeeded();
+ await page.setViewportSize({width:390,height:844});await openPreview(page);await page.locator('#studio-browser-stage').scrollIntoViewIfNeeded();
  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.screenshot({path:test.info().outputPath('verb-browser-phone.png'),fullPage:false});
  await page.getByRole('button',{name:'Stop browser',exact:true}).click();await expect(page.locator('#studio-browser-status')).toContainText('Browser stopped.');await expect(page.locator('#studio-browser-stage img')).toHaveCount(0);
 });
@@ -201,7 +201,7 @@ test('failed navigation is explicit, errors stay with their tab and successful n
 });
 
 test('address drafts survive refresh and tab switches clear old inspection and synchronize viewport',async({page})=>{
- await page.goto(url);await openWorkspaceView(page, "Studio");
+ await page.goto(url);await openPreview(page);
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();
  const address=page.getByRole('textbox',{name:'Website address',exact:true});
@@ -232,7 +232,7 @@ test('closing during browser startup stops only the returned runtime',async({pag
   }
   await route.continue();
  });
- await page.goto(url);await openWorkspaceView(page, "Studio");
+ await page.goto(url);await openPreview(page);
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();await ready;
  await page.getByRole('button',{name:'Browser',exact:true}).click();release();
@@ -250,7 +250,7 @@ test('unavailable browser cannot be started and delayed availability cannot over
   }
   await route.continue();
  });
- await page.goto(url);await openWorkspaceView(page, "Studio");
+ await page.goto(url);await openPreview(page);
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await expect(page.getByRole('button',{name:'Start browser',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'Browser',exact:true}).click();
@@ -263,7 +263,7 @@ test('unavailable browser cannot be started and delayed availability cannot over
 
 
 test('one deliberate action waits for an in-flight screenshot and is never duplicated',async({page})=>{
- await page.goto(url);await openWorkspaceView(page, "Studio");
+ await page.goto(url);await openPreview(page);
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();
  await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});
@@ -285,7 +285,7 @@ test('one deliberate action waits for an in-flight screenshot and is never dupli
 
 
 test('stopping during a held refresh cancels waiting input instead of replaying it',async({page})=>{
- await page.goto(url);await openWorkspaceView(page, "Studio");
+ await page.goto(url);await openPreview(page);
  await page.getByRole('button',{name:'Browser',exact:true}).click();
  await page.getByRole('button',{name:'Start browser',exact:true}).click();
  await expect(page.locator('#studio-browser-stage img')).toBeVisible({timeout:20000});

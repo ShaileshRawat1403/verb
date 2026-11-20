@@ -308,7 +308,6 @@ function showView(destination) {
     panel.hidden = view !== "settings" || panel.dataset.settingsPanel !== section;
   });
   if (view === "settings" && section === "phone") renderPhoneSettings();
-  $("#app").classList.toggle("studio-open", view === "studio");
   document
     .querySelectorAll(".view")
     .forEach((element) =>
@@ -321,7 +320,6 @@ function showView(destination) {
     else element.removeAttribute("aria-current");
   });
   if (["tasks", "session-history"].includes(destination) || view === "context") refreshState();
-  workbench?.onShowView(view);
   project?.onShowView(view);
   host?.onShowView(view === "settings" ? section : view);
   studio?.onShowView(view);
@@ -432,7 +430,6 @@ function render() {
     ui.selectedTask = tasks[0]?.id || null;
   renderTaskDetail();
   syncHostedTerminals();
-  studio?.render();
   shell?.render();
 }
 
@@ -1986,6 +1983,7 @@ $("#phone-stop").addEventListener("click", async () => {
 function refreshProject() {
   refreshState();
   shell?.refresh();
+  studio?.refreshFiles();
 }
 function updateLaunchForm() {
   const form = $("#session-form");
@@ -2411,8 +2409,11 @@ async function bootstrap() {
     selectTerminal,
     theme,
   });
-  studio = initStudio({ $, api, readProjectFiles, ui, workbench, showView, selectTerminal, escapeHtml, toast, agentDisplayName, agentMark });
-  connections = initConnections({ $, api, escapeHtml, useInStudio: result => studio.acceptExternalResult(result) });
+  studio = initStudio({ $, api, readProjectFiles, ui, escapeHtml });
+  connections = initConnections({ $, api, escapeHtml, useInNewSpec: ({ source, text }) => workbench.openNewSpec({
+    title: `From ${source}`,
+    problem: `External, untrusted connector result from ${source}:\n${text.slice(0, 3800)}${text.length > 3800 ? "\n[Result truncated]" : ""}`,
+  }) });
   shell = initBenchShell({ $, api, ui, workbench, studio, briefExists: project.briefExists, showView, selectTerminal, openSession: id => activateSession(id, { resume: false }), fitTerminals, escapeHtml, agentDisplayName, openFile: project.openFile, refreshFiles: project.refreshFiles, openTask, loadInstalledAgents, showDialog, closeDialog, mountLaunchedSession, refreshState, refreshChecks, toast, openLaunch: id => {
     benchTerminals?.openLaunch(id);
     updateLaunchForm();
@@ -2432,7 +2433,7 @@ async function bootstrap() {
   extras.openBenchLaunch = id => { benchTerminals.openLaunch(id); updateLaunchForm(); };
   extras.shellCommands = () => [
     ...connections.commands(),
-    ...Object.entries({ Studio: "studio", Board: "bench-board", "Project files": "project", Review: "overview", Host: "host",
+    ...Object.entries({ Board: "bench-board", "Project files": "project", Review: "overview", Host: "host",
       Connections: "connections", Tasks: "tasks", "Phone pairing": "phone", "Session history": "session-history" }).map(([label, view]) => ({
         title: `Open ${label}`, run: () => showView(view),
       })),
@@ -2449,11 +2450,9 @@ async function bootstrap() {
     } }] : []),
   ];
   extras.onWorkbenchChange = () => {
-    studio.render();
     shell.render();
   };
   extras.onGitSummary = fillBranchFromGit;
-  extras.onStudioSpecCreated = problem => studio.onSpecCreated(problem);
   extras.ask = initAsk({ api, toast, showDialog, showView, escapeHtml, $, extras });
   extras.selectSpec = workbench.selectSpec;
   extras.openFile = project.openFile;

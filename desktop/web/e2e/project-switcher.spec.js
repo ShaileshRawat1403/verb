@@ -85,11 +85,6 @@ for (const width of [1440, 390]) {
     ).then((response) => response.json()).then((response) => Buffer.from(response.data, "base64").toString());
     await expect.poll(output).toContain("original-terminal");
 
-    await openWorkspaceView(page, "Studio");
-    if (width === 390) await page.locator("#studio-focus-work").click();
-    const draft = page.locator("#studio-intent");
-    await draft.fill("Keep this draft in the source project");
-
     if (width === 390) await page.locator("#bench-toggle-navigation").click();
     await page.getByRole("button", { name: "Open another project" }).click();
     const dialog = page.getByRole("dialog", { name: "Open another project" });
@@ -116,7 +111,6 @@ for (const width of [1440, 390]) {
     expect(authorization).not.toContain(sourceToken);
     await expect(dialog).toBeHidden();
     await expect(page.locator("#project-switch-url")).toHaveValue("");
-    await expect(draft).toHaveValue("Keep this draft in the source project");
 
     if (width === 390) await page.keyboard.press("Escape");
     await openWorkspaceView(page, "Sessions");

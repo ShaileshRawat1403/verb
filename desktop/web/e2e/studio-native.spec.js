@@ -1,4 +1,4 @@
-import { test, expect, openWorkspaceView, runPaletteCommand } from "./workspace-navigation.js";
+import { test, expect, openPreview, runPaletteCommand } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import {
   mkdtempSync,
@@ -136,18 +136,23 @@ test.afterAll(() => {
   remote?.kill();
 });
 async function selectCanvasFile(page, path) {
-  const picker = page.getByLabel("Canvas file", { exact: true });
-  if (!await picker.isVisible()) await page.getByRole("button", { name: "Files", exact: true }).click();
-  await picker.selectOption(path);
+  await openPreview(page);
+  await page.locator("#studio-file-search").fill(path);
+  await page.locator("#bench-file-results").getByRole("button", { name: path, exact: true }).click();
+}
+// Preview starts an HTML file's app once the file is read, which can land just after an Edit click.
+async function editFile(page) {
+  const edit = page.locator("#bench-preview").getByRole("button", { name: "Edit", exact: true });
+  await expect(edit).toBeEnabled();
+  await expect(async () => {
+    await edit.click();
+    await expect(page.locator("#studio-edit-panel")).toBeVisible({ timeout: 1_000 });
+  }).toPass();
 }
 async function openFile(page, path) {
   await page.goto(url);
-  await openWorkspaceView(page, "Studio");
   await selectCanvasFile(page, path);
-  await expect(
-    page.getByRole("button", { name: "Edit file", exact: true }),
-  ).toBeEnabled();
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await page.getByRole("button", { name: "Plain text", exact: true }).click();
   await expect(
     page.getByLabel("File contents · UTF-8 text editor", { exact: true }),
@@ -162,7 +167,7 @@ async function doc(request, path) {
   return r.json();
 }
 
-test("edit, explicit save, app interaction and Git review share one actual file", async ({
+test("edit, explicit save and app interaction share one actual file", async ({
   page,
 }) => {
   await openFile(page, "app.html");
@@ -172,9 +177,6 @@ test("edit, explicit save, app interaction and Git review share one actual file"
   await editor.fill(
     APP.replace("Choose a slower Sunday.", "Sunday 1 Nov · 2 hours · ₹850"),
   );
-  await expect(
-    page.getByRole("button", { name: "App preview", exact: true }),
-  ).toBeDisabled();
   await page.getByRole("button", { name: "Save file", exact: true }).click();
   await expect(page.locator("#studio-draft-state")).toContainText(
     "Saved on disk",
@@ -182,11 +184,8 @@ test("edit, explicit save, app interaction and Git review share one actual file"
   expect(readFileSync(join(repo, "app.html"), "utf8")).toContain(
     "Sunday 1 Nov · 2 hours · ₹850",
   );
-  await page.getByRole("button", { name: "Document", exact: true }).click();
-  await expect(page.locator("#studio-document")).toContainText(
-    "Sunday 1 Nov · 2 hours · ₹850",
-  );
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  // In Preview, an HTML file previews as the running app.
+  await page.locator("#bench-preview").getByRole("button", { name: "Preview", exact: true }).click();
   const frame = page.frameLocator("#studio-app-frame iframe");
   await expect(
     frame.getByRole("heading", { name: "Fieldnotes" }),
@@ -214,20 +213,8 @@ test("edit, explicit save, app interaction and Git review share one actual file"
   await expect(page.locator("#studio-app-caption")).toContainText(
     "saved snapshot",
   );
-  await page
-    .getByRole("button", { name: "Review Git changes", exact: true })
-    .click();
-  await expect(page.getByRole("region", { name: "Git changes preview", exact: true })).toBeVisible();
-  await expect(page.locator("#commit-dialog")).toBeHidden();
-  await expect(page.locator("#studio-changed-files")).toContainText("app.html");
-  await page.getByRole("region", { name: "Git changes preview", exact: true }).getByRole("button", { name: "Commit changes…", exact: true }).click();
-  await expect(page.locator("#commit-dialog")).toBeVisible();
-  await expect(page.locator("#commit-dialog")).toContainText("app.html");
-  await page
-    .locator("#commit-dialog")
-    .getByRole("button", { name: "Cancel", exact: true })
-    .click();
-  await openWorkspaceView(page, "Sessions");
+  await page.locator("#bench-tab-plan").click();
+  await page.locator("#bench-tab-preview").click();
   await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
 });
 
@@ -530,14 +517,14 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
     "<h1>Fieldnotes on a phone</h1>",
   );
   await editor.fill(appDraft);
-  await page.getByRole("button", { name: "Current work", exact: true }).click();
-  await page.getByRole("button", { name: "Canvas", exact: true }).click();
+  await page.locator("#bench-tab-plan").click();
+  await page.locator("#bench-tab-preview").click();
   await expect(editor).toHaveValue(appDraft);
   await selectCanvasFile(page, "conflict.txt");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await editor.fill("a second unsaved file draft");
   await selectCanvasFile(page, "app.html");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await expect(editor).toHaveValue(appDraft);
   await page.getByRole("button", { name: "Save file", exact: true }).click();
   await expect(page.locator("#studio-draft-state")).toContainText(
@@ -546,7 +533,7 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
   expect(readFileSync(join(repo, "conflict.txt"), "utf8")).not.toBe(
     "a second unsaved file draft",
   );
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  await page.locator("#bench-preview").getByRole("button", { name: "Preview", exact: true }).click();
   await expect(
     page
       .frameLocator("#studio-app-frame iframe")
@@ -563,195 +550,6 @@ test("phone editing keeps per-file drafts and previews only the explicitly saved
   await expect(page.locator("#studio-app-frame iframe")).toHaveCount(0);
 });
 
-
-test("console tabs, image zoom and keyboard resize preserve editable drafts", async ({ page, request }) => {
-  await page.goto(url);
-  await openWorkspaceView(page, "Studio");
-  await expect(page.locator("#studio-document h1")).toHaveText("Native Studio");
-  const work = await page.locator("#studio-work-panel").boundingBox();
-  const preview = await page.locator("#studio-canvas-panel").boundingBox();
-  expect(work.x).toBeLessThan(preview.x);
-  const divider = page.getByRole("separator", { name: "Resize work and preview" });
-  await divider.focus(); await divider.press("ArrowRight");
-  await expect(divider).toHaveAttribute("aria-valuenow", "48");
-  await selectCanvasFile(page, "sample.png");
-  await expect(page.locator("#studio-image-state")).toContainText("1 × 1");
-  await expect(page.getByRole("button", { name: "Edit file", exact: true })).toBeDisabled();
-  await page.getByRole("button", { name: "Zoom image in", exact: true }).click();
-  await expect(page.locator("#studio-image-scale")).toHaveText("125%");
-  await page.getByRole("button", { name: "Fit image", exact: true }).click();
-  await expect(page.locator("#studio-image-scale")).toHaveText("Fit");
-  const response = await request.get(`${origin}/api/studio/image?path=disguised.png`, { headers });
-  expect(response.ok()).toBe(false);
-  await page.getByRole("button", { name: "Close current preview", exact: true }).click();
-  await expect(page.getByRole("tab", { name: /sample.png/ })).toHaveCount(0);
-  await selectCanvasFile(page, "app.html");
-  await page.getByRole("tab", { name: /README.md/ }).click();
-  await page.getByRole("tab", { name: /README.md/ }).press("ArrowRight");
-  await expect(page.getByRole("tab", { name: /app.html/ })).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
-  const editor = page.getByRole("textbox", { name: "Code editor", exact: true });
-  await expect(editor).toBeVisible(); await editor.fill("an unsaved tab draft");
-  await expect(page.locator("#studio-draft-state")).toContainText("Unsaved draft");
-  await page.getByRole("button", { name: "Close current preview", exact: true }).click();
-  await expect(editor).toContainText("an unsaved tab draft");
-  await expect(page.locator("#studio-message")).toContainText("Your text is retained");
-});
-
-test("preview dock reviews real Git diffs and expands without losing the work thread", async ({ page }, testInfo) => {
-  writeFileSync(join(repo, "app.html"), APP.replace("<h1>Fieldnotes</h1>", "<h1>Fieldnotes review</h1>") + "\n<!-- pending review -->\n");
-  await openFile(page, "app.html");
-  await page.getByRole("button", { name: "Document", exact: true }).click();
-  await page.getByRole("button", { name: "Show changes", exact: true }).click();
-  await expect(page.locator("#studio-changed-files")).toContainText("app.html");
-  await page.locator("#studio-changed-files").getByRole("button", { name: /app.html/ }).click();
-  await expect(page.locator("#studio-diff")).toContainText("Fieldnotes");
-  await page.getByRole("button", { name: "Back to preview", exact: true }).click();
-  await page.getByRole("button", { name: "Expand preview", exact: true }).click();
-  await expect(page.locator("#studio-work-panel")).not.toBeVisible();
-  await page.getByRole("button", { name: "Restore split", exact: true }).press("Escape");
-  await expect(page.locator("#studio-work-panel")).toBeVisible();
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
-  await page.getByLabel("File contents · UTF-8 text editor", { exact: true }).fill(`<!doctype html><html lang="en"><meta charset="utf-8"><style>body{margin:0;padding:38px;background:#f4f0e5;color:#243b32;font:16px/1.6 system-ui}small{text-transform:uppercase;letter-spacing:.16em;color:#68776b}h1{font:46px/1.1 Georgia,serif;letter-spacing:-1px;margin:32px 0 18px}p{max-width:340px}.details{border-top:1px solid #cbd1c5;padding:20px 0;margin:24px 0}button{border:0;border-radius:4px;padding:13px 19px;background:#284e3b;color:white;font:inherit}</style><small>Fieldnotes / local walks</small><h1>A slower Sunday.<br>A different way home.</h1><p>Small groups. Open air. Explore the familiar with fresh eyes.</p><div class="details">Sunday 1 Nov · 2 hours<br><strong>₹850 per person</strong></div><button id="book">See walk details</button><p id="details" hidden>Meet at the park gate at 9am. Comfortable shoes and curiosity welcome.</p><script>document.querySelector('#book').onclick=()=>document.querySelector('#details').hidden=false;</script></html>`);
-  await page.getByRole("button", { name: "Save file", exact: true }).click();
-  await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
-  if (await page.locator("#studio-intent-form").isHidden())
-    await page.getByRole("button", { name: "Define another change", exact: true }).click();
-  await page.getByLabel("Describe a new change", { exact: true }).fill("Make the walk booking clearer\nShow the date, duration and price before someone books.");
-  await page.getByRole("button", { name: "Define change", exact: false }).click();
-  await page.locator('#spec-dialog [name="criteria"]').fill("The date, duration and price are visible before booking");
-  await page.locator('#spec-dialog button[type="submit"]').click();
-  await expect(page.locator("#spec-dialog")).not.toBeVisible();
-  await expect(page.locator("#studio-work-activity")).not.toBeEmpty();
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
-  const frame = page.frameLocator("#studio-app-frame iframe");
-  await expect(frame.getByRole("heading", { name: /A slower Sunday/ })).toBeVisible();
-  await frame.getByRole("button", { name: "See walk details" }).click();
-  await expect(frame.locator("#details")).toBeVisible();
-  for (let step = 0; step < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== "dark"; step++) await runPaletteCommand(page, "Theme: dark");
-  await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", "dark");
-  await expect(page.locator(".toast.visible")).toHaveCount(0, { timeout: 8000 });
-  await page.screenshot({ path: testInfo.outputPath("console-preview-desktop.png") });
-  writeFileSync(join(repo, "walk-preview.png"), await page.locator("#studio-app-frame").screenshot());
-  await page.getByRole("button", { name: "Refresh canvas", exact: true }).click();
-  await expect(page.getByLabel("Canvas file", { exact: true }).locator('option[value="walk-preview.png"]')).toHaveCount(1);
-  await selectCanvasFile(page, "walk-preview.png");
-  await expect(page.locator("#studio-image-state")).toContainText("KB");
-  await expect(page.locator("#studio-preview-image")).toBeVisible();
-  const imageBounds = await page.locator("#studio-preview-image").boundingBox();
-  const imageViewport = await page.locator(".studio-image-viewport").boundingBox();
-  expect(imageBounds.height).toBeLessThanOrEqual(imageViewport.height);
-  expect(imageBounds.width).toBeLessThanOrEqual(imageViewport.width);
-  await page.screenshot({ path: testInfo.outputPath("console-image-desktop.png") });
-
-});
-
-
-test("Files and review stay in Studio and retain drafts on desktop and phone", async ({ page }) => {
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await openFile(page, "typing.txt");
-    await page.getByRole("button", { name: "Edit file", exact: true }).click();
-    const editor = page.getByRole("textbox", { name: "File contents · UTF-8 text editor", exact: true });
-    await editor.fill(`Keep my unsaved ${width} draft`);
-    await page.getByRole("button", { name: "Files", exact: true }).click();
-    await expect(page.locator("#view-studio")).toBeVisible();
-    await expect(page.getByRole("searchbox", { name: "Find a canvas file", exact: true })).toBeFocused();
-    await expect(page.locator("#studio-preview-content")).toBeVisible();
-    await page.getByRole("button", { name: "Edit file", exact: true }).click();
-    await expect(editor).toHaveValue(`Keep my unsaved ${width} draft`);
-    await page.getByRole("button", { name: "Review Git changes", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Git changes preview", exact: true })).toBeFocused();
-    await expect(page.locator("#commit-dialog")).toBeHidden();
-    await page.getByRole("button", { name: "Files", exact: true }).click();
-    await page.getByRole("button", { name: "Edit file", exact: true }).click();
-    await expect(editor).toHaveValue(`Keep my unsaved ${width} draft`);
-  }
-});
-
-
-test("Studio prioritises selected work, keeps details optional and preserves the next-change draft", async ({ page, request }) => {
-  const response = await request.post(`${origin}/api/specs`, { headers, data: { title: "Review the reading experience", problem: "Make the task easy to understand without losing access to its tools.", criteria: ["A person can review the actual wording change"] } });
-  const spec = await response.json();
-  await request.post(`${origin}/api/specs/${spec.id}/stage`, { headers, data: { stage: "review", expectedRevision: spec.revision, note: "UX fixture, not a completion claim" } });
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto(url);
-    await openWorkspaceView(page, "Studio");
-    if (width === 390) await page.getByRole("button", { name: "Current work", exact: true }).click();
-    await page.getByRole("combobox", { name: "Current work", exact: true }).selectOption(spec.id);
-    await expect(page.locator("#studio-next-hint")).toHaveText("Inspect the actual changes before deciding what to keep.");
-    await expect(page.locator("#studio-intent-form")).toBeHidden();
-    if (width === 1440) await expect(page.locator("#studio-work-details")).not.toHaveAttribute("open", "");
-    else if (await page.locator("#studio-work-details").evaluate(node => node.open))
-      await page.getByText("Task details & acceptance criteria", { exact: true }).click();
-    await expect(page.locator("#studio-history")).not.toHaveAttribute("open", "");
-    await page.getByText("Task details & acceptance criteria", { exact: true }).click();
-    await expect(page.locator("#studio-criteria")).toContainText("A person can review");
-    await page.getByRole("button", { name: "Define another change", exact: true }).click();
-    const draft = page.getByRole("textbox", { name: "Describe a new change", exact: true });
-    await draft.fill(`Next idea for ${width}`);
-    await page.getByRole("button", { name: "Hide new change", exact: true }).click();
-    await page.getByRole("button", { name: "Define another change", exact: true }).click();
-    await expect(draft).toHaveValue(`Next idea for ${width}`);
-    await page.getByRole("button", { name: "Hide new change", exact: true }).click();
-    await page.getByRole("button", { name: "Review changes", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Git changes preview", exact: true })).toBeVisible();
-    await expect(page.locator("#commit-dialog")).toBeHidden();
-    await expect(page.locator("#studio-changed-files button").first()).toBeVisible();
-    await page.locator("#studio-changed-files button").first().click();
-    await expect(page.locator("#studio-diff-path")).not.toHaveText("Select a changed file");
-    if (width === 390) {
-      expect((await page.locator(".studio-diff-wrap").boundingBox()).width).toBeGreaterThan(300);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-    }
-    await page.screenshot({ path: test.info().outputPath(`studio-task-review-${width}.png`) });
-  }
-});
-
-test("Studio visual themes keep readable hierarchy and phone-sized controls", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" }); // Measure settled colours, not theme-transition interpolation.
-  for (const width of [1440, 390]) {
-    await page.setViewportSize({ width, height: 900 });
-    // Seed a task through the normal form/API fixture so the hierarchy is exercised in isolation too.
-    const created = await page.request.post(`${origin}/api/specs`, { headers, data: { title: "Make the workspace welcoming", problem: "Help someone understand the task and confidently choose their next action.", criteria: ["The next action is readable and reachable"] } });
-    const spec = await created.json();
-    await page.goto(url);
-    await openWorkspaceView(page, "Studio");
-    if (width === 390) await page.getByRole("button", { name: "Current work", exact: true }).click();
-    await page.getByRole("combobox", { name: "Current work", exact: true }).selectOption(spec.id);
-    await expect(page.locator("#studio-next-action")).toBeVisible();
-    for (const theme of ["dark", "light"]) {
-      for (let i = 0; i < 3 && await page.locator("html").getAttribute("data-resolved-theme") !== theme; i++)
-        await runPaletteCommand(page, `Theme: ${theme}`);
-      await expect(page.locator("html")).toHaveAttribute("data-resolved-theme", theme);
-      expect(await page.locator("#studio-next-action").evaluate(node => getComputedStyle(node).transitionDuration)).toBe("0s");
-      const contrast = await page.locator("#studio-next-hint, #studio-next-action, #studio-stage-label, #studio-conversation-empty").evaluateAll(nodes => {
-        const luminance = color => {
-          const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
-          return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
-        };
-        return nodes.map(node => {
-          let parent = node, bg;
-          while (parent) {
-            bg = getComputedStyle(parent).backgroundColor;
-            if (bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") break;
-            parent = parent.parentElement;
-          }
-          const a = luminance(getComputedStyle(node).color), b = luminance(bg);
-          return { id: node.id, fg: getComputedStyle(node).color, bg, ratio: (Math.max(a, b) + .05) / (Math.min(a, b) + .05) };
-        });
-      });
-      contrast.forEach(sample => expect(sample.ratio, `${theme} text contrast ${JSON.stringify(sample)}`).toBeGreaterThanOrEqual(4.5));
-      if (width === 390) {
-        expect((await page.locator("#studio-next-action").boundingBox()).height).toBeGreaterThanOrEqual(44);
-        expect((await page.locator("#studio-thread-title").boundingBox()).y).toBeLessThan((await page.locator("#studio-new-change-toggle").boundingBox()).y);
-        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
-      }
-      await page.screenshot({ path: test.info().outputPath(`studio-finish-${theme}-${width}.png`) });
-    }
-  }
-});
 
 test("find and replace stays in the draft, supports undo and explicit save", async ({ page }, testInfo) => {
   await openFile(page, "app.html");
@@ -820,10 +618,14 @@ test("file find fits a phone and undo cannot cross files", async ({ page }, test
     expect(Math.round(await button.evaluate((el) => el.getBoundingClientRect().height) * 1000) / 1000).toBeGreaterThanOrEqual(44);
   await page.locator("#studio-find-panel").screenshot({ path: testInfo.outputPath("verb-find-phone.png") });
   await selectCanvasFile(page, "conflict.txt");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await expect(page.getByRole("button", { name: "Undo replacement", exact: true })).toBeDisabled();
   await selectCanvasFile(page, "app.html");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  // Preview starts an HTML file's app once the file is read, which can land after an Edit click.
+  await expect(async () => {
+    await editFile(page);
+    await expect(editor).toBeVisible({ timeout: 1_000 });
+  }).toPass();
   await expect(editor).toHaveValue("two two");
   await editor.fill(readFileSync(join(repo, "app.html"), "utf8"));
 });
@@ -941,10 +743,10 @@ for (const width of [1440, 390]) test(`interrupted commit repair at ${width}px c
 });
 
 
-test("Studio retries busy file reads, then exposes manual recovery if the host stays busy", async ({ page }) => {
+test("Preview retries busy file reads, then exposes manual recovery if the host stays busy", async ({ page }) => {
   test.setTimeout(75_000);
   await page.goto(url);
-  await openWorkspaceView(page, "Studio");
+  await openPreview(page);
   const file = page.locator("#studio-file option[value='app.html']");
   await expect(file).toHaveCount(1);
   let available = false, reads = 0;
@@ -952,16 +754,18 @@ test("Studio retries busy file reads, then exposes manual recovery if the host s
     reads++;
     return available ? route.continue() : route.fulfill({ status: 503, json: { error: "desktop host is busy; retry shortly" } });
   });
-  const refresh = page.getByRole("button", { name: "Refresh canvas", exact: true });
-  await refresh.click();
+  const refresh = () => runPaletteCommand(page, "Refresh project");
+  await refresh();
   // A busy host is retried with growing pauses for about sixteen seconds before giving up.
-  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Refresh to retry.", { timeout: 30_000 });
+  await expect(page.locator("#studio-file-note")).toHaveText("Files unavailable. Run Refresh project (⌘K) to retry.", { timeout: 30_000 });
   expect(reads).toBe(8);
   available = true;
-  await refresh.click();
-  await expect(page.locator("#studio-file-note")).not.toHaveText("Files unavailable. Refresh to retry.");
+  await refresh();
+  await expect(page.locator("#studio-file-note")).not.toHaveText("Files unavailable. Run Refresh project (⌘K) to retry.");
   await expect(file).toHaveCount(1);
-  expect(reads).toBe(9);
+  // Refresh project rereads the shared file list and Preview's own: one or two reads, never a retry storm.
+  expect(reads).toBeGreaterThanOrEqual(9);
+  expect(reads).toBeLessThanOrEqual(10);
 });
 
 test("go to line navigates the current draft without saving and tracks cursor position", async ({ page }) => {
@@ -1002,12 +806,12 @@ test("go to line navigates the current draft without saving and tracks cursor po
   await expect(editor).toHaveValue(draft);
   expect(readFileSync(join(repo, "typing.txt"), "utf8")).toBe(disk);
   await selectCanvasFile(page, "conflict.txt");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await expect(page.locator("#studio-line-panel")).toBeHidden();
   await editor.fill("");
   await expect(page.locator("#studio-editor-position")).toHaveText("Line 1, column 1 · 1 line");
   await selectCanvasFile(page, "typing.txt");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await expect(editor).toHaveValue(draft);
   await editor.fill(disk);
 });
@@ -1038,7 +842,7 @@ test("preview reports stalled loading, rejects unrelated readiness and recovers 
   await openFile(page, "ready.html");
   const pending = [];
   await page.route("**/studio-preview/*", route => { pending.push(route); });
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  await page.locator("#bench-preview").getByRole("button", { name: "Preview", exact: true }).click();
   const loading = page.locator("#studio-app-loading");
   await expect(loading).toHaveText("Loading saved preview…");
   await expect(page.locator("#studio-app-frame")).toHaveAttribute("aria-busy", "true");
@@ -1065,7 +869,7 @@ test("preview reports stalled loading, rejects unrelated readiness and recovers 
 
 test("closing a preview while Reload is pending never reopens it", async ({ page }) => {
   await openFile(page, "ready.html");
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  await page.locator("#bench-preview").getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.locator("#studio-app-panel")).toBeVisible();
   await expect(page.locator("#studio-editor-status")).toContainText("Preview document loaded");
   let release;
@@ -1089,9 +893,9 @@ test("closing a preview while Reload is pending never reopens it", async ({ page
 
 async function openCodeFile(page, path) {
   await page.goto(url);
-  await openWorkspaceView(page, "Studio");
+  await openPreview(page);
   await selectCanvasFile(page, path);
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   const code = page.getByRole("textbox", { name: "Code editor", exact: true });
   await expect(code).toBeVisible();
   await expect(page.getByRole("button", { name: "Code", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -1106,11 +910,10 @@ test("Code editor highlights actual source, saves explicitly and preserves sandb
   await code.fill(changed);
   await expect(text).toHaveValue(changed);
   await expect(page.locator("#studio-code-editor .cm-line span").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "App preview", exact: true })).toBeDisabled();
   await code.press("ControlOrMeta+s");
   await expect(page.locator("#studio-draft-state")).toContainText("Saved on disk");
   expect(readFileSync(join(repo, "app.html"), "utf8")).toBe(changed);
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
+  await page.locator("#bench-preview").getByRole("button", { name: "Preview", exact: true }).click();
   const frame = page.frameLocator("#studio-app-frame iframe");
   await expect(frame.locator("body")).toContainText("Edited in the Studio code editor.");
   await frame.locator("#count").click();
@@ -1131,14 +934,14 @@ test("Code editor keeps undo histories separate and shares unsaved drafts with P
   await page.getByRole("button", { name: "Redo edit", exact: true }).click();
   await expect(text).toHaveValue(draft);
   await selectCanvasFile(page, "script.py");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await expect(page.locator("#studio-code-language")).toHaveText("Python");
   await expect(page.getByRole("button", { name: "Undo edit", exact: true })).toBeDisabled();
   await code.fill('print("Another draft")\n');
   await code.press("ControlOrMeta+z");
   await expect(text).toHaveValue(readFileSync(join(repo, "script.py"), "utf8"));
   await selectCanvasFile(page, "code.js");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
+  await editFile(page);
   await expect(text).toHaveValue(draft);
   await page.getByRole("button", { name: "Plain text", exact: true }).click();
   await expect(text).toBeVisible();
@@ -1223,79 +1026,3 @@ test("Code editor offers HTML completion without starting an agent", async ({ pa
   await expect(page.locator("#studio-code-editor .cm-tooltip-autocomplete")).toBeHidden();
 });
 
-
-test("Studio pane collapse retains editor drafts and app state, and every pane can be restored", async ({
-  page,
-}, testInfo) => {
-  writeFileSync(join(repo, "app.html"), APP);
-  await openFile(page, "app.html");
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
-  await page.getByRole("button", { name: "Code", exact: true }).click();
-  const editor = page.getByRole("textbox", {
-    name: "Code editor",
-    exact: true,
-  });
-  await editor.fill("retained unsaved pane draft");
-  await page.getByRole("button", { name: "Hide preview", exact: true }).click();
-  await expect(page.locator("#studio-canvas-panel")).not.toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Show preview", exact: true }),
-  ).toHaveAttribute("aria-expanded", "false");
-  await expect(page.locator("#studio-work-panel")).toBeVisible();
-  await page.getByRole("button", { name: "Show preview", exact: true }).click();
-  await expect(editor).toContainText("retained unsaved pane draft");
-  await page
-    .getByRole("button", { name: "Hide current work", exact: true })
-    .click();
-  await expect(page.locator("#studio-work-panel")).not.toBeVisible();
-  await expect(editor).toBeVisible();
-  await page
-    .getByRole("button", { name: "Show current work", exact: true })
-    .press("Escape");
-  await expect(page.locator("#studio-work-panel")).toBeVisible();
-  await page.getByRole("button", { name: "Hide preview", exact: true }).click();
-  await page.getByRole("button", { name: "Files", exact: true }).click();
-  await expect(page.locator("#studio-canvas-panel")).toBeVisible();
-  await page.getByRole("button", { name: "Edit file", exact: true }).click();
-  await page.getByRole("button", { name: "Code", exact: true }).click();
-  await expect(editor).toContainText("retained unsaved pane draft");
-  await page
-    .getByRole("button", { name: "Load disk version", exact: true })
-    .click();
-  await expect(page.locator("#studio-draft-state")).toContainText(
-    "Saved on disk",
-  );
-  await page.getByRole("button", { name: "App preview", exact: true }).click();
-  const frame = page.frameLocator("#studio-app-frame iframe");
-  await expect(
-    frame.getByRole("button", { name: "Book a walk · 0", exact: true }),
-  ).toBeVisible();
-  await frame
-    .getByRole("button", { name: "Book a walk · 0", exact: true })
-    .click();
-  await page.getByRole("button", { name: "Hide preview", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Toggle sidebar", exact: true })
-    .click();
-  expect(
-    (await page.locator(".main-content").boundingBox()).width,
-  ).toBeGreaterThan(1400);
-  await page
-    .getByRole("button", { name: "Reset Studio layout", exact: true })
-    .click();
-  await expect(
-    frame.getByRole("button", { name: "Book a walk · 1", exact: true }),
-  ).toBeVisible();
-  await expect(page.locator("#studio-work-panel")).toBeVisible();
-  await page.screenshot({
-    path: testInfo.outputPath("studio-restored-panels.png"),
-  });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(
-    page.getByRole("group", { name: "Studio panels", exact: true }),
-  ).not.toBeVisible();
-  await page.getByRole("button", { name: "Current work", exact: true }).click();
-  await expect(page.locator("#studio-work-panel")).toBeVisible();
-  await page.getByRole("button", { name: "Canvas", exact: true }).click();
-  await expect(page.locator("#studio-canvas-panel")).toBeVisible();
-});

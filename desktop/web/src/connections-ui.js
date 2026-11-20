@@ -36,7 +36,7 @@ export function validateConnectionNumbers(value) {
   }
 }
 
-export function initConnections({ $, api, escapeHtml: esc, useInStudio }) {
+export function initConnections({ $, api, escapeHtml: esc, useInNewSpec }) {
   let timer = null;
   let selected = null,
     epoch = 0,
@@ -495,9 +495,9 @@ export function initConnections({ $, api, escapeHtml: esc, useInStudio }) {
       const reviewedResult = result;
       if (!reviewedResult) return [];
       return [{
-        title: "Attach connection result to Studio draft",
+        title: "Start a spec from the connection result",
         run: () => {
-          if (result === reviewedResult) useInStudio(reviewedResult);
+          if (result === reviewedResult) useInNewSpec(reviewedResult);
         },
       }];
     },

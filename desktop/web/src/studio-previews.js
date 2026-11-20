@@ -7,15 +7,13 @@ export function initStudioPreviews({
   openFile,
   canClose,
   workspaceId,
-  stopApp,
   escapeHtml,
 }) {
-  const root = $("#view-studio"),
+  const root = $("#preview-home"),
     tabs = [];
   let selected = null,
     request = 0,
-    zoom = null,
-    share = 46;
+    zoom = null;
   const message = (text) => ($("#studio-message").textContent = text);
   const isImage = (path) => /\.(png|jpe?g|gif|webp)$/i.test(path || "");
   function renderTabs() {
@@ -107,162 +105,6 @@ export function initStudioPreviews({
     size();
   });
   $("#studio-close-preview").addEventListener("click", close);
-  const splitter = $("#studio-pane-divider");
-  function split(value) {
-    share = Math.max(30, Math.min(65, value));
-    $(".studio-layout").style.setProperty("--studio-work-share", `${share}%`);
-    splitter.setAttribute("aria-valuenow", String(Math.round(share)));
-    splitter.setAttribute(
-      "aria-valuetext",
-      `Work thread ${Math.round(share)} percent`,
-    );
-  }
-  splitter.addEventListener("keydown", (event) => {
-    const delta = event.shiftKey ? 10 : 2;
-    const value =
-      event.key === "ArrowLeft"
-        ? share - delta
-        : event.key === "ArrowRight"
-          ? share + delta
-          : event.key === "Home"
-            ? 30
-            : event.key === "End"
-              ? 65
-              : null;
-    if (value != null) {
-      event.preventDefault();
-      split(value);
-    }
-  });
-  splitter.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    splitter.setPointerCapture(event.pointerId);
-    splitter.onpointermove = (move) => {
-      const rect = $(".studio-layout").getBoundingClientRect();
-      split(((move.clientX - rect.left) / rect.width) * 100);
-    };
-    splitter.onpointerup = splitter.onlostpointercapture = () => {
-      splitter.onpointermove = null;
-    };
-  });
-  function paneLayout(workHidden, canvasHidden) {
-    // Always retain one surface and its external restore controls. Never unmount drafts or apps.
-    root.dataset.previewExpanded = String(workHidden);
-    root.dataset.workExpanded = String(canvasHidden);
-    for (const [id, hidden, label] of [
-      ["work", workHidden, "current work"],
-      ["canvas", canvasHidden, "preview"],
-    ]) {
-      const button = $(`#studio-toggle-${id}`);
-      button.setAttribute("aria-expanded", String(!hidden));
-      button.textContent = `${hidden ? "Show" : "Hide"} ${label}`;
-    }
-    $("#studio-expand-preview").setAttribute(
-      "aria-pressed",
-      String(workHidden),
-    );
-    $("#studio-expand-preview").textContent = workHidden
-      ? "Restore split"
-      : "Expand preview";
-  }
-  function expand(expanded) {
-    paneLayout(expanded, false);
-  }
-  $("#studio-expand-preview").addEventListener("click", () =>
-    expand(root.dataset.previewExpanded !== "true"),
-  );
-  $("#studio-toggle-work").addEventListener("click", () =>
-    paneLayout(root.dataset.previewExpanded !== "true", false),
-  );
-  $("#studio-toggle-canvas").addEventListener("click", () =>
-    paneLayout(false, root.dataset.workExpanded !== "true"),
-  );
-  $("#studio-reset-layout").addEventListener("click", () => {
-    split(46);
-    paneLayout(false, false);
-  });
-  root.addEventListener("keydown", (event) => {
-    // Escape inside a dialog/editor belongs to that control. Restore only from the layout controls.
-    if (
-      event.key === "Escape" &&
-      (event.target.closest(".studio-pane-controls") ||
-        event.target === $("#studio-expand-preview"))
-    ) {
-      paneLayout(false, false);
-      $("#studio-toggle-work").focus();
-    }
-  });
-  function showChanges(show) {
-    ++request;
-    $("#studio-preview-content").hidden = show;
-    $("#studio-changes-panel").hidden = !show;
-    $("#studio-toggle-changes").setAttribute("aria-pressed", String(show));
-    $("#studio-toggle-changes").textContent = show
-      ? "Back to preview"
-      : "Show changes";
-    if (show) stopApp();
-  }
-  async function diff(path) {
-    const generation = ++request;
-    $("#studio-diff-path").textContent = path;
-    $("#studio-diff").textContent = "Reading changes…";
-    try {
-      const result = await readWithBusyRetry(api,
-        `/api/git/diff?path=${encodeURIComponent(path)}`,
-      );
-      if (generation !== request) return;
-      const rows = (result.hunks || [])
-        .map(
-          (hunk) =>
-            `<div class="studio-diff-hunk">${escapeHtml(hunk.header)}</div>` +
-            hunk.lines
-              .map(
-                (line) =>
-                  `<div class="studio-diff-line ${line.kind === "add" ? "add" : line.kind === "del" ? "del" : "context"}"><span>${line.kind === "add" ? "+" : line.kind === "del" ? "−" : " "}</span><code>${escapeHtml(line.text) || " "}</code></div>`,
-              )
-              .join(""),
-        )
-        .join("");
-      $("#studio-diff").innerHTML =
-        `${result.reason ? `<p>${escapeHtml(result.reason)}</p>` : ""}${rows || "<p>No textual diff available.</p>"}`;
-    } catch (error) {
-      if (generation === request) $("#studio-diff").textContent = error.message;
-    }
-  }
-  $("#studio-toggle-changes").addEventListener("click", async () => {
-    const show = $("#studio-changes-panel").hidden;
-    showChanges(show);
-    if (!show) return;
-    const generation = request;
-    $("#studio-changed-files").textContent = "Reading changed files…";
-    $("#studio-diff").textContent = "Select a file to review its changes.";
-    try {
-      const summary = await readWithBusyRetry(api, "/api/git");
-      if (generation !== request) return;
-      if (summary.error) throw new Error(summary.error);
-      const changes = summary.changes || [];
-      $("#studio-change-count").textContent =
-        `${changes.length} changed file${changes.length === 1 ? "" : "s"} · checkout state`;
-      $("#studio-changed-files").replaceChildren(
-        ...changes.map((change) => {
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "studio-change-file";
-          button.textContent = `${change.code}  ${change.path}`;
-          button.addEventListener("click", () => diff(change.path));
-          return button;
-        }),
-      );
-      if (!changes.length)
-        $("#studio-diff").textContent =
-          "No uncommitted changes in this checkout.";
-    } catch (error) {
-      if (generation === request)
-        $("#studio-changed-files").textContent =
-          `Changes unavailable: ${error.message}`;
-    }
-  });
   return {
     open(path) {
       if (path && !tabs.includes(path)) {
@@ -275,7 +117,6 @@ export function initStudioPreviews({
         tabs.push(path);
       }
       selected = path;
-      showChanges(false);
       renderTabs();
       root.dataset.previewKind = $("#studio-canvas-panel").dataset.previewKind = isImage(path) ? "image" : "document";
       $("#studio-show-document").textContent = isImage(path)
@@ -329,13 +170,6 @@ export function initStudioPreviews({
           $("#studio-image-state").textContent =
             `Image unavailable: ${error.message}`;
       }
-    },
-    reveal(surface) {
-      if (
-        (surface === "canvas" && root.dataset.workExpanded === "true") ||
-        (surface === "work" && root.dataset.previewExpanded === "true")
-      )
-        paneLayout(false, false);
     },
     isImage,
   };

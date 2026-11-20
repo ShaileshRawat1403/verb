@@ -259,17 +259,6 @@ for (const width of [1440, 390]) {
       await shot("settings");
       await expect(page.getByRole("checkbox", { name: "Use previous navigation" })).toHaveCount(0);
       await expect(app).toHaveClass(/bench-layout/);
-      await run("Open Studio");
-      if (mobile) await page.locator("#studio-focus-work").click();
-      const draft = page.locator("#studio-intent");
-      const newChange = page.locator("#studio-new-change-toggle");
-      if (await newChange.isVisible()) await newChange.click();
-      await draft.fill("Keep this draft through navigation");
-      await openSettings();
-      await expect(app).toHaveClass(/bench-layout/);
-      await run("Open Studio");
-      await expect(draft).toHaveValue("Keep this draft through navigation");
-      await openSettings();
       await run("Open Sessions");
       await expect(tile).toHaveAttribute("id", id);
       expect(await tile.evaluate((node, previous) => node === previous, domTile)).toBeTruthy();
@@ -1250,10 +1239,9 @@ for (const width of [1440, 390]) {
       await expect(detail.getByRole("heading", { name: new RegExp(sessionId.slice(0, 8)) })).toBeVisible();
       await expect(detail.getByRole("button", { name: /Start a new .* session/ })).toBeVisible();
       await shot("session-history-detail");
+      // An old Studio link opens the terminals instead of an empty page.
       await page.goto(`${origin}/?view=studio#${token}`);
-      await expect(page.locator("#view-studio")).toBeHidden();
-      await palette("Open Studio");
-      await expect(page.locator("#view-studio")).toBeVisible();
+      await expect(page.locator("#view-sessions")).toBeVisible();
     });
   }
 }
