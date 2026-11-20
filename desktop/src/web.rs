@@ -689,6 +689,8 @@ struct WebHost {
     connections: crate::connections::Connections,
     browser_cancel: Arc<AtomicBool>,
     browser_identity: Arc<std::sync::Mutex<Option<String>>>,
+    /// The built-in page, or a verified release from `VERB_PAGE_DIR` (docs/PAGE_ONLY_RELEASE.md).
+    page: crate::page::PageSource,
 }
 
 /// `verb check` runs Git and several `--version` probes, which can take seconds. The web host has one
@@ -1135,6 +1137,7 @@ pub(super) fn run(project: &Path, args: &[String]) -> Result<(), String> {
         connections: Default::default(),
         browser_cancel: Arc::default(),
         browser_identity: Arc::default(),
+        page: crate::page::PageSource::from_env(),
         access: crate::tokens::Access::owner(),
     };
     if let Some((jwks, pinned, age)) = load_initial_jwks() {
@@ -1841,50 +1844,74 @@ impl WebHost {
         let path = url.split('?').next().unwrap_or("");
         if request.method() == &Method::Get && path == "/healthz" {
             // Minimal HTTP readiness after host/origin validation. No project/session or token data.
+            // `page` names the page a reload would get, so a page release can be verified here.
+            self.page.refresh();
             return Reply::json(
                 200,
-                serde_json::json!({"status":"serving","version":env!("CARGO_PKG_VERSION"),"sourceRevision":env!("VERB_BUILD_REVISION"),"sourceDirty":match env!("VERB_BUILD_DIRTY") {"true"=>Some(true),"false"=>Some(false),_=>None}}),
+                serde_json::json!({"status":"serving","version":env!("CARGO_PKG_VERSION"),"sourceRevision":env!("VERB_BUILD_REVISION"),"sourceDirty":match env!("VERB_BUILD_DIRTY") {"true"=>Some(true),"false"=>Some(false),_=>None},"page":self.page.status()}),
             );
         }
         if request.method() == &Method::Get {
+            if path == "/" {
+                // A page switch is picked up on the next page load, never part-way through one.
+                self.page.refresh();
+            }
             let asset_reply = match path {
                 "/" => Some(Reply::asset(
                     "text/html; charset=utf-8",
-                    include_bytes!("../web/index.html"),
+                    self.page
+                        .file("index.html")
+                        .unwrap_or(include_bytes!("../web/index.html")),
                 )),
                 "/app.js" => Some(Reply::asset_cached(
                     "text/javascript; charset=utf-8",
-                    include_bytes!("../web/dist/app.js"),
+                    self.page
+                        .file("app.js")
+                        .unwrap_or(include_bytes!("../web/dist/app.js")),
                 )),
                 "/app.css" => Some(Reply::asset_cached(
                     "text/css; charset=utf-8",
-                    include_bytes!("../web/dist/app.css"),
+                    self.page
+                        .file("app.css")
+                        .unwrap_or(include_bytes!("../web/dist/app.css")),
                 )),
                 "/favicon.svg" => Some(Reply::asset_cached(
                     "image/svg+xml",
-                    include_bytes!("../web/favicon.svg"),
+                    self.page
+                        .file("favicon.svg")
+                        .unwrap_or(include_bytes!("../web/favicon.svg")),
                 )),
                 // Interface typefaces (SIL OFL 1.1, notice in web/LICENSES/barlow-OFL.txt).
                 // Served locally because the page policy allows fonts from 'self' only.
                 "/fonts/barlow-400.woff2" => Some(Reply::asset_cached(
                     "font/woff2",
-                    include_bytes!("../web/fonts/barlow-400.woff2"),
+                    self.page
+                        .file("fonts/barlow-400.woff2")
+                        .unwrap_or(include_bytes!("../web/fonts/barlow-400.woff2")),
                 )),
                 "/fonts/barlow-500.woff2" => Some(Reply::asset_cached(
                     "font/woff2",
-                    include_bytes!("../web/fonts/barlow-500.woff2"),
+                    self.page
+                        .file("fonts/barlow-500.woff2")
+                        .unwrap_or(include_bytes!("../web/fonts/barlow-500.woff2")),
                 )),
                 "/fonts/barlow-600.woff2" => Some(Reply::asset_cached(
                     "font/woff2",
-                    include_bytes!("../web/fonts/barlow-600.woff2"),
+                    self.page
+                        .file("fonts/barlow-600.woff2")
+                        .unwrap_or(include_bytes!("../web/fonts/barlow-600.woff2")),
                 )),
                 "/fonts/barlow-condensed-600.woff2" => Some(Reply::asset_cached(
                     "font/woff2",
-                    include_bytes!("../web/fonts/barlow-condensed-600.woff2"),
+                    self.page
+                        .file("fonts/barlow-condensed-600.woff2")
+                        .unwrap_or(include_bytes!("../web/fonts/barlow-condensed-600.woff2")),
                 )),
                 "/fonts/barlow-condensed-700.woff2" => Some(Reply::asset_cached(
                     "font/woff2",
-                    include_bytes!("../web/fonts/barlow-condensed-700.woff2"),
+                    self.page
+                        .file("fonts/barlow-condensed-700.woff2")
+                        .unwrap_or(include_bytes!("../web/fonts/barlow-condensed-700.woff2")),
                 )),
                 _ => None,
             };
