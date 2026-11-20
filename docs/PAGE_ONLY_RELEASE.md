@@ -30,7 +30,7 @@ A change is page-only when nothing that builds into the host changed since the r
 `sourceRevision`:
 
 ```
-git diff --quiet <host revision> <page revision> -- desktop/src desktop/scripts desktop/build.rs desktop/Cargo.toml desktop/Cargo.lock
+git diff --quiet <host revision> <page revision> -- desktop/src desktop/scripts desktop/build.rs desktop/Cargo.toml desktop/Cargo.lock desktop/vendor
 ```
 
 Changes to any of those paths (Rust, the bridge script that is compiled in with `include_str!`,
@@ -83,8 +83,9 @@ it is not left to judgement.
 
 ### 2. Build: a page bundle from CI
 
-- **New workflow:** `release-page.yml`, triggered by a tag `page-<short page revision>` with an
-  input `host_revision`. It:
+- **New workflow:** `release-page.yml`, run by hand with the inputs `page_revision` (a commit on
+  main) and `host_revision` (the live `/healthz` `sourceRevision`). It creates the tag
+  `page-<12 hex>` on the page revision, and:
   1. Enforces the page-only rule above, and fails otherwise.
   2. Runs the same desktop CI as the full release. The e2e suite builds the host at the page
      revision; because the host paths are unchanged, that host is equivalent to the deployed one.

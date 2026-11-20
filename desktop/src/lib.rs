@@ -50,6 +50,8 @@ mod session;
 mod session_context;
 mod shell;
 use session::{Agent, ResumeVerdict, Session, SessionState};
+#[cfg(unix)]
+mod page;
 mod spec_summary;
 mod specs;
 #[cfg(unix)]

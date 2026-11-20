@@ -2195,8 +2195,37 @@ fn readiness_is_minimal_without_granting_api_access() {
     assert_eq!(status, 200);
     let report: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(report["status"], "serving");
-    assert_eq!(report.as_object().unwrap().len(), 4);
+    assert_eq!(report.as_object().unwrap().len(), 5);
+    assert_eq!(report["page"], serde_json::json!({"source": "built-in"}));
     assert_eq!(server.request("GET", "/api/state", None, false).0, 403);
+}
+
+/// A page folder the host cannot trust (here: not owned by root) is never served, even when its
+/// manifest is otherwise correct; the built-in page is served and `/healthz` says so.
+#[test]
+fn an_untrusted_page_folder_falls_back_to_the_built_in_page() {
+    let folder = std::env::temp_dir().join(format!(
+        "verb-page-untrusted-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let release = folder.join("releases").join("a".repeat(40));
+    std::fs::create_dir_all(release.join("fonts")).unwrap();
+    std::fs::write(release.join("index.html"), "<p>not the built-in page</p>").unwrap();
+    std::os::unix::fs::symlink(release.as_path(), folder.join("current")).unwrap();
+    let folder_env = folder.to_string_lossy().into_owned();
+    let server = WebServer::start_with_env(&[("VERB_PAGE_DIR", folder_env.as_str())]);
+    let (status, body) = server.request("GET", "/", None, false);
+    assert_eq!(status, 200);
+    let page = String::from_utf8_lossy(&body);
+    assert!(!page.contains("not the built-in page"));
+    assert!(page.contains("/app.js"));
+    let (_, body) = server.request("GET", "/healthz", None, false);
+    let report: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(report["page"]["source"], "built-in");
 }
 
 #[test]
