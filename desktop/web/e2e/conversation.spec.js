@@ -264,62 +264,6 @@ test("turning the stream off clears at once, leaves the log, and reports each de
   await expect(chat.locator(".conv-agent").first()).toBeVisible();
 });
 
-test("Studio reads the same conversation and opens the agent's files in the preview pane", async ({ page }) => {
-  await page.goto(url);
-  await openWorkspaceView(page, "Studio");
-  await page.locator("#studio-conversation-session").selectOption(session);
-  const panel = page.locator("#studio-conversation-mount");
-  await expect(panel.locator(".conv-agent").first()).toBeVisible();
-  const toggle = page.getByRole("button", { name: "Define another change" });
-  await expect(page.locator("#studio-intent-form")).toBeHidden();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await toggle.click();
-  await expect(page.locator("#studio-intent")).toBeFocused();
-  await page.locator("#studio-intent").fill("Keep this separate draft");
-  await page.getByRole("button", { name: "Hide new change" }).click();
-  await expect(page.locator("#studio-intent-form")).toBeHidden();
-  await page.getByRole("button", { name: "Define another change" }).click();
-  await expect(page.locator("#studio-intent")).toHaveValue("Keep this separate draft");
-  await page.locator("#studio-intent").fill("");
-  await page.getByRole("button", { name: "Hide new change" }).click();
-  await panel.locator(".conv-work").last().locator("summary").click({ trial: false }).catch(() => {});
-  await panel.getByRole("button", { name: "notes.md" }).last().click();
-  await expect(page.locator("#studio-preview-tabs")).toContainText("notes.md");
-  await expect(page.locator("#studio-document")).toContainText("Add a line about the launch");
-  await panel.locator(".conv-composer").scrollIntoViewIfNeeded();
-  const contained = await panel.locator(".conv-composer").evaluate((form) => {
-    const rect = form.getBoundingClientRect();
-    return [...form.querySelectorAll("button")].every((button) => button.hidden || button.getBoundingClientRect().bottom <= rect.bottom + 1);
-  });
-  expect(contained).toBe(true);
-  await shot(page, "studio-conversation");
-});
-
-test("phone Studio keeps chat primary and preserves a separate work draft", async ({ browser }) => {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
-  const page = await context.newPage();
-  try {
-    await page.goto(url);
-    await openWorkspaceView(page, "Studio");
-    await page.getByRole("button", { name: "Current work", exact: true }).click();
-    await page.locator("#studio-conversation-session").selectOption(session);
-    const panel = page.locator("#studio-conversation-mount");
-    await expect(panel.locator(".conv-agent").first()).toBeVisible();
-    await expect(page.locator("#studio-intent-form")).toBeHidden();
-    await page.getByRole("button", { name: "Define another change" }).click();
-    await page.locator("#studio-intent").fill("Plan this next");
-    await page.getByRole("button", { name: "Hide new change" }).click();
-    await page.getByRole("button", { name: "Define another change" }).click();
-    await expect(page.locator("#studio-intent")).toHaveValue("Plan this next");
-    await page.getByRole("button", { name: "Hide new change" }).click();
-    await panel.locator(".conv-composer").scrollIntoViewIfNeeded();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
-    await shot(page, "studio-conversation-phone");
-  } finally {
-    await context.close();
-  }
-});
-
 test("phone width: one surface at a time, reachable controls, keyboard-only sending", async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const page = await context.newPage();
@@ -354,25 +298,6 @@ test("every control in the panel has a name, and sending works by keyboard alone
   await expect(chat.locator(".conv-agent").last()).toContainText("Keyboard only", { timeout: 15000 });
 });
 
-
-test("stream off in Studio clears hidden Sessions panels and stored sent text before acknowledgement", async ({ page }) => {
-  await page.goto(url);
-  await call("POST", "/api/stream", { enabled: true });
-  const chat = await openChat(page, session);
-  await expect(chat.locator(".conv-agent").first()).toBeVisible();
-  await openWorkspaceView(page, "Studio");
-  await page.locator("#studio-conversation-session").selectOption(session);
-  const studio = page.locator("#studio-conversation-mount");
-  await expect(studio.locator(".conv-agent").first()).toBeVisible();
-  await studio.getByRole("textbox", { name: "Message Claude Code" }).fill("keep my unsent draft");
-  await studio.getByRole("button", { name: "Turn off stream" }).click();
-  await expect(studio.locator(".conv-card h4")).toHaveText("Stream off");
-  await expect(page.locator(".conv-agent")).toHaveCount(0);
-  await expect(studio.getByRole("textbox", { name: "Message Claude Code" })).toHaveValue("keep my unsent draft");
-  expect(await page.evaluate(() => Object.keys(sessionStorage).filter((key) => key.startsWith("verb.chat.")).flatMap((key) => JSON.parse(sessionStorage[key])).some((record) => record.text))).toBe(false);
-  await studio.getByRole("button", { name: "Turn on for this project" }).click();
-  await expect(studio.locator(".conv-agent").first()).toBeVisible();
-});
 
 test("a different message with identical redacted text cannot confirm delivery", async () => {
   await expect.poll(async () => (await call("GET", `/api/terminals/${session}/conversation`)).body.canSend).toBe(true);

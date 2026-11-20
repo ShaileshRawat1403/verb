@@ -1,4 +1,4 @@
-import { test, expect, chromium, openWorkspaceView } from "./workspace-navigation.js";
+import { test, expect, chromium, openPreview } from "./workspace-navigation.js";
 import { spawn, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -208,11 +208,11 @@ test("real browser commands cross the relay without giving the companion general
   await owner("/api/browser/pairing", { op: "revoke" });
 });
 
-test("Studio pairs, discovers the Mac location and revokes a running browser", async ({
+test("Preview pairs, discovers the Mac location and revokes a running browser", async ({
   page,
 }) => {
   await page.goto(base + "/#" + TOKEN);
-  await openWorkspaceView(page, "Studio");
+  await openPreview(page);
   await page.getByRole("button", { name: "Browser", exact: true }).click();
   await page.locator("#studio-browser-pairing summary").click();
   await page
@@ -313,7 +313,7 @@ test("Studio pairs, discovers the Mac location and revokes a running browser", a
     .toBe(0);
 });
 
-test("Studio recovers when the companion is revoked outside this tab", async ({
+test("Preview recovers when the companion is revoked outside this tab", async ({
   page,
 }) => {
   const pairing = (await owner("/api/browser/pairing", { op: "pair" })).body;
@@ -335,7 +335,7 @@ test("Studio recovers when the companion is revoked outside this tab", async ({
     })
     .toBe(true);
   await page.goto(base + "/#" + TOKEN);
-  await openWorkspaceView(page, "Studio");
+  await openPreview(page);
   await page.getByRole("button", { name: "Browser", exact: true }).click();
   const start = page.getByRole("button", {
     name: "Start browser",

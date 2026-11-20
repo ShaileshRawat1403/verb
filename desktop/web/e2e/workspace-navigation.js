@@ -6,6 +6,12 @@ export async function runPaletteCommand(page, command) {
   await page.getByRole("option").filter({ has: page.getByText(command, { exact: true }) }).click();
 }
 
+/** Opens the Preview tab of the right panel, showing the panel first on a narrow screen. */
+export async function openPreview(page) {
+  if (!await page.locator("#bench-tab-preview").isVisible()) await page.locator("#bench-toggle-right").click();
+  if (await page.locator("#bench-tab-preview").getAttribute("aria-selected") !== "true") await page.locator("#bench-tab-preview").click();
+}
+
 export function openWorkspaceView(page, name) {
   return runPaletteCommand(page, `Open ${name}`);
 }

@@ -213,7 +213,7 @@ export function initStudioBrowser({ $, api, beforeOpen }) {
     clearPairCode(); panel.hidden = true; ++visibility; ++serial; busy = false; availability = null; clearTimeout(timer);
     stage.replaceChildren(); $('#studio-browser-text').textContent = ''; $('#studio-browser-errors').textContent = '';
     $('#studio-show-browser').setAttribute('aria-pressed', 'false');
-    if (restore) $('#studio-show-document').setAttribute('aria-pressed', String($('#view-studio').dataset.canvasMode === 'document'));
+    if (restore) $('#studio-show-document').setAttribute('aria-pressed', String($('#studio-canvas-panel').dataset.canvasMode === 'document'));
     if (restore) $('#studio-preview-content').hidden = false;
     if (view?.running) void api('POST', '/api/browser', { op: 'stop', client, session: view?.session }).catch(() => {});
     view = null;

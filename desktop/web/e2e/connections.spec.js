@@ -214,7 +214,7 @@ test("connections are owner-only and refuse private endpoints and Verb credentia
   ).toBe(400);
 });
 
-test("a person connects, reviews a call, inspects the result and attaches a Studio draft", async ({
+test("a person connects, reviews a call, inspects the result and starts a spec from it", async ({
   browser,
 }, testInfo) => {
   context = await browser.newContext();
@@ -281,11 +281,12 @@ test("a person connects, reviews a call, inspects the result and attaches a Stud
     path: testInfo.outputPath("mcp-desktop.png"),
     fullPage: true,
   });
-  await runPaletteCommand(page, "Attach connection result to Studio draft");
-  await openWorkspaceView(page, "Studio");
-  await expect(page.locator("#studio-context-text")).toContainText(
-    "Exactly what I approved",
+  await runPaletteCommand(page, "Start a spec from the connection result");
+  await expect(page.locator("#spec-dialog")).toBeVisible();
+  await expect(page.locator("#spec-dialog-form").locator('[name="problem"]')).toHaveValue(
+    /External, untrusted connector result[\s\S]*Exactly what I approved/,
   );
+  await page.locator("#spec-dialog").getByRole("button", { name: "Cancel", exact: true }).click();
 });
 
 test("a pasted Verb credential in tool input is refused before external dispatch", async () => {
