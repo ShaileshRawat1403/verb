@@ -390,9 +390,7 @@
   .studio-open .sidebar {
     padding: 8px 10px;
   }
-  .studio-open .main-nav {
-    flex-wrap: wrap;
-  }
+
   .studio-open .topbar {
     padding: 10px 14px;
   }
@@ -647,7 +645,7 @@
 }
 
 /* Console: work in the middle, typed previews alongside it. */
-#app.studio-open, #app.specs-open {
+#app.studio-open {
   --canvas: #18191b;
   --bg-0: #18191b;
   --bg-1: #202124;
@@ -663,7 +661,7 @@
   --on-accent: #172849;
   --accent-bg: #2c3546;
 }
-:root[data-resolved-theme="light"] #app.studio-open, :root[data-resolved-theme="light"] #app.specs-open {
+:root[data-resolved-theme="light"] #app.studio-open {
   --canvas: #f5f5f4;
   --bg-0: #f5f5f4;
   --bg-1: #ffffff;
@@ -1158,7 +1156,6 @@
   margin-right: 6px;
 }
 
-
 /* Keep one clear writing surface when a conversation is open. The separate work draft can
    always be expanded, and its text and attached context remain in place while collapsed. */
 .studio-new-change-toggle {
@@ -1180,7 +1177,6 @@
   .studio-new-change-toggle { margin: 0 14px 12px; }
 }
 
-
 /* Responsive preview is one isolated app, with controls that do not restart it. */
 .studio-app-toolbar, .studio-app-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .studio-app-toolbar > div:first-child { display: grid; gap: 3px; }
@@ -1195,7 +1191,6 @@
 #studio-app-frame[data-viewport="tablet"] iframe { width: 768px; max-width: none; }
 .studio-app-hint { margin: 0; padding: 10px 14px; line-height: 1.5; border-top: 1px solid var(--line); }
 @media (max-width: 820px) { .studio-app-toolbar, .studio-app-controls { align-items: flex-start; } .studio-viewport-group button { min-height: 44px; } }
-
 
 .studio-browser { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
 .studio-browser[hidden] { display: none; }

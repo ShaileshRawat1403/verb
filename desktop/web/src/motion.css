@@ -7,17 +7,12 @@
 
 .view.active,
 .terminal-tile,
-.spec-item,
-.criteria-list li,
-.audit-list li,
-.audit-list li:first-child,
 .palette-list li {
   animation: none;
 }
 
 .nav-item,
 .terminal-tab,
-.tabs-action,
 .primary-button,
 .secondary-button,
 .icon-button {
@@ -26,8 +21,7 @@
 }
 
 .primary-button:active,
-.secondary-button:active,
-.tabs-action:active {
+.secondary-button:active {
   transform: translateY(1px);
 }
 
