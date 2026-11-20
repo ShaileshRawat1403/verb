@@ -1,0 +1,153 @@
+name: Release Page
+
+# A page-only release (docs/PAGE_ONLY_RELEASE.md): the web page as a verified bundle that a host
+# built from `host_revision` serves from its page folder, with no new binary and no restart.
+#
+# It refuses any change that builds into the host since `host_revision`; those take the full
+# desktop release. The bundle is attached to a *draft* release under the tag `page-<12 hex>`.
+#
+# Run: gh workflow run release-page.yml -f page_revision=<full sha on main> -f host_revision=<live /healthz sourceRevision>
+
+on:
+  workflow_dispatch:
+    inputs:
+      page_revision:
+        description: "Full commit on main whose page is released"
+        required: true
+        type: string
+      host_revision:
+        description: "Full sourceRevision of the running host (/healthz)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-page-${{ inputs.page_revision }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.rule.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Enforce the page-only rule
+        id: rule
+        env:
+          # Read through the environment, never pasted into the script.
+          PAGE: ${{ inputs.page_revision }}
+          HOST: ${{ inputs.host_revision }}
+        run: |
+          set -euo pipefail
+          for rev in "$PAGE" "$HOST"; do
+            [[ "$rev" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::$rev is not a full commit hash"; exit 1; }
+            git cat-file -e "$rev^{commit}" 2>/dev/null || { echo "::error::$rev is not in this repository"; exit 1; }
+          done
+          git merge-base --is-ancestor "$PAGE" origin/main \
+            || { echo "::error::the page revision must be on main"; exit 1; }
+          git merge-base --is-ancestor "$HOST" "$PAGE" \
+            || { echo "::error::the host revision must be an ancestor of the page revision"; exit 1; }
+          HOST_PATHS=(desktop/src desktop/scripts desktop/build.rs desktop/Cargo.toml desktop/Cargo.lock desktop/vendor)
+          if ! git diff --quiet "$HOST" "$PAGE" -- "${HOST_PATHS[@]}"; then
+            echo "::error::these host files changed since $HOST; use the full desktop release:"
+            git diff --name-only "$HOST" "$PAGE" -- "${HOST_PATHS[@]}"
+            exit 1
+          fi
+          echo "tag=page-${PAGE:0:12}" >> "$GITHUB_OUTPUT"
+
+  # The same desktop CI a full release runs, on the page revision. The host it builds is
+  # equivalent to the deployed one because the host paths are unchanged (checked above).
+  verify:
+    needs: check
+    uses: ./.github/workflows/desktop-ci.yml
+    with:
+      ref: ${{ inputs.page_revision }}
+    permissions:
+      contents: read
+
+  bundle:
+    needs: [check, verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.page_revision }}
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: desktop/web/package-lock.json
+
+      - name: Build the page and check it matches the committed dist
+        run: |
+          npm ci --prefix web
+          npm test --prefix web
+          npm run build --prefix web
+          git diff --exit-code -- web/dist
+
+      - name: Package the bundle with its manifest
+        id: package
+        env:
+          PAGE: ${{ inputs.page_revision }}
+          HOST: ${{ inputs.host_revision }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          NAME="verb-$TAG"
+          STAGE="$RUNNER_TEMP/$NAME"
+          mkdir -p "$STAGE/fonts"
+          # Exactly the files the host serves (desktop/src/page.rs PAGE_FILES).
+          cp web/index.html web/dist/app.js web/dist/app.css web/favicon.svg "$STAGE/"
+          for font in barlow-400 barlow-500 barlow-600 barlow-condensed-600 barlow-condensed-700; do
+            cp "web/fonts/$font.woff2" "$STAGE/fonts/"
+          done
+          python3 - "$STAGE" "$PAGE" "$HOST" <<'PY'
+          import hashlib, json, pathlib, sys
+          stage, page, host = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+          files = {p.relative_to(stage).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in sorted(stage.rglob("*")) if p.is_file()}
+          assert len(files) == 9, files
+          manifest = {"format": 1, "pageRevision": page, "hostRevision": host, "files": files}
+          (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          PY
+          tar -C "$RUNNER_TEMP" --sort=name --owner=0 --group=0 --numeric-owner \
+            --mtime='2000-01-01 00:00Z' -czf "$RUNNER_TEMP/$NAME.tar.gz" "$NAME"
+          cd "$RUNNER_TEMP"
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          cat "$NAME.tar.gz.sha256" "$STAGE/manifest.json"
+          echo "archive=$RUNNER_TEMP/$NAME.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and attach to a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAGE: ${{ inputs.page_revision }}
+          HOST: ${{ inputs.host_revision }}
+          TAG: ${{ needs.check.outputs.tag }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          # A draft release does not create its tag, so the tag is made here, on the page revision.
+          if ! git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$PAGE" >/dev/null
+          fi
+          [ "$(git ls-remote --tags origin "refs/tags/$TAG" | cut -f1)" = "$PAGE" ] \
+            || { echo "::error::tag $TAG does not point at $PAGE"; exit 1; }
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --prerelease --verify-tag \
+              --title "Verb page ${PAGE:0:12}" \
+              --notes "Page-only release of $PAGE for the host built from $HOST. Apply with release.sh page-apply; see docs/PAGE_ONLY_RELEASE.md."
+          fi
+          gh release upload "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
