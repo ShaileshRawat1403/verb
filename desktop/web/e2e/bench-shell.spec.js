@@ -144,7 +144,9 @@ for (const width of [1440, 390]) {
       await expect(page.locator(".topbar .breadcrumb")).toBeHidden();
       await expect(page.locator("#toggle-navigation")).toBeHidden();
       await expect(page.locator("#refresh-button")).toBeHidden();
-      await expect(page.locator("#theme-toggle")).toBeHidden();
+      // The theme is one icon in the bar, like search and the panel toggles.
+      await expect(page.locator("#theme-toggle")).toBeVisible();
+      await expect(page.locator("#theme-toggle .theme-icon svg")).toBeVisible();
       await expect(page.locator("#observer-pill")).toBeHidden();
       await expect(page.locator('[data-action="ask"]')).toBeHidden();
       await expect(page.locator("#bench-settings")).toBeHidden();
@@ -943,6 +945,29 @@ for (const width of [1440, 390]) {
     });
   }
 }
+
+test("the top bar theme icon cycles the theme and the new-terminal button matches the icons", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto(`${origin}/#${token}`);
+  const html = page.locator("html");
+  const toggle = page.locator("#theme-toggle");
+  await expect(toggle).toBeEnabled();
+  await expect(html).toHaveAttribute("data-resolved-theme", "light");
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-theme", "light");
+  await toggle.click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await expect(html).toHaveAttribute("data-resolved-theme", "dark");
+  await toggle.click();
+  await expect(html).not.toHaveAttribute("data-theme", /.+/);
+  expect(await page.evaluate(() => localStorage.getItem("verb.theme"))).toBe("system");
+
+  const plus = await page.locator("#bench-new-terminal").boundingBox();
+  const search = await page.getByRole("button", { name: "Search or run" }).boundingBox();
+  expect(plus.height).toBeLessThanOrEqual(32);
+  expect(plus.height).toBeLessThanOrEqual(search.height);
+});
 
 test("Preview Files mode stays reachable for an empty project", async ({ page }) => {
   await page.route("**/api/files", route => route.fulfill({ json: { files: [], truncated: false } }));

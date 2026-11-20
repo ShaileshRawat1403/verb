@@ -122,9 +122,9 @@
   overflow: visible;
 }
 #app.bench-layout .topbar .breadcrumb,
-#app.bench-layout .top-actions > :not(.palette-hint):not(#bench-toggle-right) { display: none; }
+#app.bench-layout .top-actions > :not(.palette-hint):not(#theme-toggle):not(#bench-toggle-right) { display: none; }
 #app.bench-layout .topbar .top-actions { flex: none; flex-wrap: nowrap; gap: 2px; }
-#app.bench-layout .topbar :is(#bench-toggle-navigation, #bench-toggle-right, #bench-new-terminal, .palette-hint, #bench-terminal-menu summary) {
+#app.bench-layout .topbar :is(#bench-toggle-navigation, #bench-toggle-right, #theme-toggle, .palette-hint, #bench-terminal-menu summary) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -244,10 +244,20 @@
   justify-content: flex-start;
   padding-top: clamp(32px, 16vh, 168px);
 }
+/* New terminal: still the one filled control in the bar, but sized to the icons beside it. */
 #app.bench-layout #bench-new-terminal {
-  min-height: 34px;
-  min-width: 40px;
-  font-size: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 8px;
+}
+@media (pointer: coarse) {
+  #app.bench-layout #bench-new-terminal { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
 }
 #bench-terminal-id {
   max-width: 15rem;
